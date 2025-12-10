@@ -20,16 +20,17 @@ Compile / doc / scalacOptions += "-groups"
 
 resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/service/local/repositories/snapshots/content"
 
-lazy val testchipip = RootProject(
+lazy val testchipip = ProjectRef(
   uri(
-    "https://github.com/ucb-bar/testchipip.git#67bfc314819cdbbe3bc593231f93e576c55f5d79"
-  )
+    "https://github.com/ucb-bar/testchipip.git#b337914c1204355c44b800da16c6c1880482592a"
+  ),
+  "testchipip"
 )
 
 val rocketchip =
   "edu.berkeley.cs" %% "rocketchip-6.0.0" % "1.6-6.0.0-1b9f43352-SNAPSHOT"
 
-lazy val root = (project in file("."))
+lazy val uciedigital = (project in file("."))
   .settings(
     name := "uciedigital",
     libraryDependencies ++=
