@@ -1,35 +1,78 @@
-# Created by https://gitignore.io/api/sbt,metals
+# Created by https://www.toptal.com/developers/gitignore/api/linux,macos,windows
+# Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,windows
 
-### SBT ###
-# Simple Build Tool
-# http://www.scala-sbt.org/release/docs/Getting-Started/Directories.html#configuring-version-control
+### Linux ###
+*~
 
-dist/*
-target/
-lib_managed/
-src_managed/
-project/boot/
-project/plugins/project/
-.history
-.cache
-.lib/
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
 
-generatedVerilog/
+# KDE directory preferences
+.directory
 
-### SBT Patch ###
-.bsp/
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
 
-### Metals ###
-.metals/
-.bloop/
-project/**/metals.sbt
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
 
-#### END gitignore.io
-generatedVerilog/
+### macOS ###
+# General
+.DS_Store
+.AppleDouble
+.LSOverride
 
-### Chiseltest ###
-test_run_dir/
+# Icon must end with two \r
+Icon
 
-### IDEs ###
-.vscode/
-.idea/
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+### macOS Patch ###
+# iCloud generated files
+*.icloud
+
+### Windows ###
+# Windows thumbnail cache files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+
+# Dump file
+*.stackdump
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# End of https://www.toptal.com/developers/gitignore/api/linux,macos,windows

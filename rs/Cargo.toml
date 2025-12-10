@@ -1,0 +1,11 @@
+[package]
+name = "uciedigital"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glob = "0.3"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+test-log = "0.2"

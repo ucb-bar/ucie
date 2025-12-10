@@ -1,0 +1,76 @@
+module reset_sync #(
+    parameter integer DEPTH = 2   // number of sync flops (≥2)
+)(
+    input  logic clk,
+    input  logic arst_n,          // async reset (active low)
+    output logic srst_n           // synced reset (active low)
+);
+
+    logic [DEPTH-1:0] sync_reg;
+
+    always @(posedge clk or negedge arst_n) begin
+        if (!arst_n) begin
+            sync_reg <= '0;                 // force low immediately
+        end else begin
+            sync_reg <= {sync_reg[DEPTH-2:0], 1'b1};
+        end
+    end
+
+    assign srst_n = sync_reg[DEPTH-1];
+
+endmodule
+
+module clock_divider #(
+    parameter integer N = 4            // divide ratio
+)(
+    input  logic clk_in,
+    input  logic rst,
+    output logic clk_out
+);
+
+    integer count;
+
+    always @(posedge clk_in or posedge rst) begin
+        if (rst) begin
+            count   <= 0;
+            clk_out <= 0;
+        end else begin
+            if (count == (N/2 - 1)) begin
+                clk_out <= ~clk_out;
+                count   <= 0;
+            end else begin
+                count <= count + 1;
+            end
+        end
+    end
+
+endmodule
+
+module tree_deserializer #(
+    parameter integer K = 3,
+    parameter integer M = (1 << K)
+)(
+    input  logic          clk,          // output clock
+    input  logic          rst,          // sync reset
+    input  logic [M-1:0]  din,          // parallel inputs
+    output logic          dout,         // serialized output
+    output logic [K-1:0]  sel_idx       // current lane index
+);
+
+    // Lane index counter
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            sel_idx <= '0;
+        else
+            sel_idx <= sel_idx + 1;     // cycles through 0..M-1
+    end
+
+    //
+    // Tree mux selection (behavioral)
+    // Equivalent to the mux tree with K stages.
+    //
+    always @(*) begin
+        dout = din[sel_idx];
+    end
+
+endmodule
