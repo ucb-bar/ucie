@@ -5,7 +5,7 @@ An open-source digital implementation of the UCIe 1.1 specification.
 You can request a copy of the UCIe 1.1 specification [here](https://www.uciexpress.org/1-1-spec-download).
 
 > [!NOTE]
-> We are currently in the process of rewriting portions of the implementation. Latest changes can be found on the [`dev`](/tree/dev) branch.
+> We are currently in the process of rewriting portions of the implementation. Latest changes can be found on the [`dev`](https://github.com/ucb-bar/uciedigital/tree/dev) branch.
 > 
 
 ## Getting Started
