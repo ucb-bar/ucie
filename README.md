@@ -8,7 +8,7 @@ You can request a copy of the UCIe specification [here](https://www.uciexpress.o
 
 Chisel RTL for all digital components can be found in the `scala/` directory.
 
-Verilog testbenches and AMS models can be found in the `verilog` folder.
+Verilog testbenches and AMS models can be found in the `verilog/` folder.
 
 Rust code for orchestrating tests can be found in the `rs/` folder.
 
