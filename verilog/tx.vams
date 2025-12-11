@@ -1,0 +1,222 @@
+`timescale 1ps/1ps
+
+module ser21 #(
+    parameter real T_CLKQ_DQ = 30.0, // Clock-to-q and data-to-q delay in ps.
+    parameter real T_SETUP = 20.0,   // Setup time in ps
+    parameter real T_HOLD  = 20.0,   // Hold time in ps
+    parameter real MUX_DELAY  = 30.0 // Mux delay in ps
+)(
+    input logic [1:0] din,
+    input logic clk,
+    output logic dout
+);
+    logic d0_hold, d1_int, d1_hold;
+
+    neg_latch #(
+        .T_CLKQ_DQ(T_CLKQ_DQ),
+        .T_SETUP(T_SETUP),
+        .T_HOLD(T_HOLD)
+    ) d0_l0 (
+        .clkb(clk),
+        .d(din[0]),
+        .q(d0_hold)
+    );
+
+    neg_latch #(
+        .T_CLKQ_DQ(T_CLKQ_DQ),
+        .T_SETUP(T_SETUP),
+        .T_HOLD(T_HOLD)
+    ) d1_l0 (
+        .clkb(clk),
+        .d(din[1]),
+        .q(d1_int)
+    );
+
+    pos_latch #(
+        .T_CLKQ_DQ(T_CLKQ_DQ),
+        .T_SETUP(T_SETUP),
+        .T_HOLD(T_HOLD)
+    ) d1_l1 (
+        .clk(clk),
+        .d(d1_int),
+        .q(d1_hold)
+    );
+
+    mux #(
+        .DELAY(MUX_DELAY)
+    ) mux (
+        .sel_a(clk),
+        .a(d0_hold),
+        .b(d1_hold),
+        .o(dout)
+    );
+
+endmodule
+
+module tree_ser #(
+    parameter integer STAGES = 5,
+    parameter real T_CLKQ_DQ = 30.0, // Clock-to-q and data-to-q delay in ps.
+    parameter real T_SETUP = 20.0,   // Setup time in ps
+    parameter real T_HOLD  = 20.0,   // Hold time in ps
+    parameter real MUX_DELAY  = 30.0 // Mux delay in ps
+)(
+    input logic [2**STAGES-1:0] din,
+    input logic [STAGES-1:0] clk,
+    output logic dout
+);
+    generate
+        if (STAGES == 1) begin
+            ser21 #(
+                .T_CLKQ_DQ(T_CLKQ_DQ),
+                .T_SETUP(T_SETUP),
+                .T_HOLD(T_HOLD),
+                .MUX_DELAY(MUX_DELAY)
+            ) ser (
+                .clk(clk[0]),
+                .din(din),
+                .dout(dout)
+            );
+        end
+        else begin
+            logic [1:0] din_int;
+            logic [2**(STAGES-1)-1:0] din0;
+            logic [2**(STAGES-1)-1:0] din1;
+
+            genvar i;
+            for (i = 0; i < 2**STAGES; i++) begin
+                if (i % 2 == 0) begin
+                    assign din0[i/2] = din[i];
+                end
+                else begin
+                    assign din1[i/2] = din[i];
+                end
+            end
+
+            tree_ser #(
+                .STAGES(STAGES-1),
+                .T_CLKQ_DQ(T_CLKQ_DQ),
+                .T_SETUP(T_SETUP),
+                .T_HOLD(T_HOLD),
+                .MUX_DELAY(MUX_DELAY)
+            ) ser0 (
+                .clk(clk[STAGES-1:1]),
+                .din(din0),
+                .dout(din_int[0])
+            );
+
+            tree_ser #(
+                .STAGES(STAGES-1),
+                .T_CLKQ_DQ(T_CLKQ_DQ),
+                .T_SETUP(T_SETUP),
+                .T_HOLD(T_HOLD),
+                .MUX_DELAY(MUX_DELAY)
+            ) ser1 (
+                .clk(clk[STAGES-1:1]),
+                .din(din1),
+                .dout(din_int[1])
+            );
+
+            ser21 #(
+                .T_CLKQ_DQ(T_CLKQ_DQ),
+                .T_SETUP(T_SETUP),
+                .T_HOLD(T_HOLD),
+                .MUX_DELAY(MUX_DELAY)
+            ) ser (
+                .clk(clk[0]),
+                .din(din_int),
+                .dout(dout)
+            );
+        end
+    endgenerate
+
+endmodule
+
+
+module tb_ser;
+
+    parameter STAGES = 5;          // width of serializer
+    parameter CYCLES = 16;    // number of test cycles
+
+    logic clk;
+    logic [STAGES-1:0] serclk;
+    logic rstb;
+    logic [2**STAGES-1:0] din;
+    logic dout;
+
+    assign serclk[0] = clk;
+
+    generate
+        if (STAGES > 1) begin
+            clkdiv #(
+                .STAGES(STAGES - 1)
+            ) clkdiv (
+                .clkin(clk),
+                .clkout(serclk[STAGES-1:1]),
+                .rstb(rstb)
+            );
+        end
+    endgenerate
+
+    tree_ser #(
+        .STAGES(STAGES)
+    ) dut (
+        .clk(serclk),
+        .din(din),
+        .dout(dout)
+    );
+
+    // Clock generation
+    initial clk = 0;
+    always #62.5 clk = ~clk; // 125ps period
+
+    bit expected_q[$];
+
+    // Test stimulus
+    initial begin
+        $fsdbDumpfile("tb_ser.fsdb");
+        $fsdbDumpvars(0, tb_ser);
+        $display("OUTPUT: clk\tdin\tdout");
+        $monitor("OUTPUT: %b\t%h\t%b\t%b", clk, din, dout, rstb);
+
+        rstb = 0;
+        din = 0;
+        repeat (5) @(posedge clk);
+        rstb = 1;
+        repeat (5) @(posedge clk);
+
+        // Apply all ones to input to find start of output.
+        @(negedge serclk[STAGES-1]);
+        din = {2**STAGES{1'b1}};
+
+        // Apply random inputs
+        for (integer i = 0; i < CYCLES; i=i+1) begin
+            @(negedge serclk[STAGES-1]);
+            din = $urandom_range(0, 2**(2**STAGES) - 1);
+            for (int b = 0; b < 2**STAGES; b++) begin
+                expected_q.push_back(din[b]);   // push LSB first if that is how your design emits
+            end
+        end
+
+        $display("Simulation complete.");
+        $finish;
+    end
+
+    bit expected;
+    initial begin
+        @(posedge dout)
+        repeat (2**STAGES) @(posedge clk, negedge clk);
+        
+        for (integer i = 0; i < CYCLES * 2**STAGES; i++) begin
+            @(posedge clk, negedge clk);
+            expected = expected_q.pop_front();
+            if (expected !== dout)
+                $error("Mismatch at time %t: expected %0b, got %0b",
+                        $time, expected, dout);
+        end
+    end
+
+endmodule
+
+module tb_ser21;
+    tb_ser #(.STAGES(1)) inner ();
+endmodule
