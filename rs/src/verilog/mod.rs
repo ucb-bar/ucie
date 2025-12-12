@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -12,6 +11,7 @@ pub mod primitives;
 pub mod tx;
 
 pub const VERILOG_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../verilog");
+pub const CONTROL_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../spectre/amscf.scs");
 
 pub fn get_src_files() -> Vec<PathBuf> {
     ["sv", "v", "vams"]
@@ -35,71 +35,46 @@ pub fn simulate(
     let tb = tb.as_ref();
     let work_dir = work_dir.as_ref();
     std::fs::create_dir_all(work_dir).with_context(|| "failed to create work dir")?;
-    let vcs_home = std::env::var("VCS_HOME").with_context(|| "invalid VCS_HOME")?;
-    let verdi_home = std::env::var("VERDI_HOME").with_context(|| "invalid VCS_HOME")?;
-    info!("VCS_HOME = {vcs_home}, VERDI_HOME = {verdi_home}");
+    let xcelium_home = std::env::var("XCELIUM_HOME").with_context(|| "invalid XCELIUM_HOME")?;
+    let disciplines =
+        PathBuf::from(xcelium_home).join("tools.lnx86/spectre/etc/ahdl/disciplines.vams");
 
-    let mut vcs = Command::new("vcs")
+    let mut xrun = Command::new("xrun")
         .args([
-            "-full64",
-            "-ams",
-            "-sverilog",
-            "-debug_access",
-            "-o",
-            "simv",
+            "-sv_ms",
+            "-timescale",
+            "1ps/1ps",
+            "-spectre_args",
+            "+preset=mx +mt=32",
             "-top",
             tb,
         ])
+        .arg(disciplines)
         .args(src_files.into_iter().map(|f| f.into()))
+        .arg(CONTROL_FILE)
         .current_dir(work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| "failed to run VCS")?;
+        .with_context(|| "failed to run xrun")?;
     Command::new("tee")
-        .arg(work_dir.join("vcs.out"))
+        .arg(work_dir.join("xrun.out"))
         .current_dir(work_dir)
-        .stdin(vcs.stdout.take().ok_or(anyhow!("VCS missing stdout"))?)
+        .stdin(xrun.stdout.take().ok_or(anyhow!("xrun missing stdout"))?)
         .spawn()
-        .with_context(|| "failed to spawn VCS output tee")?;
+        .with_context(|| "failed to spawn xrun output tee")?;
     Command::new("tee")
-        .arg(work_dir.join("vcs.err"))
+        .arg(work_dir.join("xrun.err"))
         .current_dir(work_dir)
-        .stdin(vcs.stderr.take().ok_or(anyhow!("VCS missing stderr"))?)
+        .stdin(xrun.stderr.take().ok_or(anyhow!("xrun missing stderr"))?)
         .spawn()
-        .with_context(|| "failed to spawn VCS error tee")?;
-    if !vcs
+        .with_context(|| "failed to spawn xrun error tee")?;
+    if !xrun
         .wait()
-        .with_context(|| "failed to wait for VCS")?
+        .with_context(|| "failed to wait for xrun")?
         .success()
     {
-        bail!("VCS exited with nonzero exit code");
-    }
-
-    let mut simv = Command::new("simv")
-        .current_dir(work_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| "failed to run simv")?;
-    Command::new("tee")
-        .arg(work_dir.join("simv.out"))
-        .current_dir(work_dir)
-        .stdin(simv.stdout.take().ok_or(anyhow!("VCS missing stdout"))?)
-        .spawn()
-        .with_context(|| "failed to spawn VCS output tee")?;
-    Command::new("tee")
-        .arg(work_dir.join("simv.err"))
-        .current_dir(work_dir)
-        .stdin(simv.stderr.take().ok_or(anyhow!("VCS missing stderr"))?)
-        .spawn()
-        .with_context(|| "failed to spawn VCS error tee")?;
-    if !simv
-        .wait()
-        .with_context(|| "failed to wait for simv")?
-        .success()
-    {
-        bail!("simv exited with nonzero exit code");
+        bail!("xrun exited with nonzero exit code");
     }
     Ok(())
 }

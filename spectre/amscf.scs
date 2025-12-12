@@ -1,0 +1,8 @@
+// ****************************************************************
+// AMS simulation control file for xrun netlist based flow
+// ****************************************************************
+simulator lang=spectre 
+
+tran tran stop=1u annotate=status 
+
+
