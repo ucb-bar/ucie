@@ -1,0 +1,117 @@
+// ============================================================================
+// Digitally Controlled Delay Line (DCDL) - Verilog-A Behavioral Model
+// ============================================================================
+//
+// ============================================================================
+// NOTE: TRANSIENT NOISE RECOMMENDED FOR REALISTIC JITTER SIMULATION
+// ============================================================================
+//
+// This DCDL model includes phase noise modeling (white + flicker noise) to
+// simulate realistic timing jitter of inverter-based delay lines. For best
+// accuracy, enable transient noise in Spectre simulations.
+//
+// To enable transient noise in Spectre:
+//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
+//      Example: noisefmax=64G (should exceed clock_frequency)
+//   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
+//      Example: tran tran stop=100n noisefmax=64G
+//   3. Command line: spectre +aps netlist.scs +noisefmax=64G
+//
+// Recommended noisefmax: At least 2× the input clock frequency
+//
+// ============================================================================
+//
+// Description:
+//   A digitally controlled delay element with 8-bit control resolution.
+//   Models delay variation and phase noise contributions from inverter stages.
+//   Suitable for DLL, PLL, and general clock distribution applications.
+//
+// Operation:
+//   - Input clock (clk_in) is delayed by a digitally programmable amount
+//   - 8-bit control word (dl_ctrl) sets the delay: 0 = minimum, 255 = maximum
+//   - Delay ranges from delay_offset to (delay_offset + 255 × delay_gain)
+//   - Phase noise from inverters is modeled and added as timing jitter
+//
+// Delay Characteristics:
+//   - Resolution: 8-bit control (256 delay steps)
+//   - Delay Range: delay_offset to delay_offset + delay_gain × 255
+//   - Default Range: 10ps to 265ps (1ps per LSB)
+//   - Transfer Function: Delay = delay_offset + delay_gain × ctrl_value + jitter
+//
+// Noise Modeling:
+//   - White Noise: Flat phase noise floor, filtered at Nyquist frequency
+//   - Flicker Noise: 1/f phase noise contribution
+//   - Both scaled by inverter_count to model cumulative stage effects
+//   - Converted to time-domain jitter: Δt = Δφ / (2π × f_clk)
+//
+// Ports:
+//   clk_in   - Input, clock signal to be delayed (electrical)
+//   dl_ctrl  - Input, 8-bit digital control bus [7:0] (electrical)
+//              LSB at bit 0, MSB at bit 7; higher value = longer delay
+//   clk_out  - Output, delayed clock signal (electrical)
+//
+// Parameters:
+//   vdd                       - Supply voltage (default: 0.75V)
+//   delay_gain                - Delay per LSB of control word (default: 1ps)
+//   delay_offset              - Minimum delay at ctrl=0 (default: 10ps)
+//   inverter_count            - Number of inverter stages for noise scaling (default: 4)
+//   clock_frequency           - Input clock frequency for noise modeling (default: 8GHz)
+//   white_noise_floor_dBcHz   - White phase noise floor per inverter (default: -160 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz per inverter (default: -109 dBc/Hz)
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+`define DCDL_CTRL_BITWIDTH 8
+module dcdl(clk_in, dl_ctrl, clk_out);
+    input clk_in; electrical clk_in;
+    input [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl; electrical [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl;
+    output clk_out; electrical clk_out;
+
+    parameter real vdd = 0.75;
+    parameter real delay_gain = 1p; // delay per LSB of control word
+    parameter real delay_offset = 10p; // base delay
+    parameter real inverter_count = 4; // number of inverters in the delay line, used to model noise
+    parameter real clock_frequency = 8G; // frequency of the input clock
+    parameter real white_noise_floor_dBcHz = -160; // white phase noise floor introduced by one single inverter
+    parameter real flicker_noise_1Hz_dBcHz = -109; // flicker phase noise at 1Hz offset introduced by one single inverter
+
+    real ctrl_value;
+    real white_noise_floor_linear;
+    real white_noise_td;
+    real white_noise_filtered;
+    real flicker_noise_1Hz_linear;
+    real flicker_noise_td;
+    real total_phase_noise;
+    real total_time_noise;
+    real delay_max;
+    
+    genvar i;
+
+    analog begin
+        // model the phase noise introduced by the DCDL
+        // model one single inverter, then scale the noise by inverter count
+        white_noise_floor_linear = 10**(white_noise_floor_dBcHz/10);
+        white_noise_td = white_noise(inverter_count * white_noise_floor_linear);
+        // filter the white noise at Nyquist frequency to prevent folding
+        white_noise_filtered = laplace_nd(white_noise_td, {1.0}, {1.0, 1.0/(`M_PI*clock_frequency)});
+        flicker_noise_1Hz_linear = 10**(flicker_noise_1Hz_dBcHz/10);
+        flicker_noise_td = flicker_noise(inverter_count * flicker_noise_1Hz_linear, 1);
+        total_phase_noise = white_noise_filtered + flicker_noise_td;
+        total_time_noise = total_phase_noise / (2 * `M_PI * clock_frequency);
+        
+        delay_max = delay_gain * (2**`DCDL_CTRL_BITWIDTH - 1) + delay_offset;
+        
+        // Convert digital bus to numeric value using generate for loop
+        ctrl_value = 0;
+        for (i = 0; i < `DCDL_CTRL_BITWIDTH; i = i + 1) begin
+            ctrl_value = ctrl_value + V(dl_ctrl[i]) * pow(2, i);
+        end
+        
+        V(clk_out) <+ absdelay(V(clk_in), delay_offset + delay_gain * ctrl_value + total_time_noise, delay_max);
+    end
+
+
+endmodule
