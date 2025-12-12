@@ -1,10 +1,8 @@
 `timescale 1ps/1ps
 
 module ser21 #(
-    parameter real T_CLKQ_DQ = 30.0, // Clock-to-q and data-to-q delay in ps.
-    parameter real T_SETUP = 20.0,   // Setup time in ps
-    parameter real T_HOLD  = 20.0,   // Hold time in ps
-    parameter real MUX_DELAY  = 30.0 // Mux delay in ps
+    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
+    parameter real MUX_DELAY  = 5.0 // Mux delay in ps
 )(
     input logic [1:0] din,
     input logic clk,
@@ -13,9 +11,7 @@ module ser21 #(
     logic d0_hold, d1_int, d1_hold;
 
     neg_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ),
-        .T_SETUP(T_SETUP),
-        .T_HOLD(T_HOLD)
+        .T_CLKQ_DQ(T_CLKQ_DQ)
     ) d0_l0 (
         .clkb(clk),
         .d(din[0]),
@@ -23,9 +19,7 @@ module ser21 #(
     );
 
     neg_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ),
-        .T_SETUP(T_SETUP),
-        .T_HOLD(T_HOLD)
+        .T_CLKQ_DQ(T_CLKQ_DQ)
     ) d1_l0 (
         .clkb(clk),
         .d(din[1]),
@@ -33,9 +27,7 @@ module ser21 #(
     );
 
     pos_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ),
-        .T_SETUP(T_SETUP),
-        .T_HOLD(T_HOLD)
+        .T_CLKQ_DQ(T_CLKQ_DQ)
     ) d1_l1 (
         .clk(clk),
         .d(d1_int),
@@ -55,10 +47,8 @@ endmodule
 
 module tree_ser #(
     parameter integer STAGES = 5,
-    parameter real T_CLKQ_DQ = 30.0, // Clock-to-q and data-to-q delay in ps.
-    parameter real T_SETUP = 20.0,   // Setup time in ps
-    parameter real T_HOLD  = 20.0,   // Hold time in ps
-    parameter real MUX_DELAY  = 30.0 // Mux delay in ps
+    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
+    parameter real MUX_DELAY  = 5.0 // Mux delay in ps
 )(
     input logic [2**STAGES-1:0] din,
     input logic [STAGES-1:0] clk,
@@ -68,8 +58,6 @@ module tree_ser #(
         if (STAGES == 1) begin
             ser21 #(
                 .T_CLKQ_DQ(T_CLKQ_DQ),
-                .T_SETUP(T_SETUP),
-                .T_HOLD(T_HOLD),
                 .MUX_DELAY(MUX_DELAY)
             ) ser (
                 .clk(clk[0]),
@@ -95,8 +83,6 @@ module tree_ser #(
             tree_ser #(
                 .STAGES(STAGES-1),
                 .T_CLKQ_DQ(T_CLKQ_DQ),
-                .T_SETUP(T_SETUP),
-                .T_HOLD(T_HOLD),
                 .MUX_DELAY(MUX_DELAY)
             ) ser0 (
                 .clk(clk[STAGES-1:1]),
@@ -107,8 +93,6 @@ module tree_ser #(
             tree_ser #(
                 .STAGES(STAGES-1),
                 .T_CLKQ_DQ(T_CLKQ_DQ),
-                .T_SETUP(T_SETUP),
-                .T_HOLD(T_HOLD),
                 .MUX_DELAY(MUX_DELAY)
             ) ser1 (
                 .clk(clk[STAGES-1:1]),
@@ -118,8 +102,6 @@ module tree_ser #(
 
             ser21 #(
                 .T_CLKQ_DQ(T_CLKQ_DQ),
-                .T_SETUP(T_SETUP),
-                .T_HOLD(T_HOLD),
                 .MUX_DELAY(MUX_DELAY)
             ) ser (
                 .clk(clk[0]),
@@ -173,8 +155,6 @@ module tb_ser;
 
     // Test stimulus
     initial begin
-        $fsdbDumpfile("tb_ser.fsdb");
-        $fsdbDumpvars(0, tb_ser);
         $display("OUTPUT: clk\tdin\tdout");
         $monitor("OUTPUT: %b\t%h\t%b\t%b", clk, din, dout, rstb);
 

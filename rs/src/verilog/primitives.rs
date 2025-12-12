@@ -2,7 +2,8 @@ use const_format::concatcp;
 
 use crate::verilog::VERILOG_SRC_DIR;
 
-pub const PRIMITIVES_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/primitives.vams");
+pub const PRIMITIVES_SV_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/primitives.sv");
+pub const PRIMITIVES_VAMS_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/primitives.vams");
 
 #[cfg(test)]
 mod tests {
@@ -14,7 +15,10 @@ mod tests {
 
     use crate::{
         tests::out_dir,
-        verilog::{primitives::PRIMITIVES_SRC, simulate},
+        verilog::{
+            primitives::{PRIMITIVES_SV_SRC, PRIMITIVES_VAMS_SRC},
+            simulate,
+        },
     };
 
     #[test]
@@ -24,10 +28,10 @@ mod tests {
             "\
                 (?s)\
                 .*Testing setup violation\
-                .*Timing violation in tb_dff\\.dut\
+                .*Timing violation\
                 \\s*\\$setup\
                 .*Testing hold violation\
-                .*Timing violation in tb_dff\\.dut\
+                .*Timing violation\
                 \\s*\\$hold\
                 .*Normal operation\
                 .*\\$finish.*\
@@ -35,9 +39,8 @@ mod tests {
         )
         .unwrap();
         let work_dir = out_dir("dff");
-        simulate([PRIMITIVES_SRC], "tb_dff", &work_dir)?;
-        let output = read_to_string(work_dir.join("simv.out"))?;
-        println!("{}", output);
+        simulate([PRIMITIVES_SV_SRC], "tb_dff", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
         assert!(
             re.is_match(&output),
             "output should have one setup violation followed by a hold violation"
@@ -62,11 +65,13 @@ mod tests {
             "\
                 (?s)\
                 .*Testing setup violation\
-                .*Timing violation in tb_latch\\.pdut\
+                .*Timing violation\
                 \\s*\\$setup\
+                .*Scope:\\s*tb_latch\\.pdut\
                 .*Testing hold violation\
-                .*Timing violation in tb_latch\\.pdut\
+                .*Timing violation\
                 \\s*\\$hold\
+                .*Scope:\\s*tb_latch\\.pdut\
                 .*Normal operation\
                 .*\\$finish.*\
             ",
@@ -76,20 +81,21 @@ mod tests {
             "\
                 (?s)\
                 .*Testing setup violation\
-                .*Timing violation in tb_latch\\.ndut\
+                .*Timing violation\
                 \\s*\\$setup\
+                .*Scope:\\s*tb_latch\\.ndut\
                 .*Testing hold violation\
-                .*Timing violation in tb_latch\\.ndut\
+                .*Timing violation\
                 \\s*\\$hold\
+                .*Scope:\\s*tb_latch\\.ndut\
                 .*Normal operation\
                 .*\\$finish.*\
             ",
         )
         .unwrap();
         let work_dir = out_dir("latch");
-        simulate([PRIMITIVES_SRC], "tb_latch", &work_dir)?;
-        let output = read_to_string(work_dir.join("simv.out"))?;
-        println!("{}", output);
+        simulate([PRIMITIVES_SV_SRC], "tb_latch", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
         assert!(
             re_p.is_match(&output),
             "output should have one setup violation followed by a hold violation for pos_latch"
@@ -103,6 +109,19 @@ mod tests {
             4,
             "output should have 4 violations"
         );
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rdac() -> Result<()> {
+        let work_dir = out_dir("rdac");
+        simulate([PRIMITIVES_VAMS_SRC], "tb_rdac", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
             0,
