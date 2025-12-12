@@ -1,0 +1,30 @@
+// A simple Verilog-A model for a simple frequency divider.
+// The divider can only perform division of even integers.
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module model_freq_divider(clk_highspeed, clk_divided);
+
+input clk_highspeed; electrical clk_highspeed;
+output clk_divided;  electrical clk_divided;
+
+parameter integer division_factor = 16;
+parameter real t_rise = 5p;
+parameter real t_delay = 50p;
+parameter real vdd = 0.75;
+
+integer count;
+integer sign;
+
+analog begin
+    // Increment counter on rising edge of high-speed clock
+    @(cross(V(clk_highspeed) - vdd/2, 1))
+        count = (count + 1) % division_factor;
+    
+    // Generate divided clock: high for first half of division period
+    sign = count < (division_factor / 2) ? 1 : 0;
+    V(clk_divided) <+ transition(sign * vdd, t_delay, t_rise);
+end
+
+endmodule
