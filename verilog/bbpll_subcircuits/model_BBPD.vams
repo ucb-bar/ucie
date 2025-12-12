@@ -11,7 +11,7 @@ module model_BBPD(clk_ref, clk_fb, early, late);
     output early, late;
 	electrical early, late;
 
-    parameter real vdd = 0.85;
+    parameter real vdd = 0.75;
     parameter real t_rise = 5p;
     parameter real t_delay = 5p;
 
