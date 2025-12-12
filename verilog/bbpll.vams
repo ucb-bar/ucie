@@ -1,0 +1,196 @@
+// ============================================================================
+// Bang-Bang Phase-Locked Loop (BBPLL) - Top-Level Verilog-A Model
+// ============================================================================
+//
+// ============================================================================
+// WARNING: TRANSIENT NOISE MUST BE ENABLED FOR PLL TO LOCK!
+// ============================================================================
+//
+// This BBPLL model requires transient noise to be enabled in Spectre for 
+// proper locking behavior. Without noise, the bang-bang phase detector may
+// not provide sufficient dithering for the loop to converge.
+//
+// To enable transient noise in Spectre:
+//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
+//      Example: noisefmax=64G
+//   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
+//      Example: tran tran stop=100u noisefmax=64G
+//   3. Command line: spectre +aps netlist.scs +noisefmax=64G
+//
+// Recommended noisefmax: At least 64GHz (above the DCO frequency)
+//
+// ============================================================================
+//
+// Description:
+//   A complete digital PLL system using bang-bang phase detection. The PLL
+//   locks an 8GHz DCO to a 100MHz reference crystal oscillator using a
+//   digital loop filter with delta-sigma modulation for fractional control.
+//
+// Architecture:
+//   - Reference Crystal: 100MHz clock with white phase noise floor
+//   - DCO: 8GHz digitally-controlled oscillator with phase noise modeling
+//   - Main Divider: ÷80 frequency divider for feedback path
+//   - BBPD: Bang-bang phase detector comparing reference and feedback
+//   - Digital Loop Filter: PI controller (Kp + Ki/(1-z^-1))
+//   - DSM: 1st-order delta-sigma modulator to reduce quantization noise
+//   - DSM Clock Divider: ÷8 divider providing 1GHz clock for DSM
+//
+// Loop Parameters:
+//   - Loop Bandwidth: 10MHz
+//   - Phase Margin: 60°
+//   - Kp = 0.5126, Ki = 0.0563 (pre-computed for desired response)
+//
+// Ports:
+//   reset       - Input, active high reset signal
+//   clk_out     - Output, 8GHz DCO output clock
+//   Dctrl_value - Output, digital control value to DCO (for monitoring)
+//
+// Parameters:
+//   vdd                  - Supply voltage (default: 0.75V)
+//   ref_clk_freq         - Reference clock frequency (default: 100MHz)
+//   ref_PN_floor_dBcHz   - Reference phase noise floor (default: -160 dBc/Hz)
+//   dco_PN_WN_100MHz     - DCO white noise at 100MHz offset (default: -130 dBc/Hz)
+//   dco_PN_FN_10kHz      - DCO flicker noise at 10kHz offset (default: -15 dBc/Hz)
+//   Kp, Ki               - Loop filter proportional and integral gains
+//   Dctrl_setpoint       - DCO control setpoint for lock (default: 128)
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module bbpll(reset, clk_out, Dctrl_value);
+
+output clk_out; electrical clk_out; 
+output Dctrl_value; electrical Dctrl_value;
+input reset; electrical reset;
+
+// General parameters
+parameter real vdd = 0.75;
+parameter real ref_clk_freq = 100M;
+parameter real ref_PN_floor_dBcHz = -160;
+parameter real dco_PN_WN_100MHz = -130;    // White noise: -130 dBc/Hz at 100MHz offset
+parameter real dco_PN_FN_10kHz = -15;      // Flicker noise: -15 dBc/Hz at 10kHz offset;
+// Kp and Ki are pre-computed to achieve 10MHz BW and 60 PM
+parameter real Kp = 0.5126;
+parameter real Ki = 0.0563;
+parameter real Dctrl_setpoint = 128;
+parameter real dctrl_reset_value = 128;
+
+// ========== Reference Crystal Oscillator ==========
+electrical clk_ref;
+
+model_ref_crystal #(
+    .steps_per_cycle(100),
+    .vdd(vdd),
+    .osc_freq(ref_clk_freq),
+    .white_noise_floor_dBcHz(ref_PN_floor_dBcHz)
+) ref_crystal_inst(
+    .clk_ref(clk_ref)
+);
+
+// ========== Digitally Controlled Oscillator (DCO) ==========
+electrical Dctrl;
+electrical Vctrl_setpoint;
+electrical dummy_net1;
+
+model_DVCO #(
+    .clk_middle_freq(8G),
+    .Kvco(0),                    // VCO gain doesn't matter since only DCO is used
+    .Kdco(1.25M),
+    .vdd(vdd),
+    .PN_WN_100MHz(dco_PN_WN_100MHz),
+    .PN_FN_10kHz(dco_PN_FN_10kHz),
+    .steps_per_cycle(100),
+    .Dctrl_setpoint(Dctrl_setpoint),
+    .Vctrl_setpoint(0)
+) vco_inst(
+    .Vctrl(Vctrl_setpoint),
+    .Dctrl(Dctrl),
+    .clk_out(clk_out),
+    .phase_noise_out(dummy_net1)
+);
+
+// ========== Main Frequency Divider (80) ==========
+electrical clk_fb;
+
+model_freq_divider #(
+    .division_factor(80),           // Divide by 80
+    .t_rise(5p),
+    .t_delay(50p),
+    .vdd(vdd)
+) freq_div_inst(
+    .clk_highspeed(clk_out),
+    .clk_divided(clk_fb)
+);
+
+// ========== Bang-Bang Phase Detector (BBPD) ==========
+electrical early;
+electrical late;
+
+model_BBPD #(
+    .vdd(vdd),
+    .t_rise(5p),
+    .t_delay(5p)
+) bbpd_inst(
+    .clk_ref(clk_ref),
+    .clk_fb(clk_fb),
+    .early(early),
+    .late(late)
+);
+
+// ========== Digital Loop Filter ==========
+electrical Dinteger;
+electrical Dfrac;
+
+model_digital_loop_filter #(
+    .digital_latency(500p),
+    .trise(5p),
+    .vdd(vdd),
+    .dlf_bitwidth(8),
+    .dctrl_reset_value(dctrl_reset_value),
+    .rise_p1_fall_m1(1),
+    .Kp(Kp),
+    .Ki(Ki)
+) dlf_inst(
+    .clk(clk_ref),
+    .reset(reset),
+    .early(early),
+    .late(late),
+    .Dinteger(Dinteger),
+    .Dfrac(Dfrac),
+    .Dctrl(Dctrl_value)
+);
+
+// ========== DSM Clock Divider (8) ==========
+electrical clk_dsm;
+
+model_freq_divider #(
+    .division_factor(8),            // Divide by 8 to get 1GHz from 8GHz clk_out
+    .t_rise(5p),
+    .t_delay(50p),
+    .vdd(vdd)
+) dsm_freq_div_inst(
+    .clk_highspeed(clk_out),
+    .clk_divided(clk_dsm)
+);
+
+// ========== Delta-Sigma Modulator ==========
+electrical Dfrac_DSM;
+
+model_1storder_DSmodulator #(
+    .vdd(vdd),
+    .t_rise(50p)
+) dsm_inst(
+    .Din_frac(Dfrac),
+    .clk(clk_dsm),
+    .Dout(Dfrac_DSM)
+);
+
+// ========== Control Signal Summation ==========
+analog begin
+    V(Vctrl_setpoint) <+ 0;
+    V(Dctrl) <+ V(Dinteger) + V(Dfrac_DSM);
+end
+
+endmodule

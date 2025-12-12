@@ -1,0 +1,46 @@
+// BBPD is implemented using arbiter style.
+// Whichever arrives first will trigger the output, and the output is reset when both inputs are low.
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module model_BBPD(clk_ref, clk_fb, early, late);
+
+    input clk_ref, clk_fb;
+	electrical clk_ref, clk_fb;
+    output early, late;
+	electrical early, late;
+
+    parameter real vdd = 0.75;
+    parameter real t_rise = 5p;
+    parameter real t_delay = 5p;
+
+    integer early_value, late_value;
+    integer compared;
+
+    analog begin
+        if (V(clk_ref) < vdd / 2 && V(clk_fb) < vdd / 2) begin
+            compared = 0;
+        end
+
+        @(cross(V(clk_ref) - vdd/2, 1)) begin
+            if (compared == 0) begin
+                late_value = 1;
+                early_value = 0;
+                compared = 1;
+            end
+        end
+        @(cross(V(clk_fb) - vdd/2, 1)) begin
+            if (compared == 0) begin
+                early_value = 1;
+                late_value = 0;
+                compared = 1;
+            end
+        end
+
+        V(early) <+ transition(early_value*vdd, t_delay, t_rise);
+        V(late) <+ transition(late_value*vdd, t_delay, t_rise);
+
+    end
+
+endmodule
