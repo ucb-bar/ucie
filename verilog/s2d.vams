@@ -1,0 +1,139 @@
+// ============================================================================
+// Single-to-Differential (S2D) Converter - Verilog-A Behavioral Model
+// ============================================================================
+//
+// ============================================================================
+// NOTE: TRANSIENT NOISE RECOMMENDED FOR REALISTIC JITTER SIMULATION
+// ============================================================================
+//
+// This S2D model includes phase noise modeling (white + flicker noise) for
+// both differential outputs to simulate realistic timing jitter. For best
+// accuracy, enable transient noise in Spectre simulations.
+//
+// To enable transient noise in Spectre:
+//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
+//      Example: noisefmax=64G (should exceed clock_frequency)
+//   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
+//      Example: tran tran stop=100n noisefmax=64G
+//   3. Command line: spectre +aps netlist.scs +noisefmax=64G
+//
+// Recommended noisefmax: At least 2× the input clock frequency
+//
+// ============================================================================
+//
+// Description:
+//   A single-ended to differential clock converter with realistic phase noise
+//   and mismatch modeling. Converts a single-ended clock input into true
+//   differential outputs (clk_outp and clk_outn) with independent noise sources
+//   and static path mismatch to model manufacturing variations.
+//
+// Operation:
+//   - Single-ended input clock (clk_in) is converted to differential outputs
+//   - clk_outp follows clk_in with processing delay + noise
+//   - clk_outn is the inverted output (VDD - clk_in) with processing delay + noise
+//   - Each path has independent phase noise (white + flicker)
+//   - Static random mismatch between paths models manufacturing variation
+//
+// Differential Path Characteristics:
+//   - Processing Delay: Nominal delay through the converter (default: 20ps)
+//   - Path Mismatch: Random static timing offset between P and N paths
+//   - Maximum Phase Unbalance: User-specified in degrees (default: 5°)
+//   - Time Unbalance: Converted from phase: Δt = φ / (360° × f_clk)
+//   - Mismatch is randomized per simulation instance (manufacturing variation)
+//
+// Noise Modeling:
+//   - Independent noise sources for each differential path (P and N)
+//   - White Noise: Flat phase noise floor, filtered at Nyquist frequency
+//   - Flicker Noise: 1/f phase noise contribution
+//   - Both scaled by inverter_count to model cumulative stage effects
+//   - Converted to time-domain jitter: Δt = Δφ / (2π × f_clk)
+//
+// Ports:
+//   clk_in   - Input, single-ended clock signal (electrical)
+//   clk_outp - Output, positive differential clock output (electrical)
+//   clk_outn - Output, negative differential clock output (electrical)
+//              Inverted version of clk_in
+//
+// Parameters:
+//   vdd                       - Supply voltage (default: 0.75V)
+//   delay                     - Processing delay through converter (default: 20ps)
+//   max_phase_unbalance       - Maximum phase mismatch in degrees (default: 5°)
+//   clock_frequency           - Input clock frequency for noise modeling (default: 8GHz)
+//   inverter_count            - Number of inverter stages per path for noise scaling (default: 2)
+//   white_noise_floor_dBcHz   - White phase noise floor per inverter (default: -160 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz per inverter (default: -109 dBc/Hz)
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module s2d(clk_in, clk_outp, clk_outn);
+    input clk_in; electrical clk_in;
+    output clk_outp; electrical clk_outp;
+    output clk_outn; electrical clk_outn;
+
+    parameter real vdd = 0.75;
+    parameter real delay = 20p; // processing delay
+    parameter real max_phase_unbalance = 5; // maximum phase unbalance in degrees
+    parameter real clock_frequency = 8G; // input clock frequency
+    parameter real inverter_count = 2; // number of inverters in each output path, used to model noise
+    parameter real white_noise_floor_dBcHz = -160; // white phase noise floor introduced by one single inverter
+    parameter real flicker_noise_1Hz_dBcHz = -109; // flicker phase noise at 1Hz offset introduced by one single inverter
+
+    real max_time_unbalance;
+    real random_unbalance;
+    integer seed;
+    real white_noise_floor_linear;
+    real white_noise_td_p, white_noise_td_n;
+    real white_noise_filtered_p, white_noise_filtered_n;
+    real flicker_noise_1Hz_linear;
+    real flicker_noise_td_p, flicker_noise_td_n;
+    real total_phase_noise_p, total_phase_noise_n;
+    real total_time_noise_p, total_time_noise_n;
+    real delay_max;
+
+    analog begin
+        // Calculate maximum time unbalance from phase unbalance
+        max_time_unbalance = max_phase_unbalance / 360.0 / clock_frequency;
+        
+        // Initialize random seed once at start based on current time
+        @(initial_step) begin
+            seed = $random + $abstime * 1e12;  // Use $random and timestamp to create unique seed
+        end
+        
+        // Model the phase noise introduced by the S2D for positive output
+        // Model one single inverter, then scale the noise by inverter count
+        white_noise_floor_linear = 10**(white_noise_floor_dBcHz/10);
+        white_noise_td_p = white_noise(inverter_count * white_noise_floor_linear);
+        white_noise_td_n = white_noise(inverter_count * white_noise_floor_linear);
+        
+        // Filter the white noise at Nyquist frequency to prevent folding
+        white_noise_filtered_p = laplace_nd(white_noise_td_p, {1.0}, {1.0, 1.0/(`M_PI*clock_frequency)});
+        white_noise_filtered_n = laplace_nd(white_noise_td_n, {1.0}, {1.0, 1.0/(`M_PI*clock_frequency)});
+        
+        flicker_noise_1Hz_linear = 10**(flicker_noise_1Hz_dBcHz/10);
+        flicker_noise_td_p = flicker_noise(inverter_count * flicker_noise_1Hz_linear, 1);
+        flicker_noise_td_n = flicker_noise(inverter_count * flicker_noise_1Hz_linear, 1);
+        
+        total_phase_noise_p = white_noise_filtered_p + flicker_noise_td_p;
+        total_phase_noise_n = white_noise_filtered_n + flicker_noise_td_n;
+        
+        total_time_noise_p = total_phase_noise_p / (2 * `M_PI * clock_frequency);
+        total_time_noise_n = total_phase_noise_n / (2 * `M_PI * clock_frequency);
+        
+        delay_max = delay + max_time_unbalance;
+        
+        // Generate random unbalance for differential path mismatch (static, set at initialization)
+        @(initial_step) begin
+            random_unbalance = $rdist_uniform(seed, -max_time_unbalance, max_time_unbalance);
+        end
+        
+        // Apply delays with phase noise to both outputs
+        V(clk_outp) <+ absdelay(V(clk_in), delay + random_unbalance + total_time_noise_p, delay_max);
+        V(clk_outn) <+ absdelay(vdd - V(clk_in), delay - random_unbalance + total_time_noise_n, delay_max);
+    end
+
+
+
+endmodule
