@@ -11,13 +11,13 @@
 // accuracy, enable transient noise in Spectre simulations.
 //
 // To enable transient noise in Spectre:
-//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
+//   1. In ADE: Simulation  Options  Analog  Set "noisefmax" parameter
 //      Example: noisefmax=64G (should exceed clock_frequency)
 //   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
 //      Example: tran tran stop=100n noisefmax=64G
 //   3. Command line: spectre +aps netlist.scs +noisefmax=64G
 //
-// Recommended noisefmax: At least 2× the input clock frequency
+// Recommended noisefmax: At least 2 the input clock frequency
 //
 // ============================================================================
 //
@@ -29,20 +29,20 @@
 // Operation:
 //   - Input clock (clk_in) is delayed by a digitally programmable amount
 //   - 8-bit control word (dl_ctrl) sets the delay: 0 = minimum, 255 = maximum
-//   - Delay ranges from delay_offset to (delay_offset + 255 × delay_gain)
+//   - Delay ranges from delay_offset to (delay_offset + 255  delay_gain)
 //   - Phase noise from inverters is modeled and added as timing jitter
 //
 // Delay Characteristics:
 //   - Resolution: 8-bit control (256 delay steps)
-//   - Delay Range: delay_offset to delay_offset + delay_gain × 255
+//   - Delay Range: delay_offset to delay_offset + delay_gain  255
 //   - Default Range: 10ps to 265ps (1ps per LSB)
-//   - Transfer Function: Delay = delay_offset + delay_gain × ctrl_value + jitter
+//   - Transfer Function: Delay = delay_offset + delay_gain  ctrl_value + jitter
 //
 // Noise Modeling:
 //   - White Noise: Flat phase noise floor, filtered at Nyquist frequency
 //   - Flicker Noise: 1/f phase noise contribution
 //   - Both scaled by inverter_count to model cumulative stage effects
-//   - Converted to time-domain jitter: Δt = Δφ / (2π × f_clk)
+//   - Converted to time-domain jitter: t =  / (2  f_clk)
 //
 // Ports:
 //   clk_in   - Input, clock signal to be delayed (electrical)
@@ -107,7 +107,7 @@ module dcdl(clk_in, dl_ctrl, clk_out);
         // Convert digital bus to numeric value using generate for loop
         ctrl_value = 0;
         for (i = 0; i < `DCDL_CTRL_BITWIDTH; i = i + 1) begin
-            ctrl_value = ctrl_value + V(dl_ctrl[i]) * pow(2, i);
+            ctrl_value = ctrl_value + (V(dl_ctrl[i]) > vdd / 2) * pow(2, i);
         end
         
         V(clk_out) <+ absdelay(V(clk_in), delay_offset + delay_gain * ctrl_value + total_time_noise, delay_max);
