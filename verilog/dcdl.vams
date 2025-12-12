@@ -11,53 +11,72 @@
 // accuracy, enable transient noise in Spectre simulations.
 //
 // To enable transient noise in Spectre:
-//   1. In ADE: Simulation  Options  Analog  Set "noisefmax" parameter
+//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
 //      Example: noisefmax=64G (should exceed clock_frequency)
 //   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
 //      Example: tran tran stop=100n noisefmax=64G
 //   3. Command line: spectre +aps netlist.scs +noisefmax=64G
 //
-// Recommended noisefmax: At least 2 the input clock frequency
+// Recommended noisefmax: At least 2× the input clock frequency
 //
 // ============================================================================
 //
 // Description:
-//   A digitally controlled delay element with 8-bit control resolution.
-//   Models delay variation and phase noise contributions from inverter stages.
-//   Suitable for DLL, PLL, and general clock distribution applications.
+//   A digitally controlled delay element with 8-bit control resolution that
+//   regenerates the output clock from input transitions. The output waveform
+//   is synthesized using transition() functions triggered by input edges,
+//   preserving only timing information while reshaping the signal.
+//
+// IMPORTANT - Output Waveform Behavior:
+//   This model uses EDGE-TRIGGERED regeneration - it detects rising/falling
+//   edges of the input and generates corresponding delayed transitions at the
+//   output. The output waveform shape (rise/fall times, levels) is determined
+//   by model parameters (t_slew, vdd), NOT by the input waveform shape.
+//   
+//   This means:
+//   - Input timing (edge positions) IS preserved (with programmed delay + jitter)
+//   - Input waveform shape (slew rate, amplitude) IS NOT preserved
+//   - Output has clean rail-to-rail transitions with controlled slew rate
+//   - Suitable for clock distribution where timing matters, not waveform shape
 //
 // Operation:
-//   - Input clock (clk_in) is delayed by a digitally programmable amount
-//   - 8-bit control word (dl_ctrl) sets the delay: 0 = minimum, 255 = maximum
-//   - Delay ranges from delay_offset to (delay_offset + 255  delay_gain)
-//   - Phase noise from inverters is modeled and added as timing jitter
+//   1. Input rising edge detected → output rises after (delay + jitter)
+//   2. Input falling edge detected → output falls after (delay + jitter)
+//   3. Delay = delay_offset + delay_gain × ctrl_value + sampled_jitter
+//   4. Jitter is sampled once per rising edge and held constant for that cycle
 //
 // Delay Characteristics:
-//   - Resolution: 8-bit control (256 delay steps)
-//   - Delay Range: delay_offset to delay_offset + delay_gain  255
+//   - Control Resolution: 8-bit digital bus (256 delay steps)
+//   - Delay Range: delay_offset to (delay_offset + 255 × delay_gain)
 //   - Default Range: 10ps to 265ps (1ps per LSB)
-//   - Transfer Function: Delay = delay_offset + delay_gain  ctrl_value + jitter
+//   - Delay Formula: total_delay = delay_offset + delay_gain × ctrl_value + jitter
 //
 // Noise Modeling:
 //   - White Noise: Flat phase noise floor, filtered at Nyquist frequency
 //   - Flicker Noise: 1/f phase noise contribution
-//   - Both scaled by inverter_count to model cumulative stage effects
-//   - Converted to time-domain jitter: t =  / (2  f_clk)
+//   - Noise scaled by inverter_count to model cumulative inverter stage effects
+//   - Phase noise converted to timing jitter: Δt = Δφ / (2π × f_clk)
+//   - Jitter sampled at each input rising edge (discrete, sample-and-hold)
 //
 // Ports:
 //   clk_in   - Input, clock signal to be delayed (electrical)
-//   dl_ctrl  - Input, 8-bit digital control bus [7:0] (electrical)
-//              LSB at bit 0, MSB at bit 7; higher value = longer delay
-//   clk_out  - Output, delayed clock signal (electrical)
+//              Only edge timing is used; waveform shape is ignored
+//   dl_ctrl  - Input, 8-bit digital control bus [7:0] (electrical array)
+//              Bit 0 = LSB, Bit 7 = MSB; higher value = longer delay
+//              Each bit interpreted as logic high if voltage > vdd/2
+//   clk_out  - Output, regenerated delayed clock (electrical)
+//              Rail-to-rail signal (0 to vdd) with controlled slew rate
 //
 // Parameters:
-//   vdd                       - Supply voltage (default: 0.75V)
-//   delay_gain                - Delay per LSB of control word (default: 1ps)
-//   delay_offset              - Minimum delay at ctrl=0 (default: 10ps)
+//   vdd                       - Supply voltage / output signal amplitude (default: 0.75V)
+//   delay_gain                - Delay increment per LSB of control word (default: 1ps)
+//   delay_offset              - Minimum delay when ctrl=0 (default: 10ps)
 //   inverter_count            - Number of inverter stages for noise scaling (default: 4)
-//   clock_frequency           - Input clock frequency for noise modeling (default: 8GHz)
-//   white_noise_floor_dBcHz   - White phase noise floor per inverter (default: -160 dBc/Hz)
-//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz per inverter (default: -109 dBc/Hz)
+//                               Higher count = more cumulative noise
+//   clock_frequency           - Input clock frequency for noise-to-jitter conversion (default: 8GHz)
+//   white_noise_floor_dBcHz   - White phase noise floor per single inverter (default: -160 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz offset per inverter (default: -109 dBc/Hz)
+//   t_slew                    - Output transition (rise/fall) time (default: 5ps)
 //
 // ============================================================================
 
@@ -77,6 +96,7 @@ module dcdl(clk_in, dl_ctrl, clk_out);
     parameter real clock_frequency = 8G; // frequency of the input clock
     parameter real white_noise_floor_dBcHz = -160; // white phase noise floor introduced by one single inverter
     parameter real flicker_noise_1Hz_dBcHz = -109; // flicker phase noise at 1Hz offset introduced by one single inverter
+    parameter real t_slew = 5p; // output transition time
 
     real ctrl_value;
     real white_noise_floor_linear;
@@ -85,10 +105,14 @@ module dcdl(clk_in, dl_ctrl, clk_out);
     real flicker_noise_1Hz_linear;
     real flicker_noise_td;
     real total_phase_noise;
-    real total_time_noise;
+    real total_time_noise_sampled = 0;  // Sampled (discrete) jitter value - initialized to 0
+    real total_time_noise_bounded = 0;  // Bounded jitter - initialized to 0
     real delay_max;
+    real max_jitter;
     
     genvar i;
+
+    integer sign = 0;
 
     analog begin
         // model the phase noise introduced by the DCDL
@@ -100,7 +124,11 @@ module dcdl(clk_in, dl_ctrl, clk_out);
         flicker_noise_1Hz_linear = 10**(flicker_noise_1Hz_dBcHz/10);
         flicker_noise_td = flicker_noise(inverter_count * flicker_noise_1Hz_linear, 1);
         total_phase_noise = white_noise_filtered + flicker_noise_td;
-        total_time_noise = total_phase_noise / (2 * `M_PI * clock_frequency);
+        
+        // Sample noise only at rising edge of input clock (discrete jitter)
+        @(cross(V(clk_in) - vdd/2, 0)) begin
+            total_time_noise_sampled = total_phase_noise / (2 * `M_PI * clock_frequency);
+        end
         
         delay_max = delay_gain * (2**`DCDL_CTRL_BITWIDTH - 1) + delay_offset;
         
@@ -109,8 +137,11 @@ module dcdl(clk_in, dl_ctrl, clk_out);
         for (i = 0; i < `DCDL_CTRL_BITWIDTH; i = i + 1) begin
             ctrl_value = ctrl_value + (V(dl_ctrl[i]) > vdd / 2) * pow(2, i);
         end
-        
-        V(clk_out) <+ absdelay(V(clk_in), delay_offset + delay_gain * ctrl_value + total_time_noise, delay_max);
+
+        @(cross(V(clk_in) - vdd/2, 1)) sign = 1;
+        @(cross(V(clk_in) - vdd/2, -1)) sign = 0;
+        V(clk_out) <+ transition(vdd * sign, (delay_offset + delay_gain * ctrl_value + total_time_noise_sampled - t_slew / 2), t_slew);
+
     end
 
 
