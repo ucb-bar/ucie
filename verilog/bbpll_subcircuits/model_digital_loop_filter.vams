@@ -15,7 +15,7 @@ output Dctrl;    electrical Dctrl;
 
 parameter real digital_latency = 500p;
 parameter real trise = 50p;
-parameter real vdd = 0.85;
+parameter real vdd = 0.75;
 parameter real dlf_bitwidth = 8;
 parameter real dctrl_reset_value = 128;
 parameter integer rise_p1_fall_m1 = 1;
