@@ -1,0 +1,96 @@
+// ============================================================================
+// BBPLL Testbench - Spectre Simulation
+// ============================================================================
+//
+// Description:
+//   Testbench for Bang-Bang Phase-Locked Loop (BBPLL) behavioral model.
+//   Tests PLL lock behavior with transient noise enabled.
+//
+// Simulation Setup:
+//   - 100us transient simulation for lock observation
+//   - Transient noise enabled (REQUIRED for BBPLL operation)
+//   - Records reference clock, DCO output, and control signals
+//
+// Expected Behavior:
+//   - PLL should lock within ~20-30us
+//   - DCO output: 8GHz locked to 100MHz reference
+//   - Dctrl_value should settle around 128 (default setpoint)
+//
+// ============================================================================
+
+simulator lang=spectre
+global 0
+
+// ============================================================================
+// Include Verilog-AMS Models
+// ============================================================================
+ahdl_include "../bbpll.vams"
+
+// ============================================================================
+// Simulation Options
+// ============================================================================
+simulatorOptions options reltol=1e-4 vabstol=1e-6 iabstol=1e-12 \
+    temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 rforce=1 \
+    maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3 \
+    sensfile="../psf/sens.output" checklimitdest=psf
+
+// ============================================================================
+// Parameters
+// ============================================================================
+parameters vdd_supply=0.75
+parameters sim_time=100u
+
+// ============================================================================
+// Device Under Test: BBPLL
+// ============================================================================
+X_bbpll (reset clk_out Dctrl_value) bbpll \
+    vdd=vdd_supply \
+    ref_clk_freq=100M \
+    ref_PN_floor_dBcHz=-160 \
+    dco_PN_WN_100MHz=-130 \
+    dco_PN_FN_10kHz=-15 \
+    Kp=0.5126 \
+    Ki=0.0563 \
+    Dctrl_setpoint=128 \
+    dctrl_reset_value=128
+
+// ============================================================================
+// Reset Signal Generator
+// ============================================================================
+// Active high reset: 1us pulse at start
+Vreset (reset 0) vsource type=pulse val0=0 val1=vdd_supply period=1 \
+    delay=0 rise=10p fall=10p width=1u
+
+// ============================================================================
+// Load Capacitors (Optional - for realistic loading)
+// ============================================================================
+Cload_clk (clk_out 0) capacitor c=10f
+Cload_ctrl (Dctrl_value 0) capacitor c=1f
+
+// ============================================================================
+// Analysis: Transient with Noise
+// ============================================================================
+// CRITICAL: noisefmax MUST be enabled for BBPLL to lock properly
+// Set noisefmax above DCO frequency (64G minimum, 100G recommended)
+tran_analysis tran stop=sim_time errpreset=conservative \
+    noisefmax=100G annotate=status
+
+// ============================================================================
+// Output Data Saving
+// ============================================================================
+// Save all signals for post-processing
+save X_bbpll:clk_ref        // Reference clock (100MHz)
+save clk_out                 // DCO output (8GHz)
+save Dctrl_value             // Digital control value
+save reset                   // Reset signal
+save X_bbpll:clk_fb          // Feedback clock (100MHz after ÷80)
+save X_bbpll:early           // BBPD early signal
+save X_bbpll:late            // BBPD late signal
+save X_bbpll:Dinteger        // Integer part of control
+save X_bbpll:Dfrac           // Fractional part of control
+save X_bbpll:Dfrac_DSM       // Delta-sigma modulated fractional control
+save X_bbpll:clk_dsm         // DSM clock (1GHz)
+
+// ============================================================================
+// End of Testbench
+// ============================================================================
