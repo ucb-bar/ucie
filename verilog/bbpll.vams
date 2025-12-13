@@ -58,6 +58,12 @@
 
 `include "constants.vams"
 `include "disciplines.vams"
+`include "bbpll_subcircuits/model_ref_crystal.vams"
+`include "bbpll_subcircuits/model_DVCO.vams"
+`include "bbpll_subcircuits/model_freq_divider.vams"
+`include "bbpll_subcircuits/model_BBPD.vams"
+`include "bbpll_subcircuits/model_digital_loop_filter.vams"
+`include "bbpll_subcircuits/model_1storder_DSmodulator.vams"
 
 module bbpll(reset, clk_out, Dctrl_value);
 
