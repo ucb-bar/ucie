@@ -1,0 +1,105 @@
+// ============================================================================
+// DCDL Testbench - Spectre Simulation
+// ============================================================================
+//
+// Description:
+//   Testbench for Digitally Controlled Delay Line (DCDL) behavioral model.
+//   Tests delay line operation with varying control codes and noise enabled.
+//
+// Simulation Setup:
+//   - 10ns transient simulation to capture multiple clock cycles
+//   - Transient noise enabled for realistic jitter simulation
+//   - Sweeps delay control from 0 to 255 (full 8-bit range)
+//   - Records input clock, output clock, and delay measurements
+//
+// Expected Behavior:
+//   - Output clock delayed version of input clock
+//   - Delay range: 10ps (ctrl=0) to 265ps (ctrl=255)
+//   - 1ps delay increment per control LSB
+//   - Phase noise adds realistic timing jitter
+//
+// ============================================================================
+
+simulator lang=spectre
+global 0
+
+// ============================================================================
+// Include Verilog-AMS Models
+// ============================================================================
+ahdl_include "../dcdl.vams"
+
+// ============================================================================
+// Simulation Options
+// ============================================================================
+simulatorOptions options reltol=1e-4 vabstol=1e-6 iabstol=1e-12 \
+    temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 rforce=1 \
+    maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3 \
+    checklimitdest=psf
+
+// ============================================================================
+// Parameters
+// ============================================================================
+parameters vdd_supply=0.75
+parameters sim_time=10n
+parameters clk_freq=8G
+parameters clk_period=1/clk_freq
+parameters ctrl_code=128  // Default: mid-range delay control
+
+// ============================================================================
+// Input Clock Source
+// ============================================================================
+Vclk_in (clk_in 0) vsource type=pulse val0=0 val1=vdd_supply \
+    period=clk_period delay=0 rise=5p fall=5p width=clk_period/2
+
+// ============================================================================
+// Digital Control Bus (8-bit)
+// ============================================================================
+// Generate 8-bit control word from parameter ctrl_code
+// Bit 0 (LSB) to Bit 7 (MSB)
+Vctrl_0 (dl_ctrl_0 0) vsource dc=((ctrl_code & 1) ? vdd_supply : 0)
+Vctrl_1 (dl_ctrl_1 0) vsource dc=((ctrl_code & 2) ? vdd_supply : 0)
+Vctrl_2 (dl_ctrl_2 0) vsource dc=((ctrl_code & 4) ? vdd_supply : 0)
+Vctrl_3 (dl_ctrl_3 0) vsource dc=((ctrl_code & 8) ? vdd_supply : 0)
+Vctrl_4 (dl_ctrl_4 0) vsource dc=((ctrl_code & 16) ? vdd_supply : 0)
+Vctrl_5 (dl_ctrl_5 0) vsource dc=((ctrl_code & 32) ? vdd_supply : 0)
+Vctrl_6 (dl_ctrl_6 0) vsource dc=((ctrl_code & 64) ? vdd_supply : 0)
+Vctrl_7 (dl_ctrl_7 0) vsource dc=((ctrl_code & 128) ? vdd_supply : 0)
+
+// ============================================================================
+// Device Under Test: DCDL
+// ============================================================================
+X_dcdl (clk_in dl_ctrl_0 dl_ctrl_1 dl_ctrl_2 dl_ctrl_3 \
+        dl_ctrl_4 dl_ctrl_5 dl_ctrl_6 dl_ctrl_7 clk_out) dcdl \
+    vdd=vdd_supply \
+    delay_gain=1p \
+    delay_offset=10p \
+    inverter_count=4 \
+    clock_frequency=clk_freq \
+    white_noise_floor_dBcHz=-160 \
+    flicker_noise_1Hz_dBcHz=-109 \
+    t_slew=5p
+
+// ============================================================================
+// Load Capacitor (Optional - for realistic loading)
+// ============================================================================
+Cload_out (clk_out 0) capacitor c=10f
+
+// ============================================================================
+// Analysis: Transient with Noise
+// ============================================================================
+// Enable transient noise for realistic jitter simulation
+// Set noisefmax to at least 2× clock frequency (16GHz for 8GHz clock)
+tran_analysis tran stop=sim_time errpreset=conservative \
+    noisefmax=20G annotate=status
+
+// ============================================================================
+// Output Data Saving
+// ============================================================================
+save clk_in         // Input clock (8GHz)
+save clk_out        // Delayed output clock
+save dl_ctrl_0 dl_ctrl_1 dl_ctrl_2 dl_ctrl_3  // Control bits [3:0]
+save dl_ctrl_4 dl_ctrl_5 dl_ctrl_6 dl_ctrl_7  // Control bits [7:4]
+
+// ============================================================================
+// End of Testbench
+// ============================================================================

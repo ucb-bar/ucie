@@ -1,0 +1,23 @@
+# Spectre simulation outputs
+*.raw
+*.raw+
+*.ahdlSimDB/
+*.log
+*.log.*
+*.err
+
+# Spectre cache and temporary files
+.spectre*
+.ahdl*
+
+# PSF and design files
+*.psf/
+*.dsn
+*.init
+
+# Waveform database
+*.wdb
+
+# Other simulation artifacts
+*.bak
+*~

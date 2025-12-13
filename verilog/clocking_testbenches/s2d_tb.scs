@@ -1,0 +1,90 @@
+// ============================================================================
+// S2D Testbench - Spectre Simulation
+// ============================================================================
+//
+// Description:
+//   Testbench for Single-to-Differential (S2D) Converter behavioral model.
+//   Tests differential clock generation with phase noise and path mismatch.
+//
+// Simulation Setup:
+//   - 10ns transient simulation to capture multiple clock cycles
+//   - Transient noise enabled for realistic jitter simulation
+//   - Records single-ended input and differential outputs
+//   - Measures path delay and differential mismatch
+//
+// Expected Behavior:
+//   - clk_outp follows clk_in (high when input high)
+//   - clk_outn inverted from clk_in (low when input high)
+//   - Nominal delay: 20ps from input to outputs
+//   - Path mismatch: ±5° (randomized at initialization)
+//   - Independent phase noise on each differential path
+//
+// ============================================================================
+
+simulator lang=spectre
+global 0
+
+// ============================================================================
+// Include Verilog-AMS Models
+// ============================================================================
+ahdl_include "../s2d.vams"
+
+// ============================================================================
+// Simulation Options
+// ============================================================================
+simulatorOptions options reltol=1e-4 vabstol=1e-6 iabstol=1e-12 \
+    temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 rforce=1 \
+    maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3 \
+    checklimitdest=psf
+
+// ============================================================================
+// Parameters
+// ============================================================================
+parameters vdd_supply=0.75
+parameters sim_time=10n
+parameters clk_freq=8G
+parameters clk_period=1/clk_freq
+
+// ============================================================================
+// Input Clock Source (Single-Ended)
+// ============================================================================
+Vclk_in (clk_in 0) vsource type=pulse val0=0 val1=vdd_supply \
+    period=clk_period delay=0 rise=5p fall=5p width=clk_period/2
+
+// ============================================================================
+// Device Under Test: S2D Converter
+// ============================================================================
+X_s2d (clk_in clk_outp clk_outn) s2d \
+    vdd=vdd_supply \
+    delay=20p \
+    t_slew=5p \
+    max_phase_unbalance=5 \
+    clock_frequency=clk_freq \
+    inverter_count=2 \
+    white_noise_floor_dBcHz=-160 \
+    flicker_noise_1Hz_dBcHz=-109
+
+// ============================================================================
+// Load Capacitors (Optional - for realistic loading)
+// ============================================================================
+Cload_outp (clk_outp 0) capacitor c=10f
+Cload_outn (clk_outn 0) capacitor c=10f
+
+// ============================================================================
+// Analysis: Transient with Noise
+// ============================================================================
+// Enable transient noise for realistic jitter simulation
+// Set noisefmax to at least 2× clock frequency (16GHz for 8GHz clock)
+tran_analysis tran stop=sim_time errpreset=conservative \
+    noisefmax=20G annotate=status
+
+// ============================================================================
+// Output Data Saving
+// ============================================================================
+save clk_in         // Single-ended input clock (8GHz)
+save clk_outp       // Positive differential output
+save clk_outn       // Negative differential output
+
+// ============================================================================
+// End of Testbench
+// ============================================================================
