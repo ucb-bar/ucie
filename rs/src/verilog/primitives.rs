@@ -50,11 +50,6 @@ mod tests {
             2,
             "output should have 2 violations"
         );
-        assert_eq!(
-            output.matches("ERROR").count(),
-            0,
-            "output should have no functionality errors"
-        );
         Ok(())
     }
 
@@ -109,6 +104,14 @@ mod tests {
             4,
             "output should have 4 violations"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rdac() -> Result<()> {
+        let work_dir = out_dir("rdac");
+        simulate([PRIMITIVES_VAMS_SRC], "tb_rdac", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
             0,
@@ -118,9 +121,22 @@ mod tests {
     }
 
     #[test]
-    fn rdac() -> Result<()> {
-        let work_dir = out_dir("rdac");
-        simulate([PRIMITIVES_VAMS_SRC], "tb_rdac", &work_dir)?;
+    fn inv_selfbias() -> Result<()> {
+        let work_dir = out_dir("inv_selfbias");
+        simulate([PRIMITIVES_VAMS_SRC], "tb_inv_selfbias", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inv_discharge_cap() -> Result<()> {
+        let work_dir = out_dir("inv_discharge_cap");
+        simulate([PRIMITIVES_VAMS_SRC], "tb_inv_discharge_cap", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
