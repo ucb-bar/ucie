@@ -6,10 +6,7 @@ pub const TX_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/tx.sv");
 
 #[cfg(test)]
 mod tests {
-    use std::fs::read_to_string;
-
     use anyhow::Result;
-    use regex::Regex;
     use test_log::test;
 
     use crate::{
