@@ -176,9 +176,6 @@ module tb_ser;
                 expected_q.push_back(din[b]);   // push LSB first if that is how your design emits
             end
         end
-
-        $display("Simulation complete.");
-        $finish;
     end
 
     bit expected;
@@ -193,6 +190,9 @@ module tb_ser;
                 $error("Mismatch at time %t: expected %0b, got %0b",
                         $time, expected, dout);
         end
+
+        $display("Simulation complete.");
+        $finish;
     end
 
 endmodule

@@ -11,7 +11,8 @@ pub mod rx;
 pub mod tx;
 
 pub const VERILOG_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../verilog");
-pub const CONTROL_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../spectre/amscf.scs");
+pub const CONTROL_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium/amscf.scs");
+pub const PROBE_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium/probe.tcl");
 
 pub fn get_src_files() -> Vec<PathBuf> {
     ["sv", "v", "vams"]
@@ -46,8 +47,12 @@ pub fn simulate(
             "1ps/1ps",
             "-spectre_args",
             "+preset=mx +mt=32 -ahdllint=warn",
+            "-access",
+            "+rwc",
             "-top",
             tb,
+            "-input",
+            PROBE_FILE,
         ])
         .arg(disciplines)
         .args(src_files.into_iter().map(|f| f.into()))

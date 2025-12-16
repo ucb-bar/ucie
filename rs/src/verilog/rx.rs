@@ -2,7 +2,8 @@ use const_format::concatcp;
 
 use crate::verilog::VERILOG_SRC_DIR;
 
-pub const RX_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/rx.vams");
+pub const RX_SV_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/rx.sv");
+pub const RX_VAMS_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/rx.vams");
 
 #[cfg(test)]
 mod tests {
@@ -14,13 +15,20 @@ mod tests {
     use crate::{
         tests::out_dir,
         verilog::{
+            clocking::CLOCKING_SRC,
             primitives::{PRIMITIVES_SV_SRC, PRIMITIVES_VAMS_SRC},
-            rx::RX_SRC,
+            rx::{RX_SV_SRC, RX_VAMS_SRC},
             simulate,
         },
     };
 
-    const SRC_FILES: &[&str] = &[RX_SRC, PRIMITIVES_SV_SRC, PRIMITIVES_VAMS_SRC];
+    const SRC_FILES: &[&str] = &[
+        RX_SV_SRC,
+        RX_VAMS_SRC,
+        PRIMITIVES_SV_SRC,
+        PRIMITIVES_VAMS_SRC,
+        CLOCKING_SRC,
+    ];
 
     #[test]
     fn rx_afe() -> Result<()> {
@@ -32,6 +40,20 @@ mod tests {
             0,
             "output should have no functionality errors"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn des12() -> Result<()> {
+        let work_dir = out_dir("des12");
+        simulate(SRC_FILES, "tb_des12", &work_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tree_des32() -> Result<()> {
+        let work_dir = out_dir("tree_des32");
+        simulate(SRC_FILES, "tb_des", &work_dir)?;
         Ok(())
     }
 }
