@@ -1,0 +1,172 @@
+module driver #(
+    parameter integer CTL_BITS  = 5, // Number of control bits
+    parameter integer NSEG  = 32, // Number of segments
+    parameter integer RSEG  = 864, // Resistance of each segment
+    parameter integer ROFFSEG  = 1000000 // Off resistance of each segment
+)(
+    input din,
+    input [CTL_BITS-1:0] pu_ctl, pd_ctlb,
+    input driver_en, driver_enb,
+    output dout,
+    inout vdd, vss
+);
+    electrical din, dout, vdd, vss;
+
+    integer i;
+    analog begin
+        // Enable pull-up segments
+        I(vdd, dout) <+ V(vdd, dout) / (((1 - driver_en * (V(din) > V(vdd)/2)) * (ROFFSEG - RSEG) + RSEG)/(NSEG - CTL_BITS));
+        // Enable pull-down segments
+        I(dout, vss) <+ V(dout, vss) / (((1 - (!driver_enb) * (V(din) < V(vdd)/2)) * (ROFFSEG - RSEG) + RSEG)/(NSEG - CTL_BITS));
+
+        // Control pull-up segments
+        for (i = 0; i < CTL_BITS; i=i+1) begin
+            I(vdd, dout) <+ V(vdd, dout) / ((1 - pu_ctl[i] * (V(din) > V(vdd)/2)) * (ROFFSEG - RSEG) + RSEG);
+        end
+        // Control pull-down segments
+        for (i = 0; i < CTL_BITS; i=i+1) begin
+            I(dout, vss) <+ V(dout, vss) / ((1 - (!pd_ctlb[i]) * (V(din) < V(vdd)/2)) * (ROFFSEG - RSEG) + RSEG);
+        end
+    end
+endmodule
+
+module tb_driver_data;
+    parameter CYCLES = 16;    // number of test cycles
+    parameter integer CTL_BITS = 5;
+    parameter integer NSEG = 32;
+    parameter integer RSEG = 864;
+    parameter integer ROFFSEG = 1000000;
+    reg din;
+    reg [CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    reg driver_en, driver_enb;
+    electrical dout;
+    electrical vdd, vss;
+    real dout_sample;
+    
+    driver #(
+        .CTL_BITS(CTL_BITS),
+        .NSEG(NSEG),
+        .RSEG(RSEG),
+        .ROFFSEG(ROFFSEG)
+    ) drv (
+        .din(din),
+        .pu_ctl(pu_ctl),
+        .pd_ctlb(pd_ctlb),
+        .driver_en(driver_en),
+        .driver_enb(driver_enb),
+        .dout(dout),
+        .vdd(vdd),
+        .vss(vss)
+    );
+
+    analog begin
+        V(vdd) <+ 0.4;
+        V(vss) <+ 0;
+        dout_sample = V(dout);
+    end
+
+    initial begin
+        pu_ctl = 0;
+        pd_ctlb = {CTL_BITS{1'b1}};
+        driver_en = 1;
+        driver_enb = 0;
+    end
+
+    integer i;
+    reg actual;
+    initial begin
+        din = 0;
+        #300;
+
+
+        // Apply random inputs and check functionality
+        for (i = 0; i < CYCLES; i=i+1) begin
+            din = $random % 2;
+            #300;
+            actual = dout_sample > 0.2;
+            $display("din = %b, dout = %b (analog %f V)", din, actual, dout_sample);
+            if (actual !== din)
+                $display("Error: dout does not match din");
+        end
+
+        $finish;
+    end
+endmodule
+
+module tb_driver_impedance;
+    parameter integer CTL_BITS = 5;
+    parameter integer NSEG = 32;
+    parameter integer RSEG = 864;
+    parameter integer ROFFSEG = 1000000;
+    reg din;
+    reg [CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    reg driver_en, driver_enb;
+    electrical dout;
+    electrical vdd, vss;
+    real dout_sample;
+    
+    driver #(
+        .CTL_BITS(CTL_BITS),
+        .NSEG(NSEG),
+        .RSEG(RSEG),
+        .ROFFSEG(ROFFSEG)
+    ) drv (
+        .din(din),
+        .pu_ctl(pu_ctl),
+        .pd_ctlb(pd_ctlb),
+        .driver_en(driver_en),
+        .driver_enb(driver_enb),
+        .dout(dout),
+        .vdd(vdd),
+        .vss(vss)
+    );
+
+    analog begin
+        V(vdd) <+ 0.4;
+        V(vss) <+ 0;
+        I(dout, vss) <+ V(dout, vss) / 50;
+        I(vdd, dout) <+ V(vdd, dout) / 50;
+        dout_sample = V(dout);
+    end
+
+    initial begin
+        pu_ctl = 0;
+        pd_ctlb = {CTL_BITS{1'b1}};
+        driver_en = 1;
+        driver_enb = 0;
+    end
+
+    integer i;
+    reg actual;
+    real rtest;
+    real r30;
+    real vpu;
+    real vpd;
+    initial begin
+        rtest = 50;
+        r30 = 1/(1/30. + 1/rtest);
+        vpu = rtest / (r30 + rtest) * 0.4;
+        vpd = r30 / (r30 + rtest) * 0.4;
+        din = 0;
+        #300;
+
+        // Check that lowest code is above 30 ohms
+        $display("din = %b, pd_ctlb = %b, dout = %f", din, pd_ctlb, dout_sample);
+        if (dout_sample < vpd) $display("Error: highest pull-down impedance is too low (vpd = %f)", vpd);
+        pd_ctlb = 0;
+        #300;
+        $display("din = %b, pd_ctlb = %b, dout = %f", din, pd_ctlb, dout_sample);
+        if (dout_sample > vpd) $display("Error: lowest pull-down impedance is too high (vpd = %f)", vpd);
+        din = 1;
+        #300;
+        $display("din = %b, pu_ctl = %b, dout = %f", din, pu_ctl, dout_sample);
+        if (dout_sample > vpu) $display("Error: highest pull-up impedance is too low (vpu = %f)", vpu);
+        pu_ctl = {CTL_BITS{1'b1}};
+        #300;
+        $display("din = %b, pu_ctl = %b, dout = %f", din, pu_ctl, dout_sample);
+        if (dout_sample < vpu) $display("Error: lowest pull-up impedance is too high (vpu = %f)", vpu);
+
+
+        $finish;
+    end
+endmodule

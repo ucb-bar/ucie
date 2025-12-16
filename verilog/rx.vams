@@ -104,7 +104,7 @@ module tb_rx_afe;
             din_dig = $random % 2;
             #300;
             $display("din = %b, dout %b", din_dig, dout);
-            if (dout != din_dig)
+            if (dout !== din_dig)
                 $display("Error: dout does not match din");
         end
 
