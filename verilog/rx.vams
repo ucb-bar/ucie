@@ -1,0 +1,115 @@
+module rx_afe(
+    inout vref,
+    input din,
+    input a_en,
+    input a_pc,
+    input b_en,
+    input b_pc,
+    input sel_a,
+    output dout,
+    inout vdd,
+    inout vss
+);
+    electrical vref, din, dout, vdd, vss, a_cap_p, a_cap_n, b_cap_p, b_cap_n, mux_a_b, mux_a, mux_b_b, mux_b;
+
+    sw a_sw_pc(.p(vref), .n(a_cap_p), .s(a_pc));
+    sw b_sw_pc(.p(vref), .n(b_cap_p), .s(b_pc));
+    sw a_sw_zero(.p(a_cap_n), .n(mux_a_b), .s(a_pc));
+    sw b_sw_zero(.p(b_cap_n), .n(mux_b_b), .s(b_pc));
+    sw a_sw_en(.p(din), .n(a_cap_p), .s(a_en));
+    sw b_sw_en(.p(din), .n(b_cap_p), .s(b_en));
+
+    cap ca(.p(a_cap_p), .n(a_cap_n));
+    cap cb(.p(b_cap_p), .n(b_cap_n));
+    
+    inv a_inv_pc(.a(a_cap_n), .o(mux_a_b), .vdd(vdd), .vss(vss));
+    inv b_inv_pc(.a(b_cap_n), .o(mux_b_b), .vdd(vdd), .vss(vss));
+    inv a_inv_d(.a(mux_a_b), .o(mux_a), .vdd(vdd), .vss(vss));
+    inv b_inv_d(.a(mux_b_b), .o(mux_b), .vdd(vdd), .vss(vss));
+
+    mux m(.a(mux_a), .b(mux_b), .sel_a(sel_a), .o(dout));
+endmodule
+
+module tb_rx_afe;
+    parameter CYCLES = 16;    // number of test cycles
+    parameter VDD = 0.4;
+
+    reg a_en, a_pc, b_en, b_pc, sel_a, din_dig;
+    electrical vref, din, vdd, vss;
+    wire dout;
+    rx_afe afe(
+        .vref(vref),
+        .din(din),
+        .a_en(a_en),
+        .a_pc(a_pc),
+        .b_en(b_en),
+        .b_pc(b_pc),
+        .sel_a(sel_a),
+        .dout(dout),
+        .vdd(vdd),
+        .vss(vss)
+    );
+
+    analog begin
+        V(vdd) <+ VDD;
+        V(vss) <+ 0;
+        V(vref) <+ VDD * 5/16;
+        V(din) <+ din_dig * VDD * 5/8;
+    end
+
+    initial begin
+        a_pc = 1;
+        b_pc = 1;
+        a_en = 0;
+        b_en = 0;
+        sel_a = 1;
+    end
+
+    initial begin
+        #1000;
+        forever begin
+            a_pc = 0;
+            #100;
+            a_en = 1;
+            #100;
+            sel_a = 1;
+            #100;
+            b_en = 0;
+            #100;
+            b_pc = 1;
+            #1000;
+            b_pc = 0;
+            #100;
+            b_en = 1;
+            #100;
+            sel_a = 0;
+            #100;
+            a_en = 0;
+            #100;
+            a_pc = 1;
+            #1000;
+        end
+    end
+
+    integer i;
+    initial begin
+        din_dig = 0;
+        $display("waiting for a_pc");
+        @(negedge a_pc);
+        #300;
+
+
+        // Apply random inputs
+        for (i = 0; i < CYCLES; i=i+1) begin
+            din_dig = $random % 2;
+            #300;
+            $display("din = %b, dout %b", din_dig, dout);
+            if (dout != din_dig)
+                $display("Error: dout does not match din");
+        end
+
+        $finish;
+    end
+
+endmodule
+

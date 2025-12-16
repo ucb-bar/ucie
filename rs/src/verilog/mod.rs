@@ -4,10 +4,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use tracing::info;
 
 pub mod clocking;
 pub mod primitives;
+pub mod rx;
 pub mod tx;
 
 pub const VERILOG_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../verilog");
@@ -45,7 +45,7 @@ pub fn simulate(
             "-timescale",
             "1ps/1ps",
             "-spectre_args",
-            "+preset=mx +mt=32",
+            "+preset=mx +mt=32 -ahdllint=warn",
             "-top",
             tb,
         ])

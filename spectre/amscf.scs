@@ -3,6 +3,10 @@
 // ****************************************************************
 simulator lang=spectre 
 
-tran tran stop=1u annotate=status 
+global 0
 
+amsd {
+    ie vsup=0.4
+}
 
+tran tran stop=1u annotate=status

@@ -31,11 +31,13 @@ module tb_rdac;
     localparam integer SEL_MAX = (1 << SEL_BITS) - 1;
 
     // Electrical nets
-    electrical vdd, vss, out0, out1, low, high, cmp_out;
+    electrical vdd, vss, out0, out1, low, high;
 
     // Digital select buses
     reg [SEL_BITS:0] sel0;
     reg [SEL_BITS:0] sel1;
+
+    wire cmp_out;
 
     integer result;
 
@@ -68,7 +70,6 @@ module tb_rdac;
     analog begin
         V(vdd) <+ 0.4;   // 0.4 V supply
         V(vss) <+ 0.0;   // ground
-        result = V(cmp_out);
     end
 
     initial begin
@@ -78,7 +79,7 @@ module tb_rdac;
         // Sweep full ladder range
         repeat (SEL_MAX) begin
             #20;
-            if (result != 0) $display("Error: out0 should be less than out1");
+            if (cmp_out != 0) $display("Error: out0 should be less than out1");
             else $display("Correct comparison output for sel0 = %b, sel1 = %b", sel0, sel1);
             sel0 = sel0 + 1;
             sel1 = sel1 + 1;
@@ -90,7 +91,7 @@ module tb_rdac;
         // Sweep full ladder range
         repeat (SEL_MAX) begin
             #20;
-            if (result != 1) $display("Error: out1 should be less than out0");
+            if (cmp_out != 1) $display("Error: out1 should be less than out0");
             else $display("Correct comparison output for sel0 = %b, sel1 = %b", sel0, sel1);
             sel0 = sel0 + 1;
             sel1 = sel1 + 1;
@@ -101,4 +102,146 @@ module tb_rdac;
     end
 
 
+endmodule
+
+module inv(a, o, vdd, vss);
+    parameter real VTH = 0.5; // VTH as a fraction of VDD
+    parameter real GAIN = 1000;
+    input a;
+    output o;
+    inout vdd, vss;
+    electrical a, o, vdd, vss;
+    real vout_clipped;
+
+    analog begin
+        vout_clipped = -(V(a) - VTH * V(vdd)) * GAIN;
+
+        if (vout_clipped > V(vdd))
+            vout_clipped = V(vdd);
+        if (vout_clipped < V(vss))
+            vout_clipped = V(vss);
+
+        V(o) <+ vout_clipped;
+    end
+endmodule
+
+module tb_inv_selfbias;
+    electrical o, vdd, vss;
+    inv dut(.a(o), .o(o), .vdd(vdd), .vss(vss));
+    real out;
+    analog begin
+        V(vdd) <+ 0.4;
+        V(vss) <+ 0;
+        out = V(o);
+    end
+
+    initial begin
+        #10
+        $display("Vout = %f", out);
+        if (abs(out - 0.2) > 0.01) begin
+            $display("Error: incorrect Vout");
+        end
+        $finish;
+    end
+endmodule
+
+
+// Digital to Electrical converter
+connectmodule d2e (din, eout);
+    input din;
+    output eout;
+    logic din;
+    electrical eout;
+    
+    parameter real VDD = 0.4;
+    parameter real TRISE = 5p;
+    parameter real TFALL = 5p;
+    
+    analog begin
+        if (din)
+            V(eout) <+ transition(VDD, 0, TRISE);
+        else
+            V(eout) <+ transition(0, 0, TFALL);
+    end
+    
+endmodule
+
+// Electrical to Digital converter
+connectmodule e2d (ein, dout);
+    input ein;
+    output dout;
+    electrical ein;
+    logic dout;
+    
+    parameter real VDD = 0.75;
+    parameter real THRESH = VDD/2;  // vdd/2
+    parameter real TD = 0p;  // delay
+    
+    reg dout_reg = 1'b0;
+    
+    always @(cross(V(ein) - THRESH, 0)) begin
+        if (V(ein) > THRESH)
+            dout_reg <= #(TD) 1'b1;
+        else
+            dout_reg <= #(TD) 1'b0;
+    end
+    
+    assign dout = dout_reg;
+    
+endmodule
+
+module cap(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real C=1e-12 from [0:inf);
+    parameter real R_LEAK=1000 from [0:inf);
+
+    analog begin
+        I(p,n) <+ C*ddt(V(p,n));
+        I(p,n) <+ V(p,n) / R_LEAK;
+    end
+endmodule
+
+module sw(p, n, s);
+    parameter real R_ON=1 from [0:inf);
+    input s;
+    output p, n;
+    logic s;
+    electrical p, n;
+
+    analog begin
+	    V(p, n) <+ I(p, n) * R_ON * limexp(20*(1 - transition(s, 0, 10e-12)));
+    end
+endmodule
+
+module tb_inv_discharge_cap;
+    electrical a, o, vdd, vss;
+    reg pc;
+
+    inv dut(.a(a), .o(o), .vdd(vdd), .vss(vss));
+    sw s(.p(a), .n(o), .s(pc));
+    cap c(.p(vdd), .n(a));
+    real out;
+    analog begin
+        V(vdd) <+ 0.4;
+        V(vss) <+ 0;
+        out = V(vdd) - V(a);
+    end
+
+    initial begin
+        pc = 1;
+        $display("Vout = %f", out);
+        #10
+        pc = 0;
+        $display("Vout = %f", out);
+        if (abs(out - 0.2) > 0.01) begin
+            $display("Error: incorrect Vout");
+        end
+        #100000
+        $display("Vout = %f", out);
+        if (abs(out) > 0.01) begin
+            $display("Error: incorrect Vout");
+        end
+        $finish;
+    end
 endmodule
