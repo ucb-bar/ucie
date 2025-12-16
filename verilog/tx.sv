@@ -1,5 +1,66 @@
 `timescale 1ps/1ps
 
+module txdata #(
+    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
+    parameter real MUX_DELAY  = 5.0, // Mux delay in ps
+    parameter integer SER_STAGES  = 5, // Number of serializer stages
+    parameter integer DRIVER_CTL_BITS  = 5, // Number of driver control bits
+    parameter integer DL_CTL_BITS  = 5 // Number of delay line control bits
+)(
+    input logic [2**SER_STAGES-1:0] din,
+    input logic clkp, clkn,
+    input logic rstb,
+    output logic dout,
+    input logic [DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb,
+    input logic driver_en, driver_enb,
+    input logic [DL_CTL_BITS-1:0] dl_ctrl,
+    input vdd, vss
+);
+
+    logic clkin;
+    dcdl dl(.clkin(clkp), .dl_ctrl(dl_ctrl), .clkout(clkin));
+
+    // TODO: ensure serializer samples async queue correctly
+    // for different delay line codes.
+    logic [SER_STAGES-1:0] serclk;
+    assign serclk[0] = clkin;
+    generate
+        if (SER_STAGES > 1) begin
+            clkdiv #(
+                .STAGES(SER_STAGES - 1)
+            ) clkdiv (
+                .clkin(clkin),
+                .clkout(serclk[SER_STAGES-1:1]),
+                .rstb(rstb)
+            );
+        end
+    endgenerate
+    wire serdout;
+    tree_ser #(
+        .STAGES(SER_STAGES),
+        .T_CLKQ_DQ(T_CLKQ_DQ),
+        .MUX_DELAY(MUX_DELAY)
+    ) ser(
+        .din(din),
+        .clk(serclk),
+        .dout(serdout)
+    );
+
+    driver #(
+        .CTL_BITS(DRIVER_CTL_BITS)
+    ) drv (
+        .din(serdout),
+        .pu_ctl(pu_ctl),
+        .pd_ctlb(pd_ctlb),
+        .driver_en(driver_en),
+        .driver_enb(driver_enb),
+        .dout(dout),
+        .vdd(vdd),
+        .vss(vss)
+    );
+
+endmodule
+
 module ser21 #(
     parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
     parameter real MUX_DELAY  = 5.0 // Mux delay in ps
