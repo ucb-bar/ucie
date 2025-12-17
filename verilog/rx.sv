@@ -5,11 +5,14 @@ module des12 (
     input logic clk,
     output logic [1:0] dout
 );
+    wire din_delayed;
     logic d0_int;
+
+    assign #(`DES_IN_DELAY) din_delayed = din;
 
     neg_latch d0_l0 (
         .clkb(clk),
-        .d(din),
+        .d(din_delayed),
         .q(d0_int)
     );
 
@@ -21,7 +24,7 @@ module des12 (
 
     pos_latch d1_l0 (
         .clk(clk),
-        .d(din),
+        .d(din_delayed),
         .q(dout[1])
     );
 
@@ -88,17 +91,15 @@ module tb_des;
 
     parameter STAGES = `SERDES_STAGES;
     localparam CYCLES = 16;    // number of test cycles
-    localparam DIN_DELAY = `T_HOLD_DEFAULT;    // delay after fast clock edge that din changes
-    localparam STAGE_DELAY = 100;    // delay of each stage
+    localparam DIN_DELAY = `T_HOLD_DEFAULT; // delay after fast clock edge that din changes
 
     logic clk;
     logic [STAGES-1:0] desclk;
-    logic [STAGES-1:0] clk_int;
     logic rstb;
     logic [2**STAGES-1:0] dout;
     logic din;
 
-    assign clk_int[0] = clk;
+    assign desclk[0] = clk;
 
     generate
         if (STAGES > 1) begin
@@ -106,15 +107,11 @@ module tb_des;
                 .STAGES(STAGES - 1)
             ) clkdiv (
                 .clkin(clk),
-                .clkout(clk_int[STAGES-1:1]),
+                .clkout(desclk[STAGES-1:1]),
                 .rstb(rstb)
             );
         end
     endgenerate
-    for (genvar i = 0; i < STAGES; i++) begin
-        always @(posedge clk_int[i], negedge clk_int[i])
-            desclk[i] = #(STAGE_DELAY * (STAGES - i - 1)) clk_int[i];
-    end
 
 
     tree_des #(
@@ -127,7 +124,7 @@ module tb_des;
 
     // Clock generation
     initial clk = 0;
-    always #500 clk = ~clk; // 500ps period
+    always #(`MIN_PERIOD/2) clk = ~clk; // 500ps period
 
     bit [2**STAGES-1:0] expected_q[$];
     bit [2**STAGES-1:0] next_bits;
