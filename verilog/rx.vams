@@ -32,7 +32,6 @@ endmodule
 
 module tb_rx_afe;
     parameter CYCLES = 16;    // number of test cycles
-    parameter VDD = 0.4;
 
     reg a_en, a_pc, b_en, b_pc, sel_a, din_dig;
     electrical vref, din, vdd, vss;
@@ -51,10 +50,10 @@ module tb_rx_afe;
     );
 
     analog begin
-        V(vdd) <+ VDD;
+        V(vdd) <+ `VDD;
         V(vss) <+ 0;
-        V(vref) <+ VDD * 5/16;
-        V(din) <+ din_dig * VDD * 5/8;
+        V(vref) <+ `RX_V_HIGH / 2;
+        V(din) <+ din_dig * `RX_V_HIGH;
     end
 
     initial begin

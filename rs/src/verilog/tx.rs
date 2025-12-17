@@ -4,6 +4,7 @@ use crate::verilog::VERILOG_SRC_DIR;
 
 pub const TX_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/tx.sv");
 pub const DRIVER_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/driver.vams");
+pub const DCDL_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/dcdl.vams");
 
 #[cfg(test)]
 mod tests {
@@ -15,14 +16,13 @@ mod tests {
     use crate::{
         tests::out_dir,
         verilog::{
-            clocking::CLOCKING_SRC,
             primitives::PRIMITIVES_SV_SRC,
             simulate,
-            tx::{DRIVER_SRC, TX_SRC},
+            tx::{DCDL_SRC, DRIVER_SRC, TX_SRC},
         },
     };
 
-    const SRC_FILES: &[&str] = &[TX_SRC, DRIVER_SRC, CLOCKING_SRC, PRIMITIVES_SV_SRC];
+    const SRC_FILES: &[&str] = &[DCDL_SRC, TX_SRC, DRIVER_SRC, PRIMITIVES_SV_SRC];
 
     #[test]
     fn ser21() -> Result<()> {

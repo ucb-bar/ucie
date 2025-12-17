@@ -81,7 +81,6 @@
 // ============================================================================
 
 `include "constants.vams"
-`include "disciplines.vams"
 
 `define DCDL_CTRL_BITWIDTH 8
 module dcdl(clk_in, dl_ctrl, clk_out);
@@ -105,14 +104,19 @@ module dcdl(clk_in, dl_ctrl, clk_out);
     real flicker_noise_1Hz_linear;
     real flicker_noise_td;
     real total_phase_noise;
-    real total_time_noise_sampled = 0;  // Sampled (discrete) jitter value - initialized to 0
+    real total_time_noise_sampled;  // Sampled (discrete) jitter value - initialized to 0
     real total_time_noise_bounded = 0;  // Bounded jitter - initialized to 0
     real delay_max;
     real max_jitter;
     
     genvar i;
 
-    integer sign = 0;
+    integer sign;
+
+    analog initial begin
+        total_time_noise_sampled = 0;
+        sign = 0;
+    end
 
     analog begin
         // model the phase noise introduced by the DCDL

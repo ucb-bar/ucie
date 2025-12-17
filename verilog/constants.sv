@@ -1,0 +1,49 @@
+// General
+// Supply voltage (V)
+`define VDD 0.75
+// Min period (ps)
+`define MIN_PERIOD 125
+
+// PRIMITIVES
+// Clock-to-q and data-to-q delays of FFs and latches (ps)
+`define T_CLKQ_DQ_DEFAULT 5.0
+// Setup time of FFs and latches (ps)
+`define T_SETUP_DEFAULT 5.0
+// Hold time of FFs and latches (ps)
+`define T_HOLD_DEFAULT 2.0
+// Combinational delay of mux (ps)
+`define MUX_DELAY_DEFAULT 5.0
+// RDAC select bits
+`define RDAC_SEL_BITS 8
+// Inverter threshold voltage (V)
+`define INV_VTH_DEFAULT (`VDD / 2)
+// Inverter gain
+`define INV_GAIN_DEFAULT 1000
+
+// SERDES
+// Number of stages for serializers/deserializers
+`define SERDES_STAGES 5
+// Number of stages for clock dividers
+`define CLKDIV_STAGES (`SERDES_STAGES - 1)
+
+// DRIVER
+// Number of driver pull-up and pull-down control bits
+`define DRIVER_CTL_BITS 5
+// Number of driver segments
+`define DRIVER_SEGMENTS 32
+// Resistance of single driver segment in ohms
+`define DRIVER_R_SEGMENT 864
+// Off resistance of driver
+`define DRIVER_R_OFF_SEGMENT 1000000
+
+// TX
+// TX nominal output impedance
+`define TX_R_OUT 30.0
+
+// RX
+// RX nominal input impedance
+`define RX_R_IN 50.0
+// RX voltage transfer function
+`define RX_VTF (`RX_R_IN / (`RX_R_IN + `TX_R_OUT))
+// High voltage for received data 
+`define RX_V_HIGH (`VDD * `RX_VTF)

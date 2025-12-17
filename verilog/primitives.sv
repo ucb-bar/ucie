@@ -1,8 +1,6 @@
-`timescale 1ps/1ps
-
 // Positive edge triggered D flip-flop
 module pos_dff #(
-    parameter real T_CLKQ = 5.0   // Clock-to-q delay in ps
+    parameter real T_CLKQ = `T_CLKQ_DQ_DEFAULT
 )(
     input logic clk,
     input logic d,
@@ -11,8 +9,8 @@ module pos_dff #(
 );
 
     specify
-        specparam T_SETUP = 5.0;  // Setup time in ps
-        specparam T_HOLD = 2.0;  // Hold time in ps
+        specparam T_SETUP = `T_SETUP_DEFAULT;
+        specparam T_HOLD = `T_HOLD_DEFAULT;
         $setup(d, posedge clk, T_SETUP);
         $hold(posedge clk, d, T_HOLD);
     endspecify
@@ -35,17 +33,17 @@ module tb_dff;
     logic q;
 
     // Ips DUT
-    pos_dff #(
-        .T_CLKQ(5.0)
-    ) dut (
+    pos_dff dut (
         .clk(clk),
         .d(d),
         .q(q)
     );
 
-    // Clock generation (10ps period)
+    real T_PERIOD = `T_SETUP_DEFAULT + `T_HOLD_DEFAULT + 10;
+
+    // Clock generation
     initial clk = 0;
-    always #5 clk = ~clk;
+    always #(T_PERIOD/2) clk = ~clk;
 
     // Test stimulus
     initial begin
@@ -55,7 +53,7 @@ module tb_dff;
 
         // --- Setup violation: change 'd' too close to clock ---
         $display("Testing setup violation at %0t", $time);
-        #7 // 3ps before clk edge, setup required is 5ps
+        #(T_PERIOD - `T_SETUP_DEFAULT + 1)
         d = 1;
         @(posedge clk);
 
@@ -64,7 +62,7 @@ module tb_dff;
         // --- Hold violation: change 'd' too soon after clock ---
         $display("Testing hold violation at %0t", $time);
         @(posedge clk);
-        #1;  // 1ps after clk edge, hold required is 2ps
+        #(`T_HOLD_DEFAULT - 1);  // 1ps after clk edge, hold required is 2ps
         d = 0;
 
         repeat (2) @(posedge clk);
@@ -72,16 +70,16 @@ module tb_dff;
         // Normal operation (no violation)
         $display("Normal operation at %0t", $time);
         @(posedge clk);
-        #3 // 3ps after clk edge and 7ps before next clk edge, satisfies setup/hold
+        #(`T_HOLD_DEFAULT + 1) // 3ps after clk edge and 7ps before next clk edge, satisfies setup/hold
         d = 1;
         @(posedge clk);
-        #6 // Wait for data-to-q delay.
+        #(`T_CLKQ_DQ_DEFAULT + 1) // Wait for data-to-q delay.
         if (q != 1'b1) $error("Incorrect q value (expected %b, got %b)", d, q);
         @(posedge clk);
-        #3
+        #(`T_HOLD_DEFAULT + 1)
         d = 0;
         @(posedge clk);
-        #6
+        #(`T_CLKQ_DQ_DEFAULT + 1)
         if (q != 1'b0) $error("Incorrect q value (expected %b, got %b)", d, q);
 
         repeat (2) @(posedge clk);
@@ -93,7 +91,7 @@ endmodule
 
 // Positive transparent latch
 module pos_latch #(
-    parameter real T_CLKQ_DQ = 5.0     // Clock-to-q and data-to-q delay in ps.
+    parameter real T_CLKQ_DQ = `T_CLKQ_DQ_DEFAULT
 )(
     input logic clk,
     input logic d,
@@ -101,8 +99,8 @@ module pos_latch #(
 );
 
     specify
-        specparam T_SETUP = 5.0;  // Setup time in ps
-        specparam T_HOLD  = 2.0;  // Hold time in ps
+        specparam T_SETUP = `T_SETUP_DEFAULT;
+        specparam T_HOLD = `T_HOLD_DEFAULT;
         $setup(d, negedge clk, T_SETUP);
         $hold(negedge clk, d, T_HOLD);
     endspecify
@@ -116,7 +114,7 @@ endmodule
 
 // Negative transparent latch
 module neg_latch #(
-    parameter real T_CLKQ_DQ = 5.0     // Clock-to-q and data-to-q delay in ps.
+    parameter real T_CLKQ_DQ = `T_CLKQ_DQ_DEFAULT
 )(
     input logic clkb,
     input logic d,
@@ -124,8 +122,8 @@ module neg_latch #(
 );
 
     specify
-        specparam T_SETUP = 5.0;  // Setup time in ps
-        specparam T_HOLD  = 2.0;  // Hold time in ps
+        specparam T_SETUP = `T_SETUP_DEFAULT;
+        specparam T_HOLD = `T_HOLD_DEFAULT;
         $setup(d, posedge clkb, T_SETUP);
         $hold(posedge clkb, d, T_HOLD);
     endspecify
@@ -146,25 +144,23 @@ module tb_latch;
     logic qp;
     logic qn;
 
-    pos_latch #(
-        .T_CLKQ_DQ(5.0)
-    ) pdut (
+    pos_latch pdut (
         .clk(clk),
         .d(d),
         .q(qp)
     );
 
-    neg_latch #(
-        .T_CLKQ_DQ(5.0)
-    ) ndut (
+    neg_latch ndut (
         .clkb(clkb),
         .d(d),
         .q(qn)
     );
 
+    real T_PERIOD = `T_SETUP_DEFAULT + `T_HOLD_DEFAULT + 10;
+
     // Clock generation (10ps period)
     initial clk = 0;
-    always #5 clk = ~clk;
+    always #(T_PERIOD/2) clk = ~clk;
     assign clkb = ~clk;
 
     // Test stimulus
@@ -176,7 +172,7 @@ module tb_latch;
 
         // --- Setup violation: change 'd' too close to clock ---
         $display("Testing setup violation at %0t", $time);
-        #8 // 2ps before clk edge, setup required is 5ps
+        #(T_PERIOD - `T_SETUP_DEFAULT + 1); // 2ps before clk edge, setup required is 5ps
         d = 1;
 
         repeat (2) @(negedge clk);
@@ -184,7 +180,7 @@ module tb_latch;
         // --- Hold violation: change 'd' too soon after clock ---
         $display("Testing hold violation at %0t", $time);
         @(negedge clk);
-        #1;  // 1ps after clk edge, hold required is 2ps
+        #(`T_HOLD_DEFAULT - 1);  // 1ps after clk edge, hold required is 2ps
         d = 0;
 
         repeat (2) @(negedge clk);
@@ -192,17 +188,17 @@ module tb_latch;
         // Normal operation (no violation)
         $display("Normal operation at %0t", $time);
         @(negedge clk);
-        #3 // 3ps after clk edge and 7ps before next clk edge, satisfies setup/hold
+        #(`T_HOLD_DEFAULT + 1); // 3ps after clk edge and 7ps before next clk edge, satisfies setup/hold
         d = 1;
         @(negedge clk);
-        #6 // Output should be up after T_CLKQ_DQ delay.
+        #(`T_CLKQ_DQ_DEFAULT + 1); // Output should be up after T_CLKQ_DQ delay.
         if (qp != 1'b1) $error("Incorrect q value for pos_latch (expected %b, got %b)", d, qp);
         if (qn != 1'b1) $error("Incorrect q value for neg_latch (expected %b, got %b)", d, qn);
         @(negedge clk);
-        #3
+        #(`T_HOLD_DEFAULT + 1);
         d = 0;
         @(negedge clk);
-        #6
+        #(`T_CLKQ_DQ_DEFAULT + 1);
         if (qp != 1'b0) $error("Incorrect q value for pos_latch (expected %b, got %b)", d, qp);
         if (qn != 1'b0) $error("Incorrect q value for neg_latch (expected %b, got %b)", d, qn);
 
@@ -214,12 +210,38 @@ module tb_latch;
 endmodule
 
 module mux #(
-    parameter real DELAY = 5.0 // Delay in ps.
+    parameter real MUX_DELAY = `MUX_DELAY_DEFAULT
 )(
     input logic sel_a,
     input logic a,
     input logic b,
     output logic o
 );
-    assign #(DELAY) o = sel_a ? a : b;
+    assign #(MUX_DELAY) o = sel_a ? a : b;
+endmodule
+
+module clkdiv #(
+    parameter integer STAGES = `CLKDIV_STAGES
+)(
+    input logic clkin,
+    output logic [STAGES-1:0] clkout,
+    input logic rstb
+);
+    pos_dff ff (
+        .clk(clkin),
+        .rstb(rstb),
+        .d(~clkout[0]),
+        .q(clkout[0])
+    );
+    genvar i;
+    generate
+        for (i = 0; i < STAGES - 1; i++) begin
+            pos_dff ff (
+                .clk(clkout[i]),
+                .rstb(rstb),
+                .d(~clkout[i+1]),
+                .q(clkout[i+1])
+            );
+        end
+    endgenerate
 endmodule

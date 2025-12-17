@@ -15,7 +15,6 @@ mod tests {
     use crate::{
         tests::out_dir,
         verilog::{
-            clocking::CLOCKING_SRC,
             primitives::{PRIMITIVES_SV_SRC, PRIMITIVES_VAMS_SRC},
             rx::{RX_SV_SRC, RX_VAMS_SRC},
             simulate,
@@ -27,7 +26,6 @@ mod tests {
         RX_VAMS_SRC,
         PRIMITIVES_SV_SRC,
         PRIMITIVES_VAMS_SRC,
-        CLOCKING_SRC,
     ];
 
     #[test]
