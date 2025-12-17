@@ -1,55 +1,57 @@
-`timescale 1ps/1ps
+interface rxdata_tile_intf;
+    wire din;
+    logic clk;
+    logic rstb;
+    logic [2**`SERDES_STAGES-1:0] dout;
+    logic zen;
+    logic [`TERMINATION_CTL_BITS-1:0] zctl;
+    logic a_en, a_pc, b_en, b_pc, sel_a;
+    logic [`RDAC_SEL_BITS-1:0] vref_sel;
+    wire vdd, vss;
+endinterface
 
-module rxdata(
-    input din,
-    input logic clk,
-    input logic rstb,
-    output logic [2**`SERDES_STAGES-1:0] dout,
-    input logic zen,
-    input logic [`TERMINATION_CTL_BITS-1:0] zctl,
-    input logic a_en, a_pc, b_en, b_pc, sel_a,
-    input logic [`RDAC_SEL_BITS-1:0] vref_sel,
-    inout vdd, vss
+module rxdata_tile(
+    rxdata_tile_intf intf
 );
 
 wire vref;
 wire dout_afe;
 
 termination term(
-    .vin(din),
-    .en(zen),
-    .zctl(zctl),
-    .vss(vss)
+    .vin(intf.din),
+    .en(intf.zen),
+    .zctl(intf.zctl),
+    .vss(intf.vss)
 );
 
 rdac rdac(
     .out(vref),
-    .sel(vref_sel),
-    .vdd(vdd),
-    .vss(vss)
+    .sel(intf.vref_sel),
+    .vdd(intf.vdd),
+    .vss(intf.vss)
 );
 
 rx_afe afe(
     .vref(vref),
-    .din(din),
-    .a_en(a_en),
-    .a_pc(a_pc),
-    .b_en(b_en),
-    .b_pc(b_pc),
-    .sel_a(sel_a),
+    .din(intf.din),
+    .a_en(intf.a_en),
+    .a_pc(intf.a_pc),
+    .b_en(intf.b_en),
+    .b_pc(intf.b_pc),
+    .sel_a(intf.sel_a),
     .dout(dout_afe),
-    .vdd(vdd),
-    .vss(vss)
+    .vdd(intf.vdd),
+    .vss(intf.vss)
 );
 
 logic [`SERDES_STAGES-1:0] desclk;
-assign desclk[0] = clk;
+assign desclk[0] = intf.clk;
 generate
     if (`SERDES_STAGES > 1) begin
         clkdiv clkdiv (
-            .clkin(clk),
+            .clkin(intf.clk),
             .clkout(desclk[`SERDES_STAGES-1:1]),
-            .rstb(rstb)
+            .rstb(intf.rstb)
         );
     end
 endgenerate
@@ -57,48 +59,52 @@ endgenerate
 tree_des des(
     .din(dout_afe),
     .clk(desclk),
-    .dout(dout)
+    .dout(intf.dout)
 );
 
 endmodule
 
-module rxclk(
-    input clkin,
-    output logic clkout,
-    input logic zen,
-    input logic [`TERMINATION_CTL_BITS-1:0] zctl,
-    input logic a_en, a_pc, b_en, b_pc, sel_a,
-    input logic [`RDAC_SEL_BITS-1:0] vref_sel,
-    inout vdd, vss
+interface rxclk_tile_intf;
+    wire clkin;
+    logic clkout;
+    logic zen;
+    logic [`TERMINATION_CTL_BITS-1:0] zctl;
+    logic a_en, a_pc, b_en, b_pc, sel_a;
+    logic [`RDAC_SEL_BITS-1:0] vref_sel;
+    wire vdd, vss;
+endinterface
+
+module rxclk_tile(
+    rxclk_tile_intf intf
 );
 
 wire vref;
 
 termination term(
-    .vin(din),
-    .en(zen),
-    .zctl(zctl),
-    .vss(vss)
+    .vin(intf.clkin),
+    .en(intf.zen),
+    .zctl(intf.zctl),
+    .vss(intf.vss)
 );
 
 rdac rdac(
     .out(vref),
-    .sel(vref_sel),
-    .vdd(vdd),
-    .vss(vss)
+    .sel(intf.vref_sel),
+    .vdd(intf.vdd),
+    .vss(intf.vss)
 );
 
 rx_afe afe(
     .vref(vref),
-    .din(din),
-    .a_en(a_en),
-    .a_pc(a_pc),
-    .b_en(b_en),
-    .b_pc(b_pc),
-    .sel_a(sel_a),
-    .dout(dout),
-    .vdd(vdd),
-    .vss(vss)
+    .din(intf.clkin),
+    .a_en(intf.a_en),
+    .a_pc(intf.a_pc),
+    .b_en(intf.b_en),
+    .b_pc(intf.b_pc),
+    .sel_a(intf.sel_a),
+    .dout(intf.clkout),
+    .vdd(intf.vdd),
+    .vss(intf.vss)
 );
 
 endmodule
@@ -132,6 +138,10 @@ module des12 (
     );
 
 endmodule
+
+interface sbrx_tile_intf;
+    wire din;
+endinterface
 
 module tree_des #(
     parameter integer STAGES = `SERDES_STAGES

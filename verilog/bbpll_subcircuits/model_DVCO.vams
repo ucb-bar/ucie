@@ -20,8 +20,7 @@ parameter real PN_WN_100MHz = -130;       // white noise floor at 100MHz offset 
 parameter real PN_FN_10kHz = -15;         // flicker noise at 10kHz offset in dBc/Hz
 parameter integer steps_per_cycle = 100;
 parameter real Dctrl_setpoint = 128;
-
-real Vctrl_setpoint = vdd/2;
+parameter real Vctrl_setpoint = vdd/2;
 
 real WN_PSD, FN_PSD;
 real osc_modulated_freq;

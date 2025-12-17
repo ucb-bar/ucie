@@ -115,9 +115,16 @@ module s2d(clk_in, clk_outp, clk_outn);
     real flicker_noise_1Hz_linear;
     real flicker_noise_td_p, flicker_noise_td_n;
     real total_phase_noise_p, total_phase_noise_n;
-    real total_time_noise_sampled_p = 0, total_time_noise_sampled_n = 0;  // Sampled jitter for each path
+    real total_time_noise_sampled_p, total_time_noise_sampled_n;  // Sampled jitter for each path
     real delay_max;
-    integer sign_p = 0, sign_n = 1;  // Track differential output states
+    integer sign_p, sign_n;  // Track differential output states
+    
+    analog initial begin
+        total_time_noise_sampled_p = 0;
+        total_time_noise_sampled_n = 0;
+        sign_p = 0;
+        sign_n = 1;
+    end
 
     analog begin
         // Initialize random seed once at start based on current time

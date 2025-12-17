@@ -81,8 +81,9 @@
 // ============================================================================
 
 `include "constants.vams"
+`include "disciplines.vams"
+`include "./constants.vams"
 
-`define DCDL_CTRL_BITWIDTH 8
 module dcdl(clk_in, dl_ctrl, clk_out);
     input clk_in; electrical clk_in;
     input [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl; electrical [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl;

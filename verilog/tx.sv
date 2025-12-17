@@ -1,18 +1,20 @@
-`timescale 1ps/1ps
+interface txdata_tile_intf;
+    logic [2**`SERDES_STAGES-1:0] din;
+    logic clkp, clkn;
+    logic rstb;
+    wire dout;
+    logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    logic driver_en, driver_enb;
+    logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl;
+    wire vdd, vss;
+endinterface
 
-module txdata (
-    input logic [2**`SERDES_STAGES-1:0] din,
-    input logic clkp, clkn,
-    input logic rstb,
-    output out,
-    input logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb,
-    input logic driver_en, driver_enb,
-    input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
-    inout vdd, vss
+module txdata_tile (
+    txdata_tile_intf intf
 );
 
     logic clkin;
-    dcdl dl(.clkin(clkp), .dl_ctrl(dl_ctrl), .clkout(clkin));
+    dcdl dl(.clk_in(intf.clkp), .dl_ctrl(intf.dl_ctrl), .clk_out(clkin));
 
     // TODO: ensure serializer samples async queue correctly
     // for different delay line codes.
@@ -23,26 +25,50 @@ module txdata (
             clkdiv clkdiv (
                 .clkin(clkin),
                 .clkout(serclk[`SERDES_STAGES-1:1]),
-                .rstb(rstb)
+                .rstb(intf.rstb)
             );
         end
     endgenerate
     wire serdout;
     tree_ser ser(
-        .din(din),
+        .din(intf.din),
         .clk(serclk),
         .dout(serdout)
     );
 
     driver drv (
         .din(serdout),
-        .pu_ctl(pu_ctl),
-        .pd_ctlb(pd_ctlb),
-        .en(driver_en),
-        .enb(driver_enb),
-        .dout(dout),
-        .vdd(vdd),
-        .vss(vss)
+        .pu_ctl(intf.pu_ctl),
+        .pd_ctlb(intf.pd_ctlb),
+        .en(intf.driver_en),
+        .enb(intf.driver_enb),
+        .dout(intf.dout),
+        .vdd(intf.vdd),
+        .vss(intf.vss)
+    );
+
+endmodule
+
+interface txdriver_tile_intf;
+    logic din;
+    logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    logic en, enb;
+    wire dout;
+    wire vdd, vss;
+endinterface
+
+module txdriver_tile (
+    txdriver_tile_intf intf
+);
+    driver drv (
+        .din(intf.din),
+        .pu_ctl(intf.pu_ctl),
+        .pd_ctlb(intf.pd_ctlb),
+        .en(intf.en),
+        .enb(intf.enb),
+        .dout(intf.dout),
+        .vdd(intf.vdd),
+        .vss(intf.vss)
     );
 
 endmodule

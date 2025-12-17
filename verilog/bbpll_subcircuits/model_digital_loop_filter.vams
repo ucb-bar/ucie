@@ -22,9 +22,13 @@ parameter integer rise_p1_fall_m1 = 1;
 parameter real Kp = 1;
 parameter real Ki = 1;
 
-real integrator_state = dctrl_reset_value / Ki;
+real integrator_state;
 real late_p1_early_m1;
 real Dctrl_value;
+
+analog initial begin
+    integrator_state = dctrl_reset_value / Ki;
+end
 
 analog begin
     // Phase detector output: +1 if late, -1 if early
