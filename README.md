@@ -4,6 +4,16 @@ An open-source digital implementation of the UCIe 3.0 specification.
 
 You can request a copy of the UCIe specification [here](https://www.uciexpress.org/3-0-spec-download).
 
+## Tests
+
+To run the tests, make sure the `XCELIUM_HOME` environment variable is correctly set and `xrun` is on your `PATH`.
+
+Then, run the following from the `rs/` folder:
+
+```bash
+cargo t
+```
+
 ## Organization
 
 Chisel RTL for all digital components can be found in the `scala/` directory.

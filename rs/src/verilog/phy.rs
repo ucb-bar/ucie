@@ -17,7 +17,7 @@ mod tests {
     #[test]
     fn phy() -> Result<()> {
         let work_dir = out_dir("phy");
-        simulate(get_src_files(), "tb_phy", &work_dir)?;
+        simulate(get_src_files(), "phy_tb", &work_dir)?;
         Ok(())
     }
 }

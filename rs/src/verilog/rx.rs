@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn rx_afe() -> Result<()> {
         let work_dir = out_dir("rx_afe");
-        simulate(SRC_FILES, "tb_rx_afe", &work_dir)?;
+        simulate(SRC_FILES, "rx_afe_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn termination() -> Result<()> {
         let work_dir = out_dir("termination");
-        simulate(SRC_FILES, "tb_termination", &work_dir)?;
+        simulate(SRC_FILES, "termination_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -57,14 +57,14 @@ mod tests {
     #[test]
     fn des12() -> Result<()> {
         let work_dir = out_dir("des12");
-        simulate(SRC_FILES, "tb_des12", &work_dir)?;
+        simulate(SRC_FILES, "des12_tb", &work_dir)?;
         Ok(())
     }
 
     #[test]
     fn tree_des32() -> Result<()> {
         let work_dir = out_dir("tree_des32");
-        simulate(SRC_FILES, "tb_des", &work_dir)?;
+        simulate(SRC_FILES, "des_tb", &work_dir)?;
         Ok(())
     }
 }

@@ -25,7 +25,7 @@ module pos_dff #(
 endmodule
 
 
-module tb_dff;
+module dff_tb;
 
     // Signals
     logic clk;
@@ -136,7 +136,7 @@ module neg_latch #(
 endmodule
 
 
-module tb_latch;
+module latch_tb;
 
     logic clk;
     logic clkb;
