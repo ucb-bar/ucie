@@ -1,33 +1,25 @@
 `timescale 1ps/1ps
 
-module des12 #(
-    parameter real T_CLKQ_DQ = 5.0 // Clock-to-q and data-to-q delay in ps.
-)(
+module des12 (
     input logic din,
     input logic clk,
     output logic [1:0] dout
 );
     logic d0_int;
 
-    neg_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d0_l0 (
+    neg_latch d0_l0 (
         .clkb(clk),
         .d(din),
         .q(d0_int)
     );
 
-    pos_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d0_l1 (
+    pos_latch d0_l1 (
         .clk(clk),
         .d(d0_int),
         .q(dout[0])
     );
 
-    pos_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d1_l0 (
+    pos_latch d1_l0 (
         .clk(clk),
         .d(din),
         .q(dout[1])
@@ -36,8 +28,7 @@ module des12 #(
 endmodule
 
 module tree_des #(
-    parameter integer STAGES = 5,
-    parameter real T_CLKQ_DQ = 5.0 // Clock-to-q and data-to-q delay in ps.
+    parameter integer STAGES = `SERDES_STAGES
 )(
     input logic din,
     input logic [STAGES-1:0] clk,
@@ -45,9 +36,7 @@ module tree_des #(
 );
     generate
         if (STAGES == 1) begin
-            des12 #(
-                .T_CLKQ_DQ(T_CLKQ_DQ)
-            ) ser (
+            des12 ser (
                 .clk(clk[0]),
                 .din(din),
                 .dout(dout)
@@ -69,8 +58,7 @@ module tree_des #(
             end
 
             tree_des #(
-                .STAGES(STAGES-1),
-                .T_CLKQ_DQ(T_CLKQ_DQ)
+                .STAGES(STAGES-1)
             ) ser0 (
                 .clk(clk[STAGES-1:1]),
                 .din(dout_int[0]),
@@ -78,17 +66,14 @@ module tree_des #(
             );
 
             tree_des #(
-                .STAGES(STAGES-1),
-                .T_CLKQ_DQ(T_CLKQ_DQ)
+                .STAGES(STAGES-1)
             ) ser1 (
                 .clk(clk[STAGES-1:1]),
                 .din(dout_int[1]),
                 .dout(dout1)
             );
 
-            des12 #(
-                .T_CLKQ_DQ(T_CLKQ_DQ)
-            ) ser (
+            des12 ser (
                 .clk(clk[0]),
                 .din(din),
                 .dout(dout_int)
@@ -101,11 +86,10 @@ endmodule
 
 module tb_des;
 
-    parameter STAGES = 5;          // width of serializer
-    parameter CYCLES = 16;    // number of test cycles
-    parameter DIN_DELAY = 20;    // delay after fast clock edge that din changes
-    parameter DOUT_DELAY = 40;    // delay after divided clock that dout is sampled
-    parameter STAGE_DELAY = 100;    // delay of each stage
+    parameter STAGES = `SERDES_STAGES;
+    localparam CYCLES = 16;    // number of test cycles
+    localparam DIN_DELAY = `T_HOLD_DEFAULT;    // delay after fast clock edge that din changes
+    localparam STAGE_DELAY = 100;    // delay of each stage
 
     logic clk;
     logic [STAGES-1:0] desclk;

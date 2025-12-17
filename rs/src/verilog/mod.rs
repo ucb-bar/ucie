@@ -4,15 +4,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use const_format::concatcp;
 
-pub mod clocking;
 pub mod primitives;
 pub mod rx;
 pub mod tx;
 
 pub const VERILOG_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../verilog");
-pub const CONTROL_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium/amscf.scs");
-pub const PROBE_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium/probe.tcl");
+pub const CONSTANTS: &str = concatcp!(VERILOG_SRC_DIR, "/constants.sv");
+pub const XCELIUM_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium");
+pub const CONTROL_FILE: &str = concatcp!(XCELIUM_DIR, "/amscf.scs");
+pub const PROBE_FILE: &str = concatcp!(XCELIUM_DIR, "/probe.tcl");
 
 pub fn get_src_files() -> Vec<PathBuf> {
     ["sv", "v", "vams"]
@@ -44,7 +46,7 @@ pub fn simulate(
         .args([
             "-sv_ms",
             "-timescale",
-            "1ps/1ps",
+            "1ps/100fs",
             "-spectre_args",
             "+preset=mx +mt=32 -ahdllint=warn",
             "-access",
@@ -55,6 +57,7 @@ pub fn simulate(
             PROBE_FILE,
         ])
         .arg(disciplines)
+        .arg(CONSTANTS)
         .args(src_files.into_iter().map(|f| f.into()))
         .arg(CONTROL_FILE)
         .current_dir(work_dir)

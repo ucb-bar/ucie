@@ -1,19 +1,13 @@
 `timescale 1ps/1ps
 
-module txdata #(
-    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
-    parameter real MUX_DELAY  = 5.0, // Mux delay in ps
-    parameter integer SER_STAGES  = 5, // Number of serializer stages
-    parameter integer DRIVER_CTL_BITS  = 5, // Number of driver control bits
-    parameter integer DL_CTL_BITS  = 5 // Number of delay line control bits
-)(
-    input logic [2**SER_STAGES-1:0] din,
+module txdata (
+    input logic [2**`SERDES_STAGES-1:0] din,
     input logic clkp, clkn,
     input logic rstb,
     output logic dout,
-    input logic [DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb,
+    input logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb,
     input logic driver_en, driver_enb,
-    input logic [DL_CTL_BITS-1:0] dl_ctrl,
+    input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
     input vdd, vss
 );
 
@@ -22,33 +16,25 @@ module txdata #(
 
     // TODO: ensure serializer samples async queue correctly
     // for different delay line codes.
-    logic [SER_STAGES-1:0] serclk;
+    logic [`SERDES_STAGES-1:0] serclk;
     assign serclk[0] = clkin;
     generate
-        if (SER_STAGES > 1) begin
-            clkdiv #(
-                .STAGES(SER_STAGES - 1)
-            ) clkdiv (
+        if (`SERDES_STAGES > 1) begin
+            clkdiv clkdiv (
                 .clkin(clkin),
-                .clkout(serclk[SER_STAGES-1:1]),
+                .clkout(serclk[`SERDES_STAGES-1:1]),
                 .rstb(rstb)
             );
         end
     endgenerate
     wire serdout;
-    tree_ser #(
-        .STAGES(SER_STAGES),
-        .T_CLKQ_DQ(T_CLKQ_DQ),
-        .MUX_DELAY(MUX_DELAY)
-    ) ser(
+    tree_ser ser(
         .din(din),
         .clk(serclk),
         .dout(serdout)
     );
 
-    driver #(
-        .CTL_BITS(DRIVER_CTL_BITS)
-    ) drv (
+    driver drv (
         .din(serdout),
         .pu_ctl(pu_ctl),
         .pd_ctlb(pd_ctlb),
@@ -61,43 +47,32 @@ module txdata #(
 
 endmodule
 
-module ser21 #(
-    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
-    parameter real MUX_DELAY  = 5.0 // Mux delay in ps
-)(
+module ser21 (
     input logic [1:0] din,
     input logic clk,
     output logic dout
 );
     logic d0_hold, d1_int, d1_hold;
 
-    neg_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d0_l0 (
+    neg_latch d0_l0 (
         .clkb(clk),
         .d(din[0]),
         .q(d0_hold)
     );
 
-    neg_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d1_l0 (
+    neg_latch d1_l0 (
         .clkb(clk),
         .d(din[1]),
         .q(d1_int)
     );
 
-    pos_latch #(
-        .T_CLKQ_DQ(T_CLKQ_DQ)
-    ) d1_l1 (
+    pos_latch d1_l1 (
         .clk(clk),
         .d(d1_int),
         .q(d1_hold)
     );
 
-    mux #(
-        .DELAY(MUX_DELAY)
-    ) mux (
+    mux mux (
         .sel_a(clk),
         .a(d0_hold),
         .b(d1_hold),
@@ -107,9 +82,7 @@ module ser21 #(
 endmodule
 
 module tree_ser #(
-    parameter integer STAGES = 5,
-    parameter real T_CLKQ_DQ = 5.0, // Clock-to-q and data-to-q delay in ps.
-    parameter real MUX_DELAY  = 5.0 // Mux delay in ps
+    parameter integer STAGES = `SERDES_STAGES
 )(
     input logic [2**STAGES-1:0] din,
     input logic [STAGES-1:0] clk,
@@ -117,10 +90,7 @@ module tree_ser #(
 );
     generate
         if (STAGES == 1) begin
-            ser21 #(
-                .T_CLKQ_DQ(T_CLKQ_DQ),
-                .MUX_DELAY(MUX_DELAY)
-            ) ser (
+            ser21 ser (
                 .clk(clk[0]),
                 .din(din),
                 .dout(dout)
@@ -142,9 +112,7 @@ module tree_ser #(
             end
 
             tree_ser #(
-                .STAGES(STAGES-1),
-                .T_CLKQ_DQ(T_CLKQ_DQ),
-                .MUX_DELAY(MUX_DELAY)
+                .STAGES(STAGES-1)
             ) ser0 (
                 .clk(clk[STAGES-1:1]),
                 .din(din0),
@@ -152,19 +120,14 @@ module tree_ser #(
             );
 
             tree_ser #(
-                .STAGES(STAGES-1),
-                .T_CLKQ_DQ(T_CLKQ_DQ),
-                .MUX_DELAY(MUX_DELAY)
+                .STAGES(STAGES-1)
             ) ser1 (
                 .clk(clk[STAGES-1:1]),
                 .din(din1),
                 .dout(din_int[1])
             );
 
-            ser21 #(
-                .T_CLKQ_DQ(T_CLKQ_DQ),
-                .MUX_DELAY(MUX_DELAY)
-            ) ser (
+            ser21 ser (
                 .clk(clk[0]),
                 .din(din_int),
                 .dout(dout)
@@ -177,7 +140,7 @@ endmodule
 
 module tb_ser;
 
-    parameter STAGES = 5;          // width of serializer
+    parameter STAGES = `SERDES_STAGES;          // width of serializer
     parameter CYCLES = 16;    // number of test cycles
 
     logic clk;
@@ -210,7 +173,7 @@ module tb_ser;
 
     // Clock generation
     initial clk = 0;
-    always #62.5 clk = ~clk; // 125ps period
+    always #(`MIN_PERIOD/2) clk = ~clk;
 
     bit expected_q[$];
 

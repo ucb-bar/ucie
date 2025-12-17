@@ -1,13 +1,12 @@
 module rdac(out, sel, vdd, vss);
-    parameter integer SEL_BITS = 8;
     output out;
-    input [SEL_BITS:0] sel;
+    input [`RDAC_SEL_BITS-1:0] sel;
     inout vdd, vss;
 
     electrical out, vdd, vss;
 
     analog begin
-        V(out) <+ (V(vdd) - V(vss)) * sel / (2 ** SEL_BITS) + V(vss);
+        V(out) <+ (V(vdd) - V(vss)) * sel / (2 ** `RDAC_SEL_BITS) + V(vss);
     end
 endmodule
 
@@ -27,32 +26,27 @@ endmodule
 module tb_rdac;
 
     // Parameters
-    parameter integer SEL_BITS = 8;
-    localparam integer SEL_MAX = (1 << SEL_BITS) - 1;
+    localparam integer SEL_MAX = (1 << `RDAC_SEL_BITS) - 1;
 
     // Electrical nets
     electrical vdd, vss, out0, out1, low, high;
 
     // Digital select buses
-    reg [SEL_BITS:0] sel0;
-    reg [SEL_BITS:0] sel1;
+    reg [`RDAC_SEL_BITS-1:0] sel0;
+    reg [`RDAC_SEL_BITS-1:0] sel1;
 
     wire cmp_out;
 
     integer result;
 
     // Instantiate RDACs
-    rdac #(
-        .SEL_BITS(SEL_BITS)
-    ) dut0 (
+    rdac dut0 (
         .out(out0),
         .sel(sel0),
         .vdd(vdd),
         .vss(vss)
     );
-    rdac #(
-        .SEL_BITS(SEL_BITS)
-    ) dut1 (
+    rdac dut1 (
         .out(out1),
         .sel(sel1),
         .vdd(vdd),
@@ -68,7 +62,7 @@ module tb_rdac;
 
     // Drive VDD/VSS as ideal sources
     analog begin
-        V(vdd) <+ 0.4;   // 0.4 V supply
+        V(vdd) <+ `VDD;   // 0.4 V supply
         V(vss) <+ 0.0;   // ground
     end
 
@@ -105,16 +99,16 @@ module tb_rdac;
 endmodule
 
 module inv(a, o, vdd, vss);
-    parameter real VTH = 0.5; // VTH as a fraction of VDD
-    parameter real GAIN = 1000;
     input a;
     output o;
     inout vdd, vss;
     electrical a, o, vdd, vss;
+    parameter real VTH = `INV_VTH_DEFAULT;
+    parameter real GAIN = `INV_GAIN_DEFAULT;
     real vout_clipped;
 
     analog begin
-        vout_clipped = -(V(a) - VTH * V(vdd)) * GAIN;
+        vout_clipped = -(V(a) - VTH) * GAIN;
 
         if (vout_clipped > V(vdd))
             vout_clipped = V(vdd);
@@ -130,7 +124,7 @@ module tb_inv_selfbias;
     inv dut(.a(o), .o(o), .vdd(vdd), .vss(vss));
     real out;
     analog begin
-        V(vdd) <+ 0.4;
+        V(vdd) <+ `VDD;
         V(vss) <+ 0;
         out = V(o);
     end
@@ -138,56 +132,11 @@ module tb_inv_selfbias;
     initial begin
         #10
         $display("Vout = %f", out);
-        if (abs(out - 0.2) > 0.01) begin
+        if (abs(out - `INV_VTH_DEFAULT) > 0.01) begin
             $display("Error: incorrect Vout");
         end
         $finish;
     end
-endmodule
-
-
-// Digital to Electrical converter
-connectmodule d2e (din, eout);
-    input din;
-    output eout;
-    logic din;
-    electrical eout;
-    
-    parameter real VDD = 0.4;
-    parameter real TRISE = 5p;
-    parameter real TFALL = 5p;
-    
-    analog begin
-        if (din)
-            V(eout) <+ transition(VDD, 0, TRISE);
-        else
-            V(eout) <+ transition(0, 0, TFALL);
-    end
-    
-endmodule
-
-// Electrical to Digital converter
-connectmodule e2d (ein, dout);
-    input ein;
-    output dout;
-    electrical ein;
-    logic dout;
-    
-    parameter real VDD = 0.75;
-    parameter real THRESH = VDD/2;  // vdd/2
-    parameter real TD = 0p;  // delay
-    
-    reg dout_reg = 1'b0;
-    
-    always @(cross(V(ein) - THRESH, 0)) begin
-        if (V(ein) > THRESH)
-            dout_reg <= #(TD) 1'b1;
-        else
-            dout_reg <= #(TD) 1'b0;
-    end
-    
-    assign dout = dout_reg;
-    
 endmodule
 
 module cap(p, n);
@@ -223,7 +172,7 @@ module tb_inv_discharge_cap;
     cap c(.p(vdd), .n(a));
     real out;
     analog begin
-        V(vdd) <+ 0.4;
+        V(vdd) <+ `VDD;
         V(vss) <+ 0;
         out = V(vdd) - V(a);
     end
@@ -234,7 +183,7 @@ module tb_inv_discharge_cap;
         #10
         pc = 0;
         $display("Vout = %f", out);
-        if (abs(out - 0.2) > 0.01) begin
+        if (abs(out - `INV_VTH_DEFAULT) > 0.01) begin
             $display("Error: incorrect Vout");
         end
         #100000
