@@ -200,7 +200,7 @@ module tree_des #(
 endmodule
 
 
-module tb_des;
+module des_tb;
 
     parameter STAGES = `SERDES_STAGES;
     localparam CYCLES = 16;    // number of test cycles
@@ -297,6 +297,6 @@ module tb_des;
 
 endmodule
 
-module tb_des12;
-    tb_des #(.STAGES(1)) inner ();
+module des12_tb;
+    des_tb #(.STAGES(1)) inner ();
 endmodule

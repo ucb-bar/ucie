@@ -6,7 +6,7 @@ module rdac(out, sel, vdd, vss);
     electrical out, vdd, vss;
 
     analog begin
-        V(out) <+ (V(vdd) - V(vss)) * sel / (2 ** `RDAC_SEL_BITS) + V(vss);
+        V(out, vss) <+ V(vdd, vss) * transition(sel, 0, `T_RISE_FALL_DEFAULT * 1p) / (2 ** `RDAC_SEL_BITS);
     end
 endmodule
 
@@ -23,7 +23,7 @@ module comparator(a, b, out);
     end
 endmodule
 
-module tb_rdac;
+module rdac_tb;
 
     // Parameters
     localparam integer SEL_MAX = (1 << `RDAC_SEL_BITS) - 1;
@@ -62,8 +62,8 @@ module tb_rdac;
 
     // Drive VDD/VSS as ideal sources
     analog begin
-        V(vdd) <+ `VDD;   // 0.4 V supply
-        V(vss) <+ 0.0;   // ground
+        V(vdd) <+ `VDD;
+        V(vss) <+ 0.0;
     end
 
     initial begin
@@ -105,21 +105,13 @@ module inv(a, o, vdd, vss);
     electrical a, o, vdd, vss;
     parameter real VTH = `INV_VTH_DEFAULT;
     parameter real GAIN = `INV_GAIN_DEFAULT;
-    real vout_clipped;
 
     analog begin
-        vout_clipped = -(V(a) - VTH) * GAIN;
-
-        if (vout_clipped > V(vdd))
-            vout_clipped = V(vdd);
-        if (vout_clipped < V(vss))
-            vout_clipped = V(vss);
-
-        V(o) <+ vout_clipped;
+        V(o, vss) <+ tanh(-(V(a, vss) - VTH) * GAIN) * V(vdd, vss)/2 + V(vdd, vss)/2;
     end
 endmodule
 
-module tb_inv_selfbias;
+module inv_selfbias_tb;
     electrical o, vdd, vss;
     inv dut(.a(o), .o(o), .vdd(vdd), .vss(vss));
     real out;
@@ -153,17 +145,18 @@ endmodule
 
 module sw(p, n, s);
     parameter real R_ON=1 from [0:inf);
+    parameter real R_OFF=1e6 from [0:inf);
     input s;
     output p, n;
     logic s;
     electrical p, n;
 
     analog begin
-	    I(p, n) <+ V(p, n) / (R_ON * limexp(20*(1 - transition(s, 0, 10e-12))));
+	    I(p, n) <+ V(p, n) / (R_ON  + (R_OFF - R_ON) * (1 - transition(s, 0, `T_RISE_FALL_DEFAULT * 1p)));
     end
 endmodule
 
-module tb_inv_discharge_cap;
+module inv_discharge_cap_tb;
     electrical a, o, vdd, vss;
     reg pc;
 
@@ -174,7 +167,7 @@ module tb_inv_discharge_cap;
     analog begin
         V(vdd) <+ `VDD;
         V(vss) <+ 0;
-        out = V(vdd) - V(a);
+        out = V(vdd, a);
     end
 
     initial begin

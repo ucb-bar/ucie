@@ -45,6 +45,10 @@
 // CLOCK_PATH
 // Digitally-controlled delay line bit width
 `define DCDL_CTRL_BITWIDTH 8
+// Digitally-controlled delay line delay offset (ps)
+`define DCDL_DELAY_OFS 10.0
+// Digitally-controlled delay line delay sep (ps)
+`define DCDL_DELAY_STEP 10.0
 
 // TX
 // TX nominal output impedance (Ohms)
