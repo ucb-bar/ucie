@@ -11,7 +11,7 @@ pub mod rx;
 pub mod tx;
 
 pub const VERILOG_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../verilog");
-pub const CONSTANTS: &str = concatcp!(VERILOG_SRC_DIR, "/constants.sv");
+pub const CONSTANTS: &str = concatcp!(VERILOG_SRC_DIR, "/constants.vams");
 pub const XCELIUM_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xcelium");
 pub const CONTROL_FILE: &str = concatcp!(XCELIUM_DIR, "/amscf.scs");
 pub const PROBE_FILE: &str = concatcp!(XCELIUM_DIR, "/probe.tcl");

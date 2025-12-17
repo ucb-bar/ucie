@@ -112,3 +112,77 @@ module tb_rx_afe;
 
 endmodule
 
+
+module termination(
+    input vin,
+    input en,
+    input [`TERMINATION_CTL_BITS-1:0] zctl,
+    inout vss
+);
+    electrical vin, vss;
+
+    integer i;
+    integer num_on;
+    analog begin
+        I(vin, vss) <+ V(vin, vss) / (
+            (
+                transition(1 - en, 0, `T_RISE_FALL_DEFAULT * 1p)
+                * (`TERMINATION_R_OFF_SEGMENT - `TERMINATION_R_SEGMENT)
+                + `TERMINATION_R_SEGMENT
+            )
+        ) * (`TERMINATION_SEGMENTS - `TERMINATION_CTL_BITS);
+        num_on = 0;
+        for (i = 0; i < `TERMINATION_CTL_BITS; i=i+1) begin
+            if (zctl[i])
+                num_on = num_on + 1;
+        end
+        I(vin, vss) <+ V(vin, vss) / `TERMINATION_R_SEGMENT * transition(num_on, 0, `T_RISE_FALL_DEFAULT * 1p);
+        I(vin, vss) <+ V(vin, vss) / `TERMINATION_R_OFF_SEGMENT * transition(`TERMINATION_CTL_BITS - num_on, 0, `T_RISE_FALL_DEFAULT * 1p);
+    end
+
+endmodule
+
+module tb_termination;
+    // TODO: Verify step size
+    reg [`TERMINATION_CTL_BITS-1:0] zctl;
+    reg en;
+    electrical vin, vdd, vss;
+    real vin_sample;
+    
+    termination term (
+        .vin(vin),
+        .zctl(zctl),
+        .en(en),
+        .vss(vss)
+    );
+
+    analog begin
+        V(vdd) <+ `VDD;
+        V(vss) <+ 0;
+        I(vdd, vin) <+ V(vdd, vin) / `RX_R_IN;
+        vin_sample = V(vin);
+    end
+
+    initial begin
+        zctl = 0;
+        en = 1;
+    end
+
+    integer i;
+    reg actual;
+    real vmid;
+    initial begin
+        vmid = `VDD/2;
+        #300;
+
+        // Check that lowest code is above 30 ohms
+        $display("vin = %f, zctl = %b", vin_sample, zctl);
+        if (vin_sample < vmid) $display("Error: highest termination impedance is too low (vmid = %f)", vmid);
+        zctl = {`TERMINATION_CTL_BITS{1'b1}};
+        #300;
+        $display("vin = %f, zctl = %b", vin_sample, zctl);
+        if (vin_sample > vmid) $display("Error: lowest termination impedance is too high (vmid = %f)", vmid);
+
+        $finish;
+    end
+endmodule

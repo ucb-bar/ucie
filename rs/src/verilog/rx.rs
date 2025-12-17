@@ -42,6 +42,19 @@ mod tests {
     }
 
     #[test]
+    fn termination() -> Result<()> {
+        let work_dir = out_dir("termination");
+        simulate(SRC_FILES, "tb_termination", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn des12() -> Result<()> {
         let work_dir = out_dir("des12");
         simulate(SRC_FILES, "tb_des12", &work_dir)?;

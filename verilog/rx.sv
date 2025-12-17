@@ -1,5 +1,108 @@
 `timescale 1ps/1ps
 
+module rxdata(
+    input din,
+    input logic clk,
+    input logic rstb,
+    output logic [2**`SERDES_STAGES-1:0] dout,
+    input logic zen,
+    input logic [`TERMINATION_CTL_BITS-1:0] zctl,
+    input logic a_en, a_pc, b_en, b_pc, sel_a,
+    input logic [`RDAC_SEL_BITS-1:0] vref_sel,
+    inout vdd, vss
+);
+
+wire vref;
+wire dout_afe;
+
+termination term(
+    .vin(din),
+    .en(zen),
+    .zctl(zctl),
+    .vss(vss)
+);
+
+rdac rdac(
+    .out(vref),
+    .sel(vref_sel),
+    .vdd(vdd),
+    .vss(vss)
+);
+
+rx_afe afe(
+    .vref(vref),
+    .din(din),
+    .a_en(a_en),
+    .a_pc(a_pc),
+    .b_en(b_en),
+    .b_pc(b_pc),
+    .sel_a(sel_a),
+    .dout(dout_afe),
+    .vdd(vdd),
+    .vss(vss)
+);
+
+logic [`SERDES_STAGES-1:0] desclk;
+assign desclk[0] = clk;
+generate
+    if (`SERDES_STAGES > 1) begin
+        clkdiv clkdiv (
+            .clkin(clk),
+            .clkout(desclk[`SERDES_STAGES-1:1]),
+            .rstb(rstb)
+        );
+    end
+endgenerate
+
+tree_des des(
+    .din(dout_afe),
+    .clk(desclk),
+    .dout(dout)
+);
+
+endmodule
+
+module rxclk(
+    input clkin,
+    output logic clkout,
+    input logic zen,
+    input logic [`TERMINATION_CTL_BITS-1:0] zctl,
+    input logic a_en, a_pc, b_en, b_pc, sel_a,
+    input logic [`RDAC_SEL_BITS-1:0] vref_sel,
+    inout vdd, vss
+);
+
+wire vref;
+
+termination term(
+    .vin(din),
+    .en(zen),
+    .zctl(zctl),
+    .vss(vss)
+);
+
+rdac rdac(
+    .out(vref),
+    .sel(vref_sel),
+    .vdd(vdd),
+    .vss(vss)
+);
+
+rx_afe afe(
+    .vref(vref),
+    .din(din),
+    .a_en(a_en),
+    .a_pc(a_pc),
+    .b_en(b_en),
+    .b_pc(b_pc),
+    .sel_a(sel_a),
+    .dout(dout),
+    .vdd(vdd),
+    .vss(vss)
+);
+
+endmodule
+
 module des12 (
     input logic din,
     input logic clk,
@@ -124,7 +227,7 @@ module tb_des;
 
     // Clock generation
     initial clk = 0;
-    always #(`MIN_PERIOD/2) clk = ~clk; // 500ps period
+    always #(`MIN_PERIOD/2) clk = ~clk;
 
     bit [2**STAGES-1:0] expected_q[$];
     bit [2**STAGES-1:0] next_bits;

@@ -4,11 +4,11 @@ module txdata (
     input logic [2**`SERDES_STAGES-1:0] din,
     input logic clkp, clkn,
     input logic rstb,
-    output logic dout,
+    output out,
     input logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb,
     input logic driver_en, driver_enb,
     input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
-    input vdd, vss
+    inout vdd, vss
 );
 
     logic clkin;
@@ -38,8 +38,8 @@ module txdata (
         .din(serdout),
         .pu_ctl(pu_ctl),
         .pd_ctlb(pd_ctlb),
-        .driver_en(driver_en),
-        .driver_enb(driver_enb),
+        .en(driver_en),
+        .enb(driver_enb),
         .dout(dout),
         .vdd(vdd),
         .vss(vss)
