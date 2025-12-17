@@ -5,6 +5,8 @@
 `define MIN_PERIOD 125
 // Rise/fall time (ps)
 `define T_RISE_FALL_DEFAULT 5
+// Number of lanes
+`define LANES 16
 
 // PRIMITIVES
 // Clock-to-q and data-to-q delays of FFs and latches (ps)
@@ -39,6 +41,10 @@
 `define DRIVER_R_SEGMENT 864
 // Off resistance of driver (Ohms)
 `define DRIVER_R_OFF_SEGMENT 1000000
+
+// CLOCK_PATH
+// Digitally-controlled delay line bit width
+`define DCDL_CTRL_BITWIDTH 8
 
 // TX
 // TX nominal output impedance (Ohms)

@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use const_format::concatcp;
 
+pub mod phy;
 pub mod primitives;
 pub mod rx;
 pub mod tx;
@@ -38,12 +39,27 @@ pub fn simulate(
     let tb = tb.as_ref();
     let work_dir = work_dir.as_ref();
     std::fs::create_dir_all(work_dir).with_context(|| "failed to create work dir")?;
-    let xcelium_home = std::env::var("XCELIUM_HOME").with_context(|| "invalid XCELIUM_HOME")?;
-    let disciplines =
-        PathBuf::from(xcelium_home).join("tools.lnx86/spectre/etc/ahdl/disciplines.vams");
+    let xcelium_home =
+        PathBuf::from(std::env::var("XCELIUM_HOME").with_context(|| "invalid XCELIUM_HOME")?);
+    let disciplines = xcelium_home.join("tools.lnx86/spectre/etc/ahdl/disciplines.vams");
+    let constants = xcelium_home.join("tools.lnx86/spectre/etc/ahdl/constants.vams");
+
+    let cp = Command::new("cp")
+        .arg("-r")
+        .arg(PathBuf::from(VERILOG_SRC_DIR).join("."))
+        .arg(work_dir.join("."))
+        .current_dir(work_dir)
+        .status()
+        .with_context(|| "failed to run cp")?;
+
+    if !cp.success() {
+        bail!("cp exited with nonzero exit code");
+    }
 
     let mut xrun = Command::new("xrun")
         .args([
+            "-allowredefinition",
+            "-dmsaoi",
             "-sv_ms",
             "-timescale",
             "1ps/100fs",
@@ -57,6 +73,7 @@ pub fn simulate(
             PROBE_FILE,
         ])
         .arg(disciplines)
+        .arg(constants)
         .arg(CONSTANTS)
         .args(src_files.into_iter().map(|f| f.into()))
         .arg(CONTROL_FILE)
