@@ -25,6 +25,8 @@
 `define SERDES_STAGES 5
 // Number of stages for clock dividers
 `define CLKDIV_STAGES (`SERDES_STAGES - 1)
+// Deserializer input delay
+`define DES_IN_DELAY 10.0
 
 // DRIVER
 // Number of driver pull-up and pull-down control bits
