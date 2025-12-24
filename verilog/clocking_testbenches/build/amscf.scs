@@ -1,0 +1,12 @@
+// ****************************************************************
+// AMS simulation control file for clocking testbenches
+// ****************************************************************
+simulator lang=spectre 
+
+global 0
+
+amsd {
+    ie vsup=0.75 tr=5p tf=5p rout=0
+}
+
+tran tran stop=100n annotate=status

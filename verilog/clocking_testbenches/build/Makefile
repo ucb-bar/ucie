@@ -3,11 +3,11 @@
 # ============================================================================
 #
 # Description:
-#   Automated build system for running Spectre simulations on BBPLL, DCDL,
+#   Automated build system for running Xcelium simulations on BBPLL, DCDL,
 #   and S2D behavioral models.
 #
 # Requirements:
-#   - Cadence Spectre simulator (must be in PATH or set via SPECTRE variable)
+#   - Cadence Xcelium simulator (xrun must be in PATH)
 #   - Verilog-AMS support enabled
 #
 # Usage:
@@ -15,104 +15,166 @@
 #   make bbpll        - Run BBPLL testbench only
 #   make dcdl         - Run DCDL testbench only
 #   make s2d          - Run S2D testbench only
+#   make bbpll-gui    - Run BBPLL with SimVision GUI
+#   make dcdl-gui     - Run DCDL with SimVision GUI
+#   make s2d-gui      - Run S2D with SimVision GUI
 #   make clean        - Remove all simulation output directories
 #   make help         - Show this help message
 #
 # ============================================================================
 
-# Check if Spectre is available
-ifndef SPECTRE
-SPECTRE := $(shell which spectre 2>/dev/null)
-ifeq ($(SPECTRE),)
-$(error ERROR: Spectre simulator not found. Please set SPECTRE environment variable or add spectre to PATH)
-endif
-endif
+# Xcelium command and options
+XRUN := xrun
+XRUN_OPTS := -64bit \
+             -timescale 1ps/1fs \
+             -xmlibdirname worklib \
+             -access +rwc \
+             -amsconnrules ConnRules_full_fast
 
-# Spectre command with APS (Spectre X) enabled
-SPECTRE_CMD := $(SPECTRE) -64 ++aps
+# Paths
+TB_DIR := ..
+VAMS_DIR := ../..
+SUBCIRCUITS_DIR := ../../bbpll_subcircuits
 
-# Testbench directory (build/ - run simulations here)
-TB_DIR := .
+# Include paths
+INCLUDES := -incdir $(VAMS_DIR) -incdir $(SUBCIRCUITS_DIR)
 
-# Testbench source files (one level up)
-SRC_DIR := ..
-BBPLL_SRC := $(SRC_DIR)/bbpll_tb.scs
-DCDL_SRC := $(SRC_DIR)/dcdl_tb.scs
-S2D_SRC := $(SRC_DIR)/s2d_tb.scs
+# Source files
+CONSTANTS := $(VAMS_DIR)/constants.vams
+BBPLL_SRC := $(VAMS_DIR)/bbpll.vams
+DCDL_SRC := $(VAMS_DIR)/dcdl.vams
+S2D_SRC := $(VAMS_DIR)/s2d.vams
+CLOCK_DIST_SRC := $(VAMS_DIR)/clock_distribution.vams
 
-# Output directories
-BBPLL_OUT := bbpll_tb.raw
-DCDL_OUT := dcdl_tb.raw
-S2D_OUT := s2d_tb.raw
+# Testbenches
+BBPLL_TB := $(TB_DIR)/bbpll_tb.vams
+DCDL_TB := $(TB_DIR)/dcdl_tb.vams
+S2D_TB := $(TB_DIR)/s2d_tb.vams
+CLOCK_DIST_TB := $(TB_DIR)/clock_distribution_tb.vams
 
-# Log files
-BBPLL_LOG := bbpll_tb.log
-DCDL_LOG := dcdl_tb.log
-S2D_LOG := s2d_tb.log
+# Probe files
+BBPLL_PROBE := bbpll_probe.tcl
+DCDL_PROBE := dcdl_probe.tcl
+S2D_PROBE := s2d_probe.tcl
+CLOCK_DIST_PROBE := clock_distribution_probe.tcl
 
 # ============================================================================
 # Targets
-# ============================================================================
-
-.PHONY: all bbpll dcdl s2d clean help check_spectre
-
-# Default target: run all testbenches
-all: check_spectre bbpll dcdl s2d
-	@echo ""
+# BBPLL testbench
+bbpll:
 	@echo "=========================================="
-	@echo "All testbenches completed successfully!"
+	@echo "Running BBPLL Testbench with xrun..."
 	@echo "=========================================="
-	@echo "Results:"
-	@echo "  BBPLL: $(BBPLL_OUT)  (log: $(BBPLL_LOG))"
-	@echo "  DCDL:  $(DCDL_OUT)  (log: $(DCDL_LOG))"
-	@echo "  S2D:   $(S2D_OUT)  (log: $(S2D_LOG))"
-	@echo "=========================================="
-
-# Check Spectre availability
-check_spectre:
-	@echo "Checking Spectre simulator..."
-	@echo "Using: $(SPECTRE)"
-	@$(SPECTRE) -V | head -1
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(BBPLL_SRC) \
+		$(SUBCIRCUITS_DIR)/model_*.vams \
+		$(BBPLL_TB) \
+		-top bbpll_tb \
+		-ams clocking_ams_control_file.scs \
+		-input $(BBPLL_PROBE)
+	@echo "BBPLL simulation completed. Waveforms: bbpll_waves.shm"
 	@echo ""
 
-# Run BBPLL testbench
-bbpll: check_spectre
+# DCDL testbench
+dcdl:
 	@echo "=========================================="
-	@echo "Running BBPLL Testbench..."
+	@echo "Running DCDL Testbench with xrun..."
 	@echo "=========================================="
-	$(SPECTRE_CMD) $(BBPLL_SRC) 2>&1 | tee $(BBPLL_LOG)
-	@echo ""
-	@echo "BBPLL simulation completed. Log: $(BBPLL_LOG)"
-	@echo ""
-
-# Run DCDL testbench
-dcdl: check_spectre
-	@echo "=========================================="
-	@echo "Running DCDL Testbench..."
-	@echo "=========================================="
-	$(SPECTRE_CMD) $(DCDL_SRC) 2>&1 | tee $(DCDL_LOG)
-	@echo ""
-	@echo "DCDL simulation completed. Log: $(DCDL_LOG)"
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(DCDL_SRC) \
+		$(DCDL_TB) \
+		-top dcdl_tb \
+		-ams clocking_ams_control_file.scs \
+		-input $(DCDL_PROBE)
+	@echo "DCDL simulation completed. Waveforms: dcdl_waves.shm"
 	@echo ""
 
-# Run S2D testbench
-s2d: check_spectre
+# S2D testbench
+s2d:
 	@echo "=========================================="
-	@echo "Running S2D Testbench..."
+	@echo "Running S2D Testbench with xrun..."
 	@echo "=========================================="
-	$(SPECTRE_CMD) $(S2D_SRC) 2>&1 | tee $(S2D_LOG)
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(S2D_SRC) \
+		$(S2D_TB) \
+		-top s2d_tb \
+		-ams clocking_ams_control_file.scs \
+		-input $(S2D_PROBE)
+	@echo "S2D simulation completed. Waveforms: s2d_waves.shm"
 	@echo ""
-	@echo "S2D simulation completed. Log: $(S2D_LOG)"
+
+# Clock Distribution testbench
+clock_dist:
+	@echo "=========================================="
+	@echo "Running Clock Distribution Testbench with xrun..."
+	@echo "=========================================="
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(CLOCK_DIST_SRC) \
+		$(CLOCK_DIST_TB) \
+		-top clock_distribution_tb \
+		-ams clocking_ams_control_file.scs \
+		-input $(CLOCK_DIST_PROBE)
+	@echo "Clock Distribution simulation completed. Waveforms: clock_distribution_waves.shm"
 	@echo ""
+
+# GUI versions
+bbpll-gui:
+	@echo "=========================================="
+	@echo "Running BBPLL Testbench with GUI..."
+	@echo "=========================================="
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(BBPLL_SRC) \
+		$(SUBCIRCUITS_DIR)/model_*.vams \
+		$(BBPLL_TB) \
+		-top bbpll_tb \
+		-gui \
+		-input $(BBPLL_PROBE)
+
+dcdl-gui:
+	@echo "=========================================="
+	@echo "Running DCDL Testbench with GUI..."
+	@echo "=========================================="
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(DCDL_SRC) \
+		$(DCDL_TB) \
+		-top dcdl_tb \
+		-gui \
+		-input $(DCDL_PROBE)
+
+s2d-gui:
+	@echo "=========================================="
+	@echo "Running S2D Testbench with GUI..."
+	@echo "=========================================="
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(S2D_SRC) \
+		$(S2D_TB) \
+		-top s2d_tb \
+		-gui \
+		-input $(S2D_PROBE)
+
+clock_dist-gui:
+	@echo "=========================================="
+	@echo "Running Clock Distribution Testbench with GUI..."
+	@echo "=========================================="
+	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+		$(CONSTANTS) \
+		$(CLOCK_DIST_SRC) \
+		$(CLOCK_DIST_TB) \
+		-top clock_distribution_tb \
+		-gui \
+		-input $(CLOCK_DIST_PROBE)
 
 # Clean all simulation outputs
 clean:
 	@echo "Cleaning simulation outputs..."
-	@rm -rf *.raw *.raw+ *.ahdlSimDB
-	@rm -f $(BBPLL_LOG) $(DCDL_LOG) $(S2D_LOG)
-	@rm -f *.log *.log.* *.err
-	@rm -f .spectre* .ahdl*
-	@rm -f *.psf *.dsn *.init *.srf
+	@rm -rf worklib *.log *.shm *.diag INCA_libs xcelium.d .simvision xrun.history .cadence
 	@echo "Clean complete."
 
 # Help message
@@ -123,19 +185,23 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make all          - Run all testbenches (default)"
-	@echo "  make bbpll        - Run BBPLL testbench only"
-	@echo "  make dcdl         - Run DCDL testbench only"
-	@echo "  make s2d          - Run S2D testbench only"
+	@echo "  make bbpll        - Run BBPLL testbench"
+	@echo "  make dcdl         - Run DCDL testbench"
+	@echo "  make s2d          - Run S2D testbench"
+	@echo "  make clock_dist   - Run Clock Distribution testbench"
+	@echo "  make bbpll-gui    - Run BBPLL with SimVision GUI"
+	@echo "  make dcdl-gui     - Run DCDL with SimVision GUI"
+	@echo "  make s2d-gui      - Run S2D with SimVision GUI"
+	@echo "  make clock_dist-gui - Run Clock Distribution with SimVision GUI"
 	@echo "  make clean        - Remove all simulation outputs"
 	@echo "  make help         - Show this help message"
 	@echo ""
-	@echo "Environment:"
-	@echo "  SPECTRE=$(SPECTRE)"
-	@echo ""
 	@echo "Testbenches:"
-	@echo "  BBPLL: $(BBPLL_SRC)"
-	@echo "  DCDL:  $(DCDL_SRC)"
-	@echo "  S2D:   $(S2D_SRC)"
+	@echo "  BBPLL: $(BBPLL_TB)"
+	@echo "  DCDL:  $(DCDL_TB)"
+	@echo "  S2D:   $(S2D_TB)"
+	@echo "  Clock Distribution: $(CLOCK_DIST_TB)"
+
 	@echo "=========================================="
 
 # ============================================================================

@@ -1,0 +1,63 @@
+// ============================================================================
+// BBPLL Testbench - Verilog-AMS
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module bbpll_tb;
+
+// Parameters
+parameter real vdd_supply = 0.75;
+parameter real ref_clk_freq = 100e6;  // 100 MHz
+parameter real ref_clk_period = 1.0 / ref_clk_freq;  // 10ns
+parameter real sim_time = 100e-6;      // 100 us
+
+// Analog signals
+electrical reset;
+electrical clk_ref, clk_out, Dctrl_value;
+
+// Control variables for stimulus
+integer reset_state;
+integer clk_state;
+real next_clk_edge;
+
+// ============================================================================
+// Reference clock generation - Square wave using timer
+// ============================================================================
+analog begin
+    @(initial_step) begin
+        clk_state = 0;  // Start LOW
+        next_clk_edge = ref_clk_period / 2.0;  // First edge at half period
+    end
+    @(timer(next_clk_edge)) begin
+        clk_state = !clk_state;
+        next_clk_edge = next_clk_edge + ref_clk_period / 2.0;
+    end
+    // Square wave clock output with fast transitions
+    V(clk_ref) <+ transition(clk_state ? vdd_supply : 0.0, 0, 10p);
+end
+
+// ============================================================================
+// Reset generation
+// ============================================================================
+analog begin
+    @(initial_step) begin
+        reset_state = 1;  // Start in reset
+    end
+    @(timer(1e-9)) begin  // Release reset after 1ns
+        reset_state = 0;
+    end
+    V(reset) <+ transition(reset_state ? vdd_supply : 0.0, 0, 10p);
+end
+
+// ============================================================================
+// DUT instantiation
+// ============================================================================
+bbpll dut (
+    .reset(reset),
+    .clk_out(clk_out),
+    .Dctrl_value(Dctrl_value)
+);
+
+endmodule

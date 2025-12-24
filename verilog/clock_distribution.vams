@@ -1,0 +1,148 @@
+// ============================================================================
+// Clock Distribution Network - Verilog-A Behavioral Model
+// ============================================================================
+//
+// ============================================================================
+// NOTE: TRANSIENT NOISE RECOMMENDED FOR REALISTIC JITTER SIMULATION
+// ============================================================================
+//
+// This clock distribution model includes phase noise modeling (white + flicker
+// noise) to simulate realistic timing jitter. For best accuracy, enable
+// transient noise in Spectre simulations.
+//
+// To enable transient noise in Spectre:
+//   1. In ADE: Simulation → Options → Analog → Set "noisefmax" parameter
+//      Example: noisefmax=64G (should exceed clock frequency)
+//   2. In netlist: Add "noisefmax=64G" to the transient analysis statement
+//      Example: tran tran stop=100n noisefmax=64G
+//   3. Command line: spectre +aps netlist.scs +noisefmax=64G
+//
+// Recommended noisefmax: At least 2× the clock frequency
+//
+// ============================================================================
+//
+// Description:
+//   A 1-to-16 clock distribution network with independent phase noise sources
+//   and static local mismatch modeling. Distributes a single input clock to
+//   16 parallel data lanes with realistic delay variation and jitter.
+//
+// Operation:
+//   - Single input clock is replicated to 16 independent outputs
+//   - Each output has a unique static delay (local mismatch)
+//   - Static delays follow Gaussian distribution: N(μ, σ²)
+//   - All outputs share the same dynamic phase noise (common jitter)
+//   - Static mismatch randomized once at initialization
+//
+// Delay Characteristics:
+//   - Mean Propagation Delay (μ): Gaussian center (default: 198ps)
+//   - Delay Standard Deviation (σ): Gaussian spread (default: 541fs)
+//   - Each lane gets unique random delay: delay[i] ~ N(μ, σ²)
+//   - Delays are static (set once per simulation instance)
+//   - Models local path mismatch in clock distribution tree
+//
+// Noise Modeling:
+//   - Single common phase noise source shared across all outputs
+//   - White Noise: Flat phase noise floor, filtered at Nyquist frequency
+//   - Flicker Noise: 1/f phase noise contribution
+//   - Converted to time-domain jitter: Δt = Δφ / (2π × f_clk)
+//   - Common jitter models correlated noise from distribution root
+//
+// Ports:
+//   clk_in   - Input, single clock source (electrical)
+//   clk_out  - Output, 16-lane clock array [15:0] (electrical)
+//              Each lane has independent static delay + common jitter
+//
+// Parameters:
+//   vdd                          - Supply voltage (default: 0.75V)
+//   clock_frequency              - Clock frequency for noise modeling (default: 8GHz)
+//   propagation_delay_mu         - Mean propagation delay (default: 198ps)
+//   propagation_delay_sigma      - Std deviation of propagation delay (default: 541fs)
+//   white_noise_floor_dBcHz      - White phase noise floor (default: -139.9 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz      - Flicker phase noise at 1Hz (default: -77.2 dBc/Hz)
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module clocking_distribution_model(clk_in, clk_out);
+    input clk_in; electrical clk_in;
+    output [15:0] clk_out; electrical [15:0] clk_out;
+
+    parameter real vdd = 0.75;
+    parameter real clock_frequency = 8G; // clock frequency for noise modeling
+    parameter real white_noise_floor_dBcHz = -139.9; 
+    parameter real flicker_noise_1Hz_dBcHz = -77.2; 
+    parameter real propagation_delay_mu = 198p;
+    parameter real propagation_delay_sigma = 541f;
+
+    // Static delays for each of the 16 lanes (local mismatch)
+    real lane_delay[0:15];
+    
+    // Common noise variables
+    integer seed;
+    integer i;
+    real white_noise_floor_linear;
+    real white_noise_td;
+    real white_noise_filtered;
+    real flicker_noise_1Hz_linear;
+    real flicker_noise_td;
+    real total_phase_noise;
+    real total_time_noise_sampled;
+    
+    // Output state tracking for each lane
+    integer sign[0:15];
+    
+    genvar j;
+
+    analog begin
+        // Initialize random seed and lane delays once at start
+        @(initial_step) begin
+            seed = $random + $abstime * 1e12;
+            total_time_noise_sampled = 0;
+            
+            // Generate 16 random delays from Gaussian distribution N(μ, σ²)
+            for (i = 0; i < 16; i = i + 1) begin
+                lane_delay[i] = propagation_delay_mu + propagation_delay_sigma * $rdist_normal(seed, 0, 1);
+                sign[i] = 0;
+            end
+        end
+        
+        // Model common phase noise (shared across all outputs)
+        white_noise_floor_linear = 10**(white_noise_floor_dBcHz/10);
+        white_noise_td = white_noise(white_noise_floor_linear);
+        
+        // Filter the white noise at Nyquist frequency to prevent folding
+        white_noise_filtered = laplace_nd(white_noise_td, {1.0}, {1.0, 1.0/(`M_PI*clock_frequency)});
+        
+        flicker_noise_1Hz_linear = 10**(flicker_noise_1Hz_dBcHz/10);
+        flicker_noise_td = flicker_noise(flicker_noise_1Hz_linear, 1);
+        
+        total_phase_noise = white_noise_filtered + flicker_noise_td;
+        
+        // Sample noise discretely at falling edges (common for all lanes)
+        @(cross(V(clk_in) - vdd/2, -1)) begin
+            total_time_noise_sampled = total_phase_noise / (2 * `M_PI * clock_frequency);
+        end
+        
+        // Track rising edges for all lanes
+        @(cross(V(clk_in) - vdd/2, 1)) begin
+            for (i = 0; i < 16; i = i + 1) begin
+                sign[i] = 1;
+            end
+        end
+        
+        // Track falling edges for all lanes
+        @(cross(V(clk_in) - vdd/2, -1)) begin
+            for (i = 0; i < 16; i = i + 1) begin
+                sign[i] = 0;
+            end
+        end
+        
+        // Distribute clock to 16 outputs with static delays + common sampled jitter
+        for (j = 0; j < 16; j = j + 1) begin
+            V(clk_out[j]) <+ transition(vdd * sign[j], lane_delay[j] + total_time_noise_sampled, 5p);
+        end
+    end
+
+endmodule
