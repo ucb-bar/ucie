@@ -20,4 +20,6 @@
 
 # Other simulation artifacts
 *.bak
+xrun.history
+.cadence/
 *~

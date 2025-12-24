@@ -1,0 +1,75 @@
+// ============================================================================
+// S2D Testbench - Verilog-AMS
+// ============================================================================
+//
+// Description:
+//   Testbench for Single-to-Differential (S2D) Converter behavioral model.
+//   Tests differential clock generation with phase noise and path mismatch.
+//
+// Expected Behavior:
+//   - clk_outp follows clk_in (high when input high)
+//   - clk_outn inverted from clk_in (low when input high)
+//   - Nominal delay: 20ps from input to outputs
+//   - Path mismatch: ±5° (randomized at initialization)
+//   - Independent phase noise on each differential path
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module s2d_tb;
+
+// ============================================================================
+// Parameters
+// ============================================================================
+parameter real vdd_supply = 0.75;
+parameter real sim_time = 10e-9;      // 10ns
+parameter real clk_freq = 8e9;        // 8 GHz
+parameter real clk_period = 1.0 / clk_freq;  // 125ps
+
+// ============================================================================
+// Signals
+// ============================================================================
+electrical clk_in;       // Single-ended input clock (8GHz)
+electrical clk_outp;     // Positive differential output
+electrical clk_outn;     // Negative differential output
+
+// Clock generation variables
+integer clk_state;
+real next_clk_edge;
+
+// ============================================================================
+// Input Clock Source (Single-Ended Square Wave)
+// ============================================================================
+analog begin
+    @(initial_step) begin
+        clk_state = 0;  // Start LOW
+        next_clk_edge = clk_period / 2.0;  // First edge at half period
+    end
+    @(timer(next_clk_edge)) begin
+        clk_state = !clk_state;
+        next_clk_edge = next_clk_edge + clk_period / 2.0;
+    end
+    // Square wave: 0V to VDD with 5ps rise/fall time
+    V(clk_in) <+ transition(clk_state ? vdd_supply : 0.0, 0, 5p);
+end
+
+// ============================================================================
+// Device Under Test: S2D Converter
+// ============================================================================
+s2d dut (
+    .clk_in(clk_in),
+    .clk_outp(clk_outp),
+    .clk_outn(clk_outn)
+);
+
+// ============================================================================
+// Load Capacitors (for realistic loading)
+// ============================================================================
+analog begin
+    I(clk_outp) <+ ddt(10e-15 * V(clk_outp));  // 10fF load on outp
+    I(clk_outn) <+ ddt(10e-15 * V(clk_outn));  // 10fF load on outn
+end
+
+endmodule

@@ -78,14 +78,14 @@
 // Parameters:
 //   vdd                       - Supply voltage / output signal amplitude (default: 0.75V)
 //   delay                     - Nominal processing delay through converter (default: 20ps)
-//   t_slew                    - Output transition (rise/fall) time (default: 5ps)
+//   t_slew                    - Output transition (rise/fall) time (default: 20ps)
 //   max_phase_unbalance       - Maximum static phase mismatch in degrees (default: 5°)
 //                               Converted to time: ±max_phase_unbalance/(360×f_clk)
 //   clock_frequency           - Input clock frequency for noise modeling (default: 8GHz)
 //   inverter_count            - Number of inverter stages per path (default: 2)
 //                               Higher count = more cumulative noise
-//   white_noise_floor_dBcHz   - White phase noise floor per single inverter (default: -160 dBc/Hz)
-//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz offset per inverter (default: -109 dBc/Hz)
+//   white_noise_floor_dBcHz   - White phase noise floor per single inverter (default: -150 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz offset per inverter (default: -100 dBc/Hz)
 //
 // ============================================================================
 
@@ -102,9 +102,9 @@ module s2d(clk_in, clk_outp, clk_outn);
     parameter real max_phase_unbalance = 5; // maximum phase unbalance in degrees
     parameter real clock_frequency = 8G; // input clock frequency
     parameter real inverter_count = 2; // number of inverters in each output path, used to model noise
-    parameter real white_noise_floor_dBcHz = -160; // white phase noise floor introduced by one single inverter
-    parameter real flicker_noise_1Hz_dBcHz = -109; // flicker phase noise at 1Hz offset introduced by one single inverter
-    parameter real t_slew = 5p; // output transition time
+    parameter real white_noise_floor_dBcHz = -150; // white phase noise floor introduced by one single inverter
+    parameter real flicker_noise_1Hz_dBcHz = -100; // flicker phase noise at 1Hz offset introduced by one single inverter
+    parameter real t_slew = 20p; // output transition time
 
     real max_time_unbalance;
     real random_unbalance;

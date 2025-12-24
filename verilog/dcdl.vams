@@ -74,9 +74,9 @@
 //   inverter_count            - Number of inverter stages for noise scaling (default: 4)
 //                               Higher count = more cumulative noise
 //   clock_frequency           - Input clock frequency for noise-to-jitter conversion (default: 8GHz)
-//   white_noise_floor_dBcHz   - White phase noise floor per single inverter (default: -160 dBc/Hz)
-//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz offset per inverter (default: -109 dBc/Hz)
-//   t_slew                    - Output transition (rise/fall) time (default: 5ps)
+//   white_noise_floor_dBcHz   - White phase noise floor per single inverter (default: -150 dBc/Hz)
+//   flicker_noise_1Hz_dBcHz   - Flicker phase noise at 1Hz offset per inverter (default: -100 dBc/Hz)
+//   t_slew                    - Output transition (rise/fall) time (default: 20ps)
 //
 // ============================================================================
 
@@ -94,9 +94,9 @@ module dcdl(clk_in, dl_ctrl, clk_out);
     parameter real delay_offset = 10p; // base delay
     parameter real inverter_count = 4; // number of inverters in the delay line, used to model noise
     parameter real clock_frequency = 8G; // frequency of the input clock
-    parameter real white_noise_floor_dBcHz = -160; // white phase noise floor introduced by one single inverter
-    parameter real flicker_noise_1Hz_dBcHz = -109; // flicker phase noise at 1Hz offset introduced by one single inverter
-    parameter real t_slew = 5p; // output transition time
+    parameter real white_noise_floor_dBcHz = -150; // white phase noise floor introduced by one single inverter
+    parameter real flicker_noise_1Hz_dBcHz = -100; // flicker phase noise at 1Hz offset introduced by one single inverter
+    parameter real t_slew = 20p; // output transition time
 
     real ctrl_value;
     real white_noise_floor_linear;
