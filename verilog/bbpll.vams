@@ -58,12 +58,6 @@
 
 `include "constants.vams"
 `include "disciplines.vams"
-`include "bbpll_subcircuits/model_ref_crystal.vams"
-`include "bbpll_subcircuits/model_DVCO.vams"
-`include "bbpll_subcircuits/model_freq_divider.vams"
-`include "bbpll_subcircuits/model_BBPD.vams"
-`include "bbpll_subcircuits/model_digital_loop_filter.vams"
-`include "bbpll_subcircuits/model_1storder_DSmodulator.vams"
 
 module bbpll(reset, clk_out, Dctrl_value);
 
@@ -198,5 +192,243 @@ analog begin
     V(Vctrl_setpoint) <+ 0;
     V(Dctrl) <+ V(Dinteger) + V(Dfrac_DSM);
 end
+
+endmodule
+
+
+// miscellaneous sub circuits definition
+
+module model_1storder_DSmodulator(Din_frac, clk, Dout);
+
+input Din_frac; electrical Din_frac;  // Input fractional value in [0, 1)
+input clk;      electrical clk;
+output Dout;    electrical Dout;      // Output 1-bit digital stream
+
+parameter real vdd = 0.75;
+parameter real t_rise = 50p;
+
+real accumulator;
+integer Dout_value;
+
+analog begin
+    // Update accumulator on clock rising edge
+    @(cross(V(clk) - vdd/2, 1)) begin
+        accumulator = accumulator + V(Din_frac) - (V(Dout) > vdd/2 ? 1 : 0);
+        
+        if (accumulator >= 0.5) begin
+            Dout_value = 1;
+        end else begin
+            Dout_value = 0;
+        end
+    end
+
+    // Output with transition filtering
+    V(Dout) <+ transition(Dout_value * vdd, 0, t_rise);
+end
+
+endmodule
+
+module model_BBPD(clk_ref, clk_fb, early, late);
+
+    input clk_ref, clk_fb;
+	electrical clk_ref, clk_fb;
+    output early, late;
+	electrical early, late;
+
+    parameter real vdd = 0.75;
+    parameter real t_rise = 5p;
+    parameter real t_delay = 5p;
+
+    integer early_value, late_value;
+    integer compared;
+
+    analog begin
+        if (V(clk_ref) < vdd / 2 && V(clk_fb) < vdd / 2) begin
+            compared = 0;
+        end
+
+        @(cross(V(clk_ref) - vdd/2, 1)) begin
+            if (compared == 0) begin
+                late_value = 1;
+                early_value = 0;
+                compared = 1;
+            end
+        end
+        @(cross(V(clk_fb) - vdd/2, 1)) begin
+            if (compared == 0) begin
+                early_value = 1;
+                late_value = 0;
+                compared = 1;
+            end
+        end
+
+        V(early) <+ transition(early_value*vdd, t_delay, t_rise);
+        V(late) <+ transition(late_value*vdd, t_delay, t_rise);
+
+    end
+
+endmodule
+
+module model_digital_loop_filter(clk, reset, early, late, Dinteger, Dfrac, Dctrl);
+
+input clk;       electrical clk;
+input reset;     electrical reset;     // active high reset
+input early;     electrical early;     // unused, kept for interface compatibility
+input late;      electrical late;
+output Dinteger; electrical Dinteger;
+output Dfrac;    electrical Dfrac;
+output Dctrl;    electrical Dctrl;
+
+parameter real digital_latency = 500p;
+parameter real trise = 50p;
+parameter real vdd = 0.75;
+parameter real dlf_bitwidth = 8;
+parameter real dctrl_reset_value = 128;
+parameter integer rise_p1_fall_m1 = 1;
+parameter real Kp = 1;
+parameter real Ki = 1;
+
+real integrator_state;
+real late_p1_early_m1;
+real Dctrl_value;
+
+analog initial begin
+    integrator_state = dctrl_reset_value / Ki;
+end
+
+analog begin
+    // Phase detector output: +1 if late, -1 if early
+    if (V(late) > vdd/2)
+        late_p1_early_m1 = 1;
+    else
+        late_p1_early_m1 = -1;
+
+    // Update integrator on clock edge
+    @(cross(V(clk) - vdd/2, rise_p1_fall_m1)) begin
+        if (V(reset) > vdd/2) begin
+            integrator_state = dctrl_reset_value / Ki;
+        end else begin
+            // Anti-overflow protection
+            if (integrator_state * Ki + late_p1_early_m1 * Kp < 2**dlf_bitwidth - 1 &&
+                integrator_state * Ki + late_p1_early_m1 * Kp > 0) begin
+                integrator_state = integrator_state + late_p1_early_m1;
+            end
+        end
+    end
+    
+    // Calculate PI controller output with flooring for integer part
+    Dctrl_value = Ki * integrator_state + Kp * late_p1_early_m1;
+    V(Dinteger) <+ transition($floor(Dctrl_value), digital_latency, trise);
+    V(Dfrac) <+ transition(Dctrl_value - $floor(Dctrl_value), digital_latency, trise);
+    V(Dctrl) <+ transition(Dctrl_value, digital_latency, trise);
+end
+
+endmodule
+
+`define DCTRL_BITWIDTH 8
+
+module model_DVCO(Vctrl, Dctrl, clk_out, phase_noise_out);
+
+input Vctrl; electrical Vctrl;
+input Dctrl; electrical Dctrl;
+output clk_out; electrical clk_out;
+output phase_noise_out; electrical phase_noise_out;
+
+parameter real clk_middle_freq = 8G;      // middle frequency of the VCO
+parameter real Kvco = 32M;               // VCO gain in Hz/V
+parameter real Kdco = 1.25M;                 // DCO gain in Hz/LSB
+parameter real vdd = 0.75;
+parameter real PN_WN_100MHz = -130;       // white noise floor at 100MHz offset in dBc/Hz
+parameter real PN_FN_10kHz = -15;         // flicker noise at 10kHz offset in dBc/Hz
+parameter integer steps_per_cycle = 100;
+parameter real Dctrl_setpoint = 128;
+parameter real Vctrl_setpoint = vdd/2;
+
+real WN_PSD, FN_PSD;
+real osc_modulated_freq;
+real real_noise_integ;
+real phase;
+integer sign;
+
+analog begin
+    // Calculate instantaneous frequency from control inputs
+    osc_modulated_freq = Kvco * (V(Vctrl) - Vctrl_setpoint) + Kdco * (V(Dctrl) - Dctrl_setpoint);
+    
+    // Calculate phase noise PSD
+    WN_PSD = (2*`M_PI)**2 * (100M)**2 * (10**(PN_WN_100MHz/10));
+    FN_PSD = (2*`M_PI)**2 * (10k)**3 * (10**(PN_FN_10kHz/10));
+    real_noise_integ = white_noise(WN_PSD) + flicker_noise(FN_PSD, 1);
+    
+    // Accumulate phase with noise modulation
+    phase = 2*`M_PI*clk_middle_freq*$abstime + idtmod(2*`M_PI*osc_modulated_freq, 0, 2*`M_PI) + idt(real_noise_integ);
+    
+    // Output phase noise for monitoring
+    V(phase_noise_out) <+ real_noise_integ;
+    
+    // Bound simulation timestep
+    $bound_step(1.0 / clk_middle_freq / steps_per_cycle);
+    
+    // Event-driven square wave output with smooth transitions
+    @(cross(cos(phase), 0)) sign = cos(phase) > 0 ? 1 : 0;
+    V(clk_out) <+ transition(sign * vdd, 5p, 5p);
+end
+
+
+endmodule
+
+module model_freq_divider(clk_highspeed, clk_divided);
+
+input clk_highspeed; electrical clk_highspeed;
+output clk_divided;  electrical clk_divided;
+
+parameter integer division_factor = 16;
+parameter real t_rise = 5p;
+parameter real t_delay = 50p;
+parameter real vdd = 0.75;
+
+integer count;
+integer sign;
+
+analog begin
+    // Increment counter on rising edge of high-speed clock
+    @(cross(V(clk_highspeed) - vdd/2, 1))
+        count = (count + 1) % division_factor;
+    
+    // Generate divided clock: high for first half of division period
+    sign = count < (division_factor / 2) ? 1 : 0;
+    V(clk_divided) <+ transition(sign * vdd, t_delay, t_rise);
+end
+
+endmodule
+
+module model_ref_crystal(clk_ref);
+
+output clk_ref; electrical clk_ref;
+
+parameter integer steps_per_cycle = 100;
+parameter real vdd = 0.75;
+parameter real osc_freq = 100M; // nominal frequency in Hz
+parameter real white_noise_floor_dBcHz = -160;
+
+real white_noise_floor_linear;
+real white_noise_td;
+real white_noise_filtered;
+real phase;
+
+analog begin
+    // Calculate white noise floor in linear scale
+    white_noise_floor_linear = 10**(white_noise_floor_dBcHz/10);
+    white_noise_td = white_noise(white_noise_floor_linear);
+    // filter the white noise at Nyquist frequency to prevent folding
+    white_noise_filtered = laplace_nd(white_noise_td, {1.0}, {1.0, 1.0/(`M_PI*osc_freq)});
+    
+    // Use linear phase accumulation instead of idtmod to avoid LTE convergence issues
+    // This is valid since the reference crystal frequency is constant
+    phase = 2 * `M_PI * osc_freq * $abstime + white_noise_filtered;
+    
+    $bound_step(1.0 / osc_freq / steps_per_cycle);
+    V(clk_ref) <+ vdd/2 + vdd/2 * sin(phase);
+end
+
 
 endmodule
