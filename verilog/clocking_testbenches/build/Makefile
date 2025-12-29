@@ -34,10 +34,6 @@ XRUN_OPTS := -64bit \
 # Paths
 TB_DIR := ..
 VAMS_DIR := ../..
-SUBCIRCUITS_DIR := ../../bbpll_subcircuits
-
-# Include paths
-INCLUDES := -incdir $(VAMS_DIR) -incdir $(SUBCIRCUITS_DIR)
 
 # Source files
 CONSTANTS := $(VAMS_DIR)/constants.vams
@@ -65,10 +61,9 @@ bbpll:
 	@echo "=========================================="
 	@echo "Running BBPLL Testbench with xrun..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(BBPLL_SRC) \
-		$(SUBCIRCUITS_DIR)/model_*.vams \
 		$(BBPLL_TB) \
 		-top bbpll_tb \
 		-ams clocking_ams_control_file.scs \
@@ -81,7 +76,7 @@ dcdl:
 	@echo "=========================================="
 	@echo "Running DCDL Testbench with xrun..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(DCDL_SRC) \
 		$(DCDL_TB) \
@@ -96,7 +91,7 @@ s2d:
 	@echo "=========================================="
 	@echo "Running S2D Testbench with xrun..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(S2D_SRC) \
 		$(S2D_TB) \
@@ -111,7 +106,7 @@ clock_dist:
 	@echo "=========================================="
 	@echo "Running Clock Distribution Testbench with xrun..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(CLOCK_DIST_SRC) \
 		$(CLOCK_DIST_TB) \
@@ -126,10 +121,9 @@ bbpll-gui:
 	@echo "=========================================="
 	@echo "Running BBPLL Testbench with GUI..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(BBPLL_SRC) \
-		$(SUBCIRCUITS_DIR)/model_*.vams \
 		$(BBPLL_TB) \
 		-top bbpll_tb \
 		-gui \
@@ -139,7 +133,7 @@ dcdl-gui:
 	@echo "=========================================="
 	@echo "Running DCDL Testbench with GUI..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(DCDL_SRC) \
 		$(DCDL_TB) \
@@ -151,7 +145,7 @@ s2d-gui:
 	@echo "=========================================="
 	@echo "Running S2D Testbench with GUI..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(S2D_SRC) \
 		$(S2D_TB) \
@@ -163,7 +157,7 @@ clock_dist-gui:
 	@echo "=========================================="
 	@echo "Running Clock Distribution Testbench with GUI..."
 	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) $(INCLUDES) \
+	$(XRUN) $(XRUN_OPTS) \
 		$(CONSTANTS) \
 		$(CLOCK_DIST_SRC) \
 		$(CLOCK_DIST_TB) \

@@ -7,6 +7,8 @@
 `define T_RISE_FALL_DEFAULT 5
 // Number of lanes
 `define LANES 16
+// Pi
+`define M_PI 3.14159265358979323846
 
 // PRIMITIVES
 // Clock-to-q and data-to-q delays of FFs and latches (ps)
