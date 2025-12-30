@@ -3,10 +3,12 @@
 // ****************************************************************
 simulator lang=spectre 
 
-global 0
+global 0 vdd!
 
 amsd {
-    ie vsup=0.75 tr=5p tf=5p rout=0
+    ie vsup=0.75 tr=20p tf=20p rout=0
 }
 
-tran tran stop=1u annotate=status
+
+// to enable noise, do noisefmax=64G noiseseed=32
+tran tran stop=1u method=gear2only maxstep=10n annotate=status
