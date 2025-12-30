@@ -45,12 +45,18 @@
 `define DRIVER_R_OFF_SEGMENT 1000000
 
 // CLOCK_PATH
+// Clock period
+`define CLK_PERIOD 125e-12
 // Digitally-controlled delay line bit width
 `define DCDL_CTRL_BITWIDTH 8
 // Digitally-controlled delay line delay offset (ps)
 `define DCDL_DELAY_OFS 10.0
 // Digitally-controlled delay line delay sep (ps)
 `define DCDL_DELAY_STEP 10.0
+// Clock distribution mean delay
+`define CLK_DIST_DELAY_MU 200e-12
+// Clock distribution std deviation
+`define CLK_DIST_DELAY_SIGMA 0.5e-12
 
 // TX
 // TX nominal output impedance (Ohms)

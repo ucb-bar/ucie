@@ -18,6 +18,8 @@ module phy(
 
 // TODO: add back after PLL model simulates faster and/or 
 // jitter simulation is needed
+// FIXME(Di): If you use the PLL model, make sure to turn on simulation noise and set the simulation time > 15us (which is the PLL lock time).  
+// NOTE(Di): It's pretty slow to lock the PLL compared to other parts of the PHY.
 // bbpll pll(
 //     .reset(intf.pll_reset),
 //     .clk_out(intf.pll_clk_out),
@@ -26,9 +28,51 @@ module phy(
 
 txdriver_tile sb_txdata_drv(.intf(intf.sb_txdata));
 txdriver_tile sb_txclk_drv(.intf(intf.sb_txclk));
+wire [`LANES-1:0] txclk_sed;
+
+clocking_distribution_model #(
+    .propagation_delay_mu(`CLK_DIST_DELAY_MU),
+    .propagation_delay_sigma(`CLK_DIST_DELAY_SIGMA)
+)   clk_dist_inst_tx(
+    .clk_in(intf.pll_clk_out),
+    .clk_out(txclk_sed)
+);
+
+wire deskewed_clk_tx, deskewed_clkp_tx, deskewed_clkn_tx;
+dcdl #(
+    .delay_gain(0),
+    // FIXME(Di): set the gain for DCDL 
+    .delay_offset(2 * `CLK_DIST_DELAY_MU + `CLK_PERIOD/4)
+) dcdl_inst(
+    .clk_in(intf.pll_clk_out),
+    // TODO(Di): connect the control signal to the main LogPHY controller
+    .dl_ctrl(0), 
+    .clk_out(deskewed_clk_tx)
+);
+
+s2d s2d_clklane_inst(
+    .clk_in(deskewed_clk_tx),
+    .clk_outp(deskewed_clkp_tx),
+    .clk_outn(deskewed_clkn_tx)
+);
+assign intf.txclkp.clkp = deskewed_clkp_tx;
+assign intf.txclkp.clkn = deskewed_clkn_tx;
+assign intf.txclkn.clkp = deskewed_clkp_tx;
+assign intf.txclkn.clkn = deskewed_clkn_tx;
+assign intf.txval.clkp = deskewed_clkp_tx;
+assign intf.txval.clkn = deskewed_clkn_tx;
+assign intf.txtrk.clkp = deskewed_clkp_tx;
+assign intf.txtrk.clkn = deskewed_clkn_tx;
+
 genvar i;
 generate
     for(i = 0; i < `LANES; i++) begin
+        // TODO(Di): DCC?
+        s2d s2d_inst(
+            .clk_in(txclk_sed[i]),
+            .clk_outp(intf.txdata[i].clkp),
+            .clk_outn(intf.txdata[i].clkn)
+        );
         txdata_tile txdata_tile(.intf(intf.txdata[i]));
     end
 endgenerate
@@ -37,8 +81,20 @@ txdata_tile txclkn_tile(.intf(intf.txclkn));
 txdata_tile txval_tile(.intf(intf.txval));
 txdata_tile txtrk_tile(.intf(intf.txtrk));
 
+wire [`LANES-1:0] rxclk_dist_sed;
+clocking_distribution_model #(
+    .propagation_delay_mu(`CLK_DIST_DELAY_MU),
+    .propagation_delay_sigma(`CLK_DIST_DELAY_SIGMA)
+)   clk_dist_inst_rx(
+    .clk_in(rxclkp_tile.afe.dout), // HACK(Di): explicitly call the AFE output
+//    .clk_in(intf.pll_clk_out),
+    .clk_out(rxclk_dist_sed)
+);
+
 generate
     for(i = 0; i < `LANES; i++) begin
+        // perform clock distribution on RX too
+        assign intf.rxdata[i].clk = rxclk_dist_sed[i];
         rxdata_tile rxdata_tile(.intf(intf.rxdata[i]));
     end
 endgenerate
@@ -52,13 +108,14 @@ endmodule
 module phy_tb;
     wire vdd = 1, vss = 0;
     reg reset = 1;
-    reg clkp;
-    wire clkn;
+    reg pll_clkp_out;
+    wire pll_clkn_out;
+
     reg a_en, a_pc, b_en, b_pc, sel_a, din_dig;
 
-    initial clkp = 0;
-    always #(`MIN_PERIOD/2) clkp = ~clkp;
-    assign clkn = ~clkp;
+    initial pll_clkp_out = 0;
+    always #(`MIN_PERIOD/2) pll_clkp_out = ~pll_clkp_out;
+    assign pll_clkn_out = ~pll_clkp_out;
 
     initial begin
         a_pc = 1;
@@ -101,8 +158,8 @@ module phy_tb;
     );
 
     assign intf.pll_reset = reset;
-    assign intf.pll_Dctrl_value = 1;
-
+    assign intf.pll_Dctrl_value = 1; // FIXME(Di): pll_Dctrl_value is an output showing the internal locking status of the PLL, so don't tie it to 1.
+    assign intf.pll_clk_out = pll_clkp_out;
     assign intf.sb_txdata.vdd = vdd;
     assign intf.sb_txdata.vss = vss;
     assign intf.sb_txdata.pu_ctl = 0;
@@ -123,8 +180,6 @@ module phy_tb;
             assign intf.txdata[i].vdd = vdd;
             assign intf.txdata[i].vss = vss;
             assign intf.txdata[i].din = {2**(`SERDES_STAGES-1){2'b01}};
-            assign intf.txdata[i].clkp = clkp;
-            assign intf.txdata[i].clkn = clkn;
             assign intf.txdata[i].rstb = ~reset;
             assign intf.txdata[i].pu_ctl = 0;
             assign intf.txdata[i].pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
@@ -134,7 +189,6 @@ module phy_tb;
 
             assign intf.rxdata[i].vdd = vdd;
             assign intf.rxdata[i].vss = vss;
-            assign intf.rxdata[i].clk = intf.rxclkp.clkout;
             assign intf.rxdata[i].rstb = ~reset;
             assign intf.rxdata[i].zen = 1;
             assign intf.rxdata[i].zctl = 0;
@@ -151,8 +205,6 @@ module phy_tb;
     assign intf.txclkp.vdd = vdd;
     assign intf.txclkp.vss = vss;
     assign intf.txclkp.din = {2**(`SERDES_STAGES-1){2'b01}};
-    assign intf.txclkp.clkp = clkp;
-    assign intf.txclkp.clkn = clkn;
     assign intf.txclkp.rstb = ~reset;
     assign intf.txclkp.pu_ctl = 0;
     assign intf.txclkp.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
@@ -163,8 +215,6 @@ module phy_tb;
     assign intf.txclkn.vdd = vdd;
     assign intf.txclkn.vss = vss;
     assign intf.txclkn.din = {2**(`SERDES_STAGES-1){2'b10}};
-    assign intf.txclkn.clkp = clkp;
-    assign intf.txclkn.clkn = clkn;
     assign intf.txclkn.rstb = ~reset;
     assign intf.txclkn.pu_ctl = 0;
     assign intf.txclkn.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
@@ -175,8 +225,6 @@ module phy_tb;
     assign intf.txval.vdd = vdd;
     assign intf.txval.vss = vss;
     assign intf.txval.din = {2**(`SERDES_STAGES-3){8'hf0}};
-    assign intf.txval.clkp = clkp;
-    assign intf.txval.clkn = clkn;
     assign intf.txval.rstb = ~reset;
     assign intf.txval.pu_ctl = 0;
     assign intf.txval.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
@@ -187,8 +235,6 @@ module phy_tb;
     assign intf.txtrk.vdd = vdd;
     assign intf.txtrk.vss = vss;
     assign intf.txtrk.din = {2**(`SERDES_STAGES-1){2'b01}};
-    assign intf.txtrk.clkp = clkp;
-    assign intf.txtrk.clkn = clkn;
     assign intf.txtrk.rstb = ~reset;
     assign intf.txtrk.pu_ctl = 0;
     assign intf.txtrk.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
@@ -258,7 +304,7 @@ module phy_tb;
     wire [2**`SERDES_STAGES-1:0] expected_a = {2**(`SERDES_STAGES-1){2'b01}};
     wire [2**`SERDES_STAGES-1:0] expected_b = {2**(`SERDES_STAGES-1){2'b10}};
     initial begin
-        #200000;
+        #200000; // FIXME(Di): Do we need to wait this long for reset?
         reset = 0;
         
         #200000;

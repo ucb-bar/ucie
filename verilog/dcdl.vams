@@ -81,8 +81,6 @@
 // ============================================================================
 
 `include "constants.vams"
-`include "disciplines.vams"
-`include "./constants.vams"
 
 module dcdl(clk_in, dl_ctrl, clk_out);
     input clk_in; electrical clk_in;
