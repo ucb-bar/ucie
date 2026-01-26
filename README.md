@@ -1,11 +1,11 @@
-# UCIe Digital IP
+# UCIe IP
 
 An open-source digital implementation of the UCIe 1.1 specification.
 
 You can request a copy of the UCIe 1.1 specification [here](https://www.uciexpress.org/1-1-spec-download).
 
 > [!NOTE]
-> We are currently in the process of rewriting portions of the implementation. Latest changes can be found on the [`dev`](https://github.com/ucb-bar/uciedigital/tree/dev) branch.
+> We are currently in the process of rewriting portions of the implementation and adding detailed schematics/models for analog components. Latest changes can be found on the [`dev`](https://github.com/ucb-bar/ucie/tree/dev) branch.
 > 
 
 ## Getting Started
@@ -22,17 +22,12 @@ If you are running `sbt` commands frequently, you may find it useful
 to leave the sbt shell (launched by running `sbt` with no arguments) open.
 You can then compile/test the code from the sbt shell.
 
-## Documentation
-
-See the [API documentation](https://ucb-ucie.github.io/uciedigital/edu/berkeley/cs/ucie/digital/index.html).
-The API docs are updated automatically in continuous integration.
-
 ## Contributing
 
 If you'd like to contribute, please let us know. You can:
 
 - Open an issue.
-- Email vikramj@berkeley.edu and rahulkumar@berkeley.edu.
+- Email rahulkumar@berkeley.edu and rohankumar@berkeley.edu.
   
 Documentation updates, tests, and bugfixes are always welcome.
 For larger feature additions, please discuss your ideas with us before implementing them.
