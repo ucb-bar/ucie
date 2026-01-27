@@ -153,12 +153,12 @@ class UcieRstSync(sim: Boolean = true) extends BlackBox with HasBlackBoxInline {
       | output rstbSync
       |);
       | wire rstb_int0, rstb_int1, rstb_int2, rstb_int3, constant_one;
-      | b15tihi00ah1n03x5 tie_1_cell(.o(constant_one));
-      | b15fqn003ah1n04x5 ff0(.clk(clk), .d(constant_one), .o(rstb_int0), .rb(rstbAsync));
-      | b15fqn003ah1n08x5 ff1(.clk(clk), .d(rstb_int0), .o(rstb_int1), .rb(rstbAsync));
-      | b15fqn003ah1n16x5 ff2(.clk(clk), .d(rstb_int1), .o(rstb_int2), .rb(rstbAsync));
-      | b15bfn000ah1n32x5 outputbuf0(.a(rstb_int2), .o(rstb_int3));
-      | b15bfn000ah1n80a5 outputbuf1(.a(rstb_int3), .o(rstbSync));
+      | tie_cell tie_1_cell(.o(constant_one));
+      | ff ff0(.clk(clk), .d(constant_one), .o(rstb_int0), .rb(rstbAsync));
+      | ff ff1(.clk(clk), .d(rstb_int0), .o(rstb_int1), .rb(rstbAsync));
+      | ff ff2(.clk(clk), .d(rstb_int1), .o(rstb_int2), .rb(rstbAsync));
+      | buf outputbuf0(.a(rstb_int2), .o(rstb_int3));
+      | buf outputbuf1(.a(rstb_int3), .o(rstbSync));
       |endmodule
       """.stripMargin
     )
