@@ -1,6 +1,6 @@
-# UCIe Digital IP
+# UCIe IP
 
-An open-source digital implementation of the UCIe 3.0 specification.
+An open-source implementation of the UCIe 3.0 specification.
 
 You can request a copy of the UCIe specification [here](https://www.uciexpress.org/3-0-spec-download).
 

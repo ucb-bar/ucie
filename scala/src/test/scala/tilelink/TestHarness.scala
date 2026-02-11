@@ -20,7 +20,7 @@ import edu.berkeley.cs.chippy.TLTesterResp
 
 class TestHarness(implicit p: Parameters) extends LazyModule {
   val tltParams = TLTesterParams()
-  val ucieParams = UcieTLParams()
+  val ucieParams = UcieTLParams(sim = true)
   val beatBytes = 64;
 
   val tlt = LazyModule(new TLTester(tltParams, beatBytes))
@@ -87,13 +87,13 @@ class TestHarnessSpec extends AnyFunSpec with ChiselScalatestTester {
     it("should be able to read/write MMIO registers") {
       implicit val p = Parameters.empty
       val dut = new TestHarness()
-      test(LazyModule(dut).module).withAnnotations(Seq(WriteVcdAnnotation)) {
+      test(LazyModule(dut).module).withAnnotations(Seq(VcsBackendAnnotation, WriteVcdAnnotation)) {
         c =>
           c.reset.poke(true.B)
           c.clock.step()
           c.reset.poke(false.B)
           c.clock.step()
-          c.clock.setTimeout(10)
+          c.clock.setTimeout(512)
           c.io.req.enqueue(
             new TLTesterReq(dut.tltParams).Lit(
               _.addr -> 0x4000.U,

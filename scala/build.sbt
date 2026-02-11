@@ -22,7 +22,7 @@ resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/service/local
 
 lazy val testchipip = ProjectRef(
   uri(
-    "https://github.com/ucb-bar/testchipip.git#b337914c1204355c44b800da16c6c1880482592a"
+    "https://github.com/ucb-bar/testchipip.git#a35c621cb797423c38dbab703d306c1561a9c812"
   ),
   "testchipip"
 )
