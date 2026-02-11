@@ -31,9 +31,7 @@ val rocketchip =
   "edu.berkeley.cs" %% "rocketchip-6.0.0" % "1.6-6.0.0-1b9f43352-SNAPSHOT"
 
 lazy val chippy = ProjectRef(
-  uri(
-    "ssh://git@github.com/ucb-substrate/chippy.git#d11dbe180c6183b6bd5d4cf6e59a737b28b239d2"
-  ),
+  file("../../chippy"),
   "chippy"
 )
 lazy val uciedigital = (project in file("."))

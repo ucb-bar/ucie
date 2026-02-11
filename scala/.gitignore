@@ -89,4 +89,4 @@ build/
 target/
 project/metals.sbt
 project/project/
-
+test_run_dir/
