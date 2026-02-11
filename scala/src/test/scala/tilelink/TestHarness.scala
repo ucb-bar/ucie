@@ -25,7 +25,7 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
 
   val tlt = LazyModule(new TLTester(tltParams, beatBytes))
 
-  val ucieTL = LazyModule(new UcieTL(UcieTLParams(), beatBytes))
+  val ucieTL = LazyModule(new UcieTL(ucieParams, beatBytes))
   val clockSourceNode_digital = ClockSourceNode(
     Seq(ClockSourceParameters())
   ) // drive uciephy and ucietl clock nodes
@@ -93,7 +93,7 @@ class TestHarnessSpec extends AnyFunSpec with ChiselScalatestTester {
           c.clock.step()
           c.reset.poke(false.B)
           c.clock.step()
-          c.clock.setTimeout(512)
+          c.clock.setTimeout(30)
           c.io.req.enqueue(
             new TLTesterReq(dut.tltParams).Lit(
               _.addr -> 0x4000.U,
