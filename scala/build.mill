@@ -1,0 +1,42 @@
+package build
+
+import mill._
+import scalalib._
+import publish._
+
+object ucie extends ScalaModule {
+  def scalaVersion = "2.13.18"
+  def publishVersion = "0.0.1"
+
+  def mvnDeps = Seq(
+    mvn"edu.berkeley.cs::chippy:0.0.1",
+    mvn"edu.berkeley.cs::diplomacy:0.0.1",
+    mvn"org.chipsalliance::chisel:7.8.0",
+    mvn"edu.berkeley.cs::cde:1.6-1b9f43352-SNAPSHOT",
+    mvn"edu.berkeley.cs::rocketchip-6.0.0:1.6-6.0.0-1b9f43352-SNAPSHOT",
+  )
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.chipsalliance:::chisel-plugin:7.8.0"
+  )
+
+  def repositories = Seq("https://oss.sonatype.org/service/local/repositories/snapshots/content")
+
+  def pomSettings = PomSettings(
+    description = "An open-source UCIe implementation",
+    organization = "edu.berkeley.cs",
+    url = "https://github.com/ucb-bar/ucie",
+    licenses = Seq(License.MIT),
+    versionControl = VersionControl.github("ucb-bar", "ucie"),
+    developers = Seq(
+      Developer("rohanku", "Rohan Kumar", "https://github.com/rohanku"),
+      Developer("rahulk29", "Rahul Kumar", "https://github.com/rahulk29")
+    )
+  )
+
+  object test extends ScalaTests, TestModule.ScalaTest {
+    def mvnDeps = Seq(
+      mvn"org.scalatest::scalatest:3.2.19",
+    )
+  }
+}
+

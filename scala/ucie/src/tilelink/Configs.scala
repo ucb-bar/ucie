@@ -10,22 +10,17 @@ import freechips.rocketchip.subsystem.{
   BaseSubsystem,
   PBUS,
   SBUS,
-  CacheBlockBytes,
   TLBusWrapperLocation
 }
 import org.chipsalliance.cde.config.{Parameters, Field, Config}
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.regmapper.{
-  HasRegMap,
-  RegField,
-  RegWriteFn,
-  RegReadFn,
-  RegFieldDesc
-}
+import edu.berkeley.cs.chippy._
+import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
-import freechips.rocketchip.util.{AsyncQueueParams}
-import testchipip.soc.{OBUS}
+import edu.berkeley.cs.chippy._
+import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.lazymodule._
 
 case class UcieTLParams(
     address: BigInt = 0x4000,
@@ -315,7 +310,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         true.B
       )
 
-      var mmioRegs = Seq(
+      val mmioRegs = Seq(
         toRegFieldRw(testTarget, "testTarget"),
         toRegFieldRw(txTestMode, "txTestMode"),
         toRegFieldRw(txDataMode, "txDataMode")
