@@ -115,15 +115,15 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
   }
 }
 
-class TestHarnessSpec extends AnyFunSpec with ChiselSim {
-  describe("TestHarness") {
+class TileLinkSpec extends AnyFunSpec with ChiselSim {
+  describe("UcieTL") {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new TestHarness()).module,
+        LazyModule(new UcieTL(TestHarness.ucieParams, 32)).module,
         args = Array(
           "--target-dir",
-          (Utils.buildRoot / "TestHarness_should_generate_valid_SystemVerilog").toString
+          (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
         )
       )
     }
@@ -149,6 +149,13 @@ class TestHarnessSpec extends AnyFunSpec with ChiselSim {
       simulateRaw(new SimTop) { c =>
         RunUntilFinished
       }
+    }
+
+    it("should be able to read/write MMIO registers using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
+      )
     }
   }
 }
