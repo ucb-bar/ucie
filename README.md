@@ -6,7 +6,15 @@ You can request a copy of the UCIe specification [here](https://www.uciexpress.o
 
 ## Tests
 
-To run the tests, make sure the `XCELIUM_HOME` environment variable is correctly set and `xrun` is on your `PATH`.
+To run the RTL tests, make sure Scala is installed.
+
+Then, run the following from the `scala/` folder.
+
+```bash
+./mill test
+```
+
+To run the VAMS tests, make sure the `XCELIUM_HOME` environment variable is correctly set and `xrun` is on your `PATH`.
 
 Then, run the following from the `rs/` folder:
 
