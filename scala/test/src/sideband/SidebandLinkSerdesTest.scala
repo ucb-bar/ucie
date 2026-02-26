@@ -2,6 +2,7 @@ package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
 import chisel3.util._
+import chisel3.simulator.HasSimulator.simulators.verilator
 
 // ChiselSim for Chisel 6
 // import chisel3.simulator.EphemeralSimulator._
@@ -11,6 +12,7 @@ import chisel3.simulator.scalatest.ChiselSim
 // import chisel3.simulator.stimulus.{RunUntilFinished, RunUntilSuccess, ResetProcedure}
 
 import org.scalatest.funspec.AnyFunSpec
+import edu.berkeley.cs.uciedigital.Utils
 
 class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
 
@@ -88,7 +90,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   describe("Serialize RAW bits") {
     val numPackets = 5
     it(s"Serialized ${numPackets} RAW packet(s) (64 bits per packet)") {
-      simulate(new SidebandLinkSerializer(sbLink_w, msg_w))
+      simulate(
+        new SidebandLinkSerializer(sbLink_w, msg_w),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(WriteVcdAnnotation))
       // .withAnnotations(Seq(TargetDirAnnotation("./generators/ucie/src/test/test_run_dir/")))
       { c =>
@@ -138,7 +143,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   describe("Serialize 64-bit sideband packet(s)") {
     val numPackets = 5
     it(s"Serialized ${numPackets} 64-bit packet(s)") {
-      simulate(new SidebandLinkSerializer(sbLink_w, msg_w))
+      simulate(
+        new SidebandLinkSerializer(sbLink_w, msg_w),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(WriteVcdAnnotation))
       // .withAnnotations(Seq(TargetDirAnnotation("./generators/ucie/src/test/test_run_dir/")))
       { c =>
@@ -206,7 +214,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   describe("Serialize 128-bit sideband packet(s)") {
     val numPackets = 10
     it(s"Serialized ${numPackets} 128-bit packet(s)") {
-      simulate(new SidebandLinkSerializer(sbLink_w, msg_w))
+      simulate(
+        new SidebandLinkSerializer(sbLink_w, msg_w),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(WriteVcdAnnotation))
       // .withAnnotations(Seq(TargetDirAnnotation("./generators/ucie/src/test/test_run_dir/")))
       { c =>
@@ -276,7 +287,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   describe("Serialize any sideband packet(s)") {
     val numPackets = 10
     it(s"Serialized ${numPackets} sideband packet(s)") {
-      simulate(new SidebandLinkSerializer(sbLink_w, msg_w))
+      simulate(
+        new SidebandLinkSerializer(sbLink_w, msg_w),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(WriteVcdAnnotation))
       // .withAnnotations(Seq(TargetDirAnnotation("./generators/ucie/src/test/test_run_dir/")))
       { c =>
@@ -357,7 +371,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   describe("Serialize a packet but reset is triggered in the middle") {
     val numPackets = 5
     it(s"Stopped serializing a packet when reset was triggered") {
-      simulate(new SidebandLinkSerializer(sbLink_w, msg_w)) { c =>
+      simulate(
+        new SidebandLinkSerializer(sbLink_w, msg_w),
+        additionalResetCycles = 5
+      ) { c =>
         val waitCyclesCtrl = 5 // max of random wait cycles before next run
         val opcodeRandCtrl = 8 // max of random opcode select
         val seed = 979
@@ -523,16 +540,17 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
   }
 
   describe("Deserialize a RAW packet(s) (64 bits per packet)") {
+    implicit val simulator =
+      verilator(verilatorSettings = Utils.verilatorSettings)
     val timeoutCycles = 512
     val numPackets = 5
     it(s"Deserialized ${numPackets} RAW packet(s) (64 bits per packet)") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
-      // .withAnnotations(Seq(VerilatorBackendAnnotation))
-      // .withAnnotations(Seq(VcsBackendAnnotation))
-      // .withAnnotations(Seq(WriteFsdbAnnotation))
-      // .withAnnotations(Seq(TargetDirAnnotation("./generators/ucie/src/test/test_run_dir/")))
-      // .withAnnotations(Seq(WriteVcdAnnotation))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       { c =>
+        enableWaves()
         val seed = 0
         val rand = new scala.util.Random(seed)
         val bitWidth = 64
@@ -588,7 +606,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     val timeoutCycles = 512
     val numPackets = 5
     it(s"Deserialized ${numPackets} sideband packet(s) (64 bits per packet)") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))
@@ -668,7 +689,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     val timeoutCycles = 512
     val numPackets = 5
     it(s"Deserialized ${numPackets} sideband packet(s) (64 bits per packet)") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))
@@ -753,7 +777,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     val opcodeRandCtrl = 8 // max of random opcode select
 
     it(s"Deserialized ${numPackets} sideband packet(s)") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))
@@ -849,7 +876,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     val opcodeRandCtrl = 8 // max of random opcode select
 
     it(s"Stopped serializing a packet when reset was triggered") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))
@@ -942,7 +972,10 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     val opcodeRandCtrl = 8 // max of random opcode select
 
     it(s"Triggered a timeout when serializer stopped sending a packet") {
-      simulate((new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)))
+      simulate(
+        (new DeserializerTestHarness(sbLink_w, msg_w, timeoutCycles)),
+        additionalResetCycles = 5
+      )
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))
@@ -1060,7 +1093,7 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     it(
       s"Serialized and deserialized single packets in loopback through async queues"
     ) {
-      simulate((new LinkSerdesTestHarness))
+      simulate((new LinkSerdesTestHarness), additionalResetCycles = 5)
       // .withAnnotations(Seq(VerilatorBackendAnnotation))
       // .withAnnotations(Seq(VcsBackendAnnotation))
       // .withAnnotations(Seq(WriteFsdbAnnotation))

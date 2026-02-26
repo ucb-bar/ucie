@@ -130,23 +130,9 @@ class TestHarnessSpec extends AnyFunSpec with ChiselSim {
 
     it("should be able to read/write MMIO registers using ChiselSim") {
       implicit val p = Parameters.empty
+      implicit val simulator =
+        verilator(verilatorSettings = Utils.verilatorSettings)
       val dut = new TestHarness()
-      implicit val simulator = verilator(verilatorSettings =
-        CompilationSettings.default
-          .withDisableFatalExitOnWarnings(true)
-          .withTraceStyle(
-            Some(
-              svsim.verilator.Backend.CompilationSettings
-                .TraceStyle(
-                  svsim.verilator.Backend.CompilationSettings.TraceKind.Vcd,
-                  traceUnderscore = true,
-                  maxArraySize = Some(1024),
-                  maxWidth = Some(1024),
-                  traceDepth = Some(1024)
-                )
-            )
-          )
-      )
       simulate(LazyModule(dut).module, additionalResetCycles = 5) { c =>
         enableWaves()
         c.io.expect(c.clock, "h4000".U, 0.U)
@@ -158,23 +144,8 @@ class TestHarnessSpec extends AnyFunSpec with ChiselSim {
 
     it("should be able to read/write MMIO registers using Verilog testbench") {
       implicit val p = Parameters.empty
-      implicit val simulator = verilator(verilatorSettings =
-        CompilationSettings.default
-          .withDisableFatalExitOnWarnings(true)
-          .withTiming(Some(CompilationSettings.Timing.TimingEnabled))
-          .withTraceStyle(
-            Some(
-              svsim.verilator.Backend.CompilationSettings
-                .TraceStyle(
-                  svsim.verilator.Backend.CompilationSettings.TraceKind.Vcd,
-                  traceUnderscore = true,
-                  maxArraySize = Some(1024),
-                  maxWidth = Some(1024),
-                  traceDepth = Some(1024)
-                )
-            )
-          )
-      )
+      implicit val simulator =
+        verilator(verilatorSettings = Utils.verilatorSettings)
       simulateRaw(new SimTop) { c =>
         RunUntilFinished
       }
