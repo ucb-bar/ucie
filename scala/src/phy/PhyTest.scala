@@ -145,10 +145,10 @@ class PhyTestRegsIO(
   val txDebugExecute = Input(Bool())
   val txDebugManualRepeatPeriod = Input(UInt(6.W))
   val txDebugPacketsToSend = Input(UInt(bitCounterWidth.W))
-  val txDebugdata = Input(Vec(16, UInt(64.W)))
+  val txDebugData = Input(Vec(16, UInt(64.W)))
   val txDebugState = Output(TxTestState())
   val txDebugPacketsEnqueued = Output(UInt(bitCounterWidth.W))
-  val dllCode = Output(UInt(5.W))
+  val txDebugDllCode = Output(UInt(5.W))
 }
 
 class PhyDebugIO extends Bundle {
@@ -189,6 +189,14 @@ class PhyTest(
     sim: Boolean = false
 ) extends Module {
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
+
+  // TODO: Add debug RTL
+  io.regs.txDebugState := TxTestState.idle
+  io.regs.txDebugDllCode := 0.U
+  io.regs.txDebugPacketsEnqueued := 0.U
+  io.bumps.txData := false.B
+  io.phy.sbTxClk := false.B
+  io.phy.sbTxData := false.B
 
   // General computations
   val maxBitCount = VecInit(Seq.fill(bitCounterWidth)(true.B)).asUInt
@@ -697,6 +705,6 @@ class PhyTest(
     driver.io.din := input
     output := driver.io.dout
     // TODO: set up control signals
-    // driver.io.ctl := io.driverctl(i)
+    driver.io.ctl := 0.U.asTypeOf(driver.io.ctl)
   }
 }

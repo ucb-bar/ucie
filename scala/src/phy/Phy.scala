@@ -39,10 +39,10 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
   val sbTxData = Output(Bool())
   val sbRxClk = Input(Clock())
   val sbRxData = Input(Bool())
-  val refClkP = Input(Bool())
-  val refClkN = Input(Bool())
-  val bypassClkP = Input(Bool())
-  val bypassClkN = Input(Bool())
+  val refClkP = Input(Clock())
+  val refClkN = Input(Clock())
+  val bypassClkP = Input(Clock())
+  val bypassClkN = Input(Clock())
   val pllRdacVref = Input(Bool())
 }
 
@@ -83,14 +83,14 @@ class ClkRx(sim: Boolean = false) extends BlackBox with HasBlackBoxInline {
 }
 
 class ClkMuxIO extends Bundle {
-  val in0 = Input(Bool())
-  val in1 = Input(Bool())
+  val in0 = Input(Clock())
+  val in1 = Input(Clock())
   val mux0_en_0 = Input(Bool())
   val mux0_en_1 = Input(Bool())
   val mux1_en_0 = Input(Bool())
   val mux1_en_1 = Input(Bool())
-  val out = Output(Bool())
-  val outb = Output(Bool())
+  val out = Output(Clock())
+  val outb = Output(Clock())
 }
 
 class ClkMux(sim: Boolean = false) extends BlackBox with HasBlackBoxInline {
@@ -238,17 +238,17 @@ class RxLaneDigitalCtlIO extends Bundle {
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
   // TX CONTROL
-  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane, 1 loopback lane).
-  val txctl = Input(Vec(numLanes + 5, new TxLaneDigitalCtlIO))
-  val dllCode = Output(Vec(numLanes + 5, UInt(5.W)))
+  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
+  val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
+  val dllCode = Output(Vec(numLanes + 4, UInt(5.W)))
   val pllCtl = Input(new UciePllCtlIO)
   val pllOutput = Output(new UciePllDebugOutIO)
   val testPllCtl = Input(new UciePllCtlIO)
   val testPllOutput = Output(new UciePllDebugOutIO)
 
   // RX CONTROL
-  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane, 1 loopback lane).
-  val rxctl = Input(Vec(numLanes + 5, new RxLaneDigitalCtlIO))
+  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
+  val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
 
   // If 1, PHY uses bypass clk. If 0, PHY uses PLL clk.
   val pllBypassEn = Input(Bool())
@@ -267,6 +267,9 @@ class PhyIO(numLanes: Int = 16) extends Bundle {
 
 class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   val io = IO(new PhyIO(numLanes))
+
+  // TODO: set these signals correctly
+  io.digital.rx := 0.U.asTypeOf(io.digital.rx)
 
   // TODO do we need to set pu/pd ctl to 0 when driver en is low?
 
@@ -347,8 +350,11 @@ class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   // TODO: Add refclkrx and buffers (need to add IO connections for all of these macros).
 
   val pll = Module(new UciePll(sim))
+  pll.io.vclk_ref := io.top.refClkP.asBool
+  pll.io.vclk_refb := io.top.refClkN.asBool
   pll.io.dref_low := io.pllCtl.dref_low
   pll.io.dref_high := io.pllCtl.dref_high
+  pll.io.vrdac_ref := io.top.pllRdacVref
   pll.io.dcoarse := io.pllCtl.dcoarse
   pll.io.dvco_reset := io.pllCtl.vco_reset
   pll.io.dvco_resetn := !io.pllCtl.vco_reset
@@ -362,8 +368,11 @@ class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   io.pllOutput.d_sar_debug := pll.io.d_sar_debug
 
   val testPll = Module(new UciePll(sim))
+  testPll.io.vclk_ref := io.top.refClkP.asBool
+  testPll.io.vclk_refb := io.top.refClkN.asBool
   testPll.io.dref_low := io.testPllCtl.dref_low
   testPll.io.dref_high := io.testPllCtl.dref_high
+  testPll.io.vrdac_ref := io.top.pllRdacVref
   testPll.io.dcoarse := io.testPllCtl.dcoarse
   testPll.io.dvco_reset := io.testPllCtl.vco_reset
   testPll.io.dvco_resetn := !io.testPllCtl.vco_reset
@@ -382,13 +391,15 @@ class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   io.debug.testPllClkN := testPllClkDiv.io.clkout_2
 
   val clkMuxP = Module(new ClkMux(sim))
-  clkMuxP.io.in0 := pll.io.vp_out
+  clkMuxP.io.in0 := pll.io.vp_out.asClock
+  clkMuxP.io.in1 := io.top.bypassClkP
   clkMuxP.io.mux0_en_0 := !io.pllBypassEn
   clkMuxP.io.mux0_en_1 := io.pllBypassEn
   clkMuxP.io.mux1_en_0 := false.B
   clkMuxP.io.mux1_en_1 := false.B
   val clkMuxN = Module(new ClkMux(sim))
-  clkMuxN.io.in0 := pll.io.vn_out
+  clkMuxN.io.in0 := pll.io.vn_out.asClock
+  clkMuxN.io.in1 := io.top.bypassClkN
   clkMuxN.io.mux0_en_0 := !io.pllBypassEn
   clkMuxN.io.mux0_en_1 := io.pllBypassEn
   clkMuxN.io.mux1_en_0 := false.B
@@ -403,8 +414,8 @@ class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   val txclkbuf5ur = Module(new DiffBufferN(4))
   val txclkbuf5ll = Module(new DiffBufferN(6))
   val txclkbuf5lr = Module(new DiffBufferN(4))
-  txclkbuf0.io.vinp := clkMuxP.io.out
-  txclkbuf0.io.vinn := clkMuxN.io.out
+  txclkbuf0.io.vinp := clkMuxP.io.out.asBool
+  txclkbuf0.io.vinn := clkMuxN.io.out.asBool
   txclkbuf1.io.vinp := txclkbuf0.io.voutp
   txclkbuf1.io.vinn := txclkbuf0.io.voutn
   txclkbuf2.io.vinp := txclkbuf1.io.voutp
@@ -442,6 +453,7 @@ class Phy(numLanes: Int = 16, sim: Boolean = false) extends Module {
   // TODO: separate clock divider for async FIFO and its reset synchronizer
   for (lane <- 0 to numLanes + 3) {
     val shuffler = Module(new Shuffler32)
+    shuffler.io.din := 0.U
     shuffler.io.permutation := io.txctl(lane).shuffler
 
     val txLane = Module(new TxLane(sim));
