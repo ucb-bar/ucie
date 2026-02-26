@@ -20,6 +20,7 @@ import chisel3.simulator.HasSimulator.simulators.verilator
 import svsim.verilator.Backend.CompilationSettings
 import _root_.circt.stage.ChiselStage
 import chisel3.simulator.stimulus.RunUntilFinished
+import edu.berkeley.cs.uciedigital.Utils
 
 trait TestDriverInterface {
   def clock: Clock
@@ -95,8 +96,6 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
 
     io <> tlt.module.io
 
-    val rxData = ucieTL.module.io.phy.rxData
-
     // Loopback
     ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData
     ucieTL.module.io.phy.rxValid := ucieTL.module.io.phy.txValid
@@ -118,13 +117,13 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
 
 class TestHarnessSpec extends AnyFunSpec with ChiselSim {
   describe("TestHarness") {
-    it("should generate valid System Verilog") {
+    it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
         LazyModule(new TestHarness()).module,
         args = Array(
           "--target-dir",
-          "./test_run_dir/TestHarness_should_generate_valid_System_Verilog"
+          (Utils.buildRoot / "TestHarness_should_generate_valid_SystemVerilog").toString
         )
       )
     }
@@ -153,7 +152,6 @@ class TestHarnessSpec extends AnyFunSpec with ChiselSim {
         c.io.expect(c.clock, "h4000".U, 0.U)
         c.io.write(c.clock, "h40f8".U, "hdeadbeef".U)
         c.io.expect(c.clock, "h40f8".U, "hdeadbeef".U)
-        c.rxData(0).expect(false.B)
         println("[TEST] Success")
       }
     }

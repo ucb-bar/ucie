@@ -1160,4 +1160,3 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim {
     }
   }
 }
-
