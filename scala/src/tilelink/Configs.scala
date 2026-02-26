@@ -13,7 +13,6 @@ import freechips.rocketchip.subsystem.{
   TLBusWrapperLocation
 }
 import org.chipsalliance.cde.config.{Parameters, Field, Config}
-import edu.berkeley.cs.chippy._
 import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
@@ -89,7 +88,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       test.io.phy <> phy.io.digital
       test.io.debug <> phy.io.debug
       // TODO: Remove and add necessary registers
-      test.io.regs <> 0.U.asTypeOf(test.io.regs)
+      test.io.regs := DontCare
 
       // MMIO registers.
       val testTarget = RegInit(TestTarget.mainband)
