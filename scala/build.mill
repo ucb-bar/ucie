@@ -1,0 +1,42 @@
+package build
+
+import mill._
+import scalalib._
+import publish._
+
+object `package` extends ScalaModule, PublishModule {
+  def scalaVersion = "2.13.18"
+  def publishVersion = "0.0.1"
+  def chiselVersion = "7.8.0"
+  def artifactName = "ucie"
+
+  def mvnDeps = Seq(
+    mvn"org.chipsalliance::chisel:${chiselVersion}",
+    mvn"edu.berkeley.cs::chippy:0.0.1",
+    mvn"edu.berkeley.cs::diplomacy:0.0.1",
+    mvn"edu.berkeley.cs::cde:0.0.1",
+    mvn"edu.berkeley.cs::rocketchip:0.0.1",
+  )
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
+  )
+
+  def pomSettings = PomSettings(
+    description = "An open-source UCIe implementation",
+    organization = "edu.berkeley.cs",
+    url = "https://github.com/ucb-bar/ucie",
+    licenses = Seq(License.MIT),
+    versionControl = VersionControl.github("ucb-bar", "ucie"),
+    developers = Seq(
+      Developer("rohanku", "Rohan Kumar", "https://github.com/rohanku"),
+      Developer("rahulk29", "Rahul Kumar", "https://github.com/rahulk29")
+    )
+  )
+
+  object test extends ScalaTests, TestModule.ScalaTest {
+    def mvnDeps = Seq(
+      mvn"org.scalatest::scalatest:3.2.19",
+    )
+  }
+}
+

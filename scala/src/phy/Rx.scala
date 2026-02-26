@@ -189,8 +189,6 @@ class VerilogRxDataLane(sim: Boolean = false)
       "rx_data_lane.v",
       """
 module rx_data_lane (
-   inout vdd,
-   inout vss,
    input din,
    output dout_0,
    output dout_1,
@@ -432,8 +430,6 @@ class VerilogRxClkLane(sim: Boolean = false)
       "rx_clock_lane.v",
       """
 module rx_clock_lane (
-   inout vdd,
-   inout vss,
    input clkin,
    output clkout,
    input zen,

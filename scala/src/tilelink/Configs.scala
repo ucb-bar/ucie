@@ -10,22 +10,16 @@ import freechips.rocketchip.subsystem.{
   BaseSubsystem,
   PBUS,
   SBUS,
-  CacheBlockBytes,
   TLBusWrapperLocation
 }
 import org.chipsalliance.cde.config.{Parameters, Field, Config}
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.regmapper.{
-  HasRegMap,
-  RegField,
-  RegWriteFn,
-  RegReadFn,
-  RegFieldDesc
-}
+import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
-import freechips.rocketchip.util.{AsyncQueueParams}
-import testchipip.soc.{OBUS}
+import edu.berkeley.cs.chippy._
+import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.lazymodule._
 
 case class UcieTLParams(
     address: BigInt = 0x4000,
@@ -71,16 +65,13 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     beatBytes = beatBytes
   )
 
-  val topIO = BundleBridgeSource(() => new UcieBumpsIO(params.numLanes))
-
   override lazy val module = new UcieTLImpl
   class UcieTLImpl extends Impl {
-    val io = IO(new Bundle {})
+    val io = IO(new UcieBumpsIO(params.numLanes))
     withClockAndReset(clock, reset) {
-      val io = topIO.out(0)._1
-
       // PHY
       val phy = Module(new Phy(params.numLanes, params.sim))
+      io.phy <> phy.io.top
 
       // TEST HARNESS
       val phyTestReset = ShiftRegister(reset, 2, true.B)
@@ -93,6 +84,11 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
           )
         )
       }
+      io.debug <> test.io.bumps
+      test.io.phy <> phy.io.digital
+      test.io.debug <> phy.io.debug
+      // TODO: Remove and add necessary registers
+      test.io.regs := DontCare
 
       // MMIO registers.
       val testTarget = RegInit(TestTarget.mainband)
@@ -300,12 +296,20 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       test.io.regs.rxDataOffset := ShiftRegister(rxDataOffset, 2, true.B)
 
       phy.io.pllBypassEn := ShiftRegister(pllBypassEn, 2, true.B)
-      phy.io.txctl := ShiftRegister(txctl, 2, true.B)
+      phy.io.txctl := ShiftRegister(
+        VecInit(txctl.take(params.numLanes + 4)),
+        2,
+        true.B
+      )
       phy.io.pllCtl := ShiftRegister(pllCtl, 2, true.B)
       phy.io.testPllCtl := ShiftRegister(testPllCtl, 2, true.B)
-      phy.io.rxctl := ShiftRegister(rxctl, 2, true.B)
+      phy.io.rxctl := ShiftRegister(
+        VecInit(rxctl.take(params.numLanes + 4)),
+        2,
+        true.B
+      )
 
-      var mmioRegs = Seq(
+      val mmioRegs = Seq(
         toRegFieldRw(testTarget, "testTarget"),
         toRegFieldRw(txTestMode, "txTestMode"),
         toRegFieldRw(txDataMode, "txDataMode")
@@ -396,7 +400,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
           "testPllOutput"
         ),
         toRegFieldRw(pllBypassEn, "pllBypassEn")
-      ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
+      ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).dll_reset, s"dll_reset_$i"),
           toRegFieldRw(txctl(i).driver, s"txctl_${i}_driver"),
@@ -411,7 +415,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
             s"dllCode_$i"
           )
         )
-      }) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
+      }) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(rxctl(i).zen, s"zen_$i"),
           toRegFieldRw(rxctl(i).zctl, s"zctl_$i"),

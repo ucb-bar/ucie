@@ -290,8 +290,6 @@ class VerilogTxLane(sim: Boolean = false)
       "tx_lane.v",
       """
 module tx_lane (
-  inout vdd,
-  inout vss,
   input dll_reset,
   input dll_resetb,
   input ser_resetb,
@@ -1075,9 +1073,7 @@ module tx_driver (
    input pd_ctlb_36,
    input pd_ctlb_37,
    input pd_ctlb_38,
-   input pd_ctlb_39,
-   inout vdd,
-   inout vss
+   input pd_ctlb_39
 );
   assign dout = din;
 endmodule
@@ -1399,9 +1395,6 @@ class VerilogUciePll(sim: Boolean = false)
       "ucie_pll.v",
       """
 module ucie_pll (
-   inout vdd,
-   inout vdd_dig,
-   inout vss,
    input vclk_ref,
    input vclk_refb,
    input dref_low_0,
