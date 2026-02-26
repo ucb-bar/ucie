@@ -59,9 +59,10 @@ xrun \\
   -access +rwc \\
   -top $topModule \\
   -input ${probeFile.toString} \\${incDirs.map(dir => s"\n  -incdir $dir \\").mkString("")}
-  +define+layer$$Verification$$Assert$$Temporal \\
-  +define+layer$$Verification$$Assume$$Temporal \\
-  +define+layer$$Verification$$Cover$$Temporal \\
+  -define layer$$Verification$$Assert$$Temporal \\
+  -define layer$$Verification$$Assume$$Temporal \\
+  -define layer$$Verification$$Cover$$Temporal \\
+  -define RANDOMIZE_MEM_INIT -define RANDOMIZE_REG_INIT -define RANDOMIZE_GARBAGE_ASSIGN -define RANDOMIZE_INVALID_ASSIGN \\
   -f ${sourceFilesList.toString} \\
   > >(tee -a xrun.out) 2> >(tee -a xrun.err >&2)
 """

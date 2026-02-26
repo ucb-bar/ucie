@@ -22,13 +22,95 @@ import _root_.circt.stage.ChiselStage
 import chisel3.simulator.stimulus.RunUntilFinished
 import edu.berkeley.cs.uciedigital.Utils
 
-trait TestDriverInterface {
-  def clock: Clock
-  def reset: Reset
-  def tlt: TLTesterIO
+abstract class TestDriver extends ExtModule {
+  val clock = IO(Output(Clock()))
+  val reset = IO(Output(Reset()))
+  val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
+
+  def setStimulus(name: String, body: String) = setInline(
+    s"${name}.sv",
+    s"""
+`timescale 1ns/1ps
+module ${name}(
+  output reg clock,
+  output reg reset,
+  output reg [63:0] tlt_req_bits_addr,
+  output reg [63:0] tlt_req_bits_data,
+  output reg tlt_req_bits_is_write,
+  output reg tlt_req_valid,
+  input tlt_req_ready,
+  input [63:0] tlt_resp_bits_data,
+  input tlt_resp_valid,
+  output reg tlt_resp_ready
+);
+  reg [63:0] result;
+  task op(input [63:0] addr, input [63:0] data, input is_write);
+    begin
+      tlt_resp_ready = 1'b1;
+      tlt_req_valid = 1'b1;
+      tlt_req_bits_addr = addr;
+      tlt_req_bits_data = data;
+      tlt_req_bits_is_write = is_write;
+      fork
+        if (!tlt_req_ready) @(posedge tlt_req_ready);
+        repeat(1000) @(posedge clock);
+      join_any
+      assert(tlt_req_ready);
+      fork
+        @(negedge clock) tlt_req_valid = 1'b0;
+        fork
+          if (!tlt_resp_valid) @(posedge tlt_resp_valid);
+          repeat(1000) @(posedge clock);
+        join_any
+      join
+      assert(tlt_resp_valid);
+      @(negedge clock);
+    end
+  endtask
+  task write(input [63:0] addr, input [63:0] data);
+    begin
+      op(addr, data, 1'b1);
+      @(negedge clock);
+    end
+  endtask
+  task read(input [63:0] addr);
+    begin
+      op(addr, 64'b0, 1'b0);
+      result = tlt_resp_bits_data;
+      @(negedge clock);
+    end
+  endtask
+  task expect_data(input [63:0] addr, input [63:0] data);
+    begin
+      read(addr);
+      assert(result === data);
+    end
+  endtask
+
+  initial clock = 1'b0;
+  always #1 clock = ~clock;
+
+  initial begin
+  reset = 1'b1;
+  tlt_req_bits_addr = 64'b0;
+  tlt_req_bits_data = 64'b0;
+  tlt_req_bits_is_write = 64'b0;
+  tlt_req_valid = 1'b0;
+  tlt_resp_ready = 1'b0;
+  repeat(5) @(negedge clock);
+  reset = 1'b0;
+  repeat(5) @(negedge clock);
+  $body
+  $$display("TEST PASSED");
+  $$finish;
+  end
+endmodule
+          """.trim
+
+  )
 }
 
-class SimTop[T <: ExtModule with TestDriverInterface](driver: => T)(implicit
+class SimTop[T <: TestDriver](driver: => T)(implicit
     p: Parameters
 ) extends RawModule {
   val drv = Module(driver)
@@ -85,64 +167,14 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
   }
 }
 
-class MmioSimpleTestDriver extends ExtModule with TestDriverInterface {
-  val clock = IO(Output(Clock()))
-  val reset = IO(Output(Reset()))
-  val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
-  setInline(
-    "MmioSimpleTestDriver.sv",
+class MmioSimpleTestDriver extends TestDriver {
+  setStimulus(
+    "MmioSimpleTestDriver",
     """
-`timescale 1ns/1ps;
-module MmioSimpleTestDriver(
-  output reg clock,
-  output reg reset,
-  output reg [63:0] tlt_req_bits_addr,
-  output reg [63:0] tlt_req_bits_data,
-  output reg tlt_req_bits_is_write,
-  output reg tlt_req_valid,
-  input tlt_req_ready,
-  input [63:0] tlt_resp_bits_data,
-  input tlt_resp_valid,
-  output reg tlt_resp_ready
-);
-  task op(input [63:0] addr, input [63:0] data, input is_write);
-    begin
-      tlt_resp_ready = 1'b1;
-      tlt_req_valid = 1'b1;
-      tlt_req_bits_addr = addr;
-      tlt_req_bits_data = data;
-      tlt_req_bits_is_write = is_write;
-      fork
-        if (!tlt_req_ready) @(posedge tlt_req_ready);
-        repeat(1000) @(posedge clock);
-      join_any
-      assert(tlt_req_ready);
-      fork
-        @(posedge clock) tlt_req_valid = 1'b0;
-        fork
-          if (!tlt_resp_valid) @(posedge tlt_resp_valid);
-          repeat(1000) @(posedge clock);
-        join_any
-      join
-      assert(tlt_resp_valid);
-    end
-  endtask
-  initial clock = 1'b0;
-  always #1 clock = ~clock;
-  initial begin
-  reset = 1'b1;
-  repeat(5) @(posedge clock);
-  reset = 1'b0;
-  op(64'h4000, 64'h0, 1'b0);
-  assert(tlt_resp_bits_data === 64'h0);
-  op(64'h40f8, 64'hdeadbeef, 1'b1);
-  op(64'h40f8, 64'h0, 1'b0);
-  assert(tlt_resp_bits_data === 64'hdeadbeef);
-  $display("TEST PASSED");
-  $finish;
-  end
-endmodule
-          """.stripMargin
+  expect_data(64'h4000, 64'h0);
+  write(64'h40f8, 64'hdeadbeef);
+  expect_data(64'h40f8, 64'hdeadbeef);
+          """.trim
   )
 }
 
