@@ -27,41 +27,11 @@ trait TestDriverInterface {
   def reset: Reset
   def tlt: TLTesterIO
 }
-class TestDriver extends ExtModule with TestDriverInterface {
-  val clock = IO(Output(Clock()))
-  val reset = IO(Output(Reset()))
-  val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
-  setInline(
-    "TestDriver.sv",
-    """module TestDriver(
-            |    output reg clock,
-            |    output reset,
-            |    output [63:0] tlt_req_bits_addr,
-            |    output [63:0] tlt_req_bits_data,
-            |    output tlt_req_bits_is_write,
-            |    output tlt_req_valid,
-            |    input tlt_req_ready,
-            |    input [63:0] tlt_resp_bits_data,
-            |    input tlt_resp_valid,
-            |    output tlt_resp_ready
-            |);
-            | `timescale 1ns/1ps
-            | initial clock = 1'b0;
-            | always #1 clock = ~clock;
-            | initial begin
-            |   repeat(5) @(posedge clock);
-            |   $display("TEST PASSED");
-            |   $finish;
-            | end
-            |endmodule
-          """.stripMargin
-  )
-}
 
-class SimTop(implicit
+class SimTop[T <: ExtModule with TestDriverInterface](driver: => T)(implicit
     p: Parameters
 ) extends RawModule {
-  val drv = Module(new TestDriver)
+  val drv = Module(driver)
 
   withClockAndReset(drv.clock, drv.reset) {
     val harness = Module(LazyModule(new TestHarness).module)
@@ -115,6 +85,67 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
   }
 }
 
+class MmioSimpleTestDriver extends ExtModule with TestDriverInterface {
+  val clock = IO(Output(Clock()))
+  val reset = IO(Output(Reset()))
+  val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
+  setInline(
+    "MmioSimpleTestDriver.sv",
+    """
+`timescale 1ns/1ps;
+module MmioSimpleTestDriver(
+  output reg clock,
+  output reg reset,
+  output reg [63:0] tlt_req_bits_addr,
+  output reg [63:0] tlt_req_bits_data,
+  output reg tlt_req_bits_is_write,
+  output reg tlt_req_valid,
+  input tlt_req_ready,
+  input [63:0] tlt_resp_bits_data,
+  input tlt_resp_valid,
+  output reg tlt_resp_ready
+);
+  task op(input [63:0] addr, input [63:0] data, input is_write);
+    begin
+      tlt_resp_ready = 1'b1;
+      tlt_req_valid = 1'b1;
+      tlt_req_bits_addr = addr;
+      tlt_req_bits_data = data;
+      tlt_req_bits_is_write = is_write;
+      fork
+        if (!tlt_req_ready) @(posedge tlt_req_ready);
+        repeat(1000) @(posedge clock);
+      join_any
+      assert(tlt_req_ready);
+      fork
+        @(posedge clock) tlt_req_valid = 1'b0;
+        fork
+          if (!tlt_resp_valid) @(posedge tlt_resp_valid);
+          repeat(1000) @(posedge clock);
+        join_any
+      join
+      assert(tlt_resp_valid);
+    end
+  endtask
+  initial clock = 1'b0;
+  always #1 clock = ~clock;
+  initial begin
+  reset = 1'b1;
+  repeat(5) @(posedge clock);
+  reset = 1'b0;
+  op(64'h4000, 64'h0, 1'b0);
+  assert(tlt_resp_bits_data === 64'h0);
+  op(64'h40f8, 64'hdeadbeef, 1'b1);
+  op(64'h40f8, 64'h0, 1'b0);
+  assert(tlt_resp_bits_data === 64'hdeadbeef);
+  $display("TEST PASSED");
+  $finish;
+  end
+endmodule
+          """.stripMargin
+  )
+}
+
 class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
@@ -146,7 +177,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       implicit val simulator =
         verilator(verilatorSettings = Utils.verilatorSettings)
-      simulateRaw(new SimTop) { c =>
+      simulateRaw(new SimTop(new MmioSimpleTestDriver)) { c =>
         RunUntilFinished
       }
     }
@@ -154,6 +185,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should be able to read/write MMIO registers using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
+        new SimTop(new MmioSimpleTestDriver),
         Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
       )
     }

@@ -4,6 +4,7 @@ import os.Path
 import java.nio.file.Paths
 import svsim.verilator.Backend.CompilationSettings
 import org.chipsalliance.cde.config.Parameters
+import chisel3.RawModule
 import circt.stage.ChiselStage
 import edu.berkeley.cs.uciedigital.tilelink.SimTop
 
@@ -12,6 +13,9 @@ object Utils {
     Paths.get(sys.env("MILL_TEST_RESOURCE_DIR")).toAbsolutePath
   ) / os.up / os.up
   val buildRoot = root / "build"
+  val xceliumDir = root / os.up / "xcelium"
+  val probeFile = xceliumDir / "probe.tcl"
+  
   val verilatorSettings =
     CompilationSettings.default
       .withDisableFatalExitOnWarnings(true)
@@ -29,10 +33,11 @@ object Utils {
         )
       )
 
-    def writeSourceFilesList(path: Path, sourceFiles: Seq[Path]) = {
-      os.makeDir.all(path / os.up)
-      os.write.over(path, sourceFiles.map(_.toString).mkString("\n"))
-    }
+  def writeSourceFilesList(path: Path, sourceFiles: Seq[Path]) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(path, sourceFiles.map(_.toString).mkString("\n"))
+  }
+
   def writeXrunSimScript(
       path: Path,
       topModule: String,
@@ -49,19 +54,15 @@ xrun \\
   -allowredefinition \\
   -dmsaoi \\
   -sv_ms \\
-  -timescale \\
-  1ps/100fs \\
-  -spectre_args \\
-  +preset=mx +mt=32 -ahdllint=warn \\
-  -access \\
-  +rwc \\
+  -timescale 1ps/100fs \\
+  -spectre_args "+preset=mx +mt=32 -ahdllint=warn" \\
+  -access +rwc \\
   -top $topModule \\
-  -input \\
-  PROBE_FILE \\${incDirs.map(dir => s"\n  +incdir+$dir \\").mkString("")}
+  -input ${probeFile.toString} \\${incDirs.map(dir => s"\n  -incdir $dir \\").mkString("")}
   +define+layer$$Verification$$Assert$$Temporal \\
   +define+layer$$Verification$$Assume$$Temporal \\
   +define+layer$$Verification$$Cover$$Temporal \\
-  +define+RANDOMIZE_MEM_INIT +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_GARBAGE_ASSIGN +define+RANDOMIZE_INVALID_ASSIGN \\
+  -f ${sourceFilesList.toString} \\
   > >(tee -a xrun.out) 2> >(tee -a xrun.err >&2)
 """
     )
@@ -81,7 +82,8 @@ xrun \\
       .filter(path => fileExtensions.exists(ext => path.last.endsWith(ext)))
   }
 
-  def simulate(
+  def simulate[T <: RawModule](
+      dut: => T,
       workDir: Path
   )(implicit p: Parameters) = {
     val sourceDir = workDir / "src"
@@ -89,7 +91,7 @@ xrun \\
     os.makeDir.all(sourceDir)
     val simDir = workDir / "sim"
     ChiselStage.emitSystemVerilogFile(
-      new SimTop,
+      dut,
       args = Array(
         "--target-dir",
         sourceDir.toString
