@@ -268,5 +268,13 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
       )
     }
+
+    it("should support simple manual test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new UcieTestDriver),
+        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
+      )
+    }
   }
 }
