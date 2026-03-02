@@ -196,7 +196,7 @@ class MmioSimpleTestDriver extends TestDriver {
     """
   expect_data(64'h4000, 64'h0);
   write(64'h40f8, 64'hdeadbeef);
-  expect_data(64'h40f8, 64'hdeadbeef);
+  expect_data(64'h40f8, 64'hdeadbeee);
           """.trim
   )
 }
@@ -242,6 +242,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val simulator =
         verilator(verilatorSettings = Utils.verilatorSettings)
       simulateRaw(new SimTop(new MmioSimpleTestDriver)) { c =>
+        enableWaves()
         RunUntilFinished
       }
     }
@@ -273,7 +274,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new UcieTestDriver),
-        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
+        Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
       )
     }
   }
