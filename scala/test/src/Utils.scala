@@ -15,7 +15,7 @@ object Utils {
   val buildRoot = root / "build"
   val xceliumDir = root / os.up / "xcelium"
   val probeFile = xceliumDir / "probe.tcl"
-  
+
   val verilatorSettings =
     CompilationSettings.default
       .withDisableFatalExitOnWarnings(true)
@@ -42,8 +42,7 @@ object Utils {
       path: Path,
       topModule: String,
       sourceFilesList: Path,
-      incDirs: Seq[Path] = Seq.empty,
-      loadmem: Boolean = true
+      incDirs: Seq[Path] = Seq.empty
   ) = {
     os.makeDir.all(path / os.up)
     os.write.over(
@@ -58,7 +57,9 @@ xrun \\
   -spectre_args "+preset=mx +mt=32 -ahdllint=warn" \\
   -access +rwc \\
   -top $topModule \\
-  -input ${probeFile.toString} \\${incDirs.map(dir => s"\n  -incdir $dir \\").mkString("")}
+  -input ${probeFile.toString} \\${incDirs
+          .map(dir => s"\n  -incdir $dir \\")
+          .mkString("")}
   -define layer$$Verification$$Assert$$Temporal \\
   -define layer$$Verification$$Assume$$Temporal \\
   -define layer$$Verification$$Cover$$Temporal \\

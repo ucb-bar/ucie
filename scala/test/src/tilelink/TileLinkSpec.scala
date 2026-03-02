@@ -10,27 +10,36 @@ import org.chipsalliance.diplomacy._
 import org.chipsalliance.cde.config.Parameters
 import freechips.rocketchip.prci._
 import edu.berkeley.cs.uciedigital.tilelink._
-import edu.berkeley.cs.chippy.TLTesterParams
-import edu.berkeley.cs.chippy.TLTester
-import edu.berkeley.cs.chippy.TLTesterIO
-import edu.berkeley.cs.chippy.TLTesterReq
-import edu.berkeley.cs.chippy.TLTesterResp
+import edu.berkeley.cs.chippy.{
+  TLTesterParams,
+  TLTester,
+  TLTesterIO,
+  TLTesterReq,
+  TLTesterResp
+}
 import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
 import svsim.verilator.Backend.CompilationSettings
 import _root_.circt.stage.ChiselStage
 import chisel3.simulator.stimulus.RunUntilFinished
 import edu.berkeley.cs.uciedigital.Utils
+import chisel3.testing.HasTestingDirectory
+import java.nio.file.Paths
 
 abstract class TestDriver extends ExtModule {
   val clock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
   val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
+  val codegen = new Codegen(new SystemVerilogFormatter)
+
   def setStimulus(name: String, body: String) = setInline(
     s"${name}.sv",
     s"""
 `timescale 1ns/1ps
+
+`define UCIE_Q1_BASE 64'h4000
+${codegen.formatDefines()}
 module ${name}(
   output reg clock,
   output reg reset,
@@ -86,27 +95,41 @@ module ${name}(
       assert(result === data);
     end
   endtask
-
+  task write_ucie(input [63:0] addr, input [63:0] data);
+    begin
+      write(`UCIE_Q1_BASE + addr, data);
+    end
+  endtask
+  task read_ucie(input [63:0] addr);
+    begin
+      read(`UCIE_Q1_BASE + addr);
+    end
+  endtask
+  task expect_ucie(input [63:0] addr, input [63:0] data);
+    begin
+      expect_data(`UCIE_Q1_BASE + addr, data);
+    end
+  endtask
+${Codegen.indent(codegen.formatFns())}
   initial clock = 1'b0;
   always #1 clock = ~clock;
 
   initial begin
-  reset = 1'b1;
-  tlt_req_bits_addr = 64'b0;
-  tlt_req_bits_data = 64'b0;
-  tlt_req_bits_is_write = 64'b0;
-  tlt_req_valid = 1'b0;
-  tlt_resp_ready = 1'b0;
-  repeat(5) @(negedge clock);
-  reset = 1'b0;
-  repeat(5) @(negedge clock);
-  $body
-  $$display("TEST PASSED");
-  $$finish;
+    reset = 1'b1;
+    tlt_req_bits_addr = 64'b0;
+    tlt_req_bits_data = 64'b0;
+    tlt_req_bits_is_write = 64'b0;
+    tlt_req_valid = 1'b0;
+    tlt_resp_ready = 1'b0;
+    repeat(5) @(negedge clock);
+    reset = 1'b0;
+    repeat(5) @(negedge clock);
+${Codegen.indent(body, n = 2)}
+    $$display("TEST PASSED");
+    $$finish;
   end
 endmodule
           """.trim
-
   )
 }
 
@@ -178,6 +201,15 @@ class MmioSimpleTestDriver extends TestDriver {
   )
 }
 
+class UcieTestDriver extends TestDriver {
+  setStimulus(
+    "UcieTestDriver",
+    """
+reset_ucie();
+          """.trim
+  )
+}
+
 class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
@@ -210,6 +242,21 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val simulator =
         verilator(verilatorSettings = Utils.verilatorSettings)
       simulateRaw(new SimTop(new MmioSimpleTestDriver)) { c =>
+        RunUntilFinished
+      }
+    }
+
+    it("should support simple manual test") {
+      implicit val p = Parameters.empty
+      implicit val testingDirectory =
+        new HasTestingDirectory {
+          override def getDirectory =
+            (Utils.buildRoot / "UcieTL_should_support_simple_manual_test").toNIO
+        }
+      implicit val simulator =
+        verilator(verilatorSettings = Utils.verilatorSettings)
+      simulateRaw(new SimTop(new UcieTestDriver)) { c =>
+        enableWaves()
         RunUntilFinished
       }
     }
