@@ -227,7 +227,7 @@ class UcieTestDriver extends TestDriver {
   setStimulus(
     "UcieTestDriver",
     """
-setup_ucie();
+manual_simple();
           """.trim
   )
 }

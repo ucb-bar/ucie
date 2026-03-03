@@ -83,6 +83,9 @@ ${Codegen.indent(body)}
 end
 """
   }
+  def formatPrintStmt(msg: String): String = {
+    s"$$display(\"${Codegen.escapeString(msg)}\");\n"
+  }
   def breakStmt(): String = {
     "break;\n"
   }
@@ -100,7 +103,7 @@ end
       outputName: String,
       addr: String,
       declareVar: Boolean = true
-  ) = {
+  ): String = {
     val sb = new StringBuilder
     if (declareVar) {
       sb.append(s"reg [63:0] $outputName;\n")
@@ -520,13 +523,13 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.toString
   }
 
-  def formatManualSimpleLoopback(): String = {
+  def formatManualSimpleLoopbackFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
-    body.append(f.formatFnCall("reset_ucie"))
+    body.append(f.formatFnCall("setup_ucie"))
     body.append(
       formatWriteNamedReg(
-        f.formatConstantRef("txPacketsToSend"),
+        "txPacketsToSend",
         f.formatLong(32)
       )
     )
@@ -538,10 +541,10 @@ class Codegen(f: SystemVerilogFormatter) {
         args = Seq(
           "group",
           "ofs",
-          f.formatLong(0xdeadbeef),
-          f.formatLong(0xdeadbeef),
-          f.formatLong(0xdeadbeef),
-          f.formatLong(0xdeadbeef)
+          f.formatLong(0xdeadbeefL),
+          f.formatLong(0xdeadbeefL),
+          f.formatLong(0xdeadbeefL),
+          f.formatLong(0xdeadbeefL)
         )
       )
     )
@@ -596,7 +599,20 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(1)
       )
     )
-    val whileBody = new StringBuilder
+    // val whileBody = new StringBuilder
+    // whileBody.append(
+    //   f.formatReadReg(
+    //     "r",
+    //     f.formatConstantRef("rxPacketsReceived"),
+    //     declareVar = true
+    //   )
+    // )
+    // whileBody.append(
+    //   f.formatIfStmt(s"r >= ${f.formatLong(32)}", f.breakStmt())
+    // )
+    // body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+    // body.append(f.formatPrintStmt("All packets received!"))
+    sb.append(f.formatFn("manual_simple", body.toString))
     sb.toString
   }
 
@@ -614,6 +630,7 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetupUcieFn())
     sb.append(formatWriteTxDataChunkFn())
+    sb.append(formatManualSimpleLoopbackFn())
     sb.toString
   }
 
