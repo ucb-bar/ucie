@@ -68,7 +68,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
   override lazy val module = new UcieTLImpl
   class UcieTLImpl extends Impl {
     val io = IO(new UcieBumpsIO(params.numLanes))
-    withClockAndReset(clock, reset) {
+    val regmap = withClockAndReset(clock, reset) {
       // PHY
       val phy = Module(new Phy(params.numLanes, params.sim))
       io.phy <> phy.io.top
@@ -309,6 +309,8 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         true.B
       )
 
+      // String name should always be camel case with an underscore to separate indices.
+      // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
       val mmioRegs = Seq(
         toRegFieldRw(testTarget, "testTarget"),
         toRegFieldRw(txTestMode, "txTestMode"),
@@ -371,29 +373,29 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
           ShiftRegister(test.io.regs.rxDataChunk, 2, true.B),
           "rxDataChunk"
         ),
-        toRegFieldRw(pllCtl.dref_low, "pll_dref_low"),
-        toRegFieldRw(pllCtl.dref_high, "pll_dref_high"),
-        toRegFieldRw(pllCtl.dcoarse, "pll_dcoarse"),
-        toRegFieldRw(pllCtl.d_kp, "pll_d_kp"),
-        toRegFieldRw(pllCtl.d_ki, "pll_d_ki"),
-        toRegFieldRw(pllCtl.d_clol, "pll_d_clol"),
-        toRegFieldRw(pllCtl.d_ol_fcw, "pll_d_ol_fcw"),
-        toRegFieldRw(pllCtl.d_accumulator_reset, "pll_d_accumulator_reset"),
-        toRegFieldRw(pllCtl.vco_reset, "pll_vco_reset"),
-        toRegFieldRw(pllCtl.digital_reset, "pll_digital_reset"),
-        toRegFieldRw(testPllCtl.dref_low, "test_pll_dref_low"),
-        toRegFieldRw(testPllCtl.dref_high, "test_pll_dref_high"),
-        toRegFieldRw(testPllCtl.dcoarse, "test_pll_dcoarse"),
-        toRegFieldRw(testPllCtl.d_kp, "test_pll_d_kp"),
-        toRegFieldRw(testPllCtl.d_ki, "test_pll_d_ki"),
-        toRegFieldRw(testPllCtl.d_clol, "test_pll_d_clol"),
-        toRegFieldRw(testPllCtl.d_ol_fcw, "test_pll_d_ol_fcw"),
+        toRegFieldRw(pllCtl.dref_low, "pllDrefLow"),
+        toRegFieldRw(pllCtl.dref_high, "pllDrefHigh"),
+        toRegFieldRw(pllCtl.dcoarse, "pllDcoarse"),
+        toRegFieldRw(pllCtl.d_kp, "pllDKp"),
+        toRegFieldRw(pllCtl.d_ki, "pllDKi"),
+        toRegFieldRw(pllCtl.d_clol, "pllDClol"),
+        toRegFieldRw(pllCtl.d_ol_fcw, "pllDOlFcw"),
+        toRegFieldRw(pllCtl.d_accumulator_reset, "pllDAccumulatorReset"),
+        toRegFieldRw(pllCtl.vco_reset, "pllVcoReset"),
+        toRegFieldRw(pllCtl.digital_reset, "pllDigitalReset"),
+        toRegFieldRw(testPllCtl.dref_low, "testPllDrefLow"),
+        toRegFieldRw(testPllCtl.dref_high, "testPllDrefHigh"),
+        toRegFieldRw(testPllCtl.dcoarse, "testPllDcoarse"),
+        toRegFieldRw(testPllCtl.d_kp, "testPllDKp"),
+        toRegFieldRw(testPllCtl.d_ki, "testPllDKi"),
+        toRegFieldRw(testPllCtl.d_clol, "testPllDClol"),
+        toRegFieldRw(testPllCtl.d_ol_fcw, "testPllDOlFcw"),
         toRegFieldRw(
           testPllCtl.d_accumulator_reset,
-          "test_pll_d_accumulator_reset"
+          "testPllDAccumulatorReset"
         ),
-        toRegFieldRw(testPllCtl.vco_reset, "test_pll_vco_reset"),
-        toRegFieldRw(testPllCtl.digital_reset, "test_pll_digital_reset"),
+        toRegFieldRw(testPllCtl.vco_reset, "testPllVcoReset"),
+        toRegFieldRw(testPllCtl.digital_reset, "testPllDigitalReset"),
         toRegFieldR(ShiftRegister(phy.io.pllOutput, 2, true.B), "pllOutput"),
         toRegFieldR(
           ShiftRegister(phy.io.testPllOutput, 2, true.B),
@@ -402,30 +404,33 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         toRegFieldRw(pllBypassEn, "pllBypassEn")
       ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
-          toRegFieldRw(txctl(i).dll_reset, s"dll_reset_$i"),
+          toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
           toRegFieldRw(txctl(i).driver, s"txctl_${i}_driver"),
           toRegFieldRw(txctl(i).skew, s"txctl_${i}_skew")
         ) ++ (0 until 32).map((j: Int) =>
           toRegFieldRw(txctl(i).shuffler(j), s"txctl_${i}_shuffler_$j")
         ) ++ Seq(
-          toRegFieldRw(txctl(i).sample_negedge, s"txctl_${i}_sample_negedge"),
+          toRegFieldRw(txctl(i).sample_negedge, s"txctl_${i}_sampleNegedge"),
           toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay"),
           toRegFieldR(
             ShiftRegister(phy.io.dllCode(i), 2, true.B),
-            s"dllCode_$i"
+            s"txctl_${i}_dllCode"
           )
         )
       }) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
-          toRegFieldRw(rxctl(i).zen, s"zen_$i"),
-          toRegFieldRw(rxctl(i).zctl, s"zctl_$i"),
-          toRegFieldRw(rxctl(i).vref_sel, s"vref_sel_$i"),
-          toRegFieldRw(rxctl(i).afeBypassEn, s"afeBypassEn_$i"),
-          toRegFieldRw(rxctl(i).afeBypass, s"afeBypass_$i"),
-          toRegFieldRw(rxctl(i).afeOpCycles, s"afeOpCycles_$i"),
-          toRegFieldRw(rxctl(i).afeOverlapCycles, s"afeOverlapCycles_$i"),
-          toRegFieldRw(rxctl(i).sample_negedge, s"sample_negedge_$i"),
-          toRegFieldRw(rxctl(i).delay, s"rx_delay_$i")
+          toRegFieldRw(rxctl(i).zen, s"rxctl_${i}_zen"),
+          toRegFieldRw(rxctl(i).zctl, s"rxctl_${i}_zctl"),
+          toRegFieldRw(rxctl(i).vref_sel, s"rxctl_${i}_vrefSel"),
+          toRegFieldRw(rxctl(i).afeBypassEn, s"rxctl_${i}_afeBypassEn"),
+          toRegFieldRw(rxctl(i).afeBypass, s"rxctl_${i}_afeBypass"),
+          toRegFieldRw(rxctl(i).afeOpCycles, s"rxctl_${i}_afeOpCycles"),
+          toRegFieldRw(
+            rxctl(i).afeOverlapCycles,
+            s"rxctl_${i}_afeOverlapCycles"
+          ),
+          toRegFieldRw(rxctl(i).sample_negedge, s"rxctl_${i}_sampleNegedge"),
+          toRegFieldRw(rxctl(i).delay, s"rxctl_${i}_rxDelay")
         )
       }) ++ Seq(
         toRegFieldRw(commonTxTestMode, "commonTxTestMode"),
@@ -440,22 +445,23 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       }) ++ (0 until commonDriverctl.length).map((i: Int) => {
         toRegFieldRw(commonDriverctl(i), s"commonDriverctl_${i}")
       }) ++ Seq(
-        toRegFieldRw(commonTxctl.dll_reset, s"dll_reset"),
-        toRegFieldRw(commonTxctl.driver, s"commonTxctl_driver"),
-        toRegFieldRw(commonTxctl.skew, s"commonTxctl_skew")
+        toRegFieldRw(commonTxctl.dll_reset, s"commonTxctlDllReset"),
+        toRegFieldRw(commonTxctl.driver, s"commonTxctlDriver"),
+        toRegFieldRw(commonTxctl.skew, s"commonTxctlSkew")
       ) ++ (0 until 32).map((j: Int) =>
-        toRegFieldRw(commonTxctl.shuffler(j), s"commonTxctl_shuffler_$j")
+        toRegFieldRw(commonTxctl.shuffler(j), s"commonTxctlShuffler_$j")
       ) ++ Seq(
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid")
       )
 
-      node.regmap(mmioRegs.zipWithIndex.map({
+      mmioRegs.zipWithIndex.map({
         case (f, i) => {
           i * 8 -> Seq(f)
         }
-      }): _*)
+      })
     }
+    node.regmap(regmap: _*)
   }
 }
 
