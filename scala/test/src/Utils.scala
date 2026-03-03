@@ -38,6 +38,46 @@ object Utils {
     os.write.over(path, sourceFiles.map(_.toString).mkString("\n"))
   }
 
+  def writeVerilatorSimScript(
+      path: Path,
+      topModule: String,
+      sourceFilesList: Path,
+      incDirs: Seq[Path] = Seq.empty
+  ) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(
+      path,
+      s"""#!/bin/bash
+set -ex -o pipefail
+verilator \\
+  --cc \\
+  --exe \\
+  --build \\
+  --main \\
+  -o ../simulation \\
+  -j 0 \\
+  --top-module ${topModule} \\
+  --Mdir verilated-sources \\
+  --assert \\
+  --trace \\
+  --timing \\
+  --max-num-width 1048576 \\${incDirs
+          .map(dir => s"\n  +incdir+$dir \\")
+          .mkString("")}
+  --vpi \\
+  +define+layer$$Verification$$Assert$$Temporal \\
+  +define+layer$$Verification$$Assume$$Temporal \\
+  +define+layer$$Verification$$Cover$$Temporal \\
+  -Wno-fatal \\
+  -CFLAGS "$$CXXFLAGS -std=c++17" \\
+  -LDFLAGS "$$LDFLAGS" \\
+  -F ${sourceFilesList.toString} > >(tee -a verilator.out) 2> >(tee -a verilator.err >&2)
+./simulation > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
+"""
+    )
+    path.toIO.setExecutable(true)
+  }
+
   def writeXrunSimScript(
       path: Path,
       topModule: String,
@@ -86,6 +126,7 @@ xrun \\
 
   def simulate[T <: RawModule](
       dut: => T,
+      writeSimScript: (Path, String, Path, Seq[Path]) => Unit,
       workDir: Path
   )(implicit p: Parameters) = {
     val sourceDir = workDir / "src"
@@ -106,11 +147,11 @@ xrun \\
 
     writeSourceFilesList(sourceFilesList, sourceFiles)
 
-    writeXrunSimScript(
+    writeSimScript(
       simScript,
       "SimTop",
       sourceFilesList,
-      incDirs = os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir)
+      os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir)
     )
 
     os.proc(

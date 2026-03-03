@@ -445,7 +445,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       }) ++ (0 until commonDriverctl.length).map((i: Int) => {
         toRegFieldRw(commonDriverctl(i), s"commonDriverctl_${i}")
       }) ++ Seq(
-        toRegFieldRw(commonTxctl.dll_reset, s"dllReset"),
+        toRegFieldRw(commonTxctl.dll_reset, s"commonTxctlDllReset"),
         toRegFieldRw(commonTxctl.driver, s"commonTxctlDriver"),
         toRegFieldRw(commonTxctl.skew, s"commonTxctlSkew")
       ) ++ (0 until 32).map((j: Int) =>

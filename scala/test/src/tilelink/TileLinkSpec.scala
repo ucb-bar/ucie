@@ -21,7 +21,6 @@ import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
 import svsim.verilator.Backend.CompilationSettings
 import _root_.circt.stage.ChiselStage
-import chisel3.simulator.stimulus.RunUntilFinished
 import edu.berkeley.cs.uciedigital.Utils
 import chisel3.testing.HasTestingDirectory
 import java.nio.file.Paths
@@ -38,6 +37,18 @@ abstract class TestDriver extends ExtModule {
     s"""
 `timescale 1ns/1ps
 
+function string basename(string path);
+  int idx;
+  idx = path.len() - 1;
+  while (idx >= 0 && path[idx] != "/" && path[idx] != "\\\\")
+    idx--;
+
+  if (idx >= 0)
+    return path.substr(idx+1, path.len()-1);
+  else
+    return path;
+endfunction
+
 `define UCIE_Q1_BASE 64'h4000
 ${codegen.formatDefines()}
 module ${name}(
@@ -52,8 +63,7 @@ module ${name}(
   input tlt_resp_valid,
   output reg tlt_resp_ready
 );
-  reg [63:0] result;
-  task op(input [63:0] addr, input [63:0] data, input is_write);
+  task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx);
     begin
       tlt_resp_ready = 1'b1;
       tlt_req_valid = 1'b1;
@@ -64,7 +74,7 @@ module ${name}(
         if (!tlt_req_ready) @(posedge tlt_req_ready);
         repeat(1000) @(posedge clock);
       join_any
-      assert(tlt_req_ready);
+      assert(tlt_req_ready) else $$fatal("Timeout waiting for TLT request to be ready: %s", ctx);
       fork
         @(negedge clock) tlt_req_valid = 1'b0;
         fork
@@ -72,49 +82,61 @@ module ${name}(
           repeat(1000) @(posedge clock);
         join_any
       join
-      assert(tlt_resp_valid);
+      assert(tlt_resp_valid) else $$fatal("Timeout waiting for TLT response to be valid: %s", ctx);
       @(negedge clock);
     end
   endtask
-  task write(input [63:0] addr, input [63:0] data);
+  task write(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      op(addr, data, 1'b1);
+      op(addr, data, 1'b1, ctx);
       @(negedge clock);
     end
   endtask
-  task read(input [63:0] addr);
+  task read(input [63:0] addr, output [63:0] result, input string ctx);
     begin
-      op(addr, 64'b0, 1'b0);
+      op(addr, 64'b0, 1'b0, ctx);
       result = tlt_resp_bits_data;
       @(negedge clock);
     end
   endtask
-  task expect_data(input [63:0] addr, input [63:0] data);
+  task expect_data(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      read(addr);
-      assert(result === data);
+      reg [63:0] result;
+      read(addr, result, ctx);
+      assert(result === data) else begin
+        $$fatal(1, "Expected 0x%X, got 0x%X: %s", data, result, ctx);
+      end
     end
   endtask
-  task write_ucie(input [63:0] addr, input [63:0] data);
+  task write_ucie(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      write(`UCIE_Q1_BASE + addr, data);
+      write(`UCIE_Q1_BASE + addr, data, ctx);
     end
   endtask
-  task read_ucie(input [63:0] addr);
+  task read_ucie(input [63:0] addr, output [63:0] result, input string ctx);
     begin
-      read(`UCIE_Q1_BASE + addr);
+      read(`UCIE_Q1_BASE + addr, result, ctx);
     end
   endtask
-  task expect_ucie(input [63:0] addr, input [63:0] data);
+  task expect_ucie(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      expect_data(`UCIE_Q1_BASE + addr, data);
+      expect_data(`UCIE_Q1_BASE + addr, data, ctx);
     end
   endtask
+  `define FILE_LINE_CTX $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__)
+  `define WRITE_UCIE(addr, data) write_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define READ_UCIE(addr, result) read_ucie(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define EXPECT_UCIE(addr, data) expect_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define WRITE_UCIE_MSG(addr, data, msg) write_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define READ_UCIE_MSG(addr, result, msg) read_ucie(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define EXPECT_UCIE_MSG(addr, data, msg) expect_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
 ${Codegen.indent(codegen.formatFns())}
   initial clock = 1'b0;
   always #1 clock = ~clock;
 
   initial begin
+    $$dumpfile("trace.vcd");
+    $$dumpvars(0);
     reset = 1'b1;
     tlt_req_bits_addr = 64'b0;
     tlt_req_bits_data = 64'b0;
@@ -194,9 +216,9 @@ class MmioSimpleTestDriver extends TestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
-  expect_data(64'h4000, 64'h0);
-  write(64'h40f8, 64'hdeadbeef);
-  expect_data(64'h40f8, 64'hdeadbeee);
+`EXPECT_UCIE(`TEST_TARGET, 64'h0);
+`WRITE_UCIE(`TX_DATA_CHUNK_IN0, 64'hdeadbeef);
+`EXPECT_UCIE(`TX_DATA_CHUNK_IN0, 64'hdeadbeef);
           """.trim
   )
 }
@@ -205,7 +227,7 @@ class UcieTestDriver extends TestDriver {
   setStimulus(
     "UcieTestDriver",
     """
-reset_ucie();
+setup_ucie();
           """.trim
   )
 }
@@ -237,35 +259,29 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("should be able to read/write MMIO registers using Verilog testbench") {
+    it("should be able to read/write MMIO registers using Verilator") {
       implicit val p = Parameters.empty
-      implicit val simulator =
-        verilator(verilatorSettings = Utils.verilatorSettings)
-      simulateRaw(new SimTop(new MmioSimpleTestDriver)) { c =>
-        enableWaves()
-        RunUntilFinished
-      }
+      Utils.simulate(
+        new SimTop(new MmioSimpleTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Verilator"
+      )
     }
 
-    it("should support simple manual test") {
+    it("should support simple manual test using Verilator") {
       implicit val p = Parameters.empty
-      implicit val testingDirectory =
-        new HasTestingDirectory {
-          override def getDirectory =
-            (Utils.buildRoot / "UcieTL_should_support_simple_manual_test").toNIO
-        }
-      implicit val simulator =
-        verilator(verilatorSettings = Utils.verilatorSettings)
-      simulateRaw(new SimTop(new UcieTestDriver)) { c =>
-        enableWaves()
-        RunUntilFinished
-      }
+      Utils.simulate(
+        new SimTop(new UcieTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Verilator"
+      )
     }
 
     it("should be able to read/write MMIO registers using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new MmioSimpleTestDriver),
+        Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_Xcelium"
       )
     }
@@ -274,6 +290,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new UcieTestDriver),
+        Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
       )
     }
