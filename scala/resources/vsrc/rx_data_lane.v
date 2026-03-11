@@ -74,17 +74,17 @@ module rx_data_lane (
   reg [31:0] shiftReg;
   reg [31:0] outputReg;
   always @(negedge rstb) begin
-    ctr <= ctr + 1'b1;
-    shiftReg <= (shiftReg << 1'b1) | din;
-    if (ctr == 3'b0) begin
-      divClock <= ~divClock;
-    end
+    divClock <= 1'b0;
+    ctr <= 3'b1;
+    shiftReg <= 32'b0;
   end
   always @(posedge clk, negedge rstb) begin
     if (rstb) begin
-      divClock <= 1'b0;
-      ctr <= 3'b1;
-      shiftReg <= 32'b0;
+      ctr <= ctr + 1'b1;
+      shiftReg <= (shiftReg << 1'b1) | din;
+      if (ctr == 3'b0) begin
+        divClock <= ~divClock;
+      end
     end
   end
   always @(negedge clk) begin
