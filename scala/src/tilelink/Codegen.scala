@@ -1,5 +1,7 @@
 package edu.berkeley.cs.uciedigital.tilelink
 
+import scala.collection.mutable
+
 import freechips.rocketchip.regmapper.RegField
 import org.chipsalliance.cde.config.Parameters
 import chisel3._
@@ -13,15 +15,15 @@ import edu.berkeley.cs.chippy.{
   TLTesterReq,
   TLTesterResp
 }
-import freechips.rocketchip.prci.ClockSourceNode
-import freechips.rocketchip.prci.ClockSourceParameters
-import scala.collection.mutable
-import edu.berkeley.cs.uciedigital.phy.TxTestState
-import edu.berkeley.cs.uciedigital.phy.DriverControlIO
-import edu.berkeley.cs.uciedigital.phy.TxSkewControlIO
-import edu.berkeley.cs.uciedigital.phy.TestTarget
-import edu.berkeley.cs.uciedigital.phy.TxTestMode
-import edu.berkeley.cs.uciedigital.phy.DataMode
+import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
+
+import edu.berkeley.cs.uciedigital.phy.{
+  TestTarget,
+  TxTestMode,
+  DataMode,
+  TxTestState
+}
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
 
 trait Formatter {}
 
@@ -131,38 +133,6 @@ end
   }
 }
 
-object UcieCodegenRef {
-  val tltParams = TLTesterParams(addrWidth = 64, dataWidth = 64)
-  val ucieParams = UcieTLParams(sim = true)
-  val beatBytes = 8
-}
-
-class UcieCodegenRef(implicit p: Parameters) extends LazyModule {
-  val tlt = LazyModule(
-    new TLTester(UcieCodegenRef.tltParams, UcieCodegenRef.beatBytes)
-  )
-  val ucieTL = LazyModule(
-    new UcieTL(UcieCodegenRef.ucieParams, UcieCodegenRef.beatBytes)
-  )
-  val clockSourceNode_digital = ClockSourceNode(
-    Seq(ClockSourceParameters())
-  )
-
-  ucieTL.clockNode := clockSourceNode_digital
-  ucieTL.node := tlt.node
-
-  lazy val module = new Impl
-  class Impl extends LazyModuleImp(this) {
-    tlt.module.io := DontCare
-    ucieTL.module.io := DontCare
-
-    val regmap = ucieTL.module.regmap
-
-    clockSourceNode_digital.out(0)._1.clock := clock
-    clockSourceNode_digital.out(0)._1.reset := reset
-  }
-}
-
 object Codegen {
   def indent(content: String, n: Int = 1): String = {
     content.split("\n").map(line => s"${"  " * n}$line").mkString("\n")
@@ -185,7 +155,7 @@ class Codegen(f: SystemVerilogFormatter) {
   }
   def formatRegs(): String = {
     implicit val p = Parameters.empty
-    val ucie_dut = new UcieCodegenRef
+    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), 32))
     val ucie = (new chisel3.stage.phases.Elaborate)
       .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
         val dut = LazyModule(ucie_dut).module
@@ -286,7 +256,7 @@ class Codegen(f: SystemVerilogFormatter) {
         ("defaultTrack", BigInt(0x55555555)),
         (
           "enableDriverCtl",
-          (new DriverControlIO)
+          (new DriverCtlIO)
             .Lit(
               _.pu_ctl -> 63.U,
               _.pd_ctl -> 63.U,
@@ -297,7 +267,7 @@ class Codegen(f: SystemVerilogFormatter) {
         ),
         (
           "defaultSkewCtl",
-          (new TxSkewControlIO)
+          (new SkewCtlIO)
             .Lit(
               _.dll_en -> true.B,
               _.ocl -> false.B,
