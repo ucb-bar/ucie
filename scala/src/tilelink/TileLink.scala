@@ -50,7 +50,6 @@ class UcieTLRegsIO(
   val test = Flipped(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
   )
-
   val phy = Flipped(new PhyRegsIO(numLanes))
 }
 
@@ -543,6 +542,7 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
           .zip(uciephy_tlbus)
           .zipWithIndex
       ) {
+        ucie.digitalClockNode := sbus.fixedClockNode
         pbus.coupleTo(s"uciephytest{$n}") {
           ucie.regNode := TLBuffer() := TLFragmenter(
             pbus.beatBytes,
@@ -567,6 +567,7 @@ class WithUcieTLDefaultModels
     })
 
 class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val node = TLClientNode(
     Seq(
       TLMasterPortParameters.v1(
@@ -578,7 +579,6 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
       )
     )
   )
-  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val ucieTL = LazyModule(ucie)
   ucieTL.digitalClockNode := clockNode
   ucieTL.regNode := node

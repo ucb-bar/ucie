@@ -338,7 +338,6 @@ class PhyTest(
   val tx_valid = Wire(Bool())
   tx_valid := false.B
 
-  // TODO: uncomment
   // TX logic
   switch(txState) {
     is(TxTestState.idle) {
