@@ -78,7 +78,7 @@ module rx_data_lane (
     ctr <= 3'b1;
     shiftReg <= 32'b0;
   end
-  always @(posedge clk, negedge rstb) begin
+  always @(posedge clk) begin
     if (rstb) begin
       ctr <= ctr + 1'b1;
       shiftReg <= (shiftReg << 1'b1) | din;
