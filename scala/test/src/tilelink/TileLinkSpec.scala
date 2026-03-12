@@ -24,6 +24,8 @@ import _root_.circt.stage.ChiselStage
 import edu.berkeley.cs.uciedigital.Utils
 import chisel3.testing.HasTestingDirectory
 import java.nio.file.Paths
+import freechips.rocketchip.tilelink._
+import freechips.rocketchip.diplomacy.IdRange
 
 abstract class TestDriver extends ExtModule {
   val clock = IO(Output(Clock()))
@@ -74,7 +76,7 @@ module ${name}(
         if (!tlt_req_ready) @(posedge tlt_req_ready);
         repeat(1000) @(posedge clock);
       join_any
-      assert(tlt_req_ready) else $$fatal("Timeout waiting for TLT request to be ready: %s", ctx);
+      assert(tlt_req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
       fork
         @(negedge clock) tlt_req_valid = 1'b0;
         fork
@@ -82,7 +84,7 @@ module ${name}(
           repeat(1000) @(posedge clock);
         join_any
       join
-      assert(tlt_resp_valid) else $$fatal("Timeout waiting for TLT response to be valid: %s", ctx);
+      assert(tlt_resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
       @(negedge clock);
     end
   endtask
@@ -135,6 +137,11 @@ ${Codegen.indent(codegen.formatFns())}
   always #1 clock = ~clock;
 
   initial begin
+    repeat(100000) @(negedge clock);
+    $$fatal(1, "Timeout");
+  end
+
+  initial begin
     $$dumpfile("trace.vcd");
     $$dumpvars(0);
     reset = 1'b1;
@@ -168,28 +175,32 @@ class SimTop[T <: TestDriver](driver: => T)(implicit
 
 object TestHarness {
   val tltParams = TLTesterParams(addrWidth = 64, dataWidth = 64)
-  val ucieParams = UcieTLParams(sim = true)
   val beatBytes = 8
 }
 
-class TestHarness(implicit p: Parameters) extends LazyModule {
+class TestHarness(includeDefaultModels: Boolean = true)(implicit p: Parameters)
+    extends LazyModule {
+
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val tlt = LazyModule(
     new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
   )
-
   val ucieTL = LazyModule(
-    new UcieTL(TestHarness.ucieParams, TestHarness.beatBytes)
-  )
-  val clockSourceNode_digital = ClockSourceNode(
-    Seq(ClockSourceParameters())
+    new UcieTL(
+      UcieTLParams(includeDefaultModels = includeDefaultModels),
+      TestHarness.beatBytes
+    )
   )
 
-  ucieTL.clockNode := clockSourceNode_digital
-  ucieTL.node := tlt.node
+  ucieTL.digitalClockNode := clockNode
+  ucieTL.regNode := tlt.node
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
     val io = IO(new TLTesterIO(TestHarness.tltParams))
+
+    clockNode.out(0)._1.clock := clock
+    clockNode.out(0)._1.reset := reset
 
     io <> tlt.module.io
 
@@ -205,10 +216,8 @@ class TestHarness(implicit p: Parameters) extends LazyModule {
     ucieTL.module.io.phy.refClkN := (!clock.asBool).asClock
     ucieTL.module.io.phy.bypassClkP := clock
     ucieTL.module.io.phy.bypassClkN := (!clock.asBool).asClock
+    ucieTL.module.io.phy.digitalBypassClk := clock
     ucieTL.module.io.phy.pllRdacVref := 0.U
-
-    clockSourceNode_digital.out(0)._1.clock := clock
-    clockSourceNode_digital.out(0)._1.reset := reset
   }
 }
 
@@ -237,7 +246,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new UcieTL(TestHarness.ucieParams, 32)).module,
+        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), 32))).module,
         args = Array(
           "--target-dir",
           (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
@@ -249,12 +258,18 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       implicit val simulator =
         verilator(verilatorSettings = Utils.verilatorSettings)
+      implicit val testingDirectory = new HasTestingDirectory {
+        override def getDirectory =
+          (Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_ChiselSim").toNIO
+      }
       val dut = new TestHarness()
-      simulate(LazyModule(dut).module, additionalResetCycles = 5) { c =>
+      simulate(LazyModule(dut).module) { c =>
         enableWaves()
+        // Allow reset to propagate to UCIe via reset synchronizers.
+        c.clock.step(cycles = 5)
         c.io.expect(c.clock, "h4000".U, 0.U)
-        c.io.write(c.clock, "h40f8".U, "hdeadbeef".U)
-        c.io.expect(c.clock, "h40f8".U, "hdeadbeef".U)
+        c.io.write(c.clock, "h4100".U, "hdeadbeef".U)
+        c.io.expect(c.clock, "h4100".U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }
