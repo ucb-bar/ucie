@@ -332,7 +332,16 @@ class PhyTest(
     }
   }
 
-  io.tx := DontCare
+  for (lane <- 0 until numLanes) {
+    io.tx.bits.data(lane) := 0.U
+  }
+  io.tx.bits.valid := 0.U
+  io.tx.bits.track := 0.U
+  // Needs to always be true to send clock and track even when data isn't valid.
+  io.tx.valid := true.B
+
+  io.tx.bits.clkp := io.regs.txClkP
+  io.tx.bits.clkn := io.regs.txClkN
 
   // Unlike `io.tx.valid`, only true when data is valid.
   val tx_valid = Wire(Bool())

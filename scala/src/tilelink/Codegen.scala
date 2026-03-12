@@ -430,6 +430,10 @@ class Codegen(f: SystemVerilogFormatter) {
     body.append(
       formatWriteNamedReg("pllBypassEn", f.formatLong(1))
     )
+    // TODO: Gate clock before de-asserting reset.
+    body.append(
+      formatWriteNamedReg("divResetb", f.formatLong(1))
+    )
     body.append(f.formatFnCall("reset_fsms"))
 
     {
@@ -476,6 +480,12 @@ class Codegen(f: SystemVerilogFormatter) {
         s"(data3 << ${f.formatLong(32)}) | data2"
       )
     )
+    body.append(
+      formatWriteNamedReg(
+        "txWriteChunk",
+        f.formatLong(1)
+      )
+    )
     sb.append(
       f.formatFn(
         "write_tx_data_chunk",
@@ -503,9 +513,9 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(32)
       )
     )
-    val outerLoopBody = new StringBuilder
-    val innerLoopBody = new StringBuilder
-    innerLoopBody.append(
+    val writeChunkOuterLoop = new StringBuilder
+    val writeChunkInnerLoop = new StringBuilder
+    writeChunkInnerLoop.append(
       f.formatFnCall(
         "write_tx_data_chunk",
         args = Seq(
@@ -518,8 +528,10 @@ class Codegen(f: SystemVerilogFormatter) {
         )
       )
     )
-    outerLoopBody.append(f.formatForLoop("group", 4, innerLoopBody.toString))
-    outerLoopBody.append(
+    writeChunkOuterLoop.append(
+      f.formatForLoop("group", 4, writeChunkInnerLoop.toString)
+    )
+    writeChunkOuterLoop.append(
       f.formatFnCall(
         "write_tx_data_chunk",
         args = Seq(
@@ -532,7 +544,7 @@ class Codegen(f: SystemVerilogFormatter) {
         )
       )
     )
-    body.append(f.formatForLoop("ofs", 32, outerLoopBody.toString))
+    body.append(f.formatForLoop("ofs", 32, writeChunkOuterLoop.toString))
     body.append(
       formatWriteNamedReg(
         "testTarget",
@@ -569,19 +581,84 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(1)
       )
     )
-    // val whileBody = new StringBuilder
-    // whileBody.append(
-    //   f.formatReadReg(
-    //     "r",
-    //     f.formatConstantRef("rxPacketsReceived"),
-    //     declareVar = true
-    //   )
-    // )
-    // whileBody.append(
-    //   f.formatIfStmt(s"r >= ${f.formatLong(32)}", f.breakStmt())
-    // )
-    // body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
-    // body.append(f.formatPrintStmt("All packets received!"))
+    val whileBody = new StringBuilder
+    whileBody.append(
+      f.formatReadReg(
+        "r",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = true
+      )
+    )
+    whileBody.append(
+      f.formatIfStmt(s"r >= ${f.formatLong(32)}", f.breakStmt())
+    )
+    body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+    body.append(f.formatPrintStmt("All packets received!"))
+    body.append(
+      f.formatAssertEq(
+        f.formatConstantRef("txTestState"),
+        f.formatConstantRef("txTestStateDone"),
+        msg = Some("TX test state is not done after all packets have been sent")
+      )
+    )
+    body.append(
+      f.formatAssertEq(
+        f.formatConstantRef("txPacketsSent"),
+        f.formatLong(32),
+        msg = Some("TX packets sent is not 32 after all data has been sent")
+      )
+    )
+    val readChunkOuterLoop = new StringBuilder
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataOffset",
+        "ofs"
+      )
+    )
+    val readChunkInnerLoop = new StringBuilder
+    readChunkInnerLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        "lane"
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatLong(0xdeadbeefL),
+        msg = Some("RX data chunk does not match expected")
+      )
+    )
+    readChunkOuterLoop.append(
+      f.formatForLoop("lane", 16, readChunkInnerLoop.toString)
+    )
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        f.formatLong(16)
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatConstantRef("defaultValid"),
+        msg = Some("RX valid chunk does not match expected")
+      )
+    )
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        f.formatLong(17)
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatConstantRef("defaultTrack"),
+        msg = Some("RX track chunk does not match expected")
+      )
+    )
+    body.append(f.formatForLoop("ofs", 32, readChunkOuterLoop.toString))
     sb.append(f.formatFn("manual_simple", body.toString))
     sb.toString
   }

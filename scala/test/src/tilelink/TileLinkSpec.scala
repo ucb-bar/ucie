@@ -76,7 +76,7 @@ module ${name}(
         if (!tlt_req_ready) @(posedge tlt_req_ready);
         repeat(1000) @(posedge clock);
       join_any
-      assert(tlt_req_ready) else $$fatal("Timeout waiting for TLT request to be ready: %s", ctx);
+      assert(tlt_req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
       fork
         @(negedge clock) tlt_req_valid = 1'b0;
         fork
@@ -84,7 +84,7 @@ module ${name}(
           repeat(1000) @(posedge clock);
         join_any
       join
-      assert(tlt_resp_valid) else $$fatal("Timeout waiting for TLT response to be valid: %s", ctx);
+      assert(tlt_resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
       @(negedge clock);
     end
   endtask
@@ -135,6 +135,11 @@ module ${name}(
 ${Codegen.indent(codegen.formatFns())}
   initial clock = 1'b0;
   always #1 clock = ~clock;
+
+  initial begin
+    repeat(100000) @(negedge clock);
+    $$fatal(1, "Timeout");
+  end
 
   initial begin
     $$dumpfile("trace.vcd");

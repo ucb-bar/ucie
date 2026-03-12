@@ -149,6 +149,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   io.clkRst.ucieRst := !digitalRstSync.io.rstbSync
 
   val clkDist = Module(new ClkDistNetwork)
+  clkDist.io.bypassClkP := io.top.bypassClkP
+  clkDist.io.bypassClkN := io.top.bypassClkN
 
   // TODO do we need to set pu/pd ctl to 0 when driver en is low?
   // TODO decide on and connect debug signals
@@ -186,12 +188,12 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   val clkMuxP = Module(new ClkMux)
   clkMuxP.connect(
     clkDist.io.clkMuxP,
-    !io.regs.pllBypassEn
+    io.regs.pllBypassEn
   )
   val clkMuxN = Module(new ClkMux)
   clkMuxN.connect(
     clkDist.io.clkMuxN,
-    !io.regs.pllBypassEn
+    io.regs.pllBypassEn
   )
 
   // Global clock dividers
@@ -264,11 +266,13 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkPAfeCtl =
       RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(numLanes + 1))
     rxClkP.io.clkin := io.top.rxClkP
+    clkDist.io.rxClkP := rxClkP.io.clkout
 
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
       RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(numLanes + 2))
     rxClkN.io.clkin := io.top.rxClkN
+    clkDist.io.rxClkN := rxClkN.io.clkout
 
     for (lane <- 0 until numLanes + 2) {
       val rxLane = Module(new RxDataLane)
