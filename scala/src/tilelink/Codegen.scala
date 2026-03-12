@@ -1,5 +1,7 @@
 package edu.berkeley.cs.uciedigital.tilelink
 
+import scala.collection.mutable
+
 import freechips.rocketchip.regmapper.RegField
 import org.chipsalliance.cde.config.Parameters
 import chisel3._
@@ -13,15 +15,15 @@ import edu.berkeley.cs.chippy.{
   TLTesterReq,
   TLTesterResp
 }
-import freechips.rocketchip.prci.ClockSourceNode
-import freechips.rocketchip.prci.ClockSourceParameters
-import scala.collection.mutable
-import edu.berkeley.cs.uciedigital.phy.TxTestState
-import edu.berkeley.cs.uciedigital.phy.DriverControlIO
-import edu.berkeley.cs.uciedigital.phy.TxSkewControlIO
-import edu.berkeley.cs.uciedigital.phy.TestTarget
-import edu.berkeley.cs.uciedigital.phy.TxTestMode
-import edu.berkeley.cs.uciedigital.phy.DataMode
+import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
+
+import edu.berkeley.cs.uciedigital.phy.{
+  TestTarget,
+  TxTestMode,
+  DataMode,
+  TxTestState
+}
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
 
 trait Formatter {}
 
@@ -131,38 +133,6 @@ end
   }
 }
 
-object UcieCodegenRef {
-  val tltParams = TLTesterParams(addrWidth = 64, dataWidth = 64)
-  val ucieParams = UcieTLParams(sim = true)
-  val beatBytes = 8
-}
-
-class UcieCodegenRef(implicit p: Parameters) extends LazyModule {
-  val tlt = LazyModule(
-    new TLTester(UcieCodegenRef.tltParams, UcieCodegenRef.beatBytes)
-  )
-  val ucieTL = LazyModule(
-    new UcieTL(UcieCodegenRef.ucieParams, UcieCodegenRef.beatBytes)
-  )
-  val clockSourceNode_digital = ClockSourceNode(
-    Seq(ClockSourceParameters())
-  )
-
-  ucieTL.clockNode := clockSourceNode_digital
-  ucieTL.node := tlt.node
-
-  lazy val module = new Impl
-  class Impl extends LazyModuleImp(this) {
-    tlt.module.io := DontCare
-    ucieTL.module.io := DontCare
-
-    val regmap = ucieTL.module.regmap
-
-    clockSourceNode_digital.out(0)._1.clock := clock
-    clockSourceNode_digital.out(0)._1.reset := reset
-  }
-}
-
 object Codegen {
   def indent(content: String, n: Int = 1): String = {
     content.split("\n").map(line => s"${"  " * n}$line").mkString("\n")
@@ -185,7 +155,7 @@ class Codegen(f: SystemVerilogFormatter) {
   }
   def formatRegs(): String = {
     implicit val p = Parameters.empty
-    val ucie_dut = new UcieCodegenRef
+    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), 32))
     val ucie = (new chisel3.stage.phases.Elaborate)
       .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
         val dut = LazyModule(ucie_dut).module
@@ -286,7 +256,7 @@ class Codegen(f: SystemVerilogFormatter) {
         ("defaultTrack", BigInt(0x55555555)),
         (
           "enableDriverCtl",
-          (new DriverControlIO)
+          (new DriverCtlIO)
             .Lit(
               _.pu_ctl -> 63.U,
               _.pd_ctl -> 63.U,
@@ -297,7 +267,7 @@ class Codegen(f: SystemVerilogFormatter) {
         ),
         (
           "defaultSkewCtl",
-          (new TxSkewControlIO)
+          (new SkewCtlIO)
             .Lit(
               _.dll_en -> true.B,
               _.ocl -> false.B,
@@ -460,6 +430,10 @@ class Codegen(f: SystemVerilogFormatter) {
     body.append(
       formatWriteNamedReg("pllBypassEn", f.formatLong(1))
     )
+    // TODO: Gate clock before de-asserting reset.
+    body.append(
+      formatWriteNamedReg("divResetb", f.formatLong(1))
+    )
     body.append(f.formatFnCall("reset_fsms"))
 
     {
@@ -506,6 +480,12 @@ class Codegen(f: SystemVerilogFormatter) {
         s"(data3 << ${f.formatLong(32)}) | data2"
       )
     )
+    body.append(
+      formatWriteNamedReg(
+        "txWriteChunk",
+        f.formatLong(1)
+      )
+    )
     sb.append(
       f.formatFn(
         "write_tx_data_chunk",
@@ -533,9 +513,9 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(32)
       )
     )
-    val outerLoopBody = new StringBuilder
-    val innerLoopBody = new StringBuilder
-    innerLoopBody.append(
+    val writeChunkOuterLoop = new StringBuilder
+    val writeChunkInnerLoop = new StringBuilder
+    writeChunkInnerLoop.append(
       f.formatFnCall(
         "write_tx_data_chunk",
         args = Seq(
@@ -548,8 +528,10 @@ class Codegen(f: SystemVerilogFormatter) {
         )
       )
     )
-    outerLoopBody.append(f.formatForLoop("group", 4, innerLoopBody.toString))
-    outerLoopBody.append(
+    writeChunkOuterLoop.append(
+      f.formatForLoop("group", 4, writeChunkInnerLoop.toString)
+    )
+    writeChunkOuterLoop.append(
       f.formatFnCall(
         "write_tx_data_chunk",
         args = Seq(
@@ -562,7 +544,7 @@ class Codegen(f: SystemVerilogFormatter) {
         )
       )
     )
-    body.append(f.formatForLoop("ofs", 32, outerLoopBody.toString))
+    body.append(f.formatForLoop("ofs", 32, writeChunkOuterLoop.toString))
     body.append(
       formatWriteNamedReg(
         "testTarget",
@@ -599,19 +581,84 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(1)
       )
     )
-    // val whileBody = new StringBuilder
-    // whileBody.append(
-    //   f.formatReadReg(
-    //     "r",
-    //     f.formatConstantRef("rxPacketsReceived"),
-    //     declareVar = true
-    //   )
-    // )
-    // whileBody.append(
-    //   f.formatIfStmt(s"r >= ${f.formatLong(32)}", f.breakStmt())
-    // )
-    // body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
-    // body.append(f.formatPrintStmt("All packets received!"))
+    val whileBody = new StringBuilder
+    whileBody.append(
+      f.formatReadReg(
+        "r",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = true
+      )
+    )
+    whileBody.append(
+      f.formatIfStmt(s"r >= ${f.formatLong(32)}", f.breakStmt())
+    )
+    body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+    body.append(f.formatPrintStmt("All packets received!"))
+    body.append(
+      f.formatAssertEq(
+        f.formatConstantRef("txTestState"),
+        f.formatConstantRef("txTestStateDone"),
+        msg = Some("TX test state is not done after all packets have been sent")
+      )
+    )
+    body.append(
+      f.formatAssertEq(
+        f.formatConstantRef("txPacketsSent"),
+        f.formatLong(32),
+        msg = Some("TX packets sent is not 32 after all data has been sent")
+      )
+    )
+    val readChunkOuterLoop = new StringBuilder
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataOffset",
+        "ofs"
+      )
+    )
+    val readChunkInnerLoop = new StringBuilder
+    readChunkInnerLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        "lane"
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatLong(0xdeadbeefL),
+        msg = Some("RX data chunk does not match expected")
+      )
+    )
+    readChunkOuterLoop.append(
+      f.formatForLoop("lane", 16, readChunkInnerLoop.toString)
+    )
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        f.formatLong(16)
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatConstantRef("defaultValid"),
+        msg = Some("RX valid chunk does not match expected")
+      )
+    )
+    readChunkOuterLoop.append(
+      formatWriteNamedReg(
+        "rxDataLane",
+        f.formatLong(17)
+      )
+    )
+    readChunkInnerLoop.append(
+      f.formatAssertEq(
+        f.formatConstantRef("rxDataChunk"),
+        f.formatConstantRef("defaultTrack"),
+        msg = Some("RX track chunk does not match expected")
+      )
+    )
+    body.append(f.formatForLoop("ofs", 32, readChunkOuterLoop.toString))
     sb.append(f.formatFn("manual_simple", body.toString))
     sb.toString
   }

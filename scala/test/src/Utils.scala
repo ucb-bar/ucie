@@ -26,9 +26,9 @@ object Utils {
             .TraceStyle(
               svsim.verilator.Backend.CompilationSettings.TraceKind.Vcd,
               traceUnderscore = true,
-              maxArraySize = Some(1024),
-              maxWidth = Some(1024),
-              traceDepth = Some(1024)
+              maxArraySize = Some(2048),
+              maxWidth = Some(2048),
+              traceDepth = Some(2048)
             )
         )
       )
