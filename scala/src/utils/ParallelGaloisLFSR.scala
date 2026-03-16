@@ -1,13 +1,25 @@
-package edu.berkeley.cs.uciedigital.logphy
+package edu.berkeley.cs.uciedigital.utils
 
 import chisel3._
 import circt.stage.ChiselStage
 import chisel3.util._
 import chisel3.util.random._
+import chisel3.ltl._
+import chisel3.layer.{Convention, Layer, block}
+
+
+// // All layers are declared here.  The Assert and Debug layers are nested under
+// // the Verification layer.
+// object Verification extends Layer(Convention.Bind) {
+//   object Assert extends Layer(Convention.Bind)
+//   object Debug extends Layer(Convention.Bind)
+//   object Cover extends Layer(Convention.Bind)
+// }
+
 
 /*
   Description: 
-    Produces `dataWidth` bits worth of LFSR output in one cycle.
+    Produces `dataWidth` bits worth of LFSR output in one cycle using an XOR tree.
     It will combinationally calculate the output bits based on the current state. When it is
     time to increment, it will step `dataWidth` times in a cycle. The next state is also
     calculated combinationally based on current state.
@@ -32,6 +44,19 @@ class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: 
 
   assert(seed > 0, "Seed needs to be positive")
   assert(dataWidth > 0, "Dath width needs to be positive")
+
+  // if(!chiselSim) {
+  //   block(Verification) {
+  //     block(Verification.Assert) {
+  //       val impl = Sequence.BoolSequence(io.resetLfsr)
+  //       AssertProperty(impl |-> Property.eventually(Sequence.BoolSequence(io.increment === true.B)))
+  //     }    
+  //     block(Verification.Cover) {
+  //       val impl = Sequence.BoolSequence(io.resetLfsr)
+  //       CoverProperty(impl |-> Property.eventually(Sequence.BoolSequence(io.increment === true.B)))
+  //     }
+  //   }
+  // }
 
   // rows: lfsrWidth, cols: lfsrWidth
   var stateUpdateMatrix: Array[Array[Int]] = Array.ofDim[Int](lfsrWidth, lfsrWidth) 
@@ -65,7 +90,7 @@ class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: 
 
   // Compute stateUpdate combinationally based on current lfsr state
   for(j <- 0 until lfsrWidth) {
-    var terms = scala.collection.mutable.ArrayBuffer[Bool]()
+    val terms = scala.collection.mutable.ArrayBuffer[Bool]()
     for(i <- 0 until lfsrWidth) {
       val doXor = stateUpdateMatrix(i)(j)      
       if(doXor == 1) {
@@ -77,7 +102,7 @@ class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: 
 
   // Compute dataOutput combinationally based on current lfsr state
   for(j <- 0 until dataWidth) {
-    var terms = scala.collection.mutable.ArrayBuffer[Bool]()
+    val terms = scala.collection.mutable.ArrayBuffer[Bool]()
     for(i <- 0 until lfsrWidth) {
       val doXor = dataOutMatrix(i)(j)      
       if(doXor == 1) {
@@ -145,16 +170,15 @@ class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
 }
 
 object MainParallelGaloisLFSR extends App {
-
   ChiselStage.emitSystemVerilogFile(
     new ParallelGaloisLFSR(0x1DBFBC, 23, 32, 0x210125),
-    args = Array("-td", "./generators/ucie/generatedVerilog/logphy/lfsr"),
+    args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
       "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables"
+      "--lowering-options=disallowLocalVariables",
     ),
   )
 }

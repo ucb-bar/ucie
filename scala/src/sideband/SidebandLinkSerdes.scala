@@ -282,12 +282,11 @@ class SidebandLinkDeserializer(val sbLink_w: Int, val msg_w: Int, val des_timeou
     }                    
   })
 
-    // Packet opcodes without data
-    // If any new packet types without data are added, then add opcode here.
+  // Packet opcodes without data
+  // If any new packet types without data are added, then add opcode here.
   val pkt_type_wo_data =  Seq(SBMsgOpcode.MessageWithoutData, 
                               SBMsgOpcode.ManagementPortMsgWithoutData)
 
-  
   // Note: 
   //  - This clock stops toggling when there's no data being sent.
   //  - Data is sampled at the negative edge.
@@ -343,6 +342,8 @@ class SidebandLinkDeserializer(val sbLink_w: Int, val msg_w: Int, val des_timeou
 
   val timeout_counter = RegInit(0.U(log2Ceil(des_timeout_cycles).W))
 
+  // When the deserializer's bit counter is not 0, start a timeout count.
+  // Can safely sample idle_status across clock domain since there's >=32 bit wait between SB msgs
   when(idle_status_sync) {
     timeout_counter := 0.U
   }.otherwise {    
@@ -357,8 +358,9 @@ class SidebandLinkDeserializer(val sbLink_w: Int, val msg_w: Int, val des_timeou
 
   val valid_sync_prev = RegNext(valid_sync, false.B) 
   val dataSent = RegInit(false.B)
+  val newData = Wire(Bool())
 
-  val newData = valid_sync && !valid_sync_prev  // new data pulse
+  newData := valid_sync && !valid_sync_prev  // new data pulse
 
   when(newData) {
     dataSent := false.B
@@ -373,10 +375,9 @@ class SidebandLinkDeserializer(val sbLink_w: Int, val msg_w: Int, val des_timeou
 }
 
 object MainSBSerdes extends App {
-
   ChiselStage.emitSystemVerilogFile(
     new SidebandLinkSerDes(new SidebandParams()),
-    args = Array("-td", "./generators/ucie/generatedVerilog/sideband"),
+    args = Array("-td", "./generatedVerilog/sideband"),
     firtoolOpts = Array(
       "-O=debug",
       "-g",
