@@ -1,15 +1,19 @@
 package edu.berkeley.cs.uciedigital.logphy
 
 import edu.berkeley.cs.uciedigital.sideband._
-import edu.berkeley.cs.uciedigital.interfaces._
 import chisel3._
+import circt.stage.ChiselStage
 import chisel3.util._
+
+/*
+  Description:
+    This module encapsulates the logic that is done during the SBINIT state
+*/
 
 class SBInitSM(sbParams: SidebandParams, timeoutCyclesMax: Int) extends Module {
   val io = IO(new Bundle {
     val fsmCtrl = new SubFsmControlIO()
-    // val sidebandCtrlIo = new SidebandCtrlIO()
-    val sbRxTxMode = Output(SBRxTxMode()) // TODO: only ctrl needed? revisit during integration.
+    val sbRxTxMode = Output(SBRxTxMode())
     val requesterSbLaneIo = new SidebandLaneIO(sbParams)
     val responderSbLaneIo = new SidebandLaneIO(sbParams)
   })
@@ -25,7 +29,7 @@ class SBInitSM(sbParams: SidebandParams, timeoutCyclesMax: Int) extends Module {
   io.responderSbLaneIo <> responder.io.sbLaneIo
 
   io.fsmCtrl.substateTransitioning := false.B // No spec defined substates. Keep false.  
-  io.fsmCtrl.error := false.B
+  io.fsmCtrl.error := false.B // Only error in SBInit can happen from training timeout
   io.fsmCtrl.done := requester.io.done && responder.io.done
 }
 
@@ -114,17 +118,18 @@ class SBInitRequester(sbParams: SidebandParams, timeoutCyclesMax: Int) extends M
         }
       }
     }
-    is(SBInitStateRequester.sOUT_OF_RESET) {
+    is(SBInitStateRequester.sOUT_OF_RESET) {     
       // detect {SBINIT Out of Reset}
       io.sbLaneIo.rx.ready := true.B          
-      when(io.sbLaneIo.rx.valid && SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.SBINIT_OUT_OF_RESET)) {
+      when(io.sbLaneIo.rx.valid && 
+           SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.SBINIT_OUT_OF_RESET)) {
         outOfResetDetected := true.B
       }
 
       // send {SBINIT Out of Reset}
       io.sbLaneIo.tx.valid := !outOfResetDetected
       when(io.sbLaneIo.tx.ready) {         
-        io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_OUT_OF_RESET, "PHY", true, "PHY")        
+        io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_OUT_OF_RESET, "PHY", "PHY", true)        
       }
 
       when(outOfResetDetected) {
@@ -135,7 +140,7 @@ class SBInitRequester(sbParams: SidebandParams, timeoutCyclesMax: Int) extends M
       // send {SBINIT done req} once
       io.sbLaneIo.tx.valid := !msgSent
       when(!msgSent && io.sbLaneIo.tx.ready) {        
-        io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_DONE_REQ, "PHY", true, "PHY")
+        io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_DONE_REQ, "PHY", "PHY", true)
         msgSent := true.B
       }
 
@@ -178,8 +183,50 @@ class SBInitResponder(sbParams: SidebandParams) extends Module {
     // once detected send {SBINIT done resp}, and signal done hold high
     io.sbLaneIo.tx.valid := msgReceived
     when(msgReceived && io.sbLaneIo.tx.ready) {                
-      io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_DONE_RESP, "PHY", true, "PHY")
+      io.sbLaneIo.tx.bits.data := SBMsgCreate(SBM.SBINIT_DONE_RESP, "PHY", "PHY", true)
       msgSent := true.B
     }
   }
+}
+
+object MainSBInit extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new SBInitSM(new SidebandParams, 8000000),
+    args = Array("-td", "./generatedVerilog/logphy/"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "-g",
+      "--disable-all-randomization",
+      "--strip-debug-info",
+      "--lowering-options=disallowLocalVariables",
+    ),
+  )
+}
+
+object MainSBInitRequester extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new SBInitRequester(new SidebandParams, 8000000),
+    args = Array("-td", "./generatedVerilog/logphy/"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "-g",
+      "--disable-all-randomization",
+      "--strip-debug-info",
+      "--lowering-options=disallowLocalVariables",
+    ),
+  )
+}
+
+object MainSBInitResponder extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new SBInitResponder(new SidebandParams),
+    args = Array("-td", "./generatedVerilog/logphy/"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "-g",
+      "--disable-all-randomization",
+      "--strip-debug-info",
+      "--lowering-options=disallowLocalVariables",
+    ),
+  )
 }

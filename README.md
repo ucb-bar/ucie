@@ -5,6 +5,14 @@ An open-source implementation of the UCIe 3.0 specification.
 You can request a copy of the UCIe specification [here](https://www.uciexpress.org/3-0-spec-download).
 
 ## Tests
+> [!NOTE]
+> For now to use `mill` please run the following to include the appropriate dependencies.
+>```bash
+>git clone https://github.com/ucb-substrate/chippy.git
+>cd chippy
+>git submodule update --init --recursive
+>./mill __.publishLocal
+>```
 
 To run the RTL tests, make sure Scala is installed.
 
