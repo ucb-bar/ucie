@@ -12,23 +12,13 @@ class ClkRxIO extends Bundle {
 
 class ClkRx(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new ClkRxIO)
 
-  override val desiredName = "clkrx_with_esd"
+  override val desiredName = "ucie_clkrx"
 
   if (includeDefaultModels) {
-    setInline(
-      "clkrx_with_esd.v",
-      """module clkrx_with_esd(
-      | input vip, vin,
-      | output vop, von
-      |);
-      | assign vop = vip;
-      | assign von = vin;
-      |endmodule
-      """.stripMargin
-    )
+    addResource("/vsrc/ucie_clkrx.v")
   }
 }
 
@@ -51,24 +41,13 @@ class ClkMuxIO extends Bundle {
 
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new ClkMuxIO)
 
   override val desiredName = "ucie_clkmux"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_clkmux.v",
-      """module ucie_clkmux(
-      | input in0, in1,
-      | input mux0_en_0, mux0_en_1,
-      | input mux1_en_0, mux1_en_1,
-      | output out, outb
-      |);
-      | assign out = mux0_en_0 && ~mux0_en_1 ? in0 : (~mux0_en_0 && mux0_en_1 ? in1 : 1'b0);
-      |endmodule
-      """.stripMargin
-    )
+    addResource("/vsrc/ucie_clkmux.v")
   }
 
   def connect(clocks: ClkMuxClockIO, sel1: Bool) = {
@@ -90,38 +69,19 @@ class RstSyncIO extends Bundle {
 
 class RstSync(implicit includeDefaultModels: Boolean = true)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new RstSyncIO)
 
   override val desiredName = "ucie_rst_sync"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_rst_sync.v",
-      """module ucie_rst_sync(
-      | input clk,
-      | input rstbAsync,
-      | output rstbSync
-      |);
-      | reg [2:0] ff;
-      | always @(negedge rstbAsync) begin
-      |   ff <= 3'd0;
-      | end
-      | always @(posedge clk) begin
-      |   ff[0] <= rstbAsync;
-      |   ff[1] <= ff[0];
-      |   ff[2] <= ff[1];
-      | end
-      | assign rstbSync = ff[2];
-      |endmodule
-      """.stripMargin
-    )
+    addResource("/vsrc/ucie_rst_sync.v")
   }
 }
 
 class Esd(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new Bundle {
     val term = Input(Bool())
   })
@@ -129,20 +89,13 @@ class Esd(implicit includeDefaultModels: Boolean = false)
   override val desiredName = "ucie_esd"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_esd.v",
-      """module ucie_esd(
-      | input term
-      |);
-      |endmodule
-      """.stripMargin
-    )
+    addResource("ucie_esd.v")
   }
 }
 
 class EsdRoutable(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new Bundle {
     val term = Input(Bool())
   })
@@ -150,14 +103,7 @@ class EsdRoutable(implicit includeDefaultModels: Boolean = false)
   override val desiredName = "ucie_esd_routable"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_esd_routable.v",
-      """module ucie_esd_routable(
-      | input term
-      |);
-      |endmodule
-      """.stripMargin
-    )
+    addResource("/vsrc/ucie_esd_routable.v")
   }
 }
 
@@ -172,41 +118,13 @@ class ClkDiv4IO extends Bundle {
 
 class ClkDiv4(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new ClkDiv4IO)
 
   override val desiredName = "ucie_clk_div4"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_clk_div4.v",
-      """module ucie_clk_div4(
-      |  input clk, resetb,
-      |  output reg clkout_0, clkout_1, clkout_2, clkout_3
-      |);
-      |  always @(negedge resetb) begin
-      |    clkout_0 <= 1'b0;
-      |    clkout_1 <= 1'b0;
-      |    clkout_2 <= 1'b0;
-      |    clkout_3 <= 1'b0;
-      |  end
-      |  always @(posedge clk) begin
-      |    if (resetb) begin
-      |    	clkout_0 <= ~clkout_0;
-      |    end
-      |  end
-      |  always @(posedge clkout_0) begin
-      |    clkout_1 <= ~clkout_1;
-      |  end
-      |  always @(posedge clkout_1) begin
-      |    clkout_2 <= ~clkout_2;
-      |  end
-      |  always @(posedge clkout_2) begin
-      |    clkout_3 <= ~clkout_3;
-      |  end
-      |endmodule
-      """.stripMargin
-    )
+    addResource("/vsrc/ucie_clk_div4.v")
   }
 }
 
@@ -218,32 +136,13 @@ class ClkGateIO extends Bundle {
 
 class ClkGate(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
-    with HasBlackBoxInline {
+    with HasBlackBoxResource {
   val io = IO(new ClkGateIO)
 
   override val desiredName = "ucie_clk_gate"
 
   if (includeDefaultModels) {
-    setInline(
-      "ucie_clk_gate.sv",
-      """module ucie_clk_gate(
-    input  logic clk,
-    input  logic en,
-    output logic gated_clk
-);
-
-logic en_latched;
-
-always_latch begin
-    if (!clk)
-        en_latched = en;
-end
-
-assign gated_clk = clk & en_latched;
-
-endmodule
-      """.trim
-    )
+    addResource("/vsrc/ucie_clk_gate.sv")
   }
 }
 
@@ -305,6 +204,6 @@ class VerilogClkDistNetwork(implicit includeDefaultModels: Boolean = false)
   override val desiredName = "ucie_clk_dist_network"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/ucie_clk_dist_network.v")
+    addResource("/vsrc/ucie_clk_dist_network.sv")
   }
 }

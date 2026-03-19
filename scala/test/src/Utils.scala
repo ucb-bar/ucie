@@ -14,6 +14,7 @@ object Utils {
   ) / os.up / os.up
   val buildRoot = root / "build"
   val verilogSrcDir = root / os.up / "verilog"
+  val defaultVsrcDir = root / "resources" / "vsrc"
   val constants = verilogSrcDir / "constants.vams"
   val xceliumDir = root / os.up / "xcelium"
   val controlFile = xceliumDir / "amscf.scs"
@@ -151,7 +152,14 @@ xrun \\
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
         val constants =
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
-        Seq(disciplines, constants) ++ getSourceFiles(verilogSrcDir)
+        val defaultModels = Seq("ucie_clk_dist_network.sv", "ucie_clk_div4.v", "ucie_clk_gate.sv", "ucie_clkmux.v", "ucie_clkrx.v", "ucie_esd.v", "ucie_esd_routable.v", "ucie_pll.v", "ucie_rst_sync.v")
+        Seq(
+          disciplines,
+          constants,
+          controlFile,
+          Utils.constants,
+        ) ++ getSourceFiles(verilogSrcDir) ++
+          defaultModels.map(module => defaultVsrcDir / module)
       } else { Seq.empty }
     }
 
