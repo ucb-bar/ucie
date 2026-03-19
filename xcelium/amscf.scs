@@ -11,4 +11,4 @@ amsd {
 
 
 // to enable noise, do noisefmax=64G noiseseed=32
-tran tran stop=1u method=gear2only maxstep=10n annotate=status
+tran tran stop=200u method=gear2only maxstep=10n annotate=status

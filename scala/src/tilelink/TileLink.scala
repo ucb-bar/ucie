@@ -504,7 +504,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     txFifo.io.enq <> test.io.tx
     txFifo.io.enq_clock := phy.io.clkRst.ucieClk
     txFifo.io.enq_reset := phy.io.clkRst.ucieRst
-    phy.io.tx := txFifo.io.deq.bits
+    phy.io.tx := Mux(txFifo.io.deq.valid, txFifo.io.deq.bits, 0.U.asTypeOf(phy.io.tx))
     txFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txFifo.io.deq_reset := phy.io.clkRst.txDivRst
     txFifo.io.deq.ready := true.B

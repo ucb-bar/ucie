@@ -434,7 +434,6 @@ class Codegen(f: SystemVerilogFormatter) {
     body.append(
       formatWriteNamedReg("divResetb", f.formatLong(1))
     )
-    body.append(f.formatFnCall("reset_fsms"))
 
     {
       val loopBody = new StringBuilder
@@ -459,6 +458,7 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatConstantRef("defaultSkewCtl")
       )
     )
+    body.append(f.formatFnCall("reset_fsms"))
     sb.append(f.formatFn("setup_ucie", body.toString))
     sb.toString
   }

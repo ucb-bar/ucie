@@ -1,3 +1,5 @@
+`timescale 1ps/100fs
+
 module ucie_pll #(parameter CLK_PERIOD_PS=125)(
    input vclk_ref,
    input vclk_refb,
@@ -130,7 +132,6 @@ module ucie_pll #(parameter CLK_PERIOD_PS=125)(
    input d_accumulator_reset_30,
    input d_accumulator_reset_31
 );
-  `timescale 1ps/100fs
   wire reset = dvco_reset || !dvco_resetn || d_digital_reset;
   reg clk = 1'b0;
   always #(CLK_PERIOD_PS/2) clk = ~clk;
