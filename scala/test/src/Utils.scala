@@ -13,7 +13,11 @@ object Utils {
     Paths.get(sys.env("MILL_TEST_RESOURCE_DIR")).toAbsolutePath
   ) / os.up / os.up
   val buildRoot = root / "build"
+  val verilogSrcDir = root / os.up / "verilog"
+  val defaultVsrcDir = root / "resources" / "vsrc"
+  val constants = verilogSrcDir / "constants.vams"
   val xceliumDir = root / os.up / "xcelium"
+  val controlFile = xceliumDir / "amscf.scs"
   val probeFile = xceliumDir / "probe.tcl"
 
   val verilatorSettings =
@@ -127,7 +131,8 @@ xrun \\
   def simulate[T <: RawModule](
       dut: => T,
       writeSimScript: (Path, String, Path, Seq[Path]) => Unit,
-      workDir: Path
+      workDir: Path,
+      includeVamsModels: Boolean = false
   )(implicit p: Parameters) = {
     val sourceDir = workDir / "src"
     os.remove.all(sourceDir)
@@ -140,7 +145,23 @@ xrun \\
         sourceDir.toString
       )
     )
-    val sourceFiles = getSourceFiles(sourceDir)
+    val sourceFiles = getSourceFiles(sourceDir) ++ {
+      if (includeVamsModels) {
+        val xceliumHome = Path(sys.env("XCELIUM_HOME"))
+        val disciplines =
+          xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
+        val constants =
+          xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
+        val defaultModels = Seq("ucie_clk_dist_network.sv", "ucie_clk_div4.v", "ucie_clk_gate.sv", "ucie_clkmux.v", "ucie_clkrx.v", "ucie_esd.v", "ucie_esd_routable.v", "ucie_pll.v", "ucie_rst_sync.v")
+        Seq(
+          disciplines,
+          constants,
+          controlFile,
+          Utils.constants,
+        ) ++ getSourceFiles(verilogSrcDir) ++
+          defaultModels.map(module => defaultVsrcDir / module)
+      } else { Seq.empty }
+    }
 
     val sourceFilesList = simDir / "sourceFiles.F"
     val simScript = simDir / "simulate.sh"
@@ -151,7 +172,13 @@ xrun \\
       simScript,
       "SimTop",
       sourceFilesList,
-      os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir)
+      os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir) ++ {
+        if (includeVamsModels) {
+          Seq(
+            verilogSrcDir
+          )
+        } else { Seq.empty }
+      }
     )
 
     os.proc(

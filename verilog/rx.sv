@@ -1,6 +1,248 @@
+module rx_data_lane (
+   input din,
+   output dout_0,
+   output dout_1,
+   output dout_2,
+   output dout_3,
+   output dout_4,
+   output dout_5,
+   output dout_6,
+   output dout_7,
+   output dout_8,
+   output dout_9,
+   output dout_10,
+   output dout_11,
+   output dout_12,
+   output dout_13,
+   output dout_14,
+   output dout_15,
+   output dout_16,
+   output dout_17,
+   output dout_18,
+   output dout_19,
+   output dout_20,
+   output dout_21,
+   output dout_22,
+   output dout_23,
+   output dout_24,
+   output dout_25,
+   output dout_26,
+   output dout_27,
+   output dout_28,
+   output dout_29,
+   output dout_30,
+   output dout_31,
+   output divclk,
+   input clk,
+   input rstb,
+   input zen,
+   input zctl_0,
+   input zctl_1,
+   input zctl_2,
+   input zctl_3,
+   input zctl_4,
+   input zctl_5,
+   input zctl_6,
+   input zctl_7,
+   input zctl_8,
+   input zctl_9,
+   input zctl_10,
+   input zctl_11,
+   input zctl_12,
+   input zctl_13,
+   input zctl_14,
+   input zctl_15,
+   input zctl_16,
+   input zctl_17,
+   input zctl_18,
+   input zctl_19,
+   input a_en,
+   input a_pc,
+   input b_en,
+   input b_pc,
+   input sel_a,
+   input vref_sel_0,
+   input vref_sel_1,
+   input vref_sel_2,
+   input vref_sel_3,
+   input vref_sel_4,
+   input vref_sel_5,
+   input vref_sel_6
+);
+  wire [19:0] zctl = {
+    zctl_0,
+    zctl_1,
+    zctl_2,
+    zctl_3,
+    zctl_4,
+    zctl_5,
+    zctl_6,
+    zctl_7,
+    zctl_8,
+    zctl_9,
+    zctl_10,
+    zctl_11,
+    zctl_12,
+    zctl_13,
+    zctl_14,
+    zctl_15,
+    zctl_16,
+    zctl_17,
+    zctl_18,
+    zctl_19
+  };
+  wire [6:0] vref_sel = {
+    vref_sel_0,
+    vref_sel_1,
+    vref_sel_2,
+    vref_sel_3,
+    vref_sel_4,
+    vref_sel_5,
+    vref_sel_6
+  };
+  rxdata_tile_intf intf();
+  assign intf.din = din;
+  assign intf.clk = clk;
+  assign intf.rstb = rstb;
+  assign intf.zen = zen;
+  assign intf.zctl = zctl;
+  assign intf.a_en = a_en;
+  assign intf.a_pc = a_pc;
+  assign intf.b_en = b_en;
+  assign intf.b_pc = b_pc;
+  assign intf.sel_a = sel_a;
+  assign intf.vref_sel = vref_sel;
+  assign intf.vdd = 1'b1;
+  assign intf.vss = 1'b0;
+
+  assign dout_0  = intf.dout[0];
+  assign dout_1  = intf.dout[1];
+  assign dout_2  = intf.dout[2];
+  assign dout_3  = intf.dout[3];
+  assign dout_4  = intf.dout[4];
+  assign dout_5  = intf.dout[5];
+  assign dout_6  = intf.dout[6];
+  assign dout_7  = intf.dout[7];
+  assign dout_8  = intf.dout[8];
+  assign dout_9  = intf.dout[9];
+  assign dout_10 = intf.dout[10];
+  assign dout_11 = intf.dout[11];
+  assign dout_12 = intf.dout[12];
+  assign dout_13 = intf.dout[13];
+  assign dout_14 = intf.dout[14];
+  assign dout_15 = intf.dout[15];
+  assign dout_16 = intf.dout[16];
+  assign dout_17 = intf.dout[17];
+  assign dout_18 = intf.dout[18];
+  assign dout_19 = intf.dout[19];
+  assign dout_20 = intf.dout[20];
+  assign dout_21 = intf.dout[21];
+  assign dout_22 = intf.dout[22];
+  assign dout_23 = intf.dout[23];
+  assign dout_24 = intf.dout[24];
+  assign dout_25 = intf.dout[25];
+  assign dout_26 = intf.dout[26];
+  assign dout_27 = intf.dout[27];
+  assign dout_28 = intf.dout[28];
+  assign dout_29 = intf.dout[29];
+  assign dout_30 = intf.dout[30];
+  assign dout_31 = intf.dout[31];
+  assign divclk = intf.divclk;
+  rxdata_tile tile(
+    .intf(intf)
+  );
+endmodule
+
+module rx_clock_lane (
+   input clkin,
+   output clkout,
+   input zen,
+   input zctl_0,
+   input zctl_1,
+   input zctl_2,
+   input zctl_3,
+   input zctl_4,
+   input zctl_5,
+   input zctl_6,
+   input zctl_7,
+   input zctl_8,
+   input zctl_9,
+   input zctl_10,
+   input zctl_11,
+   input zctl_12,
+   input zctl_13,
+   input zctl_14,
+   input zctl_15,
+   input zctl_16,
+   input zctl_17,
+   input zctl_18,
+   input zctl_19,
+   input a_en,
+   input a_pc,
+   input b_en,
+   input b_pc,
+   input sel_a,
+   input vref_sel_0,
+   input vref_sel_1,
+   input vref_sel_2,
+   input vref_sel_3,
+   input vref_sel_4,
+   input vref_sel_5,
+   input vref_sel_6
+);
+  wire [19:0] zctl = {
+    zctl_0,
+    zctl_1,
+    zctl_2,
+    zctl_3,
+    zctl_4,
+    zctl_5,
+    zctl_6,
+    zctl_7,
+    zctl_8,
+    zctl_9,
+    zctl_10,
+    zctl_11,
+    zctl_12,
+    zctl_13,
+    zctl_14,
+    zctl_15,
+    zctl_16,
+    zctl_17,
+    zctl_18,
+    zctl_19
+  };
+  wire [6:0] vref_sel = {
+    vref_sel_0,
+    vref_sel_1,
+    vref_sel_2,
+    vref_sel_3,
+    vref_sel_4,
+    vref_sel_5,
+    vref_sel_6
+  };
+  rxclk_tile_intf intf();
+  assign intf.clkin = clkin;
+  assign clkout = intf.clkout;
+  assign intf.zen = zen;
+  assign intf.zctl = zctl;
+  assign intf.a_en = a_en;
+  assign intf.a_pc = a_pc;
+  assign intf.b_en = b_en;
+  assign intf.b_pc = b_pc;
+  assign intf.sel_a = sel_a;
+  assign intf.vref_sel = vref_sel;
+  assign intf.vdd = 1'b1;
+  assign intf.vss = 1'b0;
+  rxclk_tile tile(
+    .intf(intf)
+  );
+endmodule
+
 interface rxdata_tile_intf;
     wire din;
     logic clk;
+    logic divclk;
     logic rstb;
     logic [2**`SERDES_STAGES-1:0] dout;
     logic zen;
@@ -55,6 +297,7 @@ generate
         );
     end
 endgenerate
+assign intf.divclk = desclk[`SERDES_STAGES-1];
 
 tree_des des(
     .din(dout_afe),

@@ -162,13 +162,20 @@ endmodule
   )
 }
 
-class SimTop[T <: TestDriver](driver: => T)(implicit
-    p: Parameters
+class SimTop[T <: TestDriver](
+    driver: => T
+)(implicit
+    p: Parameters,
+    includeDefaultModels: Boolean = true
 ) extends RawModule {
   val drv = Module(driver)
 
   withClockAndReset(drv.clock, drv.reset) {
-    val harness = Module(LazyModule(new TestHarness).module)
+    val harness = Module(
+      LazyModule(
+        new TestHarness
+      ).module
+    )
     harness.io <> drv.tlt
   }
 }
@@ -178,7 +185,7 @@ object TestHarness {
   val beatBytes = 8
 }
 
-class TestHarness(includeDefaultModels: Boolean = true)(implicit p: Parameters)
+class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
   val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
@@ -307,6 +314,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new UcieTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
+      )
+    }
+
+    it(
+      "should support simple manual test using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new UcieTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium_with_PHY_analog_models",
+        includeVamsModels = true
       )
     }
   }
