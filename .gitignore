@@ -76,3 +76,6 @@ target/
 xrun.history
 xrun.log
 
+out/
+.metals/
+.vscode/
