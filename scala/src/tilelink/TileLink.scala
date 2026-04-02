@@ -46,10 +46,10 @@ class UcieBumpsIO(numLanes: Int = 16) extends Bundle {
 }
 
 object MainbandSel extends ChiselEnum {
-  // Send TL packets over mainband
-  val tl = Value(0.U(1.W))
   // Allow PhyTest to control mainband
-  val phytest = Value(1.U(1.W))
+  val phytest = Value(0.U(1.W))
+  // Send TL packets over mainband
+  val tl = Value(1.U(1.W))
 }
 
 class UcieTLRegsIO(
@@ -479,12 +479,13 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
   // TODO: Support more than 1 in-flight message
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
-  val managerNode: TLManagerNode = TLManagerNode(
+  // TODO: Use correct AddressSet
+  val managerNode = TLManagerNode(
     Seq(
       TLSlavePortParameters.v1(
         Seq(
           TLSlaveParameters.v1(
-            address = Seq(AddressSet(0x0, 0xffffffffL)),
+            address = Seq(AddressSet(0x0, 0xffffL)),
             resources = device.reg,
             regionType =
               RegionType.UNCACHED, // Should be changed to CACHED eventually
@@ -500,7 +501,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     )
   )
   // Client node to reply to send and acquire traffic from partner die
-  val clientNode: TLClientNode = TLClientNode(
+  val clientNode = TLClientNode(
     Seq(
       TLMasterPortParameters.v1(
         Seq(
@@ -508,7 +509,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
             name = "ucie-client",
             sourceId = IdRange(0, 1),
             requestFifo = true,
-            visibility = Seq(AddressSet(0x0, 0xffffffffL))
+            visibility = Seq(AddressSet(0x0, 0xffffL))
           )
         )
       )
@@ -519,6 +520,9 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
 
   override lazy val module = new UcieTLImpl
   class UcieTLImpl extends LazyRawModuleImp(this) {
+    childClock := digitalClockNode.in(0)._1.clock
+    childReset := digitalClockNode.in(0)._1.reset
+    override def provideImplicitClockToLazyChildren = true
 
     val regmap = regs.module.regmap
     val io = IO(new UcieBumpsIO(params.numLanes))
@@ -527,8 +531,6 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     val phy = Module(new Phy(params.numLanes)(params.includeDefaultModels))
     io.phy <> phy.io.top
     phy.io.clkRst.reset := digitalClockNode.in(0)._1.reset
-    val digitalClock = digitalClockNode.out(0)._1.clock
-    val digitalReset = digitalClockNode.out(0)._1.reset
     ucieDigitalClockNode.out(0)._1.clock := phy.io.clkRst.ucieClk
     ucieDigitalClockNode.out(0)._1.reset := phy.io.clkRst.ucieRst
     phy.io.regs <> regs.module.io.phy
@@ -573,9 +575,9 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
-    withClockAndReset(digitalClock, digitalReset) {
+    withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
-      val managerTl = managerNode.out(0)._1
+      val managerTl = managerNode.in(0)._1
       val txAInFlight = RegInit(false.B)
       val rxABuffer = Module(new Queue(chiselTypeOf(clientTl.a.bits), 1))
       val rxDBuffer = Module(new Queue(chiselTypeOf(managerTl.d.bits), 1))
@@ -592,14 +594,14 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         clientTl.d.valid,
         Cat(clientTl.d.bits.asUInt, 1.U),
         Cat(managerTl.a.bits.asUInt, 0.U)
-      )
+      ).asTypeOf(txTlFifo.io.enq.bits.data)
       clientTl.d.ready := txTlFifo.io.enq.ready
       managerTl.a.ready := txTlFifo.io.enq.ready && !clientTl.d.valid && !txAInFlight
       when(managerTl.a.ready && managerTl.a.valid) {
         txAInFlight := true.B
       }
-      txTlFifo.io.enq_clock := phy.io.clkRst.ucieClk
-      txTlFifo.io.enq_reset := phy.io.clkRst.ucieRst
+      txTlFifo.io.enq_clock := childClock
+      txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
       txTlFifo.io.deq_reset := phy.io.clkRst.txDivRst
       txTlFifo.io.deq.ready := regs.module.io.mainbandSel === MainbandSel.tl
@@ -611,18 +613,19 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       rxTlFifo.io.enq.valid := regs.module.io.mainbandSel === MainbandSel.tl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
-      rxTlFifo.io.deq <> validFramer.io.phy.ready
-      rxTlFifo.io.deq_clock := phy.io.clkRst.ucieClk
-      rxTlFifo.io.deq_reset := phy.io.clkRst.ucieRst
+      rxTlFifo.io.deq <> validFramer.io.phy
+      rxTlFifo.io.deq_clock := childClock
+      rxTlFifo.io.deq_reset := childReset
       // Replace decoupled IOs that need ready to be true with validIO
       validFramer.io.digital.ready := true.B
       rxABuffer.io.enq.valid := false.B
       rxDBuffer.io.enq.valid := false.B
       val framedBits = validFramer.io.digital.bits.asUInt
-      rxABuffer.io.enq.bits := framedBits(framedBits.getWidth - 1, 1)
-      rxDBuffer.io.enq.bits := framedBits(framedBits.getWidth - 1, 1)
+      val tlBits = framedBits(framedBits.getWidth - 1, 1)
+      rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
+      rxDBuffer.io.enq.bits := tlBits.asTypeOf(rxDBuffer.io.enq.bits)
       when(validFramer.io.digital.valid) {
-        when(validFramer.io.digital.bits(0).asBool) {
+        when(framedBits.asUInt(0)) {
           rxDBuffer.io.enq.valid := true.B
         }.otherwise {
           rxABuffer.io.enq.valid := true.B
@@ -712,6 +715,8 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   val ucieTL = LazyModule(ucie)
   ucieTL.digitalClockNode := clockNode
   ucieTL.regNode := node
+  // Hack to get RTL to be generated, should never be simulated.
+  ucieTL.managerNode := ucieTL.clientNode
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {

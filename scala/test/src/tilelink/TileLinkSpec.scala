@@ -29,7 +29,9 @@ import freechips.rocketchip.diplomacy.IdRange
 import freechips.rocketchip.diplomacy.AddressSet
 
 abstract class TestDriver extends ExtModule {
-  val clock = IO(Output(Clock()))
+  val digitalClock = IO(Output(Clock()))
+  val ucieBypassClock = IO(Output(Clock()))
+  val ucieDigitalBypassClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
@@ -39,7 +41,7 @@ abstract class TestDriver extends ExtModule {
   def setStimulus(name: String, body: String) = setInline(
     s"${name}.sv",
     s"""
-`timescale 1ns/1ps
+`timescale 1ps/100fs
 
 function string basename(string path);
   int idx;
@@ -79,10 +81,10 @@ module TLTDriver(
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
-      fork
-        if (!intf.req_ready) @(posedge intf.req_ready);
-        repeat(1000) @(posedge clock);
-      join_any
+      for (int i = 0; i < 1000; i++) begin
+        @(posedge clock)
+        if (intf.req_ready) break;
+      end
       assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
       fork
         @(negedge clock) intf.req_valid = 1'b0;
@@ -142,15 +144,57 @@ module TLTDriver(
 endmodule
 
 module ${name}(
-  output reg clock,
+  output reg digitalClock,
+  output reg ucieBypassClock,
+  output reg ucieDigitalBypassClock,
   output reg reset,
 
-  tltBus tltReg,
-  tltBus tltMb,
+  output reg [63:0] tltReg_req_bits_addr,
+  output reg [63:0] tltReg_req_bits_data,
+  output reg tltReg_req_bits_is_write,
+  output reg tltReg_req_valid,
+  input tltReg_req_ready,
+  input [63:0] tltReg_resp_bits_data,
+  input tltReg_resp_valid,
+  output reg tltReg_resp_ready,
+
+  output reg [63:0] tltMb_req_bits_addr,
+  output reg [63:0] tltMb_req_bits_data,
+  output reg tltMb_req_bits_is_write,
+  output reg tltMb_req_valid,
+  input tltMb_req_ready,
+  input [63:0] tltMb_resp_bits_data,
+  input tltMb_resp_valid,
+  output reg tltMb_resp_ready
 );
-  tltRegDrv TLTDriver(.clock(clock), .intf(tltReg));
-  tltMbDrv TLTDriver(.clock(clock), .intf(tltReg));
-  `define FILE_LINE_CTX $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__)
+  tltBus tltReg(
+    .req_bits_addr(tltReg_req_bits_addr),
+    .req_bits_data(tltReg_req_bits_data),
+    .req_bits_is_write(tltReg_req_bits_is_write),
+    .req_valid(tltReg_req_valid),
+    .req_ready(tltReg_req_ready),
+    .resp_bits_data(tltReg_resp_bits_data),
+    .resp_valid(tltReg_resp_valid),
+    .resp_ready(tltReg_resp_ready)
+  );
+  tltBus tltMb(
+    .req_bits_addr(tltMb_req_bits_addr),
+    .req_bits_data(tltMb_req_bits_data),
+    .req_bits_is_write(tltMb_req_bits_is_write),
+    .req_valid(tltMb_req_valid),
+    .req_ready(tltMb_req_ready),
+    .resp_bits_data(tltMb_resp_bits_data),
+    .resp_valid(tltMb_resp_valid),
+    .resp_ready(tltMb_resp_ready)
+  );
+  TLTDriver regDrv (.clock(digitalClock), .intf(tltReg));
+  TLTDriver mbDrv(.clock(digitalClock), .intf(tltMb));
+  `define WRITE(drv, addr, data) drv.write(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define READ(drv, addr, result) drv.read(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define EXPECT(drv, addr, data) drv.expect_data(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define WRITE_MSG(drv, addr, data, msg) drv.write(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define READ_MSG(drv, addr, result, msg) drv.read(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define EXPECT_MSG(drv, addr, data, msg) drv.expect_data(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
   `define WRITE_UCIE(drv, addr, data) drv.write_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
   `define READ_UCIE(drv, addr, result) drv.read_ucie(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
   `define EXPECT_UCIE(drv, addr, data) drv.expect_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
@@ -158,11 +202,15 @@ module ${name}(
   `define READ_UCIE_MSG(drv, addr, result, msg) drv.read_ucie(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
   `define EXPECT_UCIE_MSG(drv, addr, data, msg) drv.expect_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
 ${Codegen.indent(codegen.formatFns())}
-  initial clock = 1'b0;
-  always #1 clock = ~clock;
+  initial digitalClock = 1'b0;
+  initial ucieBypassClock = 1'b0;
+  initial ucieDigitalBypassClock = 1'b0;
+  always #1000 digitalClock = ~digitalClock;
+  always #62.5 ucieBypassClock = ~ucieBypassClock;
+  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
 
   initial begin
-    repeat(100000) @(negedge clock);
+    repeat(100000) @(negedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
@@ -170,9 +218,9 @@ ${Codegen.indent(codegen.formatFns())}
     $$dumpfile("trace.vcd");
     $$dumpvars(0);
     reset = 1'b1;
-    repeat(5) @(negedge clock);
+    repeat(5) @(negedge digitalClock);
     reset = 1'b0;
-    repeat(5) @(negedge clock);
+    repeat(5) @(negedge digitalClock);
 ${Codegen.indent(body, n = 2)}
     $$display("TEST PASSED");
     $$finish;
@@ -190,12 +238,14 @@ class SimTop[T <: TestDriver](
 ) extends RawModule {
   val drv = Module(driver)
 
-  withClockAndReset(drv.clock, drv.reset) {
+  withClockAndReset(drv.digitalClock, drv.reset) {
     val harness = Module(
       LazyModule(
         new TestHarness
       ).module
     )
+    harness.io.ucieBypassClock := drv.ucieBypassClock
+    harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
     harness.io.reg <> drv.tltReg
     harness.io.mb <> drv.tltMb
   }
@@ -218,7 +268,11 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   )
   val tlRam =
     LazyModule(
-      new TLRAM(AddressSet(0x0, 0xffffffffL), beatBytes = TestHarness.beatBytes)
+      new TLRAM(
+        AddressSet(0x0, 0xffffL),
+        beatBytes = TestHarness.beatBytes,
+        cacheable = false
+      )
     )
   val ucieTL = LazyModule(
     new UcieTL(
@@ -235,6 +289,8 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
     val io = IO(new Bundle {
+      val ucieBypassClock = Input(Clock())
+      val ucieDigitalBypassClock = Input(Clock())
       val reg = new TLTesterIO(TestHarness.tltParams)
       val mb = new TLTesterIO(TestHarness.tltParams)
     })
@@ -253,11 +309,11 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := clock
-    ucieTL.module.io.phy.refClkN := (!clock.asBool).asClock
-    ucieTL.module.io.phy.bypassClkP := clock
-    ucieTL.module.io.phy.bypassClkN := (!clock.asBool).asClock
-    ucieTL.module.io.phy.digitalBypassClk := clock
+    ucieTL.module.io.phy.refClkP := DontCare
+    ucieTL.module.io.phy.refClkN := DontCare
+    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
+    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
     ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
@@ -266,18 +322,27 @@ class MmioSimpleTestDriver extends TestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
-`EXPECT_UCIE(tltRegDrv, `TEST_TARGET, 64'h0);
-`WRITE_UCIE(tltRegDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
-`EXPECT_UCIE(tltRegDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
+`EXPECT_UCIE(regDrv, `TEST_TARGET, 64'h0);
+`WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
+`EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
           """.trim
   )
 }
 
-class UcieTestDriver extends TestDriver {
+class ManualSimpleTestDriver extends TestDriver {
   setStimulus(
-    "UcieTestDriver",
+    "ManualSimpleTestDriver",
     """
 manual_simple();
+          """.trim
+  )
+}
+
+class TlSimpleTestDriver extends TestDriver {
+  setStimulus(
+    "TlSimpleTestDriver",
+    """
+tl_simple();
           """.trim
   )
 }
@@ -327,9 +392,18 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple manual test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Verilator"
+      )
+    }
+
+    it("should support simple TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
       )
     }
 
@@ -345,7 +419,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple manual test using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
       )
@@ -357,7 +431,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       implicit val includeDefaultModels = false
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium_with_PHY_analog_models",
         includeVamsModels = true
