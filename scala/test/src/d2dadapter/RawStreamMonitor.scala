@@ -1,6 +1,6 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
-import chiseltest._
+import chisel3.simulator.PeekPokeAPI._
 import scala.collection.mutable
 
 final class IngressAcceptanceTracker(

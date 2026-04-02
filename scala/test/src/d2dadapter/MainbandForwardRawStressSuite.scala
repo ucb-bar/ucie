@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -13,7 +13,7 @@ import edu.berkeley.cs.uciedigital.sideband._
   * Phase 1/1B hardening for mainband raw-stream transport only.
   * This is not full UCIe protocol verification.
   */
-class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
+class MainbandForwardRawStressSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -37,7 +37,7 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
     dut.clock.step(2)
   }
 
-  private def runScenario(
+  private def runForwardScenario(
     dut: D2DMainbandModule,
     beats: Seq[RawBeat],
     checkStreamId: Boolean = false,
@@ -164,11 +164,11 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
     ) // SPEC-DERIVED
   }
 
-  behavior of "RawStreamSuite1B"
+  behavior of "MainbandForwardRawStressSuite"
 
   // Bug class targeted: long-run ordering/corruption/drop/duplication under sustained bursty backpressure.
-  it should "long deterministic stress under bursty egress ready" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "sustain long forward traffic with bursty egress readiness" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beatCount = 256
@@ -179,7 +179,7 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       val readyPattern: Long => Boolean = cycle => (cycle % 11) < 7
-      runScenario(
+      runForwardScenario(
         dut = dut,
         beats = beats,
         checkStreamId = false,
@@ -190,8 +190,8 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // Bug class targeted: repeated payload runs expose off-by-one, accidental duplicate, or dropped-beat issues.
-  it should "handle repeated payload runs without duplicate/drop artifacts" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "avoid duplicate/drop errors across repeated payload runs" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val p1 = BigInt("1111111111111111", 16)
@@ -201,7 +201,7 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
       val beats = payloads.map(p => RawBeat(data = p, streamId = RawStreamIds.Stack0Streaming))
 
       val readyPattern: Long => Boolean = cycle => (cycle % 5) != 0
-      runScenario(
+      runForwardScenario(
         dut = dut,
         beats = beats,
         checkStreamId = false,
@@ -212,8 +212,8 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // Bug class targeted: source-idle insertion between bursts catches state-machine assumptions about continuous valid.
-  it should "preserve transport correctness with intentional source gaps between bursts" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "preserve order and payloads across intentional source gaps" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beats = (0 until 12).map { i =>
@@ -229,7 +229,7 @@ class RawStreamSuite1B extends AnyFlatSpec with ChiselScalatestTester {
       )
       val gapFn: Int => Int = beatIdx => gapMap.getOrElse(beatIdx, 0)
 
-      runScenario(
+      runForwardScenario(
         dut = dut,
         beats = beats,
         checkStreamId = false,

@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import edu.berkeley.cs.uciedigital.interfaces._
@@ -23,7 +23,7 @@ import edu.berkeley.cs.uciedigital.sideband._
   *   safety (no premature ACTIVE / no illegal sideband advance) rather than
   *   claiming direct proof of internal sub-FSM state transitions.
   */
-class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
+class LinkInitializationAdversarialSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -144,7 +144,7 @@ class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
     dut.io.fdi_pl_state_sts.expect(PhyState.reset) // SPEC-DERIVED
   }
 
-  private def completeToActive(dut: LinkManagementController): Unit = {
+  private def completeInitializationToActive(dut: LinkManagementController): Unit = {
     // Complete PARAM_EXCH.
     waitUntil(dut, maxCycles = 40, reason = "ADV_CAP present before completion") {
       dut.io.sb_snd.peek().litValue == SideBandMessage.ADV_CAP.litValue
@@ -203,10 +203,10 @@ class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
     dut.io.fdi_lp_rx_active_sts.poke(false.B)
   }
 
-  behavior of "LinkInitAdversarialSuite"
+  behavior of "LinkInitializationAdversarialSuite"
 
-  it should "out-of-order handshake: ignore REQ_ACTIVE before ADV_CAP exchange completion" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "ignore early REQ_ACTIVE before ADV_CAP exchange completes" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 
@@ -226,13 +226,13 @@ class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       // Ensure legal completion still works after adversarial inputs.
-      completeToActive(dut)
+      completeInitializationToActive(dut)
       dut.io.fdi_pl_state_sts.expect(PhyState.active) // SPEC-DERIVED
     }
   }
 
-  it should "duplicate ADV_CAP receive: advance once and never jump to ACTIVE prematurely" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "tolerate duplicate ADV_CAP receive and advance only once" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 
@@ -271,8 +271,8 @@ class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "interrupted initialization: drop inband presence and remain safely non-ACTIVE" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "stay safely non-ACTIVE when inband presence drops mid-initialization" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 
@@ -304,8 +304,8 @@ class LinkInitAdversarialSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "restart after interrupted init: resume cleanly and reach ACTIVE with legal completion" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "resume from interrupted initialization and reach ACTIVE with legal completion" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 

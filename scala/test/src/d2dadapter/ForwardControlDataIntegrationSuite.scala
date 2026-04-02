@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -132,7 +132,7 @@ final class ControlFdiIngressDriver(
   beats: Seq[RawBeat],
   injectedSourceHoldoff: () => Boolean = () => false,
   gapCyclesBeforeBeat: Int => Int = _ => 0
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var beatIdx: Int = 0
   private var activeBeat: Option[RawBeat] = None
   private var preSendGapRemaining: Int = 0
@@ -187,7 +187,7 @@ final class ControlFdiIngressDriver(
   }
 }
 
-final class ControlIngressTracker(dut: ControlDataIntegrationHarness) {
+final class ControlIngressTracker(dut: ControlDataIntegrationHarness) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var acceptedCount: Long = 0L
 
@@ -228,7 +228,7 @@ final class ControlEgressMonitor(
   dut: ControlDataIntegrationHarness,
   onObserved: AcceptedBeat => Unit,
   egressStreamId: () => Int = () => RawStreamIds.UnknownStreamId
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var observedCount: Long = 0L
 
@@ -263,7 +263,7 @@ final class ControlEgressMonitor(
 final class ForwardSourceStabilityChecker(
   dut: ControlDataIntegrationHarness,
   driver: ControlFdiIngressDriver
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var prevOutstanding: Option[(Int, BigInt, Int)] = None
 
   /**
@@ -317,7 +317,7 @@ final class ForwardSourceStabilityChecker(
   * traffic transport (`fdi_lp_*` -> mainband -> `rdi_lp_*`), while keeping
   * reverse path controllable/observable but not deeply validated here.
   */
-class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester {
+class ForwardControlDataIntegrationSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -327,8 +327,6 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
 
   private def initDut(dut: ControlDataIntegrationHarness): Unit = {
     // Integration tests can run long while queues drain around disruptions.
-    dut.clock.setTimeout(0)
-
     // Forward path defaults
     dut.io.fdi_lp_valid.poke(false.B)
     dut.io.fdi_lp_irdy.poke(false.B)
@@ -383,7 +381,7 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     dut.io.sb_rcv.poke(SideBandMessage.NOP)
   }
 
-  private def driveToActive(dut: ControlDataIntegrationHarness): Unit = {
+  private def bringLinkToActive(dut: ControlDataIntegrationHarness): Unit = {
     dut.io.rdi_pl_inband_pres.poke(true.B)
     waitUntil(dut, maxCycles = 40, reason = "RDI request ACTIVE during bring-up") {
       dut.io.rdi_lp_state_req.peek().litValue == PhyStateReq.active.litValue
@@ -446,7 +444,7 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     dut.clock.step(1)
 
     // Re-run normal reset->active bring-up.
-    driveToActive(dut)
+    bringLinkToActive(dut)
   }
 
   private def runForwardTrafficToCompletion(
@@ -529,12 +527,12 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     ) // SPEC-DERIVED
   }
 
-  behavior of "ControlDataIntegrationSuite"
+  behavior of "ForwardControlDataIntegrationSuite"
 
-  it should "active traffic + retrain request: assert stall, stop acceptance after boundary edge, and enter RETRAIN" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "on retrain request, assert stall and stop new acceptances past the boundary" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 256).map { i =>
         RawBeat(
@@ -653,10 +651,10 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     }
   }
 
-  it should "active traffic + linkerror: enter LINKERROR, stop acceptance after boundary edge, and emit no extra outputs" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "on linkerror entry, stop new acceptances past the boundary and emit no extras" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 256).map { i =>
         RawBeat(
@@ -759,10 +757,10 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     }
   }
 
-  it should "recovery to ACTIVE + resumed traffic: restart cleanly without stale-beat leakage" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "recover from linkerror back to ACTIVE and resume clean forward traffic" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Phase A: baseline active traffic before disruption.
       val preBeats = (0 until 24).map(i => RawBeat(BigInt("7000000000000000", 16) + BigInt(i), RawStreamIds.Stack0Streaming))
@@ -800,10 +798,10 @@ class ControlDataIntegrationSuite extends AnyFlatSpec with ChiselScalatestTester
     }
   }
 
-  it should "buffered-beat boundary: marker beat is emitted at most once across disruption and recovery" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "emit boundary marker at most once across disruption and recovery" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val marker = BigInt("DEADBEEF00000001", 16)
       val preBeats = Seq(

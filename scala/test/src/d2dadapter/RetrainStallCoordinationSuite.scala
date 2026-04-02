@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -20,7 +20,7 @@ import edu.berkeley.cs.uciedigital.sideband._
   * - top-level observable control-state and stall-handshake behavior
   * - no full bidirectional protocol/retrain-exit specification proof
   */
-class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTester {
+class RetrainStallCoordinationSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -36,8 +36,6 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
   )
 
   private def initDut(dut: ControlDataIntegrationHarness): Unit = {
-    dut.clock.setTimeout(0)
-
     // Forward path defaults
     dut.io.fdi_lp_valid.poke(false.B)
     dut.io.fdi_lp_irdy.poke(false.B)
@@ -109,7 +107,7 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     dut.io.sb_rcv.poke(SideBandMessage.NOP)
   }
 
-  private def driveToActive(dut: ControlDataIntegrationHarness): Unit = {
+  private def bringLinkToActive(dut: ControlDataIntegrationHarness): Unit = {
     dut.io.rdi_pl_inband_pres.poke(true.B)
     waitUntil(dut, maxCycles = 40, reason = "RDI request ACTIVE during bring-up") {
       dut.io.rdi_lp_state_req.peek().litValue == PhyStateReq.active.litValue
@@ -177,7 +175,7 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     dut.io.rdi_pl_inband_pres.poke(false.B)
     dut.clock.step(1)
 
-    driveToActive(dut)
+    bringLinkToActive(dut)
   }
 
   private def newForwardTrafficEnv(
@@ -262,12 +260,12 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     )
   }
 
-  behavior of "StallRetrainCoordinationSuite"
+  behavior of "RetrainStallCoordinationSuite"
 
-  it should "retrain request while traffic active: assert stallreq under live traffic" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "assert stall requests under live traffic when retrain is requested" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 128).map(i => RawBeat(BigInt("8100000000000000", 16) + BigInt(i), RawStreamIds.Stack0Streaming))
       var sourceHoldoff = false
@@ -311,10 +309,10 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     }
   }
 
-  it should "retrain without stalldone: remain in ACTIVE while stalldone stays low" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "remain ACTIVE while retrain is requested but stalldone stays low" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 96).map(i => RawBeat(BigInt("8200000000000000", 16) + BigInt(i), RawStreamIds.Stack1Streaming))
       val env = newForwardTrafficEnv(dut, beats)
@@ -353,10 +351,10 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     }
   }
 
-  it should "retrain with delayed stalldone: transition to RETRAIN after delayed handshake" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "enter RETRAIN only after delayed stallack/stalldone handshake" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 160).map(i => RawBeat(BigInt("8300000000000000", 16) + BigInt(i), RawStreamIds.Stack0Streaming))
       var sourceHoldoff = false
@@ -450,10 +448,10 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     }
   }
 
-  it should "repeated retrain triggers: remain in consistent state under repeated trigger activity" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "remain consistent under repeated retrain trigger activity" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 120).map(i => RawBeat(BigInt("8400000000000000", 16) + BigInt(i), RawStreamIds.Stack1Streaming))
       var sourceHoldoff = false
@@ -575,10 +573,10 @@ class StallRetrainCoordinationSuite extends AnyFlatSpec with ChiselScalatestTest
     }
   }
 
-  it should "retrain exit restart: recover to ACTIVE and resume normal traffic cleanly" in {
-    test(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "recover from retrain-exit path and resume clean traffic" in {
+    simulate(new ControlDataIntegrationHarness(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Phase A: traffic with retrain entry.
       val preBeats = (0 until 80).map(i => RawBeat(BigInt("8500000000000000", 16) + BigInt(i), RawStreamIds.Stack0Streaming))

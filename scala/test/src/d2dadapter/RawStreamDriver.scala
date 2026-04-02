@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.PeekPokeAPI._
 import edu.berkeley.cs.uciedigital.interfaces.{ProtoStack, ProtoStream, ProtoStreamType}
 
 object RawStreamSignalCodec {

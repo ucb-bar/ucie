@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import edu.berkeley.cs.uciedigital.interfaces._
@@ -19,7 +19,7 @@ import edu.berkeley.cs.uciedigital.sideband._
   * - this RTL has explicit failure (LinkError) and retrain behaviors
   * - there is no explicit top-level LinkManagementController timeout state/output to assert directly
   */
-class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
+class LinkManagementStateMachineSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -112,7 +112,7 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  private def driveToActive(dut: LinkManagementController): Unit = {
+  private def bringLinkToActive(dut: LinkManagementController): Unit = {
     // Start LinkInit from RESET.
     dut.io.rdi_pl_inband_pres.poke(true.B)
     waitUntil(dut, maxCycles = 30, reason = "rdi_lp_state_req ACTIVE during RDI bringup") {
@@ -132,10 +132,10 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     completeFdiBringupToActive(dut)
   }
 
-  behavior of "LinkManagementFsmSuite(LinkManagementController)"
+  behavior of "LinkManagementStateMachineSuite(LinkManagementController)"
 
-  it should "reset / idle sanity: remain RESET with no spontaneous transitions" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "stay in RESET at idle with no spontaneous outputs" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       // SPEC-DERIVED
@@ -150,10 +150,10 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "happy-path bring-up: progress through sideband handshake and reach ACTIVE" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "complete nominal bring-up and reach ACTIVE through sideband handshakes" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       dut.io.fdi_pl_state_sts.expect(PhyState.active) // SPEC-DERIVED
       dut.io.fdi_pl_inband_pres.expect(true.B) // SPEC-DERIVED
@@ -161,8 +161,8 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "hold-in-state: not leave RESET while ADV_CAP handshake completion is held off" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "stay in RESET until ADV_CAP exchange is fully completed" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       dut.io.rdi_pl_inband_pres.poke(true.B)
@@ -190,10 +190,10 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "failure path: enter LINKERROR and recover to RESET when RX deactivates" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "enter LINKERROR on PHY fault and recover to RESET when RX deactivates" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Physical layer failure indication.
       dut.io.rdi_pl_state_sts.poke(PhyState.linkError)
@@ -219,10 +219,10 @@ class LinkManagementFsmSuite extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "retrain behavior: require stall-done before ACTIVE->RETRAIN transition" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "require stall-done before transitioning from ACTIVE to RETRAIN" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Request retrain from PHY.
       dut.io.rdi_pl_state_sts.poke(PhyState.retrain)

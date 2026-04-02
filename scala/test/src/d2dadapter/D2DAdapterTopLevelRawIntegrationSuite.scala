@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -14,7 +14,7 @@ final class TopLevelForwardIngressDriver(
   beats: Seq[RawBeat],
   injectedSourceHoldoff: () => Boolean = () => false,
   gapCyclesBeforeBeat: Int => Int = _ => 0
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var beatIdx: Int = 0
   private var activeBeat: Option[RawBeat] = None
   private var preSendGapRemaining: Int = 0
@@ -74,7 +74,7 @@ final class TopLevelForwardIngressDriver(
   }
 }
 
-final class TopLevelForwardIngressTracker(dut: D2DAdapter) {
+final class TopLevelForwardIngressTracker(dut: D2DAdapter) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var acceptedCount: Long = 0L
 
@@ -115,7 +115,7 @@ final class TopLevelForwardEgressMonitor(
   dut: D2DAdapter,
   onObserved: AcceptedBeat => Unit,
   egressStreamId: () => Int = () => RawStreamIds.UnknownStreamId
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var observedCount: Long = 0L
 
@@ -152,7 +152,7 @@ final class TopLevelForwardEgressMonitor(
 final class TopLevelForwardSourceStabilityChecker(
   dut: D2DAdapter,
   driver: TopLevelForwardIngressDriver
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var prevOutstanding: Option[(Int, BigInt, Int)] = None
 
   /**
@@ -204,7 +204,7 @@ final class TopLevelReverseIngressDriver(
   beats: Seq[RawBeat],
   injectedSourceHoldoff: () => Boolean = () => false,
   gapCyclesBeforeBeat: Int => Int = _ => 0
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var beatIdx: Int = 0
   private var activeBeat: Option[RawBeat] = None
   private var preSendGapRemaining: Int = 0
@@ -260,7 +260,7 @@ final class TopLevelReverseIngressTracker(
   dut: D2DAdapter,
   expectedQ: mutable.Queue[AcceptedBeat],
   expectedForwardedStreamId: Int
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var sampledCount: Long = 0L
 
@@ -295,7 +295,7 @@ final class TopLevelReverseIngressTracker(
 final class TopLevelReverseEgressMonitor(
   dut: D2DAdapter,
   onObserved: AcceptedBeat => Unit
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var observedCount: Long = 0L
 
@@ -329,7 +329,7 @@ final class TopLevelReverseEgressMonitor(
 final class TopLevelReverseSourceStabilityChecker(
   dut: D2DAdapter,
   driver: TopLevelReverseIngressDriver
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var prevOutstanding: Option[(Int, BigInt)] = None
 
   def check(cycle: Long): Unit = {
@@ -401,7 +401,7 @@ final class RdiSidebandMessageCollector(wordWidth: Int, beatsPerMessage: Int) {
   *   stream-preservation cannot be checked at top boundary.
   * - reverse egress (`fdi.plStream`) is visible and checked.
   */
-class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalatestTester {
+class D2DAdapterTopLevelRawIntegrationSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -425,8 +425,6 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
   )
 
   private def initDut(dut: D2DAdapter): Unit = {
-    dut.clock.setTimeout(0)
-
     // Protocol-side ingress defaults (forward path).
     dut.io.fdi.lpData.valid.poke(false.B)
     dut.io.fdi.lpData.irdy.poke(false.B)
@@ -659,7 +657,7 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  private def driveToActive(dut: D2DAdapter): Unit = {
+  private def bringLinkToActive(dut: D2DAdapter): Unit = {
     // Reset -> RDI bring-up.
     dut.io.rdi.plInbandPres.poke(true.B)
     waitUntil(dut, maxCycles = 40, reason = "RDI request ACTIVE during bring-up") {
@@ -728,7 +726,7 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     dut.io.rdi.plInbandPres.poke(false.B)
     dut.clock.step(1)
 
-    driveToActive(dut)
+    bringLinkToActive(dut)
   }
 
   private def newForwardTrafficEnv(
@@ -915,12 +913,12 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     )
   }
 
-  behavior of "D2DAdapterTopLevelStreamingRawSuite"
+  behavior of "D2DAdapterTopLevelRawIntegrationSuite"
 
-  it should "top-level bringup + forward traffic" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "bring link to ACTIVE and forward protocol-to-PHY traffic" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
       dut.io.fdi.plStateStatus.expect(PhyState.active) // SPEC-DERIVED
 
       val beats = (0 until 96).map { i =>
@@ -939,10 +937,10 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level bringup + reverse traffic" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "bring link to ACTIVE and forward PHY-to-protocol traffic" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
       dut.io.fdi.plStateStatus.expect(PhyState.active) // SPEC-DERIVED
 
       val beats = (0 until 80).map { i =>
@@ -962,10 +960,10 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level active traffic + retrain" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "during retrain, stop new forward acceptances after boundary" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 192).map { i =>
         RawBeat(
@@ -1054,10 +1052,10 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level active traffic + linkerror" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "during linkerror, stop new forward acceptances after boundary" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       val beats = (0 until 192).map { i =>
         RawBeat(
@@ -1133,10 +1131,10 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level recovery + resumed traffic" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "recover from linkerror to ACTIVE and resume clean forward traffic" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Phase A: baseline forward traffic while ACTIVE.
       val preBeats = (0 until 32).map(i => RawBeat(BigInt("E500000000000000", 16) + BigInt(i), RawStreamIds.Stack0Streaming))
@@ -1172,10 +1170,10 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level linkreset/disabled flow (linkreset-focused)" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "process linkreset request-response flow and reach LINKRESET" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
 
       // Request LINKRESET from protocol side.
       dut.io.fdi.lpStateReq.poke(PhyStateReq.linkReset)
@@ -1201,8 +1199,8 @@ class D2DAdapterTopLevelStreamingRawSuite extends AnyFlatSpec with ChiselScalate
     }
   }
 
-  it should "top-level clock-gating wake/ack handshake pins are tied-off in this RTL" in {
-    test(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "keep clock and wake handshake outputs tied as defined by RTL" in {
+    simulate(new D2DAdapter(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       for (cycle <- 0 until 16) {

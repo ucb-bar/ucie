@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import edu.berkeley.cs.uciedigital.interfaces._
@@ -22,7 +22,7 @@ import edu.berkeley.cs.uciedigital.sideband._
   *   level-held by RTL until acceptance
   * - no full protocol-side model
   */
-class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTester {
+class LinkSidebandRobustnessSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -114,7 +114,7 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     dut.io.fdi_pl_state_sts.expect(PhyState.reset)
   }
 
-  private def driveToActive(dut: LinkManagementController): Unit = {
+  private def bringLinkToActive(dut: LinkManagementController): Unit = {
     reachParamExchange(dut)
     completeParamExchangeToFdiBringup(dut)
 
@@ -145,10 +145,10 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     }
   }
 
-  behavior of "SidebandProtocolRobustnessSuite"
+  behavior of "LinkSidebandRobustnessSuite"
 
-  it should "RSP_ACTIVE before REQ_ACTIVE: ignore early response and stay non-ACTIVE" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "ignore early RSP_ACTIVE before REQ_ACTIVE phase" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 
@@ -166,8 +166,8 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     }
   }
 
-  it should "duplicate REQ_ACTIVE: not advance twice and remain stable once ACTIVE" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "ignore duplicate REQ_ACTIVE and remain stable after reaching ACTIVE" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
       completeParamExchangeToFdiBringup(dut)
@@ -223,10 +223,10 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     }
   }
 
-  it should "stale ADV_CAP after ACTIVE: no state regression and no unexpected sb_snd" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "ignore stale ADV_CAP once already ACTIVE" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
-      driveToActive(dut)
+      bringLinkToActive(dut)
       dut.io.fdi_pl_state_sts.expect(PhyState.active) // SPEC-DERIVED
 
       pulseSbReceive(dut, SideBandMessage.ADV_CAP)
@@ -242,8 +242,8 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     }
   }
 
-  it should "repeated ready pulses: TX handshake completes once for ADV_CAP" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "treat repeated sb_rdy pulses as one ADV_CAP transmit completion" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
 
@@ -303,8 +303,8 @@ class SidebandProtocolRobustnessSuite extends AnyFlatSpec with ChiselScalatestTe
     }
   }
 
-  it should "multi-cycle receive message: consume REQ_ACTIVE effect once" in {
-    test(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "treat held REQ_ACTIVE receive as one logical event" in {
+    simulate(new LinkManagementController(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
       reachParamExchange(dut)
       completeParamExchangeToFdiBringup(dut)

@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -10,7 +10,7 @@ import scala.util.Random
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 
-class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
+class MainbandForwardRawBasicSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -37,7 +37,7 @@ class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
     dut.clock.step(2)
   }
 
-  private def runScenario(
+  private def runForwardScenario(
     dut: D2DMainbandModule,
     beats: Seq[RawBeat],
     checkStreamId: Boolean,
@@ -159,10 +159,10 @@ class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
     scoreboard.finishAndAssert(acceptedInputCount = ingressTracker.acceptedCount) // SPEC-DERIVED
   }
 
-  behavior of "RawStreamSuite1A"
+  behavior of "MainbandForwardRawBasicSuite"
 
-  it should "deterministic smoke test (4 beats)" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "forward 4 deterministic beats without corruption" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beats = Seq(
@@ -173,12 +173,12 @@ class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
       )
 
       // Stream-preservation checking is intentionally disabled here because rdi_lp_* has no stream field.
-      runScenario(dut, beats, checkStreamId = false)
+      runForwardScenario(dut, beats, checkStreamId = false)
     }
   }
 
-  it should "backpressure test with stable source beat until accepted" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "hold source beat stable under egress backpressure until accepted" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beats = (0 until 12).map { i =>
@@ -187,12 +187,12 @@ class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       val readyPattern: Long => Boolean = cycle => (cycle % 3) != 0
-      runScenario(dut, beats, checkStreamId = false, egressReadyFn = readyPattern)
+      runForwardScenario(dut, beats, checkStreamId = false, egressReadyFn = readyPattern)
     }
   }
 
-  it should "alternating stack IDs with random bursty ready and injected source-holdoff gating check" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "preserve transport under bursty ready and injected source holdoff" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val rng = new Random(123)
@@ -205,7 +205,7 @@ class RawStreamSuite1A extends AnyFlatSpec with ChiselScalatestTester {
       val readyPattern: Long => Boolean = cycle => ((cycle / 2) % 2) == 0
       val injectedHoldoffPattern: Long => Boolean = cycle => cycle >= 6 && cycle <= 8
 
-      runScenario(
+      runForwardScenario(
         dut = dut,
         beats = beats,
         checkStreamId = false,

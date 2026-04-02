@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chiseltest._
+import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.collection.mutable
@@ -23,7 +23,7 @@ final class RdiIngressDriver(
   beats: Seq[RawBeat],
   injectedSourceHoldoff: () => Boolean = () => false,
   gapCyclesBeforeBeat: Int => Int = _ => 0
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var beatIdx: Int = 0
   private var activeBeat: Option[RawBeat] = None
   private var preSendGapRemaining: Int = 0
@@ -79,7 +79,7 @@ final class RdiIngressAcceptanceTracker(
   dut: D2DMainbandModule,
   expectedQ: mutable.Queue[AcceptedBeat],
   expectedForwardedStreamId: Int
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   final case class IngressEdgeObservation(
     sampledAtIngress: Boolean,
     parityFiltered: Boolean,
@@ -146,7 +146,7 @@ final class RdiIngressAcceptanceTracker(
 final class FdiEgressMonitor(
   dut: D2DMainbandModule,
   onObserved: AcceptedBeat => Unit
-) {
+) extends chisel3.simulator.PeekPokeAPI {
   private var nextSeq: Long = 0L
   var observedCount: Long = 0L
 
@@ -182,7 +182,7 @@ final class FdiEgressMonitor(
   }
 }
 
-class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
+class MainbandReverseRawStressSuite extends AnyFlatSpec with ChiselSim {
   private val fdiParams = new FdiParams(width = 8, dllpWidth = 8, sbWidth = 32)
   private val rdiParams = new RdiParams(width = 8, sbWidth = 32)
   private val sbParams = new SidebandParams
@@ -190,8 +190,6 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
 
   private def initDut(dut: D2DMainbandModule): Unit = {
     // Long stress tests use their own bounded while loops.
-    dut.clock.setTimeout(0)
-
     // Keep forward path idle for this reverse-direction suite.
     dut.io.fdi_lp_valid.poke(false.B)
     dut.io.fdi_lp_irdy.poke(false.B)
@@ -211,7 +209,7 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
     dut.clock.step(2)
   }
 
-  private def runScenario(
+  private def runReverseScenario(
     dut: D2DMainbandModule,
     beats: Seq[RawBeat],
     maxCycles: Int = 4000,
@@ -346,11 +344,11 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
     )
   }
 
-  behavior of "RawStreamSuiteRX"
+  behavior of "MainbandReverseRawStressSuite"
 
   // Bug class targeted: long-run ordering/corruption/drop/duplication under deterministic source throttling.
-  it should "long deterministic stress under injected RDI source holdoff" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "sustain long reverse traffic under injected source holdoff" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beatCount = 256
@@ -361,7 +359,7 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       val sourceHoldoffPattern: Long => Boolean = cycle => (cycle % 11) >= 7
-      val stats = runScenario(
+      val stats = runReverseScenario(
         dut = dut,
         beats = beats,
         maxCycles = 12000,
@@ -373,8 +371,8 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // Bug class targeted: repeated payload runs expose off-by-one, accidental duplicate, or dropped-beat issues.
-  it should "handle repeated payload runs without duplicate/drop artifacts" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "avoid duplicate/drop errors across repeated reverse payload runs" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val pA = BigInt("AAAAAAAAAAAAAAAA", 16)
@@ -385,7 +383,7 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
       val payloads = Seq.fill(4)(pA) ++ Seq.fill(4)(pB) ++ Seq.fill(4)(pC) ++ Seq.fill(4)(pB) ++ Seq.fill(4)(pA)
       val beats = payloads.map(p => RawBeat(data = p, streamId = RawStreamIds.Stack0Streaming))
 
-      val stats = runScenario(
+      val stats = runReverseScenario(
         dut = dut,
         beats = beats,
         maxCycles = 5000
@@ -396,8 +394,8 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // Bug class targeted: idle spacing between ingress bursts catches buffering/order bugs around bubble insertion.
-  it should "preserve transport correctness with intentional source gaps between bursts" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "preserve reverse transport across intentional ingress gaps" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beats = (0 until 12).map { i =>
@@ -414,7 +412,7 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
       )
       val gapFn: Int => Int = beatIdx => gapMap.getOrElse(beatIdx, 0)
 
-      val stats = runScenario(
+      val stats = runReverseScenario(
         dut = dut,
         beats = beats,
         maxCycles = 6000,
@@ -426,8 +424,8 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // Bug class targeted: parity-marked reverse ingress beats must be filtered from protocol egress.
-  it should "filter parity-check-marked ingress beats and still report correct egress stream metadata" in {
-    test(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
+  it should "filter parity-marked reverse ingress beats and keep egress accounting consistent" in {
+    simulate(new D2DMainbandModule(fdiParams, rdiParams, sbParams)) { dut =>
       initDut(dut)
 
       val beatCount = 64
@@ -437,7 +435,7 @@ class RawStreamSuiteRX extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       val parityCheckPattern: Long => Boolean = cycle => (cycle % 9) == 4
-      val stats = runScenario(
+      val stats = runReverseScenario(
         dut = dut,
         beats = beats,
         maxCycles = 5000,
