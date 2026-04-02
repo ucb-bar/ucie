@@ -98,10 +98,14 @@ end
   def formatConstantRef(name: String): String = {
     s"`${getConstantName(name)}"
   }
-  def formatWriteReg(addr: String, value: String) = {
-    s"`WRITE_UCIE($addr, $value);\n"
+  def formatWrite(drv: String, addr: String, value: String) = {
+    s"`WRITE($drv, $addr, $value);\n"
   }
-  def formatReadReg(
+  def formatWriteReg(drv: String, addr: String, value: String) = {
+    s"`WRITE_UCIE($drv, $addr, $value);\n"
+  }
+  def formatRead(
+      drv: String,
       outputName: String,
       addr: String,
       declareVar: Boolean = true
@@ -111,18 +115,45 @@ end
       sb.append(s"reg [63:0] $outputName;\n")
 
     }
-    sb.append(s"`READ_UCIE($addr, $outputName);\n")
+    sb.append(s"`READ($drv, $addr, $outputName);\n")
+    sb.toString
+  }
+  def formatReadReg(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String = {
+    val sb = new StringBuilder
+    if (declareVar) {
+      sb.append(s"reg [63:0] $outputName;\n")
+
+    }
+    sb.append(s"`READ_UCIE($drv, $addr, $outputName);\n")
     sb.toString
   }
   def formatAssertEq(
+      drv: String,
       addr: String,
       value: String,
       msg: Option[String] = None
   ): String = {
     msg match {
       case Some(msg) =>
-        f"`EXPECT_UCIE_MSG($addr, $value, \"${Codegen.escapeString(msg)}\");\n"
-      case None => f"`EXPECT_UCIE($addr, $value);\n"
+        f"`EXPECT_MSG($drv, $addr, $value, \"${Codegen.escapeString(msg)}\");\n"
+      case None => f"`EXPECT($drv, $addr, $value);\n"
+    }
+  }
+  def formatUcieAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String = {
+    msg match {
+      case Some(msg) =>
+        f"`EXPECT_UCIE_MSG($drv, $addr, $value, \"${Codegen.escapeString(msg)}\");\n"
+      case None => f"`EXPECT_UCIE($drv, $addr, $value);\n"
     }
   }
   def formatLong(value: Long): String = {
@@ -150,8 +181,11 @@ object Codegen {
 }
 
 class Codegen(f: SystemVerilogFormatter) {
-  def formatWriteNamedReg(addrConst: String, value: String): String = {
-    f.formatWriteReg(f.formatConstantRef(addrConst), value)
+  def formatWriteNamedReg(
+      addrConst: String,
+      value: String
+  ): String = {
+    f.formatWriteReg("regDrv", f.formatConstantRef(addrConst), value)
   }
   def formatRegs(): String = {
     implicit val p = Parameters.empty
@@ -304,21 +338,24 @@ class Codegen(f: SystemVerilogFormatter) {
       formatWriteNamedReg("commonTxFsmRst", f.formatLong(1))
     )
     body.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("txTestState"),
         f.formatConstantRef("txTestStateIdle"),
         msg = Some("TX test state is not idle after reset")
       )
     )
     body.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("txPacketsSent"),
         f.formatLong(0),
         msg = Some("TX packets sent is not 0 after reset")
       )
     )
     body.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("rxPacketsReceived"),
         f.formatLong(0),
         msg = Some("RX packets received is not 0 after reset")
@@ -332,6 +369,7 @@ class Codegen(f: SystemVerilogFormatter) {
     val body = new StringBuilder
     body.append(
       f.formatWriteReg(
+        "regDrv",
         s"${f.formatConstantRef("txctl")} + lane * ${f.formatConstantRef("txctlWidth")} + ofs",
         "v"
       )
@@ -355,6 +393,7 @@ class Codegen(f: SystemVerilogFormatter) {
     val body = new StringBuilder
     body.append(
       f.formatWriteReg(
+        "regDrv",
         s"${f.formatConstantRef("rxctl")} + lane * ${f.formatConstantRef("rxctlWidth")} + ofs",
         "v"
       )
@@ -439,6 +478,7 @@ class Codegen(f: SystemVerilogFormatter) {
       val loopBody = new StringBuilder
       loopBody.append(
         f.formatWriteReg(
+          "regDrv",
           s"${f.formatConstantRef("commonDriverctl")} + 8 * i",
           f.formatConstantRef("enableDriverCtl")
         )
@@ -584,6 +624,7 @@ class Codegen(f: SystemVerilogFormatter) {
     val whileBody = new StringBuilder
     whileBody.append(
       f.formatReadReg(
+        "regDrv",
         "r",
         f.formatConstantRef("rxPacketsReceived"),
         declareVar = true
@@ -595,14 +636,16 @@ class Codegen(f: SystemVerilogFormatter) {
     body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
     body.append(f.formatPrintStmt("All packets received!"))
     body.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("txTestState"),
         f.formatConstantRef("txTestStateDone"),
         msg = Some("TX test state is not done after all packets have been sent")
       )
     )
     body.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("txPacketsSent"),
         f.formatLong(32),
         msg = Some("TX packets sent is not 32 after all data has been sent")
@@ -623,7 +666,8 @@ class Codegen(f: SystemVerilogFormatter) {
       )
     )
     readChunkInnerLoop.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("rxDataChunk"),
         f.formatLong(0xdeadbeefL),
         msg = Some("RX data chunk does not match expected")
@@ -639,7 +683,8 @@ class Codegen(f: SystemVerilogFormatter) {
       )
     )
     readChunkInnerLoop.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("rxDataChunk"),
         f.formatConstantRef("defaultValid"),
         msg = Some("RX valid chunk does not match expected")
@@ -652,7 +697,8 @@ class Codegen(f: SystemVerilogFormatter) {
       )
     )
     readChunkInnerLoop.append(
-      f.formatAssertEq(
+      f.formatUcieAssertEq(
+        "regDrv",
         f.formatConstantRef("rxDataChunk"),
         f.formatConstantRef("defaultTrack"),
         msg = Some("RX track chunk does not match expected")
@@ -660,6 +706,34 @@ class Codegen(f: SystemVerilogFormatter) {
     )
     body.append(f.formatForLoop("ofs", 32, readChunkOuterLoop.toString))
     sb.append(f.formatFn("manual_simple", body.toString))
+    sb.toString
+  }
+
+  def formatTlSimpleLoopbackFn(): String = {
+    val sb = new StringBuilder
+    val body = new StringBuilder
+    body.append(f.formatFnCall("setup_ucie"))
+    body.append(
+      formatWriteNamedReg(
+        "mainbandSel",
+        f.formatLong(1)
+      )
+    )
+    body.append(
+      f.formatWrite(
+        "mbDrv",
+        f.formatLong(0),
+        f.formatLong(0xdeadbeefL)
+      )
+    )
+    body.append(
+      f.formatAssertEq(
+        "mbDrv",
+        f.formatLong(0),
+        f.formatLong(0xdeadbeefL)
+      )
+    )
+    sb.append(f.formatFn("tl_simple", body.toString))
     sb.toString
   }
 
@@ -678,6 +752,7 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.append(formatSetupUcieFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
+    sb.append(formatTlSimpleLoopbackFn())
     sb.toString
   }
 

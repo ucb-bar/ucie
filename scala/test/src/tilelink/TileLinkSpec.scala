@@ -26,18 +26,22 @@ import chisel3.testing.HasTestingDirectory
 import java.nio.file.Paths
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.diplomacy.IdRange
+import freechips.rocketchip.diplomacy.AddressSet
 
 abstract class TestDriver extends ExtModule {
-  val clock = IO(Output(Clock()))
+  val digitalClock = IO(Output(Clock()))
+  val ucieBypassClock = IO(Output(Clock()))
+  val ucieDigitalBypassClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
-  val tlt = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
+  val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
+  val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
   val codegen = new Codegen(new SystemVerilogFormatter)
 
   def setStimulus(name: String, body: String) = setInline(
     s"${name}.sv",
     s"""
-`timescale 1ns/1ps
+`timescale 1ps/100fs
 
 function string basename(string path);
   int idx;
@@ -53,38 +57,43 @@ endfunction
 
 `define UCIE_Q1_BASE 64'h4000
 ${codegen.formatDefines()}
-module ${name}(
-  output reg clock,
-  output reg reset,
-  output reg [63:0] tlt_req_bits_addr,
-  output reg [63:0] tlt_req_bits_data,
-  output reg tlt_req_bits_is_write,
-  output reg tlt_req_valid,
-  input tlt_req_ready,
-  input [63:0] tlt_resp_bits_data,
-  input tlt_resp_valid,
-  output reg tlt_resp_ready
+
+interface tltBus (
+  output reg [63:0] req_bits_addr,
+  output reg [63:0] req_bits_data,
+  output reg req_bits_is_write,
+  output reg req_valid,
+  input req_ready,
+  input [63:0] resp_bits_data,
+  input resp_valid,
+  output reg resp_ready
+);
+endinterface
+
+module TLTDriver(
+  input clock,
+  tltBus intf
 );
   task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx);
     begin
-      tlt_resp_ready = 1'b1;
-      tlt_req_valid = 1'b1;
-      tlt_req_bits_addr = addr;
-      tlt_req_bits_data = data;
-      tlt_req_bits_is_write = is_write;
+      intf.resp_ready = 1'b1;
+      intf.req_valid = 1'b1;
+      intf.req_bits_addr = addr;
+      intf.req_bits_data = data;
+      intf.req_bits_is_write = is_write;
+      for (int i = 0; i < 1000; i++) begin
+        @(posedge clock)
+        if (intf.req_ready) break;
+      end
+      assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
       fork
-        if (!tlt_req_ready) @(posedge tlt_req_ready);
-        repeat(1000) @(posedge clock);
-      join_any
-      assert(tlt_req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
-      fork
-        @(negedge clock) tlt_req_valid = 1'b0;
+        @(negedge clock) intf.req_valid = 1'b0;
         fork
-          if (!tlt_resp_valid) @(posedge tlt_resp_valid);
+          if (!intf.resp_valid) @(posedge intf.resp_valid);
           repeat(1000) @(posedge clock);
         join_any
       join
-      assert(tlt_resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
+      assert(intf.resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
       @(negedge clock);
     end
   endtask
@@ -97,7 +106,7 @@ module ${name}(
   task read(input [63:0] addr, output [63:0] result, input string ctx);
     begin
       op(addr, 64'b0, 1'b0, ctx);
-      result = tlt_resp_bits_data;
+      result = intf.resp_bits_data;
       @(negedge clock);
     end
   endtask
@@ -125,19 +134,83 @@ module ${name}(
       expect_data(`UCIE_Q1_BASE + addr, data, ctx);
     end
   endtask
-  `define FILE_LINE_CTX $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__)
-  `define WRITE_UCIE(addr, data) write_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
-  `define READ_UCIE(addr, result) read_ucie(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
-  `define EXPECT_UCIE(addr, data) expect_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
-  `define WRITE_UCIE_MSG(addr, data, msg) write_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
-  `define READ_UCIE_MSG(addr, result, msg) read_ucie(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
-  `define EXPECT_UCIE_MSG(addr, data, msg) expect_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  initial begin
+    intf.req_bits_addr = 64'b0;
+    intf.req_bits_data = 64'b0;
+    intf.req_bits_is_write = 64'b0;
+    intf.req_valid = 1'b0;
+    intf.resp_ready = 1'b0;
+  end
+endmodule
+
+module ${name}(
+  output reg digitalClock,
+  output reg ucieBypassClock,
+  output reg ucieDigitalBypassClock,
+  output reg reset,
+
+  output reg [63:0] tltReg_req_bits_addr,
+  output reg [63:0] tltReg_req_bits_data,
+  output reg tltReg_req_bits_is_write,
+  output reg tltReg_req_valid,
+  input tltReg_req_ready,
+  input [63:0] tltReg_resp_bits_data,
+  input tltReg_resp_valid,
+  output reg tltReg_resp_ready,
+
+  output reg [63:0] tltMb_req_bits_addr,
+  output reg [63:0] tltMb_req_bits_data,
+  output reg tltMb_req_bits_is_write,
+  output reg tltMb_req_valid,
+  input tltMb_req_ready,
+  input [63:0] tltMb_resp_bits_data,
+  input tltMb_resp_valid,
+  output reg tltMb_resp_ready
+);
+  tltBus tltReg(
+    .req_bits_addr(tltReg_req_bits_addr),
+    .req_bits_data(tltReg_req_bits_data),
+    .req_bits_is_write(tltReg_req_bits_is_write),
+    .req_valid(tltReg_req_valid),
+    .req_ready(tltReg_req_ready),
+    .resp_bits_data(tltReg_resp_bits_data),
+    .resp_valid(tltReg_resp_valid),
+    .resp_ready(tltReg_resp_ready)
+  );
+  tltBus tltMb(
+    .req_bits_addr(tltMb_req_bits_addr),
+    .req_bits_data(tltMb_req_bits_data),
+    .req_bits_is_write(tltMb_req_bits_is_write),
+    .req_valid(tltMb_req_valid),
+    .req_ready(tltMb_req_ready),
+    .resp_bits_data(tltMb_resp_bits_data),
+    .resp_valid(tltMb_resp_valid),
+    .resp_ready(tltMb_resp_ready)
+  );
+  TLTDriver regDrv (.clock(digitalClock), .intf(tltReg));
+  TLTDriver mbDrv(.clock(digitalClock), .intf(tltMb));
+  `define WRITE(drv, addr, data) drv.write(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define READ(drv, addr, result) drv.read(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define EXPECT(drv, addr, data) drv.expect_data(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define WRITE_MSG(drv, addr, data, msg) drv.write(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define READ_MSG(drv, addr, result, msg) drv.read(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define EXPECT_MSG(drv, addr, data, msg) drv.expect_data(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define WRITE_UCIE(drv, addr, data) drv.write_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define READ_UCIE(drv, addr, result) drv.read_ucie(addr, result, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define EXPECT_UCIE(drv, addr, data) drv.expect_ucie(addr, data, $$sformatf("%s:%0d", basename(`__FILE__), `__LINE__))
+  `define WRITE_UCIE_MSG(drv, addr, data, msg) drv.write_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define READ_UCIE_MSG(drv, addr, result, msg) drv.read_ucie(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
+  `define EXPECT_UCIE_MSG(drv, addr, data, msg) drv.expect_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
 ${Codegen.indent(codegen.formatFns())}
-  initial clock = 1'b0;
-  always #1 clock = ~clock;
+  initial digitalClock = 1'b0;
+  initial ucieBypassClock = 1'b0;
+  initial ucieDigitalBypassClock = 1'b0;
+  always #1000 digitalClock = ~digitalClock;
+  always #62.5 ucieBypassClock = ~ucieBypassClock;
+  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
 
   initial begin
-    repeat(100000) @(negedge clock);
+    repeat(100000) @(negedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
@@ -145,14 +218,9 @@ ${Codegen.indent(codegen.formatFns())}
     $$dumpfile("trace.vcd");
     $$dumpvars(0);
     reset = 1'b1;
-    tlt_req_bits_addr = 64'b0;
-    tlt_req_bits_data = 64'b0;
-    tlt_req_bits_is_write = 64'b0;
-    tlt_req_valid = 1'b0;
-    tlt_resp_ready = 1'b0;
-    repeat(5) @(negedge clock);
+    repeat(5) @(negedge digitalClock);
     reset = 1'b0;
-    repeat(5) @(negedge clock);
+    repeat(5) @(negedge digitalClock);
 ${Codegen.indent(body, n = 2)}
     $$display("TEST PASSED");
     $$finish;
@@ -170,13 +238,16 @@ class SimTop[T <: TestDriver](
 ) extends RawModule {
   val drv = Module(driver)
 
-  withClockAndReset(drv.clock, drv.reset) {
+  withClockAndReset(drv.digitalClock, drv.reset) {
     val harness = Module(
       LazyModule(
         new TestHarness
       ).module
     )
-    harness.io <> drv.tlt
+    harness.io.ucieBypassClock := drv.ucieBypassClock
+    harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+    harness.io.reg <> drv.tltReg
+    harness.io.mb <> drv.tltMb
   }
 }
 
@@ -189,9 +260,20 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
   val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
-  val tlt = LazyModule(
+  val tltReg = LazyModule(
     new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
   )
+  val tltMb = LazyModule(
+    new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
+  )
+  val tlRam =
+    LazyModule(
+      new TLRAM(
+        AddressSet(0x0, 0xffffL),
+        beatBytes = TestHarness.beatBytes,
+        cacheable = false
+      )
+    )
   val ucieTL = LazyModule(
     new UcieTL(
       UcieTLParams(includeDefaultModels = includeDefaultModels),
@@ -200,16 +282,24 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   )
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.regNode := tlt.node
+  ucieTL.regNode := tltReg.node
+  tlRam.node := ucieTL.clientNode
+  ucieTL.managerNode := tltMb.node
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
-    val io = IO(new TLTesterIO(TestHarness.tltParams))
+    val io = IO(new Bundle {
+      val ucieBypassClock = Input(Clock())
+      val ucieDigitalBypassClock = Input(Clock())
+      val reg = new TLTesterIO(TestHarness.tltParams)
+      val mb = new TLTesterIO(TestHarness.tltParams)
+    })
 
     clockNode.out(0)._1.clock := clock
     clockNode.out(0)._1.reset := reset
 
-    io <> tlt.module.io
+    io.reg <> tltReg.module.io
+    io.mb <> tltMb.module.io
 
     // Loopback
     ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData
@@ -219,11 +309,11 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := clock
-    ucieTL.module.io.phy.refClkN := (!clock.asBool).asClock
-    ucieTL.module.io.phy.bypassClkP := clock
-    ucieTL.module.io.phy.bypassClkN := (!clock.asBool).asClock
-    ucieTL.module.io.phy.digitalBypassClk := clock
+    ucieTL.module.io.phy.refClkP := DontCare
+    ucieTL.module.io.phy.refClkN := DontCare
+    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
+    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
     ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
@@ -232,18 +322,27 @@ class MmioSimpleTestDriver extends TestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
-`EXPECT_UCIE(`TEST_TARGET, 64'h0);
-`WRITE_UCIE(`TX_DATA_CHUNK_IN0, 64'hdeadbeef);
-`EXPECT_UCIE(`TX_DATA_CHUNK_IN0, 64'hdeadbeef);
+`EXPECT_UCIE(regDrv, `TEST_TARGET, 64'h0);
+`WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
+`EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
           """.trim
   )
 }
 
-class UcieTestDriver extends TestDriver {
+class ManualSimpleTestDriver extends TestDriver {
   setStimulus(
-    "UcieTestDriver",
+    "ManualSimpleTestDriver",
     """
 manual_simple();
+          """.trim
+  )
+}
+
+class TlSimpleTestDriver extends TestDriver {
+  setStimulus(
+    "TlSimpleTestDriver",
+    """
+tl_simple();
           """.trim
   )
 }
@@ -274,9 +373,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         enableWaves()
         // Allow reset to propagate to UCIe via reset synchronizers.
         c.clock.step(cycles = 5)
-        c.io.expect(c.clock, "h4000".U, 0.U)
-        c.io.write(c.clock, "h4100".U, "hdeadbeef".U)
-        c.io.expect(c.clock, "h4100".U, "hdeadbeef".U)
+        c.io.reg.expect(c.clock, "h4000".U, 0.U)
+        c.io.reg.write(c.clock, "h4100".U, "hdeadbeef".U)
+        c.io.reg.expect(c.clock, "h4100".U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }
@@ -293,9 +392,18 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple manual test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Verilator"
+      )
+    }
+
+    it("should support simple TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
       )
     }
 
@@ -311,7 +419,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple manual test using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
       )
@@ -323,7 +431,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       implicit val p = Parameters.empty
       implicit val includeDefaultModels = false
       Utils.simulate(
-        new SimTop(new UcieTestDriver),
+        new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium_with_PHY_analog_models",
         includeVamsModels = true
