@@ -3,6 +3,7 @@ package edu.berkeley.cs.uciedigital.tilelink
 import scala.collection.mutable
 
 import freechips.rocketchip.regmapper.RegField
+import freechips.rocketchip.diplomacy.AddressSet
 import org.chipsalliance.cde.config.Parameters
 import chisel3._
 import chisel3.experimental.BundleLiterals._
@@ -189,7 +190,7 @@ class Codegen(f: SystemVerilogFormatter) {
   }
   def formatRegs(): String = {
     implicit val p = Parameters.empty
-    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), 32))
+    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32))
     val ucie = (new chisel3.stage.phases.Elaborate)
       .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
         val dut = LazyModule(ucie_dut).module

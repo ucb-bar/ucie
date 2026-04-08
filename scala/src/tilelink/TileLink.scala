@@ -27,6 +27,8 @@ import edu.berkeley.cs.uciedigital.phy.macros.PllDebugOutIO
 import freechips.rocketchip.diplomacy.RegionType
 import freechips.rocketchip.diplomacy.TransferSizes
 import freechips.rocketchip.diplomacy.IdRange
+import freechips.rocketchip.diplomacy.BundleBridgeSource
+import testchipip.soc.{ChipletLinkParams, ChipletLinkWrapperInstantiationLike, ChipletLinkWrapper, OffchipSubsystemParams, ChipletIO}
 
 case class UcieTLParams(
     address: BigInt = 0x4000,
@@ -36,13 +38,68 @@ case class UcieTLParams(
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     includeDefaultModels: Boolean = false
-)
+) extends ChipletLinkParams
+ with ChipletLinkWrapperInstantiationLike 
+ {
+  def managerBusWhere = managerWhere
+  def controlManagerBusWhere = Some(managerWhere)
+  def instantiate(params: OffchipSubsystemParams, id: Int)(implicit p: Parameters): ChipletLinkWrapper = LazyModule(new UcieChipletLink(this, params, id))
+ }
 
 case object UcieTLKey extends Field[Option[Seq[UcieTLParams]]](None)
 
-class UcieBumpsIO(numLanes: Int = 16) extends Bundle {
+class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
   val phy = new PhyBumpsIO(numLanes)
   val debug = new DebugBumpsIO
+
+  def tieoff: Unit = {
+    phy.rxData := DontCare
+    phy.rxValid := false.B
+    phy.rxTrack := false.B
+    phy.rxClkP := false.B.asClock
+    phy.rxClkN := false.B.asClock
+    phy.sbRxClk := false.B.asClock
+    phy.sbRxData := DontCare
+    phy.refClkP := false.B.asClock
+    phy.refClkN := false.B.asClock
+    phy.bypassClkP := false.B.asClock
+    phy.bypassClkN := false.B.asClock
+    phy.digitalBypassClk := false.B.asClock
+    phy.pllRdacVref := false.B
+  }
+
+  // Bypass and reference clocks should be connected at top level
+  def connect(io: ChipletIO): Unit = io match {
+    case io: UcieBumpsIO => {
+      phy.rxData      := io.phy.txData
+      phy.rxValid     := io.phy.txValid
+      phy.rxTrack     := io.phy.txTrack
+      phy.rxClkP      := io.phy.txClkP
+      phy.rxClkN      := io.phy.txClkN
+      phy.sbRxClk     := io.phy.sbTxClk
+      phy.sbRxData    := io.phy.sbTxData
+
+      io.phy.rxData   := phy.txData
+      io.phy.rxValid  := phy.txValid
+      io.phy.rxTrack  := phy.txTrack
+      io.phy.rxClkP   := phy.txClkP
+      io.phy.rxClkN   := phy.txClkN
+      io.phy.sbRxClk  := phy.sbTxClk
+      io.phy.sbRxData := phy.sbTxData
+    }
+    case _ => assert(false, s"IO does not match UcieBumpsIO: ${io.getClass}")
+  }
+
+  def loopback: Unit = {
+    // Does this require a delayer?
+    phy.rxData := phy.txData
+    phy.rxValid := phy.txValid
+    phy.rxTrack := phy.txTrack
+    phy.rxClkP := phy.txClkP
+    phy.rxClkN := phy.txClkN
+    phy.sbRxClk := phy.sbTxClk
+    phy.sbRxData := phy.sbTxData
+  }
 }
 
 object MainbandSel extends ChiselEnum {
@@ -466,7 +523,7 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
   }
 }
 
-class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
+class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: Int)(implicit
     p: Parameters
 ) extends LazyModule {
   override lazy val desiredName = "UcieTL"
@@ -483,9 +540,8 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
   val managerNode = TLManagerNode(
     Seq(
       TLSlavePortParameters.v1(
-        Seq(
-          TLSlaveParameters.v1(
-            address = Seq(AddressSet(0x0, 0xffffL)),
+        managers = managerRegion.map { as => TLSlaveParameters.v1(
+            address = AddressSet.misaligned(as.base, as.mask + 1),
             resources = device.reg,
             regionType =
               RegionType.UNCACHED, // Should be changed to CACHED eventually
@@ -495,7 +551,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
             supportsPutPartial = TransferSizes(1, beatBytes),
             fifoId = Some(0)
           )
-        ),
+        },
         beatBytes = beatBytes
       )
     )
@@ -509,7 +565,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
             name = "ucie-client",
             sourceId = IdRange(0, 1),
             requestFifo = true,
-            visibility = Seq(AddressSet(0x0, 0xffffL))
+            //visibility = Seq(AddressSet(0x0, 0xffffL))
           )
         )
       )
@@ -664,7 +720,7 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
   val uciephy = p(UcieTLKey) match {
     case Some(params) => {
       val uciephy =
-        params.map(x => LazyModule(new UcieTL(x, pbus.beatBytes)(p)))
+        params.map(x => LazyModule(new UcieTL(x, Seq(AddressSet(0x0, 0xffffL)), pbus.beatBytes)(p)))
 
       lazy val uciephy_tlbus =
         params.map(x => locateTLBusWrapper(x.managerWhere))
@@ -687,6 +743,21 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
     }
     case None => None
   }
+}
+
+class UcieChipletLink(val params: UcieTLParams, val sys_params: OffchipSubsystemParams, val id: Int)(implicit p: Parameters) extends ChipletLinkWrapper {
+  val ucie = LazyModule(new UcieTL(params, sys_params.managerRegion, sys_params.managerBeatBytes)(p))
+  val client_node = ucie.clientNode
+  val manager_node = ucie.managerNode
+  val control_manager_node = Some(ucie.regNode)
+  val clock_node = Some(ucie.digitalClockNode)
+  val top_IO = BundleBridgeSource(() => new UcieBumpsIO(params.numLanes))
+  override lazy val module = new UcieChipletLinkImpl(this)
+}
+
+class UcieChipletLinkImpl(outer: UcieChipletLink) extends LazyModuleImp(outer) {
+  val io = outer.top_IO.out(0)._1
+  outer.ucie.module.io <> io
 }
 
 class WithUcieTL(params: Seq[UcieTLParams])
