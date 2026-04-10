@@ -466,6 +466,33 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
   }
 }
 
+object UcieTL {
+  val dataBits = 256
+}
+
+class UcieTLBundleA extends Bundle {
+  val opcode = UInt(3.W)
+  val param = UInt(3.W)
+  val size = UInt(3.W)
+  val address = UInt(64.W) // to
+  val mask = UInt((UcieTL.dataBits / 8).W)
+  val data = UInt(UcieTL.dataBits.W)
+  val source = UInt(1.W) // to
+  val corrupt = Bool()
+}
+
+class UcieTLBundleD extends Bundle {
+  // fixed fields during multibeat:
+  val opcode = UInt(3.W)
+  val param = UInt(2.W)
+  val size = UInt(3.W)
+  val data = UInt(UcieTL.dataBits.W)
+  val source = UInt(1.W) // to
+  val sink = UInt(1.W) // from
+  val denied = Bool() // implies corrupt iff *Data
+  val corrupt = Bool()
+}
+
 class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     p: Parameters
 ) extends LazyModule {
@@ -485,7 +512,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       TLSlavePortParameters.v1(
         Seq(
           TLSlaveParameters.v1(
-            address = Seq(AddressSet(0x0, 0xffffL)),
+            address = Seq(AddressSet(0x0, 0xffffffffL)),
             resources = device.reg,
             regionType =
               RegionType.UNCACHED, // Should be changed to CACHED eventually
@@ -507,9 +534,7 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         Seq(
           TLMasterParameters.v1(
             name = "ucie-client",
-            sourceId = IdRange(0, 1),
-            requestFifo = true,
-            visibility = Seq(AddressSet(0x0, 0xffffL))
+            sourceId = IdRange(0, 1)
           )
         )
       )
@@ -578,9 +603,57 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
       val managerTl = managerNode.in(0)._1
+
+      val ucieClientTlD = Wire(new UcieTLBundleD)
+      val ucieManagerTlA = Wire(new UcieTLBundleA)
+
+      require(ucieClientTlD.opcode.getWidth >= clientTl.d.bits.opcode.getWidth)
+      require(ucieClientTlD.param.getWidth >= clientTl.d.bits.param.getWidth)
+      require(ucieClientTlD.size.getWidth >= clientTl.d.bits.size.getWidth)
+      require(ucieClientTlD.data.getWidth >= clientTl.d.bits.data.getWidth)
+      require(ucieClientTlD.source.getWidth >= clientTl.d.bits.source.getWidth)
+      require(ucieClientTlD.sink.getWidth >= clientTl.d.bits.sink.getWidth)
+      require(ucieClientTlD.denied.getWidth >= clientTl.d.bits.denied.getWidth)
+      require(
+        ucieClientTlD.corrupt.getWidth >= clientTl.d.bits.corrupt.getWidth
+      )
+      ucieClientTlD.opcode := clientTl.d.bits.opcode
+      ucieClientTlD.param := clientTl.d.bits.param
+      ucieClientTlD.size := clientTl.d.bits.size
+      ucieClientTlD.data := clientTl.d.bits.data
+      ucieClientTlD.source := clientTl.d.bits.source
+      ucieClientTlD.sink := clientTl.d.bits.sink
+      ucieClientTlD.denied := clientTl.d.bits.denied
+      ucieClientTlD.corrupt := clientTl.d.bits.corrupt
+
+      require(
+        ucieManagerTlA.opcode.getWidth >= managerTl.a.bits.opcode.getWidth
+      )
+      require(ucieManagerTlA.param.getWidth >= managerTl.a.bits.param.getWidth)
+      require(ucieManagerTlA.size.getWidth >= managerTl.a.bits.size.getWidth)
+      require(
+        ucieManagerTlA.address.getWidth >= managerTl.a.bits.address.getWidth
+      )
+      require(ucieManagerTlA.mask.getWidth >= managerTl.a.bits.mask.getWidth)
+      require(ucieManagerTlA.data.getWidth >= managerTl.a.bits.data.getWidth)
+      require(
+        ucieManagerTlA.source.getWidth >= managerTl.a.bits.source.getWidth
+      )
+      require(
+        ucieManagerTlA.corrupt.getWidth >= managerTl.a.bits.corrupt.getWidth
+      )
+      ucieManagerTlA.opcode := managerTl.a.bits.opcode
+      ucieManagerTlA.param := managerTl.a.bits.param
+      ucieManagerTlA.size := managerTl.a.bits.size
+      ucieManagerTlA.address := managerTl.a.bits.address
+      ucieManagerTlA.mask := managerTl.a.bits.mask
+      ucieManagerTlA.data := managerTl.a.bits.data
+      ucieManagerTlA.source := managerTl.a.bits.source
+      ucieManagerTlA.corrupt := managerTl.a.bits.corrupt
+
       val txAInFlight = RegInit(false.B)
-      val rxABuffer = Module(new Queue(chiselTypeOf(clientTl.a.bits), 1))
-      val rxDBuffer = Module(new Queue(chiselTypeOf(managerTl.d.bits), 1))
+      val rxABuffer = Module(new Queue(new UcieTLBundleA, 1))
+      val rxDBuffer = Module(new Queue(new UcieTLBundleD, 1))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock.
@@ -592,8 +665,8 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
       txTlFifo.io.enq.bits.valid := Mux(tlValid, "h0000ffff".U, 0.U)
       txTlFifo.io.enq.bits.data := Mux(
         clientTl.d.valid,
-        Cat(clientTl.d.bits.asUInt, 1.U),
-        Cat(managerTl.a.bits.asUInt, 0.U)
+        Cat(ucieClientTlD.asUInt, 1.U),
+        Cat(ucieManagerTlA.asUInt, 0.U)
       ).asTypeOf(txTlFifo.io.enq.bits.data)
       clientTl.d.ready := txTlFifo.io.enq.ready
       managerTl.a.ready := txTlFifo.io.enq.ready && !clientTl.d.valid && !txAInFlight
@@ -632,8 +705,31 @@ class UcieTL(params: UcieTLParams, beatBytes: Int)(implicit
         }
       }
 
-      clientTl.a <> rxABuffer.io.deq
-      managerTl.d <> rxDBuffer.io.deq
+      clientTl.a <> rxABuffer.io.deq.map(bits => {
+        val tlBundleA = Wire(chiselTypeOf(clientTl.a.bits))
+        tlBundleA.opcode := bits.opcode
+        tlBundleA.param := bits.param
+        tlBundleA.size := bits.size
+        tlBundleA.address := bits.address
+        tlBundleA.mask := bits.mask
+        tlBundleA.data := bits.data
+        tlBundleA.source := bits.source
+        tlBundleA.corrupt := bits.corrupt
+        tlBundleA
+      })
+      managerTl.d <> rxDBuffer.io.deq.map(bits => {
+        val tlBundleD = Wire(chiselTypeOf(managerTl.d.bits))
+        tlBundleD.opcode := bits.opcode
+        tlBundleD.param := bits.param
+        tlBundleD.size := bits.size
+        tlBundleD.data := bits.data
+        tlBundleD.source := bits.source
+        tlBundleD.sink := bits.sink
+        tlBundleD.denied := bits.denied
+        tlBundleD.corrupt := bits.corrupt
+        tlBundleD
+      })
+
       when(managerTl.d.valid && managerTl.d.ready) {
         txAInFlight := false.B
       }
