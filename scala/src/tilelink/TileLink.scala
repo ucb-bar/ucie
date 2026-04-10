@@ -472,9 +472,7 @@ object UcieTL {
 
 class UcieTLBundleA extends Bundle {
   val opcode = UInt(3.W)
-  val param = UInt(
-    List(TLAtomics.width, TLPermissions.aWidth, TLHints.width).max.W
-  ) // amo_opcode || grow perms || hint
+  val param = UInt(3.W)
   val size = UInt(3.W)
   val address = UInt(64.W) // to
   val mask = UInt((UcieTL.dataBits / 8).W)
@@ -486,7 +484,7 @@ class UcieTLBundleA extends Bundle {
 class UcieTLBundleD extends Bundle {
   // fixed fields during multibeat:
   val opcode = UInt(3.W)
-  val param = UInt(TLPermissions.bdWidth.W) // cap perms
+  val param = UInt(2.W)
   val size = UInt(3.W)
   val data = UInt(UcieTL.dataBits.W)
   val source = UInt(1.W) // to
