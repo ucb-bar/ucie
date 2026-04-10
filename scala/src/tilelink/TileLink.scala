@@ -534,7 +534,7 @@ class UcieTLBundleA extends Bundle {
   val address = UInt(64.W) // to
   val mask = UInt((UcieTL.dataBits / 8).W)
   val data = UInt(UcieTL.dataBits.W)
-  val source = UInt(1.W) // to
+  val source = UInt(8.W) // to
   val corrupt = Bool()
 }
 
@@ -544,7 +544,7 @@ class UcieTLBundleD extends Bundle {
   val param = UInt(2.W)
   val size = UInt(3.W)
   val data = UInt(UcieTL.dataBits.W)
-  val source = UInt(1.W) // to
+  val source = UInt(8.W) // to
   val sink = UInt(1.W) // from
   val denied = Bool() // implies corrupt iff *Data
   val corrupt = Bool()
@@ -668,7 +668,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       require(ucieClientTlD.size.getWidth >= clientTl.d.bits.size.getWidth)
       require(ucieClientTlD.data.getWidth >= clientTl.d.bits.data.getWidth)
       require(ucieClientTlD.source.getWidth >= clientTl.d.bits.source.getWidth)
-      require(ucieClientTlD.sink.getWidth >= clientTl.d.bits.sink.getWidth)
       require(ucieClientTlD.denied.getWidth >= clientTl.d.bits.denied.getWidth)
       require(
         ucieClientTlD.corrupt.getWidth >= clientTl.d.bits.corrupt.getWidth
@@ -678,7 +677,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       ucieClientTlD.size := clientTl.d.bits.size
       ucieClientTlD.data := clientTl.d.bits.data
       ucieClientTlD.source := clientTl.d.bits.source
-      ucieClientTlD.sink := clientTl.d.bits.sink
+      ucieClientTlD.sink := clientTl.d.bits.sink(ucieClientTlD.sink.getWidth - 1, 0) // Truncate since sink will always be 0
       ucieClientTlD.denied := clientTl.d.bits.denied
       ucieClientTlD.corrupt := clientTl.d.bits.corrupt
 
