@@ -79,3 +79,5 @@ xrun.log
 out/
 .metals/
 .vscode/
+
+chippy/
