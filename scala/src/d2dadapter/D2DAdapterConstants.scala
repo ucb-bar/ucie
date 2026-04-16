@@ -1,7 +1,6 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-//import chisel3.util._
 import edu.berkeley.cs.uciedigital.sideband._
 import edu.berkeley.cs.uciedigital.interfaces._
 
@@ -37,9 +36,6 @@ object SideBandMessage{
     val RSP_L2: UInt = "b011000".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val RSP_LINKRESET: UInt = "b011001".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val RSP_DISABLED: UInt = "b011100".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
-    val PARITY_FEATURE_REQ: UInt = "b100001".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
-    val PARITY_FEATURE_ACK: UInt = "b110001".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
-    val PARITY_FEATURE_NAK: UInt = "b110010".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val ADV_CAP: UInt = "b100100".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val REGISTER_ACCESS: UInt = "b101000".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
 }
@@ -52,30 +48,7 @@ object StallHandlerWidth{
 
 object StallHandshakeState extends ChiselEnum{
     val IDLE = Value(0x0.U(StallHandlerWidth.STATE_WIDTH))
-    val REQSNT = Value(0x1.U(StallHandlerWidth.STATE_WIDTH))
-    val REQFALL = Value(0x2.U(StallHandlerWidth.STATE_WIDTH))
-    val COMPLETE = Value(0x3.U(StallHandlerWidth.STATE_WIDTH))
-}
-
-// Parity module constants
-
-object ParityGeneratorWidth{
-    val PARITY_N_WIDTH = 3.W
-}
-
-object ParityAmount{
-    val BASESIZE: Int = 64
-    val PARITY_DATA_NBYTE_1: Int = 64
-    val DATA_NBYTE_1: Int = 256 * 256 * 1
-    val PARITY_DATA_NBYTE_2: Int = 64 * 2
-    val DATA_NBYTE_2: Int = 256 * 256 * 2
-    val PARITY_DATA_NBYTE_4: Int = 64 * 4
-    val DATA_NBYTE_4: Int = 256 * 256 * 4
-    val CORRECT_REG_WIDTH = 256.W // 4 * 64 for maximum four 64Bytes parity
-}
-
-object ParityN{
-    val ONE: UInt = "b000".U
-    val TWO: UInt = "b001".U
-    val FOUR: UInt = "b010".U
+    val WAIT_ACK_ASSERT = Value(0x1.U(StallHandlerWidth.STATE_WIDTH))
+    val STALLED = Value(0x2.U(StallHandlerWidth.STATE_WIDTH))
+    val WAIT_ACK_DEASSERT = Value(0x3.U(StallHandlerWidth.STATE_WIDTH))
 }

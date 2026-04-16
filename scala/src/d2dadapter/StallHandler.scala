@@ -1,133 +1,92 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
-import chisel3.util._
-//import chisel3.experimental._
 
 class FDIStallHandlerIO() extends Bundle{
-    // FDI: send request
-    // RDI: receive request and perform actual stall
-    val linkmgmt_stallreq = Input(Bool())// 
-    val linkmgmt_stalldone = Output(Bool())// complete stall
-    val fdi_pl_stallreq = Output(Bool())
-    val fdi_lp_stallack = Input(Bool())
+    val linkStallReq = Input(Bool())
+    val linkStallDone = Output(Bool())// complete stall
+    val plStallReq = Output(Bool())
+    val lpStallAck = Input(Bool())
 }
 
 class RDIStallHandlerIO() extends Bundle{
-    // FDI: send request
-    // RDI: receive request and perform actual stall
-    val mainband_stallreq = Output(Bool())// 
-    val mainband_stalldone = Input(Bool())// complete stall
-    val rdi_pl_stallreq = Input(Bool())
-    val rdi_lp_stallack = Output(Bool())
+    val mainbandStallReq = Output(Bool()) 
+    val mainbandStallDone = Input(Bool())// complete stall
+    val plStallReq = Input(Bool())
+    val lpStallAck = Output(Bool())
 }
 
 class FDIStallHandler() extends Module{
     val io = IO(new FDIStallHandlerIO())
-    val fdi_lp_stallreq_reg = RegInit(false.B)
-    val linkmgmt_stalldone_reg = RegInit(false.B)
+    val stallHandshakeStateReg = RegInit(StallHandshakeState.IDLE)
+    val nextState = WireDefault(stallHandshakeStateReg)
+    val ackSeen = (stallHandshakeStateReg === StallHandshakeState.WAIT_ACK_ASSERT) &&
+        io.lpStallAck
 
-    io.fdi_pl_stallreq := fdi_lp_stallreq_reg
-    io.linkmgmt_stalldone := linkmgmt_stalldone_reg
+    // Keep pl_stallreq asserted until the controller drops its request after
+    // the stall boundary is reached. This lets the state machine transition
+    // while the protocol side remains held stalled.
+    io.plStallReq := stallHandshakeStateReg === StallHandshakeState.WAIT_ACK_ASSERT ||
+        (stallHandshakeStateReg === StallHandshakeState.STALLED && io.linkStallReq)
+    io.linkStallDone := ackSeen ||
+        (stallHandshakeStateReg === StallHandshakeState.STALLED && io.linkStallReq)
 
-    val stall_handshake_state_reg = RegInit(StallHandshakeState.IDLE)
-
-    stall_handshake_state_reg := stall_handshake_state_reg
-    fdi_lp_stallreq_reg := false.B
-    linkmgmt_stalldone_reg := linkmgmt_stalldone_reg
-
-    switch(stall_handshake_state_reg){
+    switch(stallHandshakeStateReg){
         is(StallHandshakeState.IDLE){
-            when(io.linkmgmt_stallreq && ~io.fdi_lp_stallack){
-                fdi_lp_stallreq_reg := true.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := StallHandshakeState.REQSNT
-            }.otherwise{
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := stall_handshake_state_reg
+            when(io.linkStallReq && !io.lpStallAck){
+                nextState := StallHandshakeState.WAIT_ACK_ASSERT
             }
         }
-        is(StallHandshakeState.REQSNT){
-            when(io.fdi_lp_stallack){
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := StallHandshakeState.REQFALL
-            }.otherwise{
-                fdi_lp_stallreq_reg := true.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := stall_handshake_state_reg
+        is(StallHandshakeState.WAIT_ACK_ASSERT){
+            when(io.lpStallAck){
+                nextState := StallHandshakeState.STALLED
             }
         }
-        is(StallHandshakeState.REQFALL){
-            when(~io.fdi_lp_stallack){
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := true.B
-                stall_handshake_state_reg := StallHandshakeState.COMPLETE             
-            }.otherwise{
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := stall_handshake_state_reg                
+        is(StallHandshakeState.STALLED){
+            when(!io.linkStallReq){
+                nextState := StallHandshakeState.WAIT_ACK_DEASSERT
             }
         }
-        is(StallHandshakeState.COMPLETE){
-            when(~io.linkmgmt_stallreq){
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := false.B
-                stall_handshake_state_reg := StallHandshakeState.IDLE            
-            }.otherwise{
-                fdi_lp_stallreq_reg := false.B
-                linkmgmt_stalldone_reg := true.B
-                stall_handshake_state_reg := stall_handshake_state_reg                
+        is(StallHandshakeState.WAIT_ACK_DEASSERT){
+            when(!io.lpStallAck){
+                nextState := StallHandshakeState.IDLE
             }
         }
     }
+
+    stallHandshakeStateReg := nextState
 }
 
 
 class RDIStallHandler() extends Module{
     val io = IO(new RDIStallHandlerIO())
+    val stallHandshakeStateReg = RegInit(StallHandshakeState.IDLE)
+    val nextState = WireDefault(stallHandshakeStateReg)
 
-    val rdi_lp_stallack_reg = RegInit(false.B)
-    val mainband_stallreq_reg = RegInit(false.B)
-    val stall_handshake_state_reg = RegInit(StallHandshakeState.IDLE)
+    io.mainbandStallReq := stallHandshakeStateReg === StallHandshakeState.WAIT_ACK_ASSERT ||
+        stallHandshakeStateReg === StallHandshakeState.STALLED
+    io.lpStallAck := stallHandshakeStateReg === StallHandshakeState.STALLED
 
-    io.rdi_lp_stallack := rdi_lp_stallack_reg
-    io.mainband_stallreq := mainband_stallreq_reg
-
-    switch(stall_handshake_state_reg){
+    switch(stallHandshakeStateReg){
         is(StallHandshakeState.IDLE){
-            when(io.rdi_pl_stallreq){
-                mainband_stallreq_reg := true.B
-                rdi_lp_stallack_reg  := false.B
-                stall_handshake_state_reg := StallHandshakeState.REQSNT
-            }.otherwise{
-                mainband_stallreq_reg := false.B
-                rdi_lp_stallack_reg  := false.B
-                stall_handshake_state_reg := stall_handshake_state_reg
+            when(io.plStallReq){
+                nextState := StallHandshakeState.WAIT_ACK_ASSERT
             }
         }
-        is(StallHandshakeState.REQSNT){
-            when(io.mainband_stalldone){
-                mainband_stallreq_reg := true.B
-                rdi_lp_stallack_reg  := true.B
-                stall_handshake_state_reg := StallHandshakeState.REQFALL
-            }.otherwise{
-                mainband_stallreq_reg := true.B
-                rdi_lp_stallack_reg  := false.B
-                stall_handshake_state_reg := stall_handshake_state_reg
+        is(StallHandshakeState.WAIT_ACK_ASSERT){
+            when(io.mainbandStallDone){
+                nextState := StallHandshakeState.STALLED
             }
         }
-        is(StallHandshakeState.REQFALL){
-            when(~io.rdi_pl_stallreq){
-                mainband_stallreq_reg := false.B
-                rdi_lp_stallack_reg  := false.B
-                stall_handshake_state_reg := StallHandshakeState.IDLE           
-            }.otherwise{
-                mainband_stallreq_reg := true.B
-                rdi_lp_stallack_reg  := true.B
-                stall_handshake_state_reg := stall_handshake_state_reg                
+        is(StallHandshakeState.STALLED){
+            when(!io.plStallReq){
+                nextState := StallHandshakeState.WAIT_ACK_DEASSERT
             }
+        }
+        is(StallHandshakeState.WAIT_ACK_DEASSERT){
+            nextState := StallHandshakeState.IDLE
         }
     }
+
+    stallHandshakeStateReg := nextState
 }
