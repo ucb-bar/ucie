@@ -5,10 +5,13 @@ import scalalib._
 import publish._
 
 object `package` extends ScalaModule, PublishModule {
+  def testchipipDir: os.Path = moduleDir / os.up / os.up / "testchipip"
   def scalaVersion = "2.13.18"
   def publishVersion = "0.0.1"
   def chiselVersion = "7.8.0"
   def artifactName = "ucie"
+
+  def moduleDeps = Seq(testchipip)
 
   def mvnDeps = Seq(
     mvn"org.chipsalliance::chisel:${chiselVersion}",
@@ -33,10 +36,28 @@ object `package` extends ScalaModule, PublishModule {
     )
   )
 
+  object testchipip extends ScalaModule, PublishModule {
+    def publishVersion = "0.0.1"
+    def pomSettings = PomSettings("", "", "", Seq(), VersionControl(), Seq())
+    def scalaVersion = "2.13.18"
+    def sources = Task.Sources(testchipipDir / "src" / "main" / "scala")
+    def resources = Task.Sources(testchipipDir / "src" / "main" / "resources")
+    def mvnDeps = Seq(
+      mvn"org.chipsalliance::chisel:${chiselVersion}",
+      mvn"edu.berkeley.cs::rocketchip:0.0.1",
+      mvn"edu.berkeley.cs::rocketchip-blocks:0.0.1",
+      mvn"edu.berkeley.cs::cde:0.0.1",
+      mvn"edu.berkeley.cs::diplomacy:0.0.1",
+    )
+    def scalacPluginMvnDeps = Seq(
+      mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}",
+    )
+  }
+
   object test extends ScalaTests, TestModule.ScalaTest {
+    def moduleDeps = super.moduleDeps ++ Seq(testchipip)
     def mvnDeps = Seq(
       mvn"org.scalatest::scalatest:3.2.19",
     )
   }
 }
-
