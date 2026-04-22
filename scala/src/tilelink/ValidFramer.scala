@@ -54,6 +54,10 @@ class ValidFramer(
       )
     }
 
+    // printf("nextData: %x\n", nextData.asUInt)
+    // printf("nextData(numLanes): %x\n", nextData(numLanes).asUInt)
+    // printf("nextData(numLanes)(Phy.SerdesRatio - 1, 0): %x\n", nextData(numLanes)(Phy.SerdesRatio - 1, 0).asUInt)
+
     // Find first one.
     hasOne := nextData(numLanes)(
       Phy.SerdesRatio - 1,
