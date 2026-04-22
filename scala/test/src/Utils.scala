@@ -73,8 +73,8 @@ verilator \\
   +define+layer$$Verification$$Assume$$Temporal \\
   +define+layer$$Verification$$Cover$$Temporal \\
   -Wno-fatal \\
-  -CFLAGS "$$CXXFLAGS -std=c++17" \\
-  -LDFLAGS "$$LDFLAGS" \\
+  -CFLAGS "$${CXXFLAGS:- } -std=c++17" \\
+  -LDFLAGS "$${LDFLAGS:- }" \\
   -F ${sourceFilesList.toString} > >(tee -a verilator.out) 2> >(tee -a verilator.err >&2)
 ./simulation > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
 """
