@@ -92,6 +92,9 @@ end
   def breakStmt(): String = {
     "break;\n"
   }
+  def formatWaitCycles(n: Int): String = {
+    s"repeat($n) @(posedge digitalClock);\n"
+  }
   def formatBool(bool: Boolean): String = {
     if (bool) { "1'b1" }
     else { "1'b0" }
@@ -720,6 +723,7 @@ class Codegen(f: SystemVerilogFormatter) {
         f.formatLong(1)
       )
     )
+    body.append(f.formatWaitCycles(32))
     body.append(
       f.formatWrite(
         "mbDrv",

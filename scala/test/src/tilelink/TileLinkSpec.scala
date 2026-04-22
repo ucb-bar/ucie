@@ -74,40 +74,57 @@ module TLTDriver(
   input clock,
   tltBus intf
 );
-  task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx);
+  task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx, output [63:0] resp_data);
     begin
+      bit got_early_resp = 1'b0;
+      bit got_resp = 1'b0;
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
+      // Wait for the request beat to be accepted. Only credit a same-cycle response
+      // for writes (TLRegisterNode-style AccessAck can be combinational with a.ready).
+      // Reads must traverse the network, so any resp_valid at request-accept time is
+      // necessarily a trailing response from a prior op and must be ignored.
       for (int i = 0; i < 1000; i++) begin
-        @(posedge clock)
-        if (intf.req_ready) break;
+        #10;
+        if (intf.req_ready) begin
+          if (is_write && intf.resp_valid) begin
+            got_early_resp = 1'b1;
+            resp_data = intf.resp_bits_data;
+          end
+          break;
+        end
       end
       assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
-      fork
-        @(negedge clock) intf.req_valid = 1'b0;
-        fork
-          if (!intf.resp_valid) @(posedge intf.resp_valid);
-          repeat(1000) @(posedge clock);
-        join_any
-      join
-      assert(intf.resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
-      @(negedge clock);
+      @(posedge clock) intf.req_valid = 1'b0;
+      // Otherwise, wait for the response posedge and sample data at that posedge.
+      if (!got_early_resp || !is_write) begin
+        for (int i = 0; i < 1000; i++) begin
+          @(posedge clock);
+          if (intf.resp_valid) begin
+            got_resp = 1'b1;
+            resp_data = intf.resp_bits_data;
+            break;
+          end
+        end
+      end
+      assert(got_resp || got_early_resp) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
+      // @(negedge clock);
     end
   endtask
   task write(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      op(addr, data, 1'b1, ctx);
-      @(negedge clock);
+      reg [63:0] discard;
+      op(addr, data, 1'b1, ctx, discard);
+      // @(negedge clock);
     end
   endtask
   task read(input [63:0] addr, output [63:0] result, input string ctx);
     begin
-      op(addr, 64'b0, 1'b0, ctx);
-      result = intf.resp_bits_data;
-      @(negedge clock);
+      op(addr, 64'b0, 1'b0, ctx, result);
+      // @(negedge clock);
     end
   endtask
   task expect_data(input [63:0] addr, input [63:0] data, input string ctx);
@@ -210,17 +227,26 @@ ${Codegen.indent(codegen.formatFns())}
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
 
   initial begin
-    repeat(100000) @(negedge digitalClock);
+    repeat(100000) @(posedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
   initial begin
+`ifdef FSDB
+    begin
+      string fsdbfile;
+      if (!$$value$$plusargs("fsdbfile=%s", fsdbfile)) fsdbfile = "waveform.fsdb";
+      $$fsdbDumpfile(fsdbfile);
+      $$fsdbDumpvars(0, SimTop, "+all");
+    end
+`else
     $$dumpfile("trace.vcd");
     $$dumpvars(0);
+`endif
     reset = 1'b1;
-    repeat(5) @(negedge digitalClock);
+    repeat(5) @(posedge digitalClock);
     reset = 1'b0;
-    repeat(5) @(negedge digitalClock);
+    repeat(5) @(posedge digitalClock);
 ${Codegen.indent(body, n = 2)}
     $$display("TEST PASSED");
     $$finish;
@@ -277,6 +303,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   val ucieTL = LazyModule(
     new UcieTL(
       UcieTLParams(includeDefaultModels = includeDefaultModels),
+      Seq(AddressSet(0x0, 0xffffL)),
       TestHarness.beatBytes
     )
   )
@@ -352,7 +379,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), 32))).module,
+        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32))).module,
         args = Array(
           "--target-dir",
           (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
@@ -404,6 +431,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_VCS"
       )
     }
 
