@@ -90,17 +90,18 @@ module TLTDriver(
       for (int i = 0; i < 1000; i++) begin
         #10;
         if (intf.req_ready) begin
-          if (is_write && intf.resp_valid) begin
+          if (intf.resp_valid) begin
             got_early_resp = 1'b1;
             resp_data = intf.resp_bits_data;
           end
           break;
         end
+        @(posedge clock);
       end
       assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
       @(posedge clock) intf.req_valid = 1'b0;
       // Otherwise, wait for the response posedge and sample data at that posedge.
-      if (!got_early_resp || !is_write) begin
+      if (!got_early_resp) begin
         for (int i = 0; i < 1000; i++) begin
           @(posedge clock);
           if (intf.resp_valid) begin
@@ -431,6 +432,24 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should be able to read/write MMIO registers using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new MmioSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_VCS"
+      )
+    }
+
+    it("should support simple manual test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ManualSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_VCS"
       )
     }
 
