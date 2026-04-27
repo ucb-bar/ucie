@@ -35,6 +35,8 @@ case class UcieTLParams(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
     bitCounterWidth: Int = 64,
+    creditCounterSize: Int = 64,
+    tlBufferDepth: Int = 31,
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     includeDefaultModels: Boolean = false
@@ -44,6 +46,8 @@ case class UcieTLParams(
   def managerBusWhere = managerWhere
   def controlManagerBusWhere = Some(managerWhere)
   def instantiate(params: OffchipSubsystemParams, id: Int)(implicit p: Parameters): ChipletLinkWrapper = LazyModule(new UcieChipletLink(this, params, id))
+  assert(isPow2(creditCounterSize), s"Credit counter size must be a power of 2")
+  assert(tlBufferDepth < creditCounterSize / 2, s"TL buffer depth must be less than half of max credits")
  }
 
 case object UcieTLKey extends Field[Option[Seq[UcieTLParams]]](None)
@@ -550,6 +554,22 @@ class UcieTLBundleD extends Bundle {
   val corrupt = Bool()
 }
 
+class UcieTXA(creditBits: Int = 5) extends Bundle {
+  val tl_valid = Bool()
+  val credit_valid = Bool()
+  val credit_a = UInt(creditBits.W)
+  val credit_d = UInt(creditBits.W)
+  val tl = new UcieTLBundleA
+}
+
+class UcieTXD(creditBits: Int = 5) extends Bundle {
+  val tl_valid = Bool()
+  val credit_valid = Bool()
+  val credit_a = UInt(creditBits.W)
+  val credit_d = UInt(creditBits.W)
+  val tl = new UcieTLBundleD
+}
+
 class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: Int)(implicit
     p: Parameters
 ) extends LazyModule {
@@ -718,25 +738,60 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       ucieManagerTlA.source := managerTl.a.bits.source
       ucieManagerTlA.corrupt := managerTl.a.bits.corrupt
 
+      val creditBits = log2Up(params.tlBufferDepth + 1)
+
+      // Credits to return to the partner: first half = A channel, second half = D channel.
+      val aCreditsToReturn = RegInit(0.U(creditBits.W))
+      val dCreditsToReturn = RegInit(0.U(creditBits.W))
+      val creditRetValid = Wire(Bool())
+      val creditRetTimer = RegInit(0.U(7.W)) // Arbitrary width for now
+      val aAvail = Wire(Bool())
+      val dAvail = Wire(Bool())
+
+      creditRetTimer := creditRetTimer + 1.U
+      creditRetValid := (creditRetTimer === 127.U || aCreditsToReturn > 15.U || dCreditsToReturn > 15.U) && regs.module.io.mainbandSel === MainbandSel.tl
+
+      val ucieClientTxD = Wire(new UcieTXD(creditBits))
+      ucieClientTxD.tl_valid := clientTl.d.valid
+      ucieClientTxD.credit_valid := creditRetValid
+      ucieClientTxD.credit_a := aCreditsToReturn
+      ucieClientTxD.credit_d := dCreditsToReturn
+      dontTouch(ucieClientTxD.tl_valid)
+      dontTouch(ucieClientTxD.credit_valid)
+      dontTouch(ucieClientTxD.credit_a)
+      dontTouch(ucieClientTxD.credit_d)
+      ucieClientTxD.tl := ucieClientTlD
+
+      val ucieManagerTxA = Wire(new UcieTXA(creditBits))
+      ucieManagerTxA.tl_valid := managerTl.a.valid
+      ucieManagerTxA.credit_valid := creditRetValid
+      ucieManagerTxA.credit_a := aCreditsToReturn
+      ucieManagerTxA.credit_d := dCreditsToReturn
+      dontTouch(ucieManagerTxA.tl_valid)
+      dontTouch(ucieManagerTxA.credit_valid)
+      dontTouch(ucieManagerTxA.credit_a)
+      dontTouch(ucieManagerTxA.credit_d)
+      ucieManagerTxA.tl := ucieManagerTlA
+
       val (s_idle :: s_a_ready :: s_inflight_A :: s_recv_resp_A :: Nil) = Enum(4)
       val txTlState = RegInit(s_idle)
 
       //val txAInFlight = RegInit(false.B)
-      val rxABuffer = Module(new Queue(new UcieTLBundleA, 1))
-      val rxDBuffer = Module(new Queue(new UcieTLBundleD, 1))
+      val rxABuffer = Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
+      val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock.
       txTlFifo.io.enq.valid := true.B
-      val tlValid = clientTl.d.valid || managerTl.a.valid
+      val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
       txTlFifo.io.enq.bits.clkn := "haaaaaaaa".U
-      txTlFifo.io.enq.bits.valid := Mux(tlValid, "h0000ffff".U, 0.U)
+      txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
       txTlFifo.io.enq.bits.data := Mux(
         clientTl.d.valid,
-        Cat(ucieClientTlD.asUInt, 1.U),
-        Cat(ucieManagerTlA.asUInt, 0.U)
+        Cat(ucieClientTxD.asUInt, 1.U),
+        Cat(ucieManagerTxA.asUInt, 0.U)
       ).asTypeOf(txTlFifo.io.enq.bits.data)
 
       when(txTlState === s_idle && managerTl.a.valid && !clientTl.d.valid && txTlFifo.io.enq.ready) {
@@ -752,8 +807,22 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       //   txTlState := s_idle
       // }
 
-      clientTl.d.ready := txTlFifo.io.enq.ready
-      managerTl.a.ready := txTlFifo.io.enq.ready && !clientTl.d.valid && (txTlState === s_a_ready)
+      clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
+      managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid && (txTlState === s_a_ready)
+
+      // This is maybe not the best way to do this
+      when(rxABuffer.io.deq.fire) {
+        aCreditsToReturn := aCreditsToReturn + 1.U
+      }
+      when(creditRetValid) {
+        aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
+      }
+      when(rxDBuffer.io.deq.fire) {
+        dCreditsToReturn := dCreditsToReturn + 1.U
+      }
+      when(creditRetValid) {
+        dCreditsToReturn := Mux(rxDBuffer.io.deq.fire, 1.U, 0.U)
+      }
 
       // clientTl.d.ready := txTlFifo.io.enq.ready
       // managerTl.a.ready := txTlFifo.io.enq.ready && !clientTl.d.valid && !txAInFlight
@@ -796,28 +865,31 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
 
       clientTl.a <> rxABuffer.io.deq.map(bits => {
         val tlBundleA = Wire(chiselTypeOf(clientTl.a.bits))
-        tlBundleA.opcode := bits.opcode
-        tlBundleA.param := bits.param
-        tlBundleA.size := bits.size
-        tlBundleA.address := bits.address
-        tlBundleA.mask := bits.mask
-        tlBundleA.data := bits.data
-        tlBundleA.source := bits.source
-        tlBundleA.corrupt := bits.corrupt
+        tlBundleA.opcode := bits.tl.opcode
+        tlBundleA.param := bits.tl.param
+        tlBundleA.size := bits.tl.size
+        tlBundleA.address := bits.tl.address
+        tlBundleA.mask := bits.tl.mask
+        tlBundleA.data := bits.tl.data
+        tlBundleA.source := bits.tl.source
+        tlBundleA.corrupt := bits.tl.corrupt
         tlBundleA
       })
+      clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
       managerTl.d <> rxDBuffer.io.deq.map(bits => {
         val tlBundleD = Wire(chiselTypeOf(managerTl.d.bits))
-        tlBundleD.opcode := bits.opcode
-        tlBundleD.param := bits.param
-        tlBundleD.size := bits.size
-        tlBundleD.data := bits.data
-        tlBundleD.source := bits.source
-        tlBundleD.sink := bits.sink
-        tlBundleD.denied := bits.denied
-        tlBundleD.corrupt := bits.corrupt
+        tlBundleD.opcode := bits.tl.opcode
+        tlBundleD.param := bits.tl.param
+        tlBundleD.size := bits.tl.size
+        tlBundleD.data := bits.tl.data
+        tlBundleD.source := bits.tl.source
+        tlBundleD.sink := bits.tl.sink
+        tlBundleD.denied := bits.tl.denied
+        tlBundleD.corrupt := bits.tl.corrupt
         tlBundleD
       })
+      managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
+      dontTouch(managerTl.d.bits.opcode)
 
       // when(managerTl.d.valid && managerTl.d.ready) {
       //   txAInFlight := false.B
@@ -843,6 +915,21 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
           0.U.asTypeOf(phy.io.tx)
         )
       )
+
+      val creditAValid = rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
+      val creditDValid = rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
+
+      val aCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
+      aCreditCounter.io.used := managerTl.a.fire
+      aCreditCounter.io.ret.valid := creditAValid || creditDValid
+      aCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_d)
+      aAvail := aCreditCounter.io.avail
+
+      val dCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
+      dCreditCounter.io.used := clientTl.d.fire
+      dCreditCounter.io.ret.valid := creditAValid || creditDValid
+      dCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_d)
+      dAvail := dCreditCounter.io.avail
     }
   }
 }
