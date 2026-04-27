@@ -78,6 +78,7 @@ module TLTDriver(
     begin
       bit got_early_resp = 1'b0;
       bit got_resp = 1'b0;
+      // @(posedge clock);
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
       intf.req_bits_addr = addr;
@@ -375,6 +376,15 @@ tl_simple();
   )
 }
 
+class TlLongTestDriver extends TestDriver {
+  setStimulus(
+    "TlLongTestDriver",
+    """
+tl_long();
+          """.trim
+  )
+}
+
 class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
@@ -459,6 +469,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVcsSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_VCS"
+      )
+    }
+
+    it("should support long TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlLongTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_TL_test_using_VCS"
       )
     }
 
