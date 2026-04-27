@@ -742,6 +742,39 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.toString
   }
 
+  def formatTlLongLoopbackFn(): String = {
+    val sb = new StringBuilder
+    val body = new StringBuilder
+    body.append(f.formatFnCall("setup_ucie"))
+    body.append(
+      formatWriteNamedReg(
+        "mainbandSel", 
+        f.formatLong(1)
+      )
+    )
+    body.append(f.formatWaitCycles(32))
+    for (i <- 0 until 32) {
+      body.append(
+        f.formatWrite(
+          "mbDrv",
+          f.formatLong(i.toLong * 8L),
+          f.formatLong(i.toLong * 0x0100010001000100L)
+        )
+      )
+    }
+    for (i <- 0 until 32) {
+      body.append(
+        f.formatAssertEq(
+          "mbDrv",
+          f.formatLong(i.toLong * 8L),
+          f.formatLong(i.toLong * 0x0100010001000100L)
+        )
+      )
+    }
+    sb.append(f.formatFn("tl_long", body.toString))
+    sb.toString
+  }
+
   def formatDefines(): String = {
     val sb = new StringBuilder
     sb.append(formatRegs())
@@ -758,6 +791,7 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatTlSimpleLoopbackFn())
+    sb.append(formatTlLongLoopbackFn())
     sb.toString
   }
 
