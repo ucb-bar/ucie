@@ -15,7 +15,9 @@ import edu.berkeley.cs.chippy.{
   TLTester,
   TLTesterIO,
   TLTesterReq,
-  TLTesterResp
+  TLTesterResp,
+  TLDriver,
+  TLRequestDescriptor
 }
 import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
@@ -27,6 +29,8 @@ import java.nio.file.Paths
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.diplomacy.IdRange
 import freechips.rocketchip.diplomacy.AddressSet
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
+import chisel3.stage.DesignAnnotation
 
 abstract class TestDriver extends ExtModule {
   val digitalClock = IO(Output(Clock()))
@@ -347,6 +351,253 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   }
 }
 
+class ScalaTestDriver extends ExtModule {
+  val digitalClock = IO(Output(Clock()))
+  val ucieBypassClock = IO(Output(Clock()))
+  val ucieDigitalBypassClock = IO(Output(Clock()))
+  val reset = IO(Output(Reset()))
+
+  setInline(
+    "ScalaTestDriver.sv",
+    s"""
+`timescale 1ps/100fs
+
+module ScalaTestDriver(
+  output reg digitalClock,
+  output reg ucieBypassClock,
+  output reg ucieDigitalBypassClock,
+  output reg reset
+);
+  initial digitalClock = 1'b0;
+  initial ucieBypassClock = 1'b0;
+  initial ucieDigitalBypassClock = 1'b0;
+  always #1000 digitalClock = ~digitalClock;
+  always #62.5 ucieBypassClock = ~ucieBypassClock;
+  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+
+  initial begin
+    repeat(100000) @(posedge digitalClock);
+    $$fatal(1, "Timeout");
+  end
+
+  initial begin
+`ifdef FSDB
+    begin
+      string fsdbfile;
+      if (!$$value$$plusargs("fsdbfile=%s", fsdbfile)) fsdbfile = "waveform.fsdb";
+      $$fsdbDumpfile(fsdbfile);
+      $$fsdbDumpvars(0, ScalaSimTop, "+all");
+    end
+`else
+    $$dumpfile("trace.vcd");
+    $$dumpvars(0);
+`endif
+    reset = 1'b1;
+    repeat(5) @(posedge digitalClock);
+    reset = 1'b0;
+  end
+endmodule
+""".trim
+  )
+}
+
+class ScalaTestHarness(
+    regReqs: Seq[TLRequestDescriptor],
+    mbReqs: Seq[TLRequestDescriptor],
+    delayCycles: Int = 32,
+    startupDelayCycles: Int = 8
+)(implicit p: Parameters, includeDefaultModels: Boolean = true)
+    extends LazyModule {
+
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  val regDriver = LazyModule(new TLDriver(regReqs))
+  val mbDriver = LazyModule(new TLDriver(mbReqs))
+  val tlRam =
+    LazyModule(
+      new TLRAM(
+        AddressSet(0x0, 0xffffL),
+        beatBytes = TestHarness.beatBytes,
+        cacheable = false
+      )
+    )
+  val ucieTL = LazyModule(
+    new UcieTL(
+      UcieTLParams(includeDefaultModels = includeDefaultModels),
+      Seq(AddressSet(0x0, 0xffffL)),
+      TestHarness.beatBytes
+    )
+  )
+
+  ucieTL.digitalClockNode := clockNode
+  ucieTL.regNode := regDriver.node
+  tlRam.node := ucieTL.clientNode
+  ucieTL.managerNode := mbDriver.node
+
+  lazy val module = new Impl
+  class Impl extends LazyModuleImp(this) {
+    val io = IO(new Bundle {
+      val ucieBypassClock = Input(Clock())
+      val ucieDigitalBypassClock = Input(Clock())
+      val finished = Output(Bool())
+    })
+
+    clockNode.out(0)._1.clock := clock
+    clockNode.out(0)._1.reset := reset
+
+    // Wait a few cycles before starting regDriver, so the PHY's digital reset
+    // synchronizer has time to deassert ucieRst (which clocks the regs module).
+    val startupCounter = RegInit(0.U(log2Up(startupDelayCycles + 1).W))
+    when (startupCounter < startupDelayCycles.U) {
+      startupCounter := startupCounter + 1.U
+    }
+    val startupReady = startupCounter === startupDelayCycles.U
+
+    val delayCounter = RegInit(0.U(log2Up(delayCycles + 1).W))
+    when (regDriver.module.io.finished && delayCounter < delayCycles.U) {
+      delayCounter := delayCounter + 1.U
+    }
+
+    regDriver.module.io.start := startupReady
+    mbDriver.module.io.start := delayCounter === delayCycles.U
+    io.finished := mbDriver.module.io.finished
+
+    when (io.finished) {
+      printf("TEST PASSED\n")
+      chisel3.stop()
+    }
+
+    ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData
+    ucieTL.module.io.phy.rxValid := ucieTL.module.io.phy.txValid
+    ucieTL.module.io.phy.rxTrack := ucieTL.module.io.phy.txTrack
+    ucieTL.module.io.phy.rxClkP := ucieTL.module.io.phy.txClkP
+    ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
+    ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
+    ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
+    ucieTL.module.io.phy.refClkP := DontCare
+    ucieTL.module.io.phy.refClkN := DontCare
+    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
+    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    ucieTL.module.io.phy.pllRdacVref := 0.U
+  }
+}
+
+class ScalaSimTop(
+    harness: => ScalaTestHarness
+)(implicit
+    p: Parameters,
+    includeDefaultModels: Boolean = true
+) extends RawModule {
+  val drv = Module(new ScalaTestDriver)
+
+  withClockAndReset(drv.digitalClock, drv.reset) {
+    val ucie_harness = Module(LazyModule(harness).module)
+    ucie_harness.io.ucieBypassClock := drv.ucieBypassClock
+    ucie_harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+  }
+}
+
+// Mirrors the SystemVerilog setup_ucie() / tl_simple sequence from Codegen.scala,
+// but emits TLRequestDescriptors that drive ScalaTestHarness.regDriver / mbDriver.
+object ScalaTlSimpleSetup {
+  val defaultClkP: BigInt = BigInt(0x55555555L)
+  val defaultClkN: BigInt = BigInt(0xaaaaaaaaL)
+  val defaultValid: BigInt = BigInt(0x0f0f0f0fL)
+  val defaultTrack: BigInt = BigInt(0x55555555L)
+
+  val enableDriverCtl: BigInt = (new DriverCtlIO)
+    .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
+    .litValue
+
+  val defaultSkewCtl: BigInt = (new SkewCtlIO)
+    .Lit(
+      _.dll_en -> true.B,
+      _.ocl -> false.B,
+      _.delay -> 31.U,
+      _.mux_en -> (3 << 6).U,
+      _.band_ctrl -> 1.U,
+      _.mix_en -> 16.U,
+      _.nen_out -> 20.U,
+      _.pen_out -> 22.U
+    )
+    .litValue
+
+  // Elaborate UcieTL once and extract a regmap name -> absolute address map,
+  // mirroring Codegen.formatRegs's elaboration trick.
+  lazy val regAddrMap: Map[String, BigInt] = {
+    implicit val p = Parameters.empty
+    val ucieParams = UcieTLParams()
+    val ucie_dut = new RTLHarness(
+      new UcieTL(ucieParams, Seq(AddressSet(0x0, 0xffffL)), 32)
+    )
+    val ucie = (new chisel3.stage.phases.Elaborate)
+      .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
+        LazyModule(ucie_dut).module
+      }))
+      .collectFirst { case a: DesignAnnotation[ucie_dut.Impl] => a.design }
+      .get
+
+    ucie.regmap.flatMap { case (offset, fields) =>
+      fields.flatMap(_.desc.map(d => (d.name, ucieParams.address + BigInt(offset))))
+    }.toMap
+  }
+
+  lazy val regReqs: Seq[TLRequestDescriptor] = {
+    val params = UcieTLParams()
+    def write(name: String, value: BigInt): TLRequestDescriptor =
+      TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
+
+    val reqs = scala.collection.mutable.Buffer[TLRequestDescriptor]()
+
+    for (lane <- 0 until params.numLanes + 4) {
+      reqs += write(s"txctl_${lane}_dllReset", 0)
+      reqs += write(s"txctl_${lane}_driver", enableDriverCtl)
+      reqs += write(s"txctl_${lane}_skew", defaultSkewCtl)
+      reqs += write(s"rxctl_${lane}_zen", 1)
+      reqs += write(s"rxctl_${lane}_zctl", 0)
+    }
+
+    reqs += write("txClkP", defaultClkP)
+    reqs += write("txClkN", defaultClkN)
+    reqs += write("txTrack", defaultTrack)
+    reqs += write("txValid", defaultValid)
+    reqs += write("rxLfsrValid", defaultValid)
+    reqs += write("commonTxctlDllReset", 0)
+    reqs += write("pllBypassEn", 1)
+    reqs += write("divResetb", 1)
+
+    for (i <- 0 until 6) {
+      reqs += write(s"commonDriverctl_$i", enableDriverCtl)
+    }
+
+    reqs += write("commonTxctlDriver", enableDriverCtl)
+    reqs += write("commonTxctlSkew", defaultSkewCtl)
+
+    // reset_fsms
+    reqs += write("txFsmRst", 1)
+    reqs += write("rxFsmRst", 1)
+    reqs += write("commonTxFsmRst", 1)
+
+    // Switch to TL mainband mode.
+    reqs += write("mainbandSel", 1)
+
+    reqs.toSeq
+  }
+
+  lazy val mbReqs: Seq[TLRequestDescriptor] = Seq(
+    TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
+    TLRequestDescriptor(0, isWrite = false, data = BigInt(0xdeadbeefL))
+  )
+}
+
+class ScalaTlSimpleTestHarness(implicit
+    p: Parameters,
+    includeDefaultModels: Boolean = true
+) extends ScalaTestHarness(
+      regReqs = ScalaTlSimpleSetup.regReqs,
+      mbReqs = ScalaTlSimpleSetup.mbReqs
+    )
+
 class MmioSimpleTestDriver extends TestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
@@ -442,6 +693,33 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple Scala TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple Scala TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_VCS"
+      )
+    }
+
+    it("should support simple Scala TL test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Xcelium"
       )
     }
 

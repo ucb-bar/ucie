@@ -169,8 +169,13 @@ xrun \\
     os.remove.all(sourceDir)
     os.makeDir.all(sourceDir)
     val simDir = workDir / "sim"
+    var topModule: String = "SimTop"
     ChiselStage.emitSystemVerilogFile(
-      dut,
+      {
+        val d = dut
+        topModule = d.getClass.getSimpleName
+        d
+      },
       args = Array(
         "--target-dir",
         sourceDir.toString
@@ -201,7 +206,7 @@ xrun \\
 
     writeSimScript(
       simScript,
-      "SimTop",
+      topModule,
       sourceFilesList,
       os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir) ++ {
         if (includeVamsModels) {
