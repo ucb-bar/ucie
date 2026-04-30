@@ -41,3 +41,23 @@ object `package` extends ScalaModule, PublishModule {
   }
 }
 
+object d2ddv extends ScalaModule {
+  def scalaVersion = "2.13.18"
+  def chiselVersion = "7.8.0"
+
+  def mvnDeps = Seq(
+    mvn"org.chipsalliance::chisel:${chiselVersion}",
+  )
+
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
+  )
+
+  def sources = Task.Sources(
+    millSourcePath / "src" / "interfaces",
+    millSourcePath / "src" / "sideband" / "utils",
+    millSourcePath / "src" / "sideband" / "modules",
+    millSourcePath / "src" / "sideband" / "D2DSidebandChannel.scala",
+    millSourcePath / "src" / "d2dadapter",
+  )
+}
