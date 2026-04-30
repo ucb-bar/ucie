@@ -352,11 +352,16 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
+      val targetDir = Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog"
       ChiselStage.emitSystemVerilogFile(
         new SimTop(new MmioSimpleTestDriver),
         args = Array(
           "--target-dir",
-          (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
+          targetDir.toString
+        ),
+        firtoolOpts = Array(
+          "--repl-seq-mem",
+          s"--repl-seq-mem-file=${targetDir / "UcieTL.mems.conf"}"
         )
       )
     }
