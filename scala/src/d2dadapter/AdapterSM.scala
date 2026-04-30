@@ -18,8 +18,8 @@ class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams) extends Bu
   val rdi_pl_state_sts = Input(RDIState())
   val rdi_pl_inband_pres = Input(Bool())
 
-  val sb_snd = Output(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH.W))
-  val sb_rcv = Input(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH.W))
+  val sb_snd = Output(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH))
+  val sb_rcv = Input(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH))
   val sb_rdy = Input(Bool())
 
   val linkmgmt_stallreq = Output(Bool())

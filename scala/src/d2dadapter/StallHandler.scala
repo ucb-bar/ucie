@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
+import chisel3.util._
 
 class FDIStallHandlerIO() extends Bundle{
     val linkStallReq = Input(Bool())

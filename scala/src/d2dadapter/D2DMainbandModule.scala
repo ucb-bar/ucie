@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
+import chisel3.util._
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 
