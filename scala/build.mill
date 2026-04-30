@@ -54,10 +54,10 @@ object d2ddv extends ScalaModule {
   )
 
   def sources = Task.Sources(
-    millSourcePath / "src" / "interfaces",
-    millSourcePath / "src" / "sideband" / "utils",
-    millSourcePath / "src" / "sideband" / "modules",
-    millSourcePath / "src" / "sideband" / "D2DSidebandChannel.scala",
-    millSourcePath / "src" / "d2dadapter",
+    os.pwd / "src" / "interfaces",
+    os.pwd / "src" / "sideband" / "utils",
+    os.pwd / "src" / "sideband" / "modules",
+    os.pwd / "src" / "sideband" / "D2DSidebandChannel.scala",
+    os.pwd / "src" / "d2dadapter",
   )
 }
