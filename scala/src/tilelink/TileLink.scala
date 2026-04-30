@@ -677,18 +677,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
-    // Capture valid rx data when it arrives
-    // TODO: Proper flow control with credits
-    // val rxDeq = Wire(Decoupled(new RxIO(params.numLanes)))
-    // withClockAndReset(phy.io.clkRst.rxDivClk, phy.io.clkRst.rxDivRst) { // Using tx clock for now because rx is fucked LOL
-    //   val rxQueue = Module(new Queue(new RxIO(params.numLanes), 2))
-    //   rxQueue.io.enq.valid := true.B // Continuous enqueue
-    //   rxQueue.io.enq.bits := phy.io.rx
-    //   rxDeq.valid := rxQueue.io.deq.valid
-    //   rxDeq.bits := rxQueue.io.deq.bits
-    //   rxQueue.io.deq.ready := rxDeq.ready // Assuming async queue is draining quickly enough
-    // }
-
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
       val managerTl = managerNode.in(0)._1
@@ -774,10 +762,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       dontTouch(ucieManagerTxA.credit_d)
       ucieManagerTxA.tl := ucieManagerTlA
 
-      val (s_idle :: s_a_ready :: s_inflight_A :: s_recv_resp_A :: Nil) = Enum(4)
-      val txTlState = RegInit(s_idle)
-
-      //val txAInFlight = RegInit(false.B)
       val rxABuffer = Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
       val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
@@ -795,21 +779,8 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         Cat(ucieManagerTxA.asUInt, 0.U)
       ).asTypeOf(txTlFifo.io.enq.bits.data)
 
-      when(txTlState === s_idle && managerTl.a.valid && !clientTl.d.valid && txTlFifo.io.enq.ready) {
-        txTlState := s_a_ready
-      }
-      when(txTlState === s_a_ready && managerTl.a.fire) {
-        txTlState := s_idle //s_inflight_A
-      }
-      // when(txTlState === s_inflight_A && managerTl.d.fire) {
-      //   txTlState := s_idle
-      // }
-      // when(txTlState === s_recv_resp_A && managerTl.d.fire) {
-      //   txTlState := s_idle
-      // }
-
       clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
-      managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid && (txTlState === s_a_ready)
+      managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid
 
       // This is maybe not the best way to do this
       when(rxABuffer.io.deq.fire) {
@@ -825,12 +796,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         dCreditsToReturn := Mux(rxDBuffer.io.deq.fire, 1.U, 0.U)
       }
 
-      // clientTl.d.ready := txTlFifo.io.enq.ready
-      // managerTl.a.ready := txTlFifo.io.enq.ready && !clientTl.d.valid && !txAInFlight
-      // when(managerTl.a.ready && managerTl.a.valid) {
-      //   txAInFlight := true.B
-      // }
-
       txTlFifo.io.enq_clock := childClock
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
@@ -844,7 +809,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       rxTlFifo.io.enq.valid := regs.module.io.mainbandSel === MainbandSel.tl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
-      //rxDeq.ready := rxTlFifo.io.enq.ready
       rxTlFifo.io.deq <> validFramer.io.phy
       rxTlFifo.io.deq_clock := childClock
       rxTlFifo.io.deq_reset := childReset
@@ -891,10 +855,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       })
       managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
       dontTouch(managerTl.d.bits.opcode)
-
-      // when(managerTl.d.valid && managerTl.d.ready) {
-      //   txAInFlight := false.B
-      // }
 
       val txContClocks = Wire(new TxIO(params.numLanes))
       txContClocks.data := txTlFifo.io.deq.bits.data
