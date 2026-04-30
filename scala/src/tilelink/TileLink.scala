@@ -39,6 +39,7 @@ case class UcieTLParams(
     tlBufferDepth: Int = 31,
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
+    maxInflight: Int = 1,
     includeDefaultModels: Boolean = false
 ) extends ChipletLinkParams
  with ChipletLinkWrapperInstantiationLike 
@@ -610,7 +611,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         Seq(
           TLMasterParameters.v1(
             name = "ucie-client",
-            sourceId = IdRange(0, 1)
+            sourceId = IdRange(0, params.maxInflight)
           )
         )
       )
@@ -752,7 +753,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       creditRetValid := (creditRetTimer === 127.U || aCreditsToReturn > 15.U || dCreditsToReturn > 15.U) && regs.module.io.mainbandSel === MainbandSel.tl
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
-      ucieClientTxD.tl_valid := clientTl.d.valid
+      ucieClientTxD.tl_valid := clientTl.d.fire
       ucieClientTxD.credit_valid := creditRetValid
       ucieClientTxD.credit_a := aCreditsToReturn
       ucieClientTxD.credit_d := dCreditsToReturn
@@ -763,7 +764,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       ucieClientTxD.tl := ucieClientTlD
 
       val ucieManagerTxA = Wire(new UcieTXA(creditBits))
-      ucieManagerTxA.tl_valid := managerTl.a.valid
+      ucieManagerTxA.tl_valid := managerTl.a.fire
       ucieManagerTxA.credit_valid := creditRetValid
       ucieManagerTxA.credit_a := aCreditsToReturn
       ucieManagerTxA.credit_d := dCreditsToReturn
@@ -798,11 +799,11 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         txTlState := s_a_ready
       }
       when(txTlState === s_a_ready && managerTl.a.fire) {
-        txTlState := s_inflight_A
+        txTlState := s_idle //s_inflight_A
       }
-      when(txTlState === s_inflight_A && managerTl.d.fire) {
-        txTlState := s_idle
-      }
+      // when(txTlState === s_inflight_A && managerTl.d.fire) {
+      //   txTlState := s_idle
+      // }
       // when(txTlState === s_recv_resp_A && managerTl.d.fire) {
       //   txTlState := s_idle
       // }
