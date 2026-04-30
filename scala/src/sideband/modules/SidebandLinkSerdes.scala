@@ -63,6 +63,7 @@ class SidebandLinkSerializer(val sbLink_w: Int, val msg_w: Int) extends Module {
     num_beats := 2.U       // messages w/ data  (2 64-bit chunk)
   }
 
+  // TODO: Fix this to use the Ser21 verilog model
   io.out.bits := Mux(out_clk_en, packet(sbLink_w - 1, 0), 0.U)
   io.out.fwClock := Mux(out_clk_en, clock.asUInt, 0.U)
 
@@ -106,7 +107,7 @@ class SidebandLinkSerializer(val sbLink_w: Int, val msg_w: Int) extends Module {
 
       // finished sending current packet, but there is a valid packet
       // ready -- doing so removes a cycle delay between sending packets
-      when (done_sending && new_packet_valid) {
+      when(done_sending && new_packet_valid) {
         beat_count := 0.U
         io.in.ready := true.B
         packet := io.in.bits
@@ -167,6 +168,8 @@ class SidebandLinkDeserializer(val sbLink_w: Int, val msg_w: Int, val des_timeou
   //    If it does come, then counter_prev == max_bits, and counter == 0.
   val neg_fw_clock = (!io.in.fwClock).asClock    
 
+
+  // TODO: Fix this so that bit are shuttled over with async fifo instead of 2ff sync
   val (async_valid_data, async_data_reg, async_idle_status) = 
   withClockAndReset(neg_fw_clock, reset.asAsyncReset) {
 

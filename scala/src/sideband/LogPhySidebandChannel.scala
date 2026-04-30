@@ -4,6 +4,7 @@
   Contains a SidebandInterfaceNode to facilitate communication over RDI, SidebandSwitch to route
   packets and SidebandLinkNode to facilitate communication over physical link.
 */
+
 package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
@@ -19,6 +20,7 @@ class LogPhySidebandChannel(
       val out = Valid(UInt(rdiNcWidth.W))
       val txCreditReturn = Input(Bool())
       val rxCreditReturn = Output(Bool()) 
+      val activity = Output(Bool())
     }
     val layer = new Bundle {
       val in = Flipped(Decoupled(UInt(sbMsgWidth.W)))
@@ -44,6 +46,8 @@ class LogPhySidebandChannel(
       val ctrl = new Bundle {
         val txMode = Input(SBRxTxMode())
         val rxMode = Input(SBRxTxMode())
+        val freezeAcceptingPackets = Input(Bool())
+        val allPacketsSent = Output(Bool())
       }
     }
   })
@@ -58,6 +62,7 @@ class LogPhySidebandChannel(
 
   // IOs for module
   io.rdi.rxCreditReturn := rdiIntfNode.io.rxCreditReturn
+  io.rdi.activity := io.rdi.in.valid || io.rdi.out.valid
   io.layer.status.sbParityErr := rdiIntfNode.io.sbParityErr || linkNode.io.err.sbParityErr
   io.layer.status.rxPriorityQueuesFull := rdiIntfNode.io.rxPriorityQueuesFull || 
                                           linkNode.io.err.rxPriorityQueuesFull
@@ -68,6 +73,8 @@ class LogPhySidebandChannel(
 
   io.link.out.bits := linkNode.io.txOut.bits
   io.link.out.fwClock := linkNode.io.txOut.fwClock
+
+  io.link.ctrl.allPacketsSent := linkNode.io.ctrl.allPacketsSent
    
   // IOs for SidebandInterfaceNode
   rdiIntfNode.io.txCreditReturn := io.rdi.txCreditReturn
@@ -87,6 +94,7 @@ class LogPhySidebandChannel(
   linkNode.io.rxIn.fwClock := io.link.in.fwClock  
   linkNode.io.ctrl.txMode := io.link.ctrl.txMode
   linkNode.io.ctrl.rxMode := io.link.ctrl.rxMode  
+  linkNode.io.ctrl.freezeAcceptingPackets := io.link.ctrl.freezeAcceptingPackets
   
 
   // TODO: Maybe add buffers for tx and rx packets to/from the layer, might cause issues with

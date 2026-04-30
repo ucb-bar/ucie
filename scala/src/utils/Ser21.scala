@@ -11,5 +11,5 @@ class Ser21 extends BlackBox with HasBlackBoxResource {
     val dout = Output(UInt(1.W))
   })
 
-  // addResource("/vsrc/Ser21.v")
+  addResource("/vsrc/Ser21.v")
 }

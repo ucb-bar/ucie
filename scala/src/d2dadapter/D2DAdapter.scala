@@ -1,8 +1,11 @@
 package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
+import circt.stage.ChiselStage
+import chisel3.util._
 import edu.berkeley.cs.uciedigital.sideband._
 import edu.berkeley.cs.uciedigital.interfaces._
+
 
 class D2DAdapterIO (val fdiParams: FdiParams, val rdiParams: RdiParams) extends Bundle {
     val fdi = Flipped(new Fdi(fdiParams))
@@ -13,8 +16,8 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
                  val sbParams: SidebandParams) extends Module {
     val io = IO(new D2DAdapterIO(fdiParams, rdiParams))
 
-    assert(fdiParams.width == rdiParams.nBytes)
-    assert(fdiParams.sbWidth == rdiParams.ncWidth)
+    assert(fdiParams.nBytes == rdiParams.nBytes)
+    assert(fdiParams.ncWidth == rdiParams.ncWidth)
 
     val linkManager = Module(new AdapterSM(fdiParams, rdiParams, sbParams))
     val fdiStallHandler = Module(new FDIStallHandler())
@@ -22,30 +25,46 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
 
     val d2dSideband = Module(new D2DSidebandModule(fdiParams, sbParams))
     val d2dMainband = Module(new D2DMainbandModule(fdiParams, rdiParams, sbParams))
+    val rdiClkAckReg = RegInit(false.B)
+    val fdiWakeAckReg = RegInit(false.B)
+    val fdiLpStateReqAsRdi = io.fdi.lpStateReq.asUInt.asTypeOf(RDIStateReq())
+    val fdiPlStateSts = linkManager.io.fdi_pl_state_sts.asUInt.asTypeOf(FDIState())
+
+    io.fdi.lclk := DontCare
+    io.rdi.lclk := DontCare
 
     // Default protocol-facing status outputs derived from RDI.
     io.fdi.lclk := clock.asBool
     io.fdi.plSpeedmode := io.rdi.plSpeedmode
     io.fdi.plMaxSpeedmode := io.rdi.plMaxSpeedmode
     io.fdi.plLnkCfg := io.rdi.plLnkCfg
-    io.fdi.plStateSts := linkManager.io.fdi_pl_state_sts
+    io.fdi.plStateSts := fdiPlStateSts
     io.fdi.plInbandPres := linkManager.io.fdi_pl_inband_pres
     io.fdi.plNfError := io.rdi.plNfError
     io.fdi.plTrainError := io.rdi.plTrainError
     io.fdi.plError := io.rdi.plError
     io.fdi.plCError := io.rdi.plCError
     io.fdi.plPhyInRecenter := io.rdi.plPhyInRecenter
-    io.fdi.plClkReq := io.rdi.plClkReq
-    io.fdi.plWakeAck := io.rdi.plWakeAck
+    io.fdi.plProtocol := FDIProtocol.streamingNoManagementTransport
+    io.fdi.plProtocolFlitFmt := FDIFlitFormat.rawFormat
+    io.fdi.plProtocolVld :=
+      linkManager.io.fdi_pl_inband_pres ||
+      (linkManager.io.fdi_pl_state_sts === RDIState.active) ||
+      (linkManager.io.fdi_pl_state_sts === RDIState.retrain)
+    io.fdi.plRxActiveReq := linkManager.io.fdi_pl_rx_active_req
+    io.fdi.plClkReq := true.B
 
-    io.rdi.lclk := clock.asBool
-    io.rdi.lpClkAck := true.B
+    fdiWakeAckReg := io.fdi.lpWakeReq
+    io.fdi.plWakeAck := fdiWakeAckReg
+
+    rdiClkAckReg := io.rdi.plClkReq
+    io.rdi.lpClkAck := rdiClkAckReg
     io.rdi.lpWakeReq := true.B
 
     // Link management controller.
-    linkManager.io.fdi_lp_state_req := io.fdi.lpStateReq
+    linkManager.io.fdi_lp_state_req := fdiLpStateReqAsRdi
     linkManager.io.fdi_lp_linkerror := io.fdi.lpLinkError
-    linkManager.io.fdi_lp_rx_active_sts := d2dMainband.io.state.rxActiveStatus
+    linkManager.io.fdi_lp_rx_active_sts := io.fdi.lpRxActiveSts
 
     io.rdi.lpLinkError := linkManager.io.rdi_lp_linkerror
     io.rdi.lpStateReq := linkManager.io.rdi_lp_state_req
@@ -89,6 +108,7 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
     // Mainband.
     d2dMainband.io.state.d2dState := linkManager.io.fdi_pl_state_sts
     d2dMainband.io.state.rxActiveReq := linkManager.io.fdi_pl_rx_active_req
+    d2dMainband.io.state.rxActiveSts := io.fdi.lpRxActiveSts
 
     d2dMainband.io.fdi.lpIrdy := io.fdi.lpIrdy
     d2dMainband.io.fdi.lpValid := io.fdi.lpValid
@@ -104,4 +124,19 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
     d2dMainband.io.rdi.plValid := io.rdi.plValid
     d2dMainband.io.rdi.plData := io.rdi.plData
 
+}
+
+
+object MainD2DAdapter extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new D2DAdapter(new FdiParams(64, 32), RdiParams(64, 32), new SidebandParams()),
+    args = Array("-td", "./generatedVerilog/logphy"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "-g",
+      "--disable-all-randomization",
+      "--strip-debug-info",
+      "--lowering-options=disallowLocalVariables"
+    ),
+  )
 }

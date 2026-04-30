@@ -3,12 +3,14 @@
 
   pl_* indicates Physical Layer -> Die-to-Die Adapter
   lp_* indicates Die-to-Die Adapter -> Physical Layer
+
+  NOTE: Signal directions are relative to the Logical PHY
 */
 package edu.berkeley.cs.uciedigital.interfaces
 
 import chisel3._
 
-case class RdiParams(nBytes: Int, ncWidth: Int) 
+case class RdiParams(nBytes: Int, ncWidth: Int)
 
 class Rdi(params: RdiParams) extends Bundle {
   val lclk = Input(Bool())

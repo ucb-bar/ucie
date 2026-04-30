@@ -20,18 +20,18 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
     val io = IO(new Bundle {
         val sb = new D2DSidebandModuleIO()
         val rdi = new Bundle{
-            val plCfg = Input(UInt(fdiParams.sbWidth.W))
+            val plCfg = Input(UInt(fdiParams.ncWidth.W))
             val plCfgVld = Input(Bool())
             val plCfgCrd = Input(Bool())
-            val lpCfg = Output(UInt(fdiParams.sbWidth.W))
+            val lpCfg = Output(UInt(fdiParams.ncWidth.W))
             val lpCfgVld = Output(Bool())
             val lpCfgCrd = Output(Bool())
         }
         val fdi = new Bundle {
-            val plCfg = Output(UInt(fdiParams.sbWidth.W))
+            val plCfg = Output(UInt(fdiParams.ncWidth.W))
             val plCfgVld = Output(Bool())
             val plCfgCrd = Input(Bool())
-            val lpCfg = Input(UInt(fdiParams.sbWidth.W))
+            val lpCfg = Input(UInt(fdiParams.ncWidth.W))
             val lpCfgVld = Input(Bool())
             val lpCfgCrd = Output(Bool())
         }
@@ -43,8 +43,8 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
     val sidebandChannel = Module(new D2DSidebandChannel(
         sbMsgWidth = sbParams.sbNodeMsgWidth,
         sbLinkWidth = sbParams.sbLinkWidth,
-        fdiNcWidth = fdiParams.sbWidth,
-        rdiNcWidth = fdiParams.sbWidth,
+        fdiNcWidth = fdiParams.ncWidth,
+        rdiNcWidth = fdiParams.ncWidth,
         numCredits = sbParams.maxCrd,
         queueDepths = SidebandPriorityQueueDepths()
     ))

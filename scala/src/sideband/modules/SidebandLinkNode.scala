@@ -45,6 +45,8 @@ class SidebandLinkNode(sbMsgWidth: Int, sbLinkWidth: Int, numCredits: Int, desTi
     val ctrl = new Bundle {
       val txMode = Input(SBRxTxMode())
       val rxMode = Input(SBRxTxMode())
+      val freezeAcceptingPackets = Input(Bool())
+      val allPacketsSent = Output(Bool())
     }
   })  
 
@@ -56,7 +58,14 @@ class SidebandLinkNode(sbMsgWidth: Int, sbLinkWidth: Int, numCredits: Int, desTi
   // Minimizes potentially large combinational path for serializer ready signal
   val skidBuffer = Module(new SkidBuffer(sbMsgWidth)) 
   
-  io.txIn <> skidBuffer.io.in
+  io.ctrl.allPacketsSent := io.ctrl.freezeAcceptingPackets && 
+                            !skidBuffer.io.out.valid &&
+                            serializer.io.in.ready
+
+  skidBuffer.io.in.valid := io.txIn.valid && !io.ctrl.freezeAcceptingPackets
+  skidBuffer.io.in.bits  := io.txIn.bits
+  io.txIn.ready := skidBuffer.io.in.ready && !io.ctrl.freezeAcceptingPackets
+
   skidBuffer.io.out.ready := serializer.io.in.ready
   
   // Parity Set Logic -- set parity before serializing

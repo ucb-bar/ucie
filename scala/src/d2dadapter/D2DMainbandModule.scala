@@ -12,7 +12,7 @@ class D2DMainbandStateIO(
 ) extends Bundle {
   val d2dState = Input(RDIState())
   val rxActiveReq = Input(Bool())
-  val rxActiveStatus = Output(Bool())
+  val rxActiveSts = Input(Bool())
   val mainbandStallReq = Input(Bool())
   val mainbandStallDone = Output(Bool())
 }
@@ -43,17 +43,17 @@ class D2DMainbandModule(
       // Protocol -> Adapter path.
       val lpIrdy = Input(Bool())
       val lpValid = Input(Bool())
-      val lpData = Input(Bits((8 * fdiParams.width).W))
+      val lpData = Input(Bits((8 * fdiParams.nBytes).W))
       val plTrdy = Output(Bool())
 
       // Adapter -> Protocol path.
       val plValid = Output(Bool())
-      val plData = Output(Bits((8 * fdiParams.width).W))
+      val plData = Output(Bits((8 * fdiParams.nBytes).W))
     }
   })
 
   // Base TX buffer: Protocol -> Adapter -> Physical
-  val dataBuffSntReg = Reg(Bits((8 * fdiParams.width).W))
+  val dataBuffSntReg = Reg(Bits((8 * fdiParams.nBytes).W))
   val dataBuffSntFillReg = RegInit(false.B)
   val dataBuffRcvReg = Reg(Bits((8 * rdiParams.nBytes).W))
   val dataBuffRcvFillReg = RegInit(false.B)
@@ -122,15 +122,10 @@ class D2DMainbandModule(
 
   // RX Control
   val rxCaptureEnabled =
-    (io.state.d2dState === RDIState.active) && io.state.rxActiveReq
+    (io.state.d2dState === RDIState.active) &&
+    io.state.rxActiveReq &&
+    io.state.rxActiveSts
   val rxBeatAcceptedFromRdi = io.rdi.plValid && rxCaptureEnabled
-  val rxActiveStatusReg = RegInit(false.B)
-  when(io.state.rxActiveReq) {
-    rxActiveStatusReg := true.B
-  }.elsewhen(!dataBuffRcvFillReg) {
-    rxActiveStatusReg := false.B
-  }
-  io.state.rxActiveStatus := rxActiveStatusReg
 
   // RX datapath: Physical -> Adapter -> Protocol
   io.fdi.plData := dataBuffRcvReg

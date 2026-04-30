@@ -4,6 +4,7 @@
   Contains a SidebandInterfaceNode to facilitate communication over FDI, SidebandSwitch to route
   packets.
 */
+
 package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
