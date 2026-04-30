@@ -97,20 +97,28 @@ module ucie_d2d_dv_top;
     fdi.drive_idle();
     rdi.drive_idle();
     reset = 1'b1;
-    repeat (5) @(posedge clock);
+    repeat (5) begin
+      @(posedge clock);
+    end
     reset = 1'b0;
 
     rdi.plInbandPres = 1'b1;
-    repeat (5) @(posedge clock);
+    repeat (5) begin
+      @(posedge clock);
+    end
     rdi.plStateSts = RDI_STATE_ACTIVE;
-    repeat (20) @(posedge clock);
+    repeat (20) begin
+      @(posedge clock);
+    end
 
     $display("D2D DV smoke completed");
     $finish;
   end
 
   initial begin
-    repeat (1000) @(posedge clock);
+    repeat (1000) begin
+      @(posedge clock);
+    end
     $fatal(1, "D2D DV smoke timeout");
   end
 endmodule

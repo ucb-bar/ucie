@@ -19,6 +19,7 @@ VCS_OPTS ?= \
 	+lint=all,noVCDE,noONGS,noUI \
 	+vcs+lic+wait \
 	-debug_access+all \
+	-Mdir=$(SIM_DIR)/csrc \
 	-kdb \
 	-lca
 
@@ -31,19 +32,27 @@ DV_SRCS ?= \
 RTL_FILELIST := $(SIM_DIR)/rtl.f
 SIMV := $(SIM_DIR)/simv
 
-.PHONY: elab filelist vcs run clean
+.PHONY: elab force-elab vcs run clean
 
 elab:
+	@if [ -f "$(GEN_DIR)/$(ELAB_TOP).sv" ]; then \
+		echo "Using existing elaborated RTL in $(GEN_DIR). Run 'make force-elab' to regenerate."; \
+	else \
+		$(MAKE) force-elab; \
+	fi
+
+force-elab:
 	cd $(SCALA_DIR) && ./mill -i d2ddv.runMain $(ELAB_MAIN) \
 		--target-dir $(GEN_DIR) \
 		--data-bytes $(DATA_BYTES) \
 		--sideband-width $(SIDEBAND_WIDTH)
 
-filelist: elab
+$(RTL_FILELIST): elab
 	mkdir -p $(SIM_DIR)
-	find $(GEN_DIR) -type f \( -name '*.sv' -o -name '*.v' \) | sort > $(RTL_FILELIST)
+	find $(GEN_DIR) -type f \( -name '*.sv' -o -name '*.v' \) \
+		! -path '$(GEN_DIR)/verification/*' | sort > $(RTL_FILELIST)
 
-vcs: filelist
+vcs: $(RTL_FILELIST)
 	$(VCS) $(VCS_OPTS) \
 		-f $(RTL_FILELIST) \
 		$(DV_SRCS) \
