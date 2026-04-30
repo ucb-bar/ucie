@@ -405,13 +405,14 @@ class ScalaTestHarness(
     regReqs: Seq[TLRequestDescriptor],
     mbReqs: Seq[TLRequestDescriptor],
     delayCycles: Int = 32,
-    startupDelayCycles: Int = 8
+    startupDelayCycles: Int = 8,
+    mbMaxInflight: Int = 1
 )(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
   val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val regDriver = LazyModule(new TLDriver(regReqs))
-  val mbDriver = LazyModule(new TLDriver(mbReqs))
+  val mbDriver = LazyModule(new TLDriver(mbReqs, mbMaxInflight))
   val tlRam =
     LazyModule(
       new TLRAM(
@@ -422,7 +423,10 @@ class ScalaTestHarness(
     )
   val ucieTL = LazyModule(
     new UcieTL(
-      UcieTLParams(includeDefaultModels = includeDefaultModels),
+      UcieTLParams(
+        includeDefaultModels = includeDefaultModels,
+        maxInflight = mbMaxInflight
+      ),
       Seq(AddressSet(0x0, 0xffffL)),
       TestHarness.beatBytes
     )
@@ -598,6 +602,37 @@ class ScalaTlSimpleTestHarness(implicit
       mbReqs = ScalaTlSimpleSetup.mbReqs
     )
 
+// 32 writes + 32 reads, mirroring formatTlLongLoopbackFn from Codegen.scala.
+object ScalaTlLongSetup {
+  val pattern: BigInt = BigInt(0x0100010001000100L)
+  lazy val mbReqs: Seq[TLRequestDescriptor] = {
+    val writes = (0 until 32).map { i =>
+      TLRequestDescriptor(
+        BigInt(i) * 8,
+        isWrite = true,
+        data = BigInt(i) * pattern
+      )
+    }
+    val reads = (0 until 32).map { i =>
+      TLRequestDescriptor(
+        BigInt(i) * 8,
+        isWrite = false,
+        data = BigInt(i) * pattern
+      )
+    }
+    writes ++ reads
+  }
+}
+
+class ScalaTlLongTestHarness(implicit
+    p: Parameters,
+    includeDefaultModels: Boolean = true
+) extends ScalaTestHarness(
+      regReqs = ScalaTlSimpleSetup.regReqs,
+      mbReqs = ScalaTlLongSetup.mbReqs,
+      mbMaxInflight = 32
+    )
+
 class MmioSimpleTestDriver extends TestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
@@ -720,6 +755,33 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new ScalaSimTop(new ScalaTlSimpleTestHarness),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Xcelium"
+      )
+    }
+
+    it("should support long Scala TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestHarness),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support long Scala TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestHarness),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_VCS"
+      )
+    }
+
+    it("should support long Scala TL test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestHarness),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Xcelium"
       )
     }
 
