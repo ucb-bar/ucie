@@ -9,7 +9,7 @@ SIDEBAND_WIDTH ?= 32
 
 ELAB_MAIN ?= edu.berkeley.cs.uciedigital.d2dadapter.D2DAdapterDvElaborate
 ELAB_TOP ?= D2DAdapterDvTop
-TB_TOP ?= $(ELAB_TOP)
+TB_TOP ?= ucie_d2d_dv_top
 
 VCS ?= vcs -full64
 VCS_OPTS ?= \
@@ -22,7 +22,12 @@ VCS_OPTS ?= \
 	-kdb \
 	-lca
 
-DV_SRCS ?=
+DV_SRCS ?= \
+	$(UCIE_ROOT)/dv/d2d/tb/ucie_d2d_dv_pkg.sv \
+	$(UCIE_ROOT)/dv/d2d/tb/ucie_d2d_fdi_if.sv \
+	$(UCIE_ROOT)/dv/d2d/tb/ucie_d2d_rdi_if.sv \
+	$(UCIE_ROOT)/dv/d2d/tb/ucie_d2d_smoke_checkers.sv \
+	$(UCIE_ROOT)/dv/d2d/tb/ucie_d2d_dv_top.sv
 RTL_FILELIST := $(SIM_DIR)/rtl.f
 SIMV := $(SIM_DIR)/simv
 

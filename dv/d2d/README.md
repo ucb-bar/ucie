@@ -42,6 +42,10 @@ Run it:
 make run
 ```
 
+By default, VCS compiles the emitted `D2DAdapterDvTop` under the stable
+SystemVerilog wrapper `ucie_d2d_dv_top`. The wrapper exposes fixed `fdi` and
+`rdi` interface instances for drivers, monitors, and SVA checkers.
+
 Override widths as needed:
 
 ```bash
@@ -50,8 +54,6 @@ make elab DATA_BYTES=64 SIDEBAND_WIDTH=32
 
 ## Next Integration Step
 
-After `make elab` succeeds, inspect the emitted `D2DAdapterDvTop` port list in
-`../../build/d2d-dv/generated/D2DAdapterDvTop.sv`. The stable SV wrapper and
-FDI/RDI interfaces should connect to those emitted port names. Keep tests and
-assertions pointed at the wrapper/interface signals rather than generated
-internal hierarchy.
+Add new tests by extending or replacing `dv/d2d/tb/ucie_d2d_dv_top.sv`, or by
+adding extra files through `DV_SRCS`. Keep tests and assertions pointed at the
+wrapper/interface signals rather than generated internal hierarchy.

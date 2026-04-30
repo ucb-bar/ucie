@@ -58,6 +58,7 @@ object `package` extends ScalaModule, PublishModule {
       "src/sideband/utils",
       "src/sideband/modules",
       "src/sideband/D2DSidebandChannel.scala",
+      "src/utils/SkidBuffer.scala",
       "src/d2dadapter",
     )
   }

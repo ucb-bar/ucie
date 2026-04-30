@@ -24,6 +24,7 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
     val d2dMainband = Module(new D2DMainbandModule(fdiParams, rdiParams, sbParams))
 
     // Default protocol-facing status outputs derived from RDI.
+    io.fdi.lclk := clock.asBool
     io.fdi.plSpeedmode := io.rdi.plSpeedmode
     io.fdi.plMaxSpeedmode := io.rdi.plMaxSpeedmode
     io.fdi.plLnkCfg := io.rdi.plLnkCfg
@@ -37,6 +38,7 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
     io.fdi.plClkReq := io.rdi.plClkReq
     io.fdi.plWakeAck := io.rdi.plWakeAck
 
+    io.rdi.lclk := clock.asBool
     io.rdi.lpClkAck := true.B
     io.rdi.lpWakeReq := true.B
 
