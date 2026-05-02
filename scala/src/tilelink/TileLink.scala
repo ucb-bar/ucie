@@ -883,13 +883,13 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val aCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
       aCreditCounter.io.used := managerTl.a.fire
       aCreditCounter.io.ret.valid := creditAValid || creditDValid
-      aCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_d)
+      aCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_a)
       aAvail := aCreditCounter.io.avail
 
       val dCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
       dCreditCounter.io.used := clientTl.d.fire
       dCreditCounter.io.ret.valid := creditAValid || creditDValid
-      dCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_d)
+      dCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_d, rxDBuffer.io.deq.bits.credit_d)
       dAvail := dCreditCounter.io.avail
     }
   }
