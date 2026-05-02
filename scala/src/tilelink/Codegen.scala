@@ -14,7 +14,8 @@ import edu.berkeley.cs.chippy.{
   TLTester,
   TLTesterIO,
   TLTesterReq,
-  TLTesterResp
+  TLTesterResp,
+  TLRequestDescriptor
 }
 import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 
@@ -182,6 +183,109 @@ object Codegen {
       case c if c.isControl => f"\\u${c.toInt}%04x"
       case c                => c.toString
     }
+
+  val defaultClkP: BigInt = BigInt(0x55555555L)
+  val defaultClkN: BigInt = BigInt(0xaaaaaaaaL)
+  val defaultValid: BigInt = BigInt(0x0f0f0f0fL)
+  val defaultTrack: BigInt = BigInt(0x55555555L)
+
+  val enableDriverCtl: BigInt = (new DriverCtlIO)
+    .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
+    .litValue
+
+  val defaultSkewCtl: BigInt = (new SkewCtlIO)
+    .Lit(
+      _.dll_en -> true.B,
+      _.ocl -> false.B,
+      _.delay -> 31.U,
+      _.mux_en -> (3 << 6).U,
+      _.band_ctrl -> 1.U,
+      _.mix_en -> 16.U,
+      _.nen_out -> 20.U,
+      _.pen_out -> 22.U
+    )
+    .litValue
+
+  val ucieParams: UcieTLParams = UcieTLParams()
+
+  // Elaborate UcieTL once; share the regmap between formatRegs and regAddrMap.
+  lazy val ucieRegmap: Seq[(Int, Seq[RegField])] = {
+    implicit val p = Parameters.empty
+    val ucie_dut = new RTLHarness(
+      new UcieTL(ucieParams, Seq(AddressSet(0x0, 0xffffL)), 32)
+    )
+    val ucie = (new chisel3.stage.phases.Elaborate)
+      .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
+        LazyModule(ucie_dut).module
+      }))
+      .collectFirst { case a: DesignAnnotation[ucie_dut.Impl] => a.design }
+      .get
+    ucie.regmap
+  }
+
+  lazy val regAddrMap: Map[String, BigInt] =
+    ucieRegmap.flatMap { case (offset, fields) =>
+      fields.flatMap(_.desc.map(d => (d.name, ucieParams.address + BigInt(offset))))
+    }.toMap
+
+  // Mirrors the SystemVerilog setup_ucie() / tl_simple sequence emitted by
+  // formatSetupUcieFn / formatTlSimpleLoopbackFn, but as TLRequestDescriptors
+  // for ScalaTestHarness.regDriver.
+  lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] = {
+    def write(name: String, value: BigInt): TLRequestDescriptor =
+      TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
+
+    val reqs = scala.collection.mutable.Buffer[TLRequestDescriptor]()
+
+    for (lane <- 0 until ucieParams.numLanes + 4) {
+      reqs += write(s"txctl_${lane}_dllReset", 0)
+      reqs += write(s"txctl_${lane}_driver", enableDriverCtl)
+      reqs += write(s"txctl_${lane}_skew", defaultSkewCtl)
+      reqs += write(s"rxctl_${lane}_zen", 1)
+      reqs += write(s"rxctl_${lane}_zctl", 0)
+    }
+
+    reqs += write("txClkP", defaultClkP)
+    reqs += write("txClkN", defaultClkN)
+    reqs += write("txTrack", defaultTrack)
+    reqs += write("txValid", defaultValid)
+    reqs += write("rxLfsrValid", defaultValid)
+    reqs += write("commonTxctlDllReset", 0)
+    reqs += write("pllBypassEn", 1)
+    reqs += write("divResetb", 1)
+
+    for (i <- 0 until 6) {
+      reqs += write(s"commonDriverctl_$i", enableDriverCtl)
+    }
+
+    reqs += write("commonTxctlDriver", enableDriverCtl)
+    reqs += write("commonTxctlSkew", defaultSkewCtl)
+
+    reqs += write("txFsmRst", 1)
+    reqs += write("rxFsmRst", 1)
+    reqs += write("commonTxFsmRst", 1)
+
+    reqs += write("mainbandSel", 1)
+
+    reqs.toSeq
+  }
+
+  lazy val tlSimpleMbReqs: Seq[TLRequestDescriptor] = Seq(
+    TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
+    TLRequestDescriptor(0, isWrite = false, data = BigInt(0xdeadbeefL))
+  )
+
+  // Mirrors formatTlLongLoopbackFn: 32 writes followed by 32 reads.
+  lazy val tlLongMbReqs: Seq[TLRequestDescriptor] = {
+    val pattern: BigInt = BigInt(0x0100010001000100L)
+    val writes = (0 until 32).map { i =>
+      TLRequestDescriptor(BigInt(i) * 8, isWrite = true, data = BigInt(i) * pattern)
+    }
+    val reads = (0 until 32).map { i =>
+      TLRequestDescriptor(BigInt(i) * 8, isWrite = false, data = BigInt(i) * pattern)
+    }
+    writes ++ reads
+  }
 }
 
 class Codegen(f: SystemVerilogFormatter) {
@@ -192,15 +296,6 @@ class Codegen(f: SystemVerilogFormatter) {
     f.formatWriteReg("regDrv", f.formatConstantRef(addrConst), value)
   }
   def formatRegs(): String = {
-    implicit val p = Parameters.empty
-    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32))
-    val ucie = (new chisel3.stage.phases.Elaborate)
-      .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
-        val dut = LazyModule(ucie_dut).module
-        dut
-      }))
-      .collectFirst { case a: DesignAnnotation[ucie_dut.Impl] => a.design }
-      .get
     val sb = new StringBuilder
 
     // Maps the variable name to the first encountered index string.
@@ -211,7 +306,7 @@ class Codegen(f: SystemVerilogFormatter) {
     val varMapIdx1 = mutable.Map[Seq[String], Int]()
 
     def isNumber(s: String): Boolean = s.forall(_.isDigit)
-    for (case (addr, reg) <- ucie.regmap) {
+    for (case (addr, reg) <- Codegen.ucieRegmap) {
       val name = reg(0).desc.get.name
       val nameInd = name.split('_').map(_.capitalize)
 
@@ -288,36 +383,12 @@ class Codegen(f: SystemVerilogFormatter) {
         ("dataModeInfinite", DataMode.infinite.litValue),
         ("testTargetMainband", TestTarget.mainband.litValue),
         ("testTargetLoopback", TestTarget.mainband.litValue),
-        ("defaultClkP", BigInt(0x55555555)),
-        ("defaultClkN", BigInt(0xaaaaaaaa)),
-        ("defaultValid", BigInt(0x0f0f0f0f)),
-        ("defaultTrack", BigInt(0x55555555)),
-        (
-          "enableDriverCtl",
-          (new DriverCtlIO)
-            .Lit(
-              _.pu_ctl -> 63.U,
-              _.pd_ctl -> 63.U,
-              _.en -> true.B,
-              _.en_b -> false.B
-            )
-            .litValue
-        ),
-        (
-          "defaultSkewCtl",
-          (new SkewCtlIO)
-            .Lit(
-              _.dll_en -> true.B,
-              _.ocl -> false.B,
-              _.delay -> 31.U,
-              _.mux_en -> (3 << 6).U,
-              _.band_ctrl -> 1.U,
-              _.mix_en -> 16.U,
-              _.nen_out -> 20.U,
-              _.pen_out -> 22.U
-            )
-            .litValue
-        )
+        ("defaultClkP", Codegen.defaultClkP),
+        ("defaultClkN", Codegen.defaultClkN),
+        ("defaultValid", Codegen.defaultValid),
+        ("defaultTrack", Codegen.defaultTrack),
+        ("enableDriverCtl", Codegen.enableDriverCtl),
+        ("defaultSkewCtl", Codegen.defaultSkewCtl)
       )
     ) {
       sb.append(
