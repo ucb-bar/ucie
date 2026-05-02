@@ -12,7 +12,7 @@ class CreditCounter(counter_size: Int, buffer_depth: Int) extends Module {
 
     val cred_used = RegInit(0.U(log2Up(counter_size).W))
     val cred_gnt = RegInit(buffer_depth.U(log2Up(counter_size).W))
-    val overflow = RegInit(0.U((log2Up(counter_size) + 1).W))
+    val overflow = Wire(UInt((log2Up(counter_size) + 1).W))
 
 
     when (io.used) {
