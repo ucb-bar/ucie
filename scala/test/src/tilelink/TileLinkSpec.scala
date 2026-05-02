@@ -17,7 +17,8 @@ import edu.berkeley.cs.chippy.{
   TLTesterReq,
   TLTesterResp,
   TLDriver,
-  TLRequestDescriptor
+  TLRequestDescriptor,
+  TLBackpressureTestWidget
 }
 import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
@@ -37,6 +38,14 @@ abstract class TestDriver extends ExtModule {
   val ucieBypassClock = IO(Output(Clock()))
   val ucieDigitalBypassClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
+
+  def regReqs: Seq[TLRequestDescriptor] = Seq.empty
+  def mbReqs: Seq[TLRequestDescriptor] = Seq.empty
+  def mbMaxInflight: Int = 1
+  def stallCycles: Int = 0
+}
+
+abstract class SVTestDriver extends TestDriver {
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
@@ -262,7 +271,7 @@ endmodule
   )
 }
 
-class SimTop[T <: TestDriver](
+class SimTop[T <: SVTestDriver](
     driver: => T
 )(implicit
     p: Parameters,
@@ -351,12 +360,8 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   }
 }
 
-class ScalaTestDriver extends ExtModule {
-  val digitalClock = IO(Output(Clock()))
-  val ucieBypassClock = IO(Output(Clock()))
-  val ucieDigitalBypassClock = IO(Output(Clock()))
-  val reset = IO(Output(Reset()))
-
+class ScalaTestDriver extends TestDriver {
+  override def desiredName = "ScalaTestDriver"
   setInline(
     "ScalaTestDriver.sv",
     s"""
@@ -406,7 +411,8 @@ class ScalaTestHarness(
     mbReqs: Seq[TLRequestDescriptor],
     delayCycles: Int = 32,
     startupDelayCycles: Int = 8,
-    mbMaxInflight: Int = 1
+    mbMaxInflight: Int = 1,
+    stallCycles: Int = 0
 )(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
@@ -431,10 +437,12 @@ class ScalaTestHarness(
       TestHarness.beatBytes
     )
   )
+  val backpressure = LazyModule(new TLBackpressureTestWidget(stallCycles))
 
   ucieTL.digitalClockNode := clockNode
   ucieTL.regNode := regDriver.node
-  tlRam.node := ucieTL.clientNode
+  backpressure.node := ucieTL.clientNode
+  tlRam.node := backpressure.node
   ucieTL.managerNode := mbDriver.node
 
   lazy val module = new Impl
@@ -486,154 +494,42 @@ class ScalaTestHarness(
   }
 }
 
-class ScalaSimTop(
-    harness: => ScalaTestHarness
+class ScalaSimTop[T <: ScalaTestDriver](
+    driver: => T
 )(implicit
     p: Parameters,
     includeDefaultModels: Boolean = true
 ) extends RawModule {
-  val drv = Module(new ScalaTestDriver)
+  val drv = Module(driver)
 
   withClockAndReset(drv.digitalClock, drv.reset) {
-    val ucie_harness = Module(LazyModule(harness).module)
+    val ucie_harness = Module(LazyModule(new ScalaTestHarness(
+      regReqs = drv.regReqs,
+      mbReqs = drv.mbReqs,
+      mbMaxInflight = drv.mbMaxInflight,
+      stallCycles = drv.stallCycles
+    )).module)
     ucie_harness.io.ucieBypassClock := drv.ucieBypassClock
     ucie_harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
   }
 }
 
-// Mirrors the SystemVerilog setup_ucie() / tl_simple sequence from Codegen.scala,
-// but emits TLRequestDescriptors that drive ScalaTestHarness.regDriver / mbDriver.
-object ScalaTlSimpleSetup {
-  val defaultClkP: BigInt = BigInt(0x55555555L)
-  val defaultClkN: BigInt = BigInt(0xaaaaaaaaL)
-  val defaultValid: BigInt = BigInt(0x0f0f0f0fL)
-  val defaultTrack: BigInt = BigInt(0x55555555L)
-
-  val enableDriverCtl: BigInt = (new DriverCtlIO)
-    .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
-    .litValue
-
-  val defaultSkewCtl: BigInt = (new SkewCtlIO)
-    .Lit(
-      _.dll_en -> true.B,
-      _.ocl -> false.B,
-      _.delay -> 31.U,
-      _.mux_en -> (3 << 6).U,
-      _.band_ctrl -> 1.U,
-      _.mix_en -> 16.U,
-      _.nen_out -> 20.U,
-      _.pen_out -> 22.U
-    )
-    .litValue
-
-  // Elaborate UcieTL once and extract a regmap name -> absolute address map,
-  // mirroring Codegen.formatRegs's elaboration trick.
-  lazy val regAddrMap: Map[String, BigInt] = {
-    implicit val p = Parameters.empty
-    val ucieParams = UcieTLParams()
-    val ucie_dut = new RTLHarness(
-      new UcieTL(ucieParams, Seq(AddressSet(0x0, 0xffffL)), 32)
-    )
-    val ucie = (new chisel3.stage.phases.Elaborate)
-      .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
-        LazyModule(ucie_dut).module
-      }))
-      .collectFirst { case a: DesignAnnotation[ucie_dut.Impl] => a.design }
-      .get
-
-    ucie.regmap.flatMap { case (offset, fields) =>
-      fields.flatMap(_.desc.map(d => (d.name, ucieParams.address + BigInt(offset))))
-    }.toMap
-  }
-
-  lazy val regReqs: Seq[TLRequestDescriptor] = {
-    val params = UcieTLParams()
-    def write(name: String, value: BigInt): TLRequestDescriptor =
-      TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
-
-    val reqs = scala.collection.mutable.Buffer[TLRequestDescriptor]()
-
-    for (lane <- 0 until params.numLanes + 4) {
-      reqs += write(s"txctl_${lane}_dllReset", 0)
-      reqs += write(s"txctl_${lane}_driver", enableDriverCtl)
-      reqs += write(s"txctl_${lane}_skew", defaultSkewCtl)
-      reqs += write(s"rxctl_${lane}_zen", 1)
-      reqs += write(s"rxctl_${lane}_zctl", 0)
-    }
-
-    reqs += write("txClkP", defaultClkP)
-    reqs += write("txClkN", defaultClkN)
-    reqs += write("txTrack", defaultTrack)
-    reqs += write("txValid", defaultValid)
-    reqs += write("rxLfsrValid", defaultValid)
-    reqs += write("commonTxctlDllReset", 0)
-    reqs += write("pllBypassEn", 1)
-    reqs += write("divResetb", 1)
-
-    for (i <- 0 until 6) {
-      reqs += write(s"commonDriverctl_$i", enableDriverCtl)
-    }
-
-    reqs += write("commonTxctlDriver", enableDriverCtl)
-    reqs += write("commonTxctlSkew", defaultSkewCtl)
-
-    // reset_fsms
-    reqs += write("txFsmRst", 1)
-    reqs += write("rxFsmRst", 1)
-    reqs += write("commonTxFsmRst", 1)
-
-    // Switch to TL mainband mode.
-    reqs += write("mainbandSel", 1)
-
-    reqs.toSeq
-  }
-
-  lazy val mbReqs: Seq[TLRequestDescriptor] = Seq(
-    TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
-    TLRequestDescriptor(0, isWrite = false, data = BigInt(0xdeadbeefL))
-  )
+class ScalaTlSimpleTestDriver extends ScalaTestDriver {
+  override def regReqs = Codegen.tlSimpleRegReqs
+  override def mbReqs = Codegen.tlSimpleMbReqs
 }
 
-class ScalaTlSimpleTestHarness(implicit
-    p: Parameters,
-    includeDefaultModels: Boolean = true
-) extends ScalaTestHarness(
-      regReqs = ScalaTlSimpleSetup.regReqs,
-      mbReqs = ScalaTlSimpleSetup.mbReqs
-    )
-
-// 32 writes + 32 reads, mirroring formatTlLongLoopbackFn from Codegen.scala.
-object ScalaTlLongSetup {
-  val pattern: BigInt = BigInt(0x0100010001000100L)
-  lazy val mbReqs: Seq[TLRequestDescriptor] = {
-    val writes = (0 until 32).map { i =>
-      TLRequestDescriptor(
-        BigInt(i) * 8,
-        isWrite = true,
-        data = BigInt(i) * pattern
-      )
-    }
-    val reads = (0 until 32).map { i =>
-      TLRequestDescriptor(
-        BigInt(i) * 8,
-        isWrite = false,
-        data = BigInt(i) * pattern
-      )
-    }
-    writes ++ reads
-  }
+class ScalaTlLongTestDriver extends ScalaTestDriver {
+  override def regReqs = Codegen.tlSimpleRegReqs
+  override def mbReqs = Codegen.tlLongMbReqs
+  override def mbMaxInflight = 32
 }
 
-class ScalaTlLongTestHarness(implicit
-    p: Parameters,
-    includeDefaultModels: Boolean = true
-) extends ScalaTestHarness(
-      regReqs = ScalaTlSimpleSetup.regReqs,
-      mbReqs = ScalaTlLongSetup.mbReqs,
-      mbMaxInflight = 32
-    )
+class ScalaTlLongStallTestDriver extends ScalaTlLongTestDriver {
+  override def stallCycles = 1024
+}
 
-class MmioSimpleTestDriver extends TestDriver {
+class MmioSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
@@ -644,7 +540,7 @@ class MmioSimpleTestDriver extends TestDriver {
   )
 }
 
-class ManualSimpleTestDriver extends TestDriver {
+class ManualSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "ManualSimpleTestDriver",
     """
@@ -653,7 +549,7 @@ manual_simple();
   )
 }
 
-class TlSimpleTestDriver extends TestDriver {
+class TlSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "TlSimpleTestDriver",
     """
@@ -662,7 +558,7 @@ tl_simple();
   )
 }
 
-class TlLongTestDriver extends TestDriver {
+class TlLongTestDriver extends SVTestDriver {
   setStimulus(
     "TlLongTestDriver",
     """
@@ -734,7 +630,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple Scala TL test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Verilator"
       )
@@ -743,7 +639,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple Scala TL test using VCS") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
         Utils.writeVcsSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_VCS"
       )
@@ -752,7 +648,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support simple Scala TL test using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlSimpleTestHarness),
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Xcelium"
       )
@@ -761,7 +657,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support long Scala TL test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlLongTestHarness),
+        new ScalaSimTop(new ScalaTlLongTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Verilator"
       )
@@ -770,7 +666,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support long Scala TL test using VCS") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlLongTestHarness),
+        new ScalaSimTop(new ScalaTlLongTestDriver),
         Utils.writeVcsSimScript,
         Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_VCS"
       )
@@ -779,9 +675,27 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should support long Scala TL test using Xcelium") {
       implicit val p = Parameters.empty
       Utils.simulate(
-        new ScalaSimTop(new ScalaTlLongTestHarness),
+        new ScalaSimTop(new ScalaTlLongTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Xcelium"
+      )
+    }
+
+    it("should support long Scala TL test with RAM-side backpressure stall using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongStallTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_with_stall_using_Verilator"
+      )
+    }
+
+    it("should support long Scala TL test with RAM-side backpressure stall using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongStallTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_with_stall_using_VCS"
       )
     }
 
