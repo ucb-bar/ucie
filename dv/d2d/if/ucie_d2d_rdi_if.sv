@@ -2,6 +2,7 @@ interface ucie_d2d_rdi_if #(
   parameter int DATA_BITS = 256,
   parameter int SIDEBAND_WIDTH = 32
 );
+
   logic                  lclk;
   logic                  lpIrdy;
   logic                  lpValid;
@@ -34,6 +35,7 @@ interface ucie_d2d_rdi_if #(
   logic                  lpCfgVld;
   logic                  lpCfgCrd;
 
+  // Drive logical protocol inputs from the RDI/LogPhy partner to idle
   task automatic drive_idle();
     plTrdy = 1'b1;
     plValid = 1'b0;
@@ -55,4 +57,13 @@ interface ucie_d2d_rdi_if #(
     plCfgVld = 1'b0;
     plCfgCrd = 1'b1;
   endtask
+
+  task automatic drive_inband_present();
+    plInbandPres = 1'b1;
+  endtask
+
+  task automatic drive_state(logic [3:0] state);
+    plStateSts = state;
+  endtask
+
 endinterface

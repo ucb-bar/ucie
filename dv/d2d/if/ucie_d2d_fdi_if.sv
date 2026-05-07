@@ -32,6 +32,7 @@ interface ucie_d2d_fdi_if #(
   logic                  lpCfgVld;
   logic                  lpCfgCrd;
 
+  // Drive logical protocol inputs from the FDI partner to a safe idle value
   task automatic drive_idle();
     lpIrdy = 1'b0;
     lpValid = 1'b0;
@@ -39,8 +40,17 @@ interface ucie_d2d_fdi_if #(
     lpStateReq = 4'h0;
     lpLinkError = 1'b0;
     lpStallAck = 1'b0;
-    plCfgCrd = 1'b1;
     lpCfg = '0;
     lpCfgVld = 1'b0;
+    plCfgCrd = 1'b1;
   endtask
+
+  task automatic request_active();
+    lpStateReq = 4'h1;
+  endtask
+
+  task automatic clear_state_request();
+    lpStateReq = 4'h0;
+  endtask
+
 endinterface

@@ -5,6 +5,7 @@ module ucie_d2d_dv_top;
 
   logic clock;
   logic reset;
+  int timeout_cycles;
 
   ucie_d2d_fdi_if #(
     .DATA_BITS(DATA_BITS),
@@ -81,7 +82,14 @@ module ucie_d2d_dv_top;
     .io_rdi_lpCfgCrd        (rdi.lpCfgCrd)
   );
 
-  ucie_d2d_smoke_checkers checkers (
+  ucie_d2d_common_checkers checkers (
+    .clock (clock),
+    .reset (reset),
+    .fdi   (fdi),
+    .rdi   (rdi)
+  );
+
+  ucie_d2d_test test (
     .clock (clock),
     .reset (reset),
     .fdi   (fdi),
@@ -96,29 +104,23 @@ module ucie_d2d_dv_top;
   initial begin
     fdi.drive_idle();
     rdi.drive_idle();
+
     reset = 1'b1;
     repeat (5) begin
       @(posedge clock);
     end
     reset = 1'b0;
-
-    rdi.plInbandPres = 1'b1;
-    repeat (5) begin
-      @(posedge clock);
-    end
-    rdi.plStateSts = RDI_STATE_ACTIVE;
-    repeat (20) begin
-      @(posedge clock);
-    end
-
-    $display("D2D DV smoke completed");
-    $finish;
   end
 
   initial begin
-    repeat (1000) begin
+    if (!$value$plusargs("D2D_TIMEOUT_CYCLES=%d", timeout_cycles)) begin
+      timeout_cycles = DEFAULT_TEST_TIMEOUT_CYCLES;
+    end
+
+    repeat (timeout_cycles) begin
       @(posedge clock);
     end
-    $fatal(1, "D2D DV smoke timeout");
+    $fatal(1, "D2D DV test timeout after %0d cycles", timeout_cycles);
   end
+  
 endmodule
