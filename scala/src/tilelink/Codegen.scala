@@ -27,14 +27,40 @@ import edu.berkeley.cs.uciedigital.phy.{
 }
 import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
 
-trait Formatter {}
-
 sealed trait Datatype
 object Datatype {
   case object Long extends Datatype
 }
 
 case class Arg(name: String, datatype: Datatype)
+
+/** Backend-specific code formatter consumed by `Codegen`. Each method emits a
+  * snippet in the target language; subclasses pick the syntax (SystemVerilog,
+  * C, etc.). Implementations are responsible for whatever language-specific
+  * setup is required (e.g. C's `CFormatter` prepends an implicit `base`
+  * parameter to every emitted function so register-write helpers can compute
+  * absolute addresses).
+  */
+trait Formatter {
+  def formatFn(name: String, body: String, args: Seq[Arg] = Seq.empty): String
+  def formatFnCall(name: String, args: Seq[String] = Seq.empty): String
+  def formatForLoop(loopVar: String, length: Int, body: String): String
+  def formatWhileLoop(condition: String, body: String): String
+  def formatIfStmt(condition: String, body: String): String
+  def formatPrintStmt(msg: String): String
+  def breakStmt(): String
+  def formatWaitCycles(n: Int): String
+  def formatBool(bool: Boolean): String
+  def formatConstantRef(name: String): String
+  def formatWrite(drv: String, addr: String, value: String): String
+  def formatWriteReg(drv: String, addr: String, value: String): String
+  def formatRead(drv: String, outputName: String, addr: String, declareVar: Boolean = true): String
+  def formatReadReg(drv: String, outputName: String, addr: String, declareVar: Boolean = true): String
+  def formatAssertEq(drv: String, addr: String, value: String, msg: Option[String] = None): String
+  def formatUcieAssertEq(drv: String, addr: String, value: String, msg: Option[String] = None): String
+  def formatLong(value: Long): String
+  def formatDefine(name: String, value: String): String
+}
 
 class SystemVerilogFormatter extends Formatter {
   def getConstantName(name: String): String = {
@@ -288,7 +314,124 @@ object Codegen {
   }
 }
 
-class Codegen(f: SystemVerilogFormatter) {
+/** Emits C source for the same UCIe MMIO programming sequences as
+  * `SystemVerilogFormatter`. Conventions:
+  *  - `getConstantName` prepends `UCIE_` so all `#define`s share a namespace.
+  *  - Every emitted function takes an implicit `uintptr_t base` first
+  *    parameter; register-write helpers expand to `reg_write64(base + ofs, v)`,
+  *    so the same `Codegen.format*Fn` bodies work unchanged.
+  *  - Asserts collapse to plain `assert(...)`; the optional message is
+  *    discarded (revisit if richer reporting is wanted).
+  */
+class CFormatter extends Formatter {
+  def getConstantName(name: String): String = "UCIE_" + name
+    .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+    .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+    .toUpperCase
+
+  private def renderArg(arg: Arg): String = {
+    val ty = arg.datatype match {
+      case Datatype.Long => "uint64_t"
+    }
+    s"$ty ${arg.name}"
+  }
+
+  def formatFn(
+      name: String,
+      body: String,
+      args: Seq[Arg] = Seq.empty
+  ): String = {
+    val argStr = ("uintptr_t base" +: args.map(renderArg)).mkString(", ")
+    s"""static inline void $name($argStr) {
+${Codegen.indent(body)}
+}
+"""
+  }
+
+  def formatFnCall(name: String, args: Seq[String] = Seq.empty): String = {
+    val argStr = ("base" +: args).mkString(", ")
+    s"$name($argStr);\n"
+  }
+
+  def formatForLoop(loopVar: String, length: Int, body: String): String =
+    s"""for (int $loopVar = 0; $loopVar < $length; $loopVar++) {
+${Codegen.indent(body)}
+}
+"""
+
+  def formatWhileLoop(condition: String, body: String): String =
+    s"""while ($condition) {
+${Codegen.indent(body)}
+}
+"""
+
+  def formatIfStmt(condition: String, body: String): String =
+    s"""if ($condition) {
+${Codegen.indent(body)}
+}
+"""
+
+  def formatPrintStmt(msg: String): String =
+    s"""printf("${Codegen.escapeString(msg)}\\n");\n"""
+
+  def breakStmt(): String = "break;\n"
+
+  def formatWaitCycles(n: Int): String =
+    s"// (wait $n cycles — no-op in C)\n"
+
+  def formatBool(bool: Boolean): String = if (bool) "1" else "0"
+
+  def formatConstantRef(name: String): String = getConstantName(name)
+
+  def formatWrite(drv: String, addr: String, value: String): String =
+    s"reg_write64(base + $addr, $value);\n"
+
+  def formatWriteReg(drv: String, addr: String, value: String): String =
+    s"reg_write64(base + $addr, $value);\n"
+
+  def formatRead(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String = {
+    val sb = new StringBuilder
+    if (declareVar) {
+      sb.append(s"uint64_t $outputName;\n")
+    }
+    sb.append(s"$outputName = reg_read64(base + $addr);\n")
+    sb.toString
+  }
+
+  def formatReadReg(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String = formatRead(drv, outputName, addr, declareVar)
+
+  def formatAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String =
+    s"assert(reg_read64(base + $addr) == ($value));\n"
+
+  def formatUcieAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String = formatAssertEq(drv, addr, value, msg)
+
+  def formatLong(value: Long): String = f"0x$value%xULL"
+
+  def formatDefine(name: String, value: String): String =
+    s"#define ${getConstantName(name)} $value\n"
+}
+
+class Codegen(f: Formatter) {
   def formatWriteNamedReg(
       addrConst: String,
       value: String
@@ -876,3 +1019,53 @@ class Codegen(f: SystemVerilogFormatter) {
     sb.toString
   }
 }
+
+/** Generates a C header (`ucie.h`) that mirrors the SystemVerilog setup
+  * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
+  * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
+  * `reset_fsms`, and `setup_ucie`. RISC-V test programs can `#include` it to
+  * program the UCIe MMIO registers from C.
+  *
+  * Run with one argument — the destination path:
+  *   ./mill ucie.runMain edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader \
+  *       iris/ucie/software/ucie.h
+  */
+object GenUcieHeader {
+  def render(): String = {
+    val cg = new Codegen(new CFormatter)
+    val sb = new StringBuilder
+    sb.append("// Auto-generated by edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader.\n")
+    sb.append("// Regenerate via:\n")
+    sb.append("//   ./mill ucie.runMain edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader <path>\n")
+    sb.append("// DO NOT EDIT.\n\n")
+    sb.append("#ifndef __UCIE_H__\n")
+    sb.append("#define __UCIE_H__\n\n")
+    sb.append("#include <stdint.h>\n")
+    sb.append("#include <assert.h>\n")
+    sb.append("#include \"mmio.h\"\n\n")
+    sb.append("// === Register offsets (relative to the UCIe MMIO base, e.g. 0x8000) ===\n")
+    sb.append(cg.formatRegs())
+    sb.append("\n// === Constants ===\n")
+    sb.append(cg.formatConstants())
+    sb.append("\n// === Helper functions ===\n")
+    sb.append(cg.formatResetFsmsFn())
+    sb.append("\n")
+    sb.append(cg.formatWriteTxctlFn())
+    sb.append("\n")
+    sb.append(cg.formatWriteRxctlFn())
+    sb.append("\n")
+    sb.append(cg.formatSetupUcieFn())
+    sb.append("\n#endif\n")
+    sb.toString
+  }
+
+  def main(args: Array[String]): Unit = {
+    require(args.length == 1,
+      s"Usage: GenUcieHeader <output-path>; got ${args.mkString(" ")}")
+    val out = os.Path(args(0), os.pwd)
+    os.makeDir.all(out / os.up)
+    os.write.over(out, render())
+    println(s"Wrote $out")
+  }
+}
+
