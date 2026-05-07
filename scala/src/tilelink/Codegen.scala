@@ -26,7 +26,45 @@ import edu.berkeley.cs.uciedigital.phy.{
 }
 import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
 
-trait Formatter {}
+trait Formatter {
+  def formatFn(name: String, body: String, args: Seq[Arg] = Seq.empty): String
+  def formatFnCall(name: String, args: Seq[String] = Seq.empty): String
+  def formatForLoop(loopVar: String, length: Int, body: String): String
+  def formatWhileLoop(condition: String, body: String): String
+  def formatIfStmt(condition: String, body: String): String
+  def formatPrintStmt(msg: String): String
+  def breakStmt(): String
+  def formatBool(bool: Boolean): String
+  def formatConstantRef(name: String): String
+  def formatWrite(drv: String, addr: String, value: String): String
+  def formatWriteReg(drv: String, addr: String, value: String): String
+  def formatRead(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String
+  def formatReadReg(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String
+  def formatAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String
+  def formatUcieAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String
+  def formatLong(value: Long): String
+  def formatDefine(name: String, value: String): String
+}
 
 sealed trait Datatype
 object Datatype {
@@ -181,7 +219,107 @@ object Codegen {
     }
 }
 
-class Codegen(f: SystemVerilogFormatter) {
+class CFormatter extends Formatter {
+  private def getConstantName(name: String): String =
+    name
+      .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+      .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+      .toUpperCase
+
+  def formatFn(
+      name: String,
+      body: String,
+      args: Seq[Arg] = Seq.empty
+  ): String = {
+    val argList = args
+      .map { case Arg(n, dt) =>
+        val dtStr = dt match { case Datatype.Long => "uint64_t" }
+        s"$dtStr $n"
+      }
+      .mkString(", ")
+    s"""void $name($argList) {
+${Codegen.indent(body)}
+}
+"""
+  }
+  def formatFnCall(name: String, args: Seq[String] = Seq.empty): String =
+    s"$name(${args.mkString(", ")});\n"
+  def formatForLoop(loopVar: String, length: Int, body: String): String =
+    s"""for (int $loopVar = 0; $loopVar < $length; $loopVar++) {
+${Codegen.indent(body)}
+}
+"""
+  def formatWhileLoop(condition: String, body: String): String =
+    s"""while ($condition) {
+${Codegen.indent(body)}
+}
+"""
+  def formatIfStmt(condition: String, body: String): String =
+    s"""if ($condition) {
+${Codegen.indent(body)}
+}
+"""
+  def formatPrintStmt(msg: String): String =
+    s"""printf("${Codegen.escapeString(msg)}\\n");\n"""
+  def breakStmt(): String = "break;\n"
+  def formatBool(bool: Boolean): String = if (bool) "1" else "0"
+  def formatConstantRef(name: String): String = getConstantName(name)
+  def formatWrite(drv: String, addr: String, value: String): String =
+    s"WRITE($drv, $addr, $value);\n"
+  def formatWriteReg(drv: String, addr: String, value: String): String =
+    s"WRITE_UCIE($drv, $addr, $value);\n"
+  def formatRead(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String = {
+    val sb = new StringBuilder
+    if (declareVar) sb.append(s"uint64_t $outputName;\n")
+    sb.append(s"READ($drv, $addr, $outputName);\n")
+    sb.toString
+  }
+  def formatReadReg(
+      drv: String,
+      outputName: String,
+      addr: String,
+      declareVar: Boolean = true
+  ): String = {
+    val sb = new StringBuilder
+    if (declareVar) sb.append(s"uint64_t $outputName;\n")
+    sb.append(s"READ_UCIE($drv, $addr, $outputName);\n")
+    sb.toString
+  }
+  def formatAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String =
+    msg match {
+      case Some(m) =>
+        s"""EXPECT_MSG($drv, $addr, $value, "${Codegen.escapeString(m)}");\n"""
+      case None => s"EXPECT($drv, $addr, $value);\n"
+    }
+  def formatUcieAssertEq(
+      drv: String,
+      addr: String,
+      value: String,
+      msg: Option[String] = None
+  ): String =
+    msg match {
+      case Some(m) =>
+        s"""EXPECT_UCIE_MSG($drv, $addr, $value, "${Codegen.escapeString(
+            m
+          )}");\n"""
+      case None => s"EXPECT_UCIE($drv, $addr, $value);\n"
+    }
+  def formatLong(value: Long): String = f"0x$value%XULL"
+  def formatDefine(name: String, value: String): String =
+    s"#define ${getConstantName(name)} $value\n"
+}
+
+class Codegen(f: Formatter) {
   def formatWriteNamedReg(
       addrConst: String,
       value: String
@@ -190,7 +328,9 @@ class Codegen(f: SystemVerilogFormatter) {
   }
   def formatRegs(): String = {
     implicit val p = Parameters.empty
-    val ucie_dut = new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32))
+    val ucie_dut = new RTLHarness(
+      new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32)
+    )
     val ucie = (new chisel3.stage.phases.Elaborate)
       .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
         val dut = LazyModule(ucie_dut).module
@@ -759,11 +899,8 @@ class Codegen(f: SystemVerilogFormatter) {
 
   def formatAll(): String = {
     val sb = new StringBuilder
-    sb.append(formatRegs())
-    sb.append(formatConstants())
-    sb.append(formatResetFsmsFn())
-    sb.append(formatWriteTxctlFn())
-    sb.append(formatSetupUcieFn())
+    sb.append(formatDefines())
+    sb.append(formatFns())
     sb.toString
   }
 }
