@@ -166,6 +166,7 @@ static inline void setup_ucie(uintptr_t base) {
   reg_write64(base + UCIE_COMMON_TXCTL_DRIVER, UCIE_ENABLE_DRIVER_CTL);
   reg_write64(base + UCIE_COMMON_TXCTL_SKEW, UCIE_DEFAULT_SKEW_CTL);
   reset_fsms(base);
+  reg_write64(base + UCIE_MAINBAND_SEL, 0x1ULL);
 }
 
 #endif

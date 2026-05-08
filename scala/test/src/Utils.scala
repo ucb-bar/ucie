@@ -28,10 +28,15 @@ object Utils {
       topModule: String,
       sourceFilesList: Path,
       incDirs: Seq[Path] = Seq.empty,
-      loadmem: Option[Path] = None
+      loadmem: Option[Path] = None,
+      debug: Boolean = false
   ): Unit = {
     val dramsim_ini = root / os.up / os.up / "testchipip" / "src" / "main" / "resources" / "dramsim2_ini"
     val dramsim2 = root / os.up / os.up / os.up / "DRAMSim2"
+    val debugCompileFlags =
+      if (debug) " +define+DEBUG -debug_access+all -kdb -lca" else ""
+    val debugRuntimeFlag =
+      if (debug) " +fsdbfile=waveform.fsdb" else ""
     os.makeDir.all(path / os.up)
     os.write.over(
       path,
@@ -50,22 +55,24 @@ vcs \\
   +define+layer$$Verification$$Assert$$Temporal \\
   +define+layer$$Verification$$Assume$$Temporal \\
   +define+layer$$Verification$$Cover$$Temporal \\
-  +define+VCS +define+FSDB +define+RANDOMIZE_MEM_INIT +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_GARBAGE_ASSIGN +define+RANDOMIZE_INVALID_ASSIGN \\
+  +define+VCS +define+FSDB +define+RANDOMIZE_MEM_INIT +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_GARBAGE_ASSIGN +define+RANDOMIZE_INVALID_ASSIGN$debugCompileFlags \\
   -o simulation -Mdir=vcs-sources
-script -f -c "./simulation +permissive +dramsim +dramsim_ini_dir=${dramsim_ini.toString}${loadmem.map(p => s" +loadmem=${p.toString}").getOrElse("")} +permissive-off placeholder-binary </dev/null 2> >(spike-dasm > simulation.out)" simulation.log
+script -f -c "./simulation +permissive +dramsim +dramsim_ini_dir=${dramsim_ini.toString}${loadmem.map(p => s" +loadmem=${p.toString}").getOrElse("")}$debugRuntimeFlag +permissive-off placeholder-binary </dev/null 2> >(spike-dasm > simulation.out)" simulation.log
 """
     )
     path.toIO.setExecutable(true)
   }
 
   /** Elaborate a `dut` and run it under VCS, loading the given RISC-V binary
-    * via TSI (or `+loadmem` when `fast` is true).
+    * via TSI (or `+loadmem` when `fast` is true). Set `debug = true` to dump
+    * an FSDB at `<workDir>/sim/waveform.fsdb`.
     */
   def simulateTopWithBinary[T <: RawModule](
       dut: => T,
       workDir: Path,
       binaryPath: Path,
-      fast: Boolean = false
+      fast: Boolean = false,
+      debug: Boolean = false
   )(implicit p: Parameters): Unit = {
     assert(
       os.exists(binaryPath),
@@ -95,6 +102,7 @@ script -f -c "./simulation +permissive +dramsim +dramsim_ini_dir=${dramsim_ini.t
       sourceFilesList,
       incDirs = os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir),
       loadmem = if (fast) Some(binaryPath) else None,
+      debug = debug,
     )
 
     os.proc(
