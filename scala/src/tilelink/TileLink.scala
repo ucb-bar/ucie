@@ -40,6 +40,7 @@ case class UcieTLParams(
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     maxInflight: Int = 1,
+    clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false
 ) extends ChipletLinkParams
  with ChipletLinkWrapperInstantiationLike 
@@ -604,14 +605,13 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       )
     )
   )
-  // Client node to reply to send and acquire traffic from partner die
   val clientNode = TLClientNode(
     Seq(
       TLMasterPortParameters.v1(
         Seq(
           TLMasterParameters.v1(
             name = "ucie-client",
-            sourceId = IdRange(0, params.maxInflight)
+            sourceId = IdRange(0, 1 << params.clientIdBits)
           )
         )
       )

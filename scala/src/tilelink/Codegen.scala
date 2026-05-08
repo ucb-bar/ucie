@@ -717,6 +717,7 @@ class Codegen(f: Formatter) {
       )
     )
     body.append(f.formatFnCall("reset_fsms"))
+    body.append(formatWriteNamedReg("mainbandSel", f.formatLong(1)))
     sb.append(f.formatFn("setup_ucie", body.toString))
     sb.toString
   }

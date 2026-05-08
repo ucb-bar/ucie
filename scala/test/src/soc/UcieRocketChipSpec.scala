@@ -115,5 +115,18 @@ class UcieRocketChipSpec extends AnyFunSpec with ChiselSim {
         Utils.softwareDir / "ucie-simple.riscv",
       )
     }
+
+    it("should run ucie-simple.riscv with waveforms") {
+      implicit val p = new UcieRocketChipConfig(sim = true)
+      val workDir =
+        Utils.buildRoot / "UcieRocketChip_should_run_ucie_simple_waveforms"
+
+      Utils.simulateTopWithBinary(
+        new SimTop(Utils.softwareDir / "ucie-simple.riscv"),
+        workDir,
+        Utils.softwareDir / "ucie-simple.riscv",
+        debug = true,
+      )
+    }
   }
 }
