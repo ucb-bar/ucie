@@ -35,6 +35,7 @@ trait Formatter {
   def formatIfStmt(condition: String, body: String): String
   def formatPrintStmt(msg: String): String
   def breakStmt(): String
+  def formatWaitCycles(n: Int): String
   def formatBool(bool: Boolean): String
   def formatConstantRef(name: String): String
   def formatWrite(drv: String, addr: String, value: String): String
@@ -365,6 +366,8 @@ ${Codegen.indent(body)}
   def formatPrintStmt(msg: String): String =
     s"""printf("${Codegen.escapeString(msg)}\\n");\n"""
   def breakStmt(): String = "break;\n"
+  def formatWaitCycles(n: Int): String =
+    s"// (wait $n cycles — no-op in C)\n"
   def formatBool(bool: Boolean): String = if (bool) "1" else "0"
   def formatConstantRef(name: String): String = getConstantName(name)
   def formatWrite(drv: String, addr: String, value: String): String =
