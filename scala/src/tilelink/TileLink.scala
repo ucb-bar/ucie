@@ -581,10 +581,8 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
   val ucieDigitalClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val regs = LazyModule(new UcieTLRegs(params, beatBytes))
 
-  // TODO: Support more than 1 in-flight message
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
-  // TODO: Use correct AddressSet
   val managerNode = TLManagerNode(
     Seq(
       TLSlavePortParameters.v1(
@@ -782,7 +780,6 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
       managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid
 
-      // This is maybe not the best way to do this
       when(rxABuffer.io.deq.fire) {
         aCreditsToReturn := aCreditsToReturn + 1.U
       }

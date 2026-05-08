@@ -95,9 +95,6 @@ module rx_data_lane (
         shiftReg <= (shiftReg << 1'b1) | din;
     end
   end
-  // always @(posedge divClock) begin
-  //  outputReg <= shiftReg;
-  // end
   assign dout_0  = outputReg[31];
   assign dout_1  = outputReg[30];
   assign dout_2  = outputReg[29];

@@ -228,9 +228,6 @@ object Codegen {
       fields.flatMap(_.desc.map(d => (d.name, ucieParams.address + BigInt(offset))))
     }.toMap
 
-  // Mirrors the SystemVerilog setup_ucie() / tl_simple sequence emitted by
-  // formatSetupUcieFn / formatTlSimpleLoopbackFn, but as TLRequestDescriptors
-  // for ScalaTestHarness.regDriver.
   lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] = {
     def write(name: String, value: BigInt): TLRequestDescriptor =
       TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
@@ -275,7 +272,6 @@ object Codegen {
     TLRequestDescriptor(0, isWrite = false, data = BigInt(0xdeadbeefL))
   )
 
-  // Mirrors formatTlLongLoopbackFn: 32 writes followed by 32 reads.
   lazy val tlLongMbReqs: Seq[TLRequestDescriptor] = {
     val pattern: BigInt = BigInt(0x0100010001000100L)
     val writes = (0 until 32).map { i =>

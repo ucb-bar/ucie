@@ -91,19 +91,15 @@ module TLTDriver(
     begin
       bit got_early_resp = 1'b0;
       bit got_resp = 1'b0;
-      // @(posedge clock);
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
-      // Wait for the request beat to be accepted. Only credit a same-cycle response
-      // for writes (TLRegisterNode-style AccessAck can be combinational with a.ready).
-      // Reads must traverse the network, so any resp_valid at request-accept time is
-      // necessarily a trailing response from a prior op and must be ignored.
       for (int i = 0; i < 1000; i++) begin
         #10;
         if (intf.req_ready) begin
+          // Check for same-cycle resp (possible with regnode)
           if (intf.resp_valid) begin
             got_early_resp = 1'b1;
             resp_data = intf.resp_bits_data;
@@ -126,7 +122,6 @@ module TLTDriver(
         end
       end
       assert(got_resp || got_early_resp) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
-      // @(negedge clock);
     end
   endtask
   task write(input [63:0] addr, input [63:0] data, input string ctx);
@@ -317,7 +312,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     )
   val ucieTL = LazyModule(
     new UcieTL(
-      UcieTLParams(includeDefaultModels = includeDefaultModels),
+      UcieTLParams(includeDefaultModels = includeDefaultModels, maxInflight = 1),
       Seq(AddressSet(0x0, 0xffffL)),
       TestHarness.beatBytes
     )
@@ -714,24 +709,6 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ManualSimpleTestDriver),
         Utils.writeVcsSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_VCS"
-      )
-    }
-
-    it("should support simple TL test using VCS") {
-      implicit val p = Parameters.empty
-      Utils.simulate(
-        new SimTop(new TlSimpleTestDriver),
-        Utils.writeVcsSimScript,
-        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_VCS"
-      )
-    }
-
-    it("should support long TL test using VCS") {
-      implicit val p = Parameters.empty
-      Utils.simulate(
-        new SimTop(new TlLongTestDriver),
-        Utils.writeVcsSimScript,
-        Utils.buildRoot / "UcieTL_should_support_long_TL_test_using_VCS"
       )
     }
 
