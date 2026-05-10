@@ -217,14 +217,6 @@ class AdapterSM(
 
   // Link-init state update
   when(linkStateReg === RDIState.reset) {
-    paramExchSbMsgRcvFlag := false.B
-    paramExchSbMsgSntFlag := false.B
-    activeSbMsgReqRcvFlag := false.B
-    activeSbMsgRspRcvFlag := false.B
-    activeSbMsgExtRspReg := false.B
-    activeSbMsgExtReqReg := false.B
-    transitionToActiveReg := false.B
-
     switch(linkInitStateReg) {
       is(LinkInitState.INIT_START) {
         when(io.rdi_pl_inband_pres) {

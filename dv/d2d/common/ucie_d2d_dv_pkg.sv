@@ -61,7 +61,7 @@ package ucie_d2d_dv_pkg;
     header = '0;
     header[4:0] = opcode;
     header[21:14] = msgcode;
-    header[25:24] = 2'b01; // Route to the local D2D layer in the current switch.
+    header[26:22] = 5'b1_01_00; // Match Chisel SBMsgCreate: remote + D2D layer + reserved.
     header[31:29] = 3'b001; // D2D source.
     header[39:32] = msgsubcode;
     header[58:56] = 3'b101; // Remote D2D destination.
