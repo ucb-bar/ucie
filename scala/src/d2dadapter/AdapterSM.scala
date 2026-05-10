@@ -235,7 +235,7 @@ class AdapterSM(
           paramExchSbMsgRcvFlag := paramExchSbMsgRcvFlag
         }
 
-        when(linkInitSbAccepted && linkInitSbSnd === SideBandMessage.ADV_CAP) {
+        when(linkInitSbSelected && linkInitSbSnd === SideBandMessage.ADV_CAP) {
           paramExchSbMsgSntFlag := true.B
         }.otherwise {
           paramExchSbMsgSntFlag := paramExchSbMsgSntFlag
@@ -258,13 +258,13 @@ class AdapterSM(
           activeSbMsgReqRcvFlag := activeSbMsgReqRcvFlag
         }
 
-        when(linkInitSbAccepted && linkInitSbSnd === SideBandMessage.RSP_ACTIVE) {
+        when(linkInitSbSelected && linkInitSbSnd === SideBandMessage.RSP_ACTIVE) {
           activeSbMsgExtRspReg := true.B
         }.otherwise {
           activeSbMsgExtRspReg := activeSbMsgExtRspReg
         }
 
-        when(linkInitSbAccepted && linkInitSbSnd === SideBandMessage.REQ_ACTIVE) {
+        when(linkInitSbSelected && linkInitSbSnd === SideBandMessage.REQ_ACTIVE) {
           activeSbMsgExtReqReg := true.B
         }.otherwise {
           activeSbMsgExtReqReg := activeSbMsgExtReqReg

@@ -10,6 +10,7 @@ module ucie_d2d_test (
   initial begin
     bring_link_to_active();
 
+    @(negedge clock);
     rdi.plStallReq = 1'b1;
 
     while (!rdi.lpStallAck) begin
@@ -21,6 +22,7 @@ module ucie_d2d_test (
       $fatal(1, "RDI stall acknowledge asserted after stall request dropped");
     end
 
+    @(negedge clock);
     rdi.plStallReq = 1'b0;
     wait_cycles(4);
 

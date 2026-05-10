@@ -56,9 +56,9 @@ extends Module {
     idList.map(id => dstId === id.U(2.W)).foldLeft(false.B)(_ || _)
   }
 
-  val arbiterToCurrLayer  = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
-  val arbiterToUpperLayer = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
-  val arbiterToLowerLayer = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
+  val arbiterToCurrLayer  = Module(new Arbiter(UInt(sbMsgWidth.W), 2))
+  val arbiterToUpperLayer = Module(new Arbiter(UInt(sbMsgWidth.W), 2))
+  val arbiterToLowerLayer = Module(new Arbiter(UInt(sbMsgWidth.W), 2))
 
   io.currLayer.to  <> arbiterToCurrLayer.io.out
   io.upperLayer.to <> arbiterToUpperLayer.io.out
