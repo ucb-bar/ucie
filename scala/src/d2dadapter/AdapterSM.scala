@@ -305,9 +305,10 @@ class AdapterSM(
     transitionToActiveReg := false.B
   }
 
-  // Parameter exchange timeout handling (spec Step 8 baseline).
+  // Parameter exchange timeout handling.
+  // Per spec, this timeout counts only while RDI is in Active.
   when(linkStateReg === RDIState.reset && linkInitStateReg === LinkInitState.PARAM_EXCH) {
-    when(!(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag)) {
+    when(io.rdi_pl_state_sts === RDIState.active && !(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag)) {
       when(paramExchTimeoutCntReg < ParamExchTimeoutCycles.U) {
         paramExchTimeoutCntReg := paramExchTimeoutCntReg + 1.U
       }.otherwise {
