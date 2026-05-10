@@ -9,6 +9,7 @@ module ucie_d2d_test (
 
   initial begin
     int cycle;
+    bit saw_stall_req;
 
     bring_link_to_active();
 
@@ -17,6 +18,27 @@ module ucie_d2d_test (
     end
 
     rdi.drive_state(RDI_STATE_RETRAIN);
+
+    // Active-to-Retrain transition requires protocol-side deactivation and
+    // completion of the FDI stall handshake.
+    for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES && fdi.plRxActiveReq !== 1'b0; cycle++) begin
+      @(posedge clock);
+    end
+    if (fdi.plRxActiveReq !== 1'b0) begin
+      $fatal(1, "FDI plRxActiveReq did not drop after RDI entered Retrain");
+    end
+    fdi.lpRxActiveSts = 1'b0;
+
+    for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES && !saw_stall_req; cycle++) begin
+      @(posedge clock);
+      if (fdi.plStallReq === 1'b1) begin
+        saw_stall_req = 1'b1;
+        fdi.lpStallAck = 1'b1;
+      end
+    end
+    if (!saw_stall_req) begin
+      $fatal(1, "FDI plStallReq was not asserted for Retrain transition");
+    end
 
     for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES && fdi.plStateSts !== RDI_STATE_RETRAIN; cycle++) begin
       @(posedge clock);
@@ -31,6 +53,8 @@ module ucie_d2d_test (
     if (fdi.plStateSts !== RDI_STATE_RETRAIN) begin
       $fatal(1, "FDI did not enter Retrain after RDI entered Retrain");
     end
+
+    fdi.lpStallAck = 1'b0;
 
     if (fdi.plRxActiveReq) begin
       $fatal(1, "FDI plRxActiveReq remained asserted in Retrain");
