@@ -21,10 +21,10 @@ module ucie_d2d_test (
     fdi.lpRxActiveSts = 1'b0;
     wait_cycles(2);
 
-    // Send both remote requests, then allow stall handshake completion.
+    // Drive both state-entry responses from remote side, then allow stall handshake completion.
     // Spec intent: Disabled transition has higher priority than LinkReset.
-    send_rdi_sideband_msg(sb_adapter0_req_linkreset());
-    send_rdi_sideband_msg(sb_adapter0_req_disabled());
+    send_rdi_sideband_msg(sb_adapter0_rsp_linkreset());
+    send_rdi_sideband_msg(sb_adapter0_rsp_disabled());
 
     @(negedge clock);
     rdi.plStallReq = 1'b1;
