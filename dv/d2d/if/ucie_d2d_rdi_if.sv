@@ -69,11 +69,15 @@ interface ucie_d2d_rdi_if #(
   // Sideband packets are sent least-significant beat first by the Chisel serdes.
   task automatic send_sideband_msg(input logic [127:0] msg);
     int beat;
-    plCfgVld = 1'b1;
     for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+      @(negedge lclk) begin
+      end
+      plCfgVld = 1'b1;
       plCfg = msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH];
       @(posedge lclk) begin
       end
+    end
+    @(negedge lclk) begin
     end
     plCfgVld = 1'b0;
     plCfg = '0;

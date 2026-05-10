@@ -61,6 +61,7 @@ elab:
 	fi
 
 force-elab: check-java
+	rm -rf $(GEN_DIR) $(SIM_DIR)
 	cd $(SCALA_DIR) && ./mill -i d2ddv.runMain $(ELAB_MAIN) \
 		--target-dir $(GEN_DIR) \
 		--data-bytes $(DATA_BYTES) \

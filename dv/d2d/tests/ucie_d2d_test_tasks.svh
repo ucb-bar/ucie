@@ -72,11 +72,15 @@ endtask
 task automatic send_rdi_sideband_msg(input logic [127:0] msg);
   int beat;
 
-  rdi.plCfgVld = 1'b1;
   for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+    @(negedge clock) begin
+    end
+    rdi.plCfgVld = 1'b1;
     rdi.plCfg = msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH];
     @(posedge clock) begin
     end
+  end
+  @(negedge clock) begin
   end
   rdi.plCfgVld = 1'b0;
   rdi.plCfg = '0;
