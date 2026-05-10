@@ -130,5 +130,31 @@ module ucie_d2d_dv_top;
     end
     $fatal(1, "D2D DV test timeout after %0d cycles", timeout_cycles);
   end
+
+`ifdef D2D_DV_DEBUG_INTERNAL
+  initial begin
+    $display("D2D internal debug enabled");
+  end
+
+  always @(posedge clock) begin
+    if (!reset) begin
+      $display(
+        "D2DDBG t=%0t linkState=0x%0h initState=0x%0h param_rcv=%0b param_snt=%0b sb_rcv=0x%0h sb_snd=0x%0h sb_rdy=%0b fdi_inband=%0b rdi_lpStateReq=0x%0h rdi_plCfgVld=%0b rdi_plCfg=0x%0h",
+        $time,
+        dut.dut.linkManager.linkStateReg,
+        dut.dut.linkManager.linkInitStateReg,
+        dut.dut.linkManager.paramExchSbMsgRcvFlag,
+        dut.dut.linkManager.paramExchSbMsgSntFlag,
+        dut.dut.linkManager.io_sb_rcv,
+        dut.dut.linkManager.io_sb_snd,
+        dut.dut.linkManager.io_sb_rdy,
+        fdi.plInbandPres,
+        rdi.lpStateReq,
+        rdi.plCfgVld,
+        rdi.plCfg
+      );
+    end
+  end
+`endif
   
 endmodule

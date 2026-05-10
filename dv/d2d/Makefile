@@ -28,6 +28,10 @@ VCS_OPTS ?= \
 	-kdb \
 	-lca
 
+ifeq ($(DEBUG_INTERNAL),1)
+VCS_OPTS += +define+D2D_DV_DEBUG_INTERNAL
+endif
+
 TEST_SRCS ?= $(UCIE_ROOT)/dv/d2d/tests/$(TEST)_test.sv
 
 DV_SRCS ?= \
