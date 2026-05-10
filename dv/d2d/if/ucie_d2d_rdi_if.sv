@@ -48,7 +48,7 @@ interface ucie_d2d_rdi_if #(
     plTrainError = 1'b0;
     plPhyInRecenter = 1'b0;
     plStallReq = 1'b0;
-    plSpeedmode = 3'h0;
+    plSpeedmode = 4'h0;
     plMaxSpeedmode = 1'b0;
     plLnkCfg = 3'h0;
     plClkReq = 1'b0;
@@ -64,6 +64,18 @@ interface ucie_d2d_rdi_if #(
 
   task automatic drive_state(logic [3:0] state);
     plStateSts = state;
+  endtask
+
+  // Sideband packets are sent least-significant beat first by the Chisel serdes.
+  task automatic send_sideband_msg(input logic [127:0] msg);
+    int beat;
+    plCfgVld = 1'b1;
+    for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+      plCfg = msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH];
+      @(posedge lclk);
+    end
+    plCfgVld = 1'b0;
+    plCfg = '0;
   endtask
 
 endinterface
