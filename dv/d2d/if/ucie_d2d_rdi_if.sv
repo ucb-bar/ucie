@@ -21,7 +21,7 @@ interface ucie_d2d_rdi_if #(
   logic                  plPhyInRecenter;
   logic                  plStallReq;
   logic                  lpStallAck;
-  logic [2:0]            plSpeedmode;
+  logic [3:0]            plSpeedmode;
   logic                  plMaxSpeedmode;
   logic [2:0]            plLnkCfg;
   logic                  plClkReq;

@@ -39,7 +39,18 @@ DV_SRCS ?= \
 RTL_FILELIST := $(SIM_DIR)/rtl.f
 SIMV := $(SIM_DIR)/simv-$(TEST)
 
-.PHONY: elab force-elab vcs run regression clean
+.PHONY: check-java elab force-elab vcs run regression clean
+
+check-java:
+	@version="$$(java -version 2>&1 | awk -F '[\".]' '/version/ { if ($$2 == "1") print $$3; else print $$2; exit }')"; \
+	if [ -z "$$version" ] || [ "$$version" -lt 17 ]; then \
+		echo "Mill elaboration requires Java 17 or newer."; \
+		echo "Current java is:"; \
+		java -version 2>&1; \
+		echo ""; \
+		echo "Use Java 17 for 'make elab' or 'make force-elab', then source VCS paths for 'make run'."; \
+		exit 1; \
+	fi
 
 elab:
 	@if [ -f "$(GEN_DIR)/$(ELAB_TOP).sv" ]; then \
@@ -48,7 +59,7 @@ elab:
 		$(MAKE) force-elab; \
 	fi
 
-force-elab:
+force-elab: check-java
 	cd $(SCALA_DIR) && ./mill -i d2ddv.runMain $(ELAB_MAIN) \
 		--target-dir $(GEN_DIR) \
 		--data-bytes $(DATA_BYTES) \

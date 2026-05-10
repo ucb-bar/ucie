@@ -6,7 +6,7 @@ import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 
 class D2DAdapterDvTop(dataBytes: Int, sidebandWidth: Int) extends Module {
-  val fdiParams = FdiParams(width = dataBytes, sbWidth = sidebandWidth)
+  val fdiParams = FdiParams(nBytes = dataBytes, ncWidth = sidebandWidth)
   val rdiParams = RdiParams(nBytes = dataBytes, ncWidth = sidebandWidth)
   val sbParams = SidebandParams()
 

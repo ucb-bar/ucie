@@ -19,6 +19,10 @@ From this directory:
 make elab
 ```
 
+Elaboration uses Mill and requires Java 17 or newer. If you have sourced the
+VCS tool paths and they put Java 8 first in `PATH`, run elaboration in a fresh
+shell or restore Java 17 before running `make elab`.
+
 This runs:
 
 ```bash
@@ -33,6 +37,7 @@ cd ../../scala
 Build a VCS simulator from the emitted RTL:
 
 ```bash
+source ../../tool_path.sh
 make vcs
 ```
 
@@ -40,6 +45,12 @@ Run it:
 
 ```bash
 make run
+```
+
+Run a specific directed test:
+
+```bash
+make run TEST=smoke
 ```
 
 By default, VCS compiles the emitted `D2DAdapterDvTop` under the stable
@@ -52,8 +63,22 @@ Override widths as needed:
 make elab DATA_BYTES=64 SIDEBAND_WIDTH=32
 ```
 
-## Next Integration Step
+## Harness Layout
 
-Add new tests by extending or replacing `dv/d2d/tb/ucie_d2d_dv_top.sv`, or by
-adding extra files through `DV_SRCS`. Keep tests and assertions pointed at the
-wrapper/interface signals rather than generated internal hierarchy.
+The harness is intentionally simple:
+
+- `common/ucie_d2d_dv_pkg.sv` holds shared constants and small helper functions.
+- `if/` holds the stable FDI/RDI interfaces and simple drive tasks.
+- `checkers/` holds always-on assertions that should apply to every test.
+- `tests/<name>_test.sv` defines the selected `ucie_d2d_test` module.
+- `tb/ucie_d2d_dv_top.sv` owns clock/reset, DUT wiring, common checkers, and test instantiation.
+
+Add a new test by creating `tests/<name>_test.sv` with a module named
+`ucie_d2d_test`, then run:
+
+```bash
+make run TEST=<name>
+```
+
+Keep tests and assertions pointed at the wrapper/interface signals rather than
+generated internal hierarchy.
