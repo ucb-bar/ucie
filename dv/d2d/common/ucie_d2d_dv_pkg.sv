@@ -31,12 +31,16 @@ package ucie_d2d_dv_pkg;
   localparam logic [4:0] SB_OP_MSG_WITH_64B_DATA = 5'b11011;
 
   localparam logic [7:0] SB_ADAPTER0_REQ_ACTIVE_MSGCODE = 8'h03;
+  localparam logic [7:0] SB_ADAPTER0_REQ_LINKRESET_MSGCODE = 8'h03;
+  localparam logic [7:0] SB_ADAPTER0_REQ_DISABLED_MSGCODE = 8'h03;
   localparam logic [7:0] SB_ADAPTER0_RSP_ACTIVE_MSGCODE = 8'h04;
   localparam logic [7:0] SB_ADAPTER0_RSP_LINKRESET_MSGCODE = 8'h04;
+  localparam logic [7:0] SB_ADAPTER0_RSP_DISABLED_MSGCODE = 8'h04;
   localparam logic [7:0] SB_ADVCAP_ADAPTER_MSGCODE = 8'h01;
 
   localparam logic [7:0] SB_ACTIVE_SUBCODE = 8'h01;
   localparam logic [7:0] SB_LINKRESET_SUBCODE = 8'h09;
+  localparam logic [7:0] SB_DISABLED_SUBCODE = 8'h0c;
   localparam logic [7:0] SB_ADVCAP_ADAPTER_SUBCODE = 8'h00;
 
   localparam logic [63:0] SB_ADVCAP_RAW_STREAMING_STACK0 = 64'h0000_0000_0000_0091;
@@ -129,6 +133,33 @@ package ucie_d2d_dv_pkg;
     );
   endfunction
 
+  function automatic logic [127:0] sb_adapter0_req_linkreset();
+    return sb_msg(
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_REQ_LINKRESET_MSGCODE,
+      SB_LINKRESET_SUBCODE,
+      64'h0
+    );
+  endfunction
+
+  function automatic logic [127:0] sb_adapter0_req_disabled();
+    return sb_msg(
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_REQ_DISABLED_MSGCODE,
+      SB_DISABLED_SUBCODE,
+      64'h0
+    );
+  endfunction
+
+  function automatic logic [127:0] sb_adapter0_rsp_disabled();
+    return sb_msg(
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_RSP_DISABLED_MSGCODE,
+      SB_DISABLED_SUBCODE,
+      64'h0
+    );
+  endfunction
+
   function automatic bit sb_is_advcap_adapter(input logic [127:0] msg);
     return sb_msg_matches(
       msg,
@@ -144,6 +175,24 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_RSP_ACTIVE_MSGCODE,
       SB_ACTIVE_SUBCODE
+    );
+  endfunction
+
+  function automatic bit sb_is_adapter0_rsp_linkreset(input logic [127:0] msg);
+    return sb_msg_matches(
+      msg,
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_RSP_LINKRESET_MSGCODE,
+      SB_LINKRESET_SUBCODE
+    );
+  endfunction
+
+  function automatic bit sb_is_adapter0_rsp_disabled(input logic [127:0] msg);
+    return sb_msg_matches(
+      msg,
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_RSP_DISABLED_MSGCODE,
+      SB_DISABLED_SUBCODE
     );
   endfunction
 
