@@ -92,7 +92,7 @@ object `package` extends ScalaModule, PublishModule {
       )
 
       def sources = Task.Sources(
-        "test/src/d2dadapter"
+        "scala/test/src/d2dadapter"
       )
 
       def testParallelism = false
