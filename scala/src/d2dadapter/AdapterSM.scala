@@ -238,6 +238,8 @@ class AdapterSM(
       is(LinkInitState.PARAM_EXCH) {
         when(io.sb_rcv === SideBandMessage.ADV_CAP) {
           paramExchSbMsgRcvFlag := true.B
+        }.elsewhen(io.sb_rcv === SideBandMessage.ADV_CAP_STALL) {
+          paramExchSbMsgRcvFlag := paramExchSbMsgRcvFlag
         }.otherwise {
           paramExchSbMsgRcvFlag := paramExchSbMsgRcvFlag
         }
@@ -308,7 +310,9 @@ class AdapterSM(
   // Parameter exchange timeout handling.
   // Per spec, this timeout counts only while RDI is in Active.
   when(linkStateReg === RDIState.reset && linkInitStateReg === LinkInitState.PARAM_EXCH) {
-    when(io.rdi_pl_state_sts === RDIState.active && !(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag)) {
+    when(io.sb_rcv === SideBandMessage.ADV_CAP_STALL) {
+      paramExchTimeoutCntReg := 0.U
+    }.elsewhen(io.rdi_pl_state_sts === RDIState.active && !(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag)) {
       when(paramExchTimeoutCntReg < ParamExchTimeoutCycles.U) {
         paramExchTimeoutCntReg := paramExchTimeoutCntReg + 1.U
       }.otherwise {

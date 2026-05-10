@@ -61,6 +61,7 @@ package ucie_d2d_dv_pkg;
     input logic [4:0] opcode,
     input logic [7:0] msgcode,
     input logic [7:0] msgsubcode,
+    input logic [15:0] msginfo,
     input logic [63:0] data
   );
     logic [63:0] header;
@@ -71,6 +72,7 @@ package ucie_d2d_dv_pkg;
     header[26:22] = 5'b1_01_00; // Match Chisel SBMsgCreate: remote + D2D layer + reserved.
     header[31:29] = 3'b001; // D2D source.
     header[39:32] = msgsubcode;
+    header[55:40] = msginfo;
     header[58:56] = 3'b101; // Remote D2D destination.
     header[62] = ^header[61:0];
     header[63] = (opcode == SB_OP_MSG_WITH_64B_DATA) ? ^data : 1'b0;
@@ -81,9 +83,10 @@ package ucie_d2d_dv_pkg;
     input logic [4:0] opcode,
     input logic [7:0] msgcode,
     input logic [7:0] msgsubcode,
+    input logic [15:0] msginfo,
     input logic [63:0] data
   );
-    return {data, sb_header(opcode, msgcode, msgsubcode, data)};
+    return {data, sb_header(opcode, msgcode, msgsubcode, msginfo, data)};
   endfunction
 
   function automatic bit sb_msg_matches(
@@ -102,6 +105,17 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITH_64B_DATA,
       SB_ADVCAP_ADAPTER_MSGCODE,
       SB_ADVCAP_ADAPTER_SUBCODE,
+      16'h0000,
+      SB_ADVCAP_RAW_STREAMING_STACK0
+    );
+  endfunction
+
+  function automatic logic [127:0] sb_advcap_adapter_stall();
+    return sb_msg(
+      SB_OP_MSG_WITH_64B_DATA,
+      SB_ADVCAP_ADAPTER_MSGCODE,
+      SB_ADVCAP_ADAPTER_SUBCODE,
+      16'hffff,
       SB_ADVCAP_RAW_STREAMING_STACK0
     );
   endfunction
@@ -111,6 +125,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_REQ_ACTIVE_MSGCODE,
       SB_ACTIVE_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -120,6 +135,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_RSP_ACTIVE_MSGCODE,
       SB_ACTIVE_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -129,6 +145,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_RSP_LINKRESET_MSGCODE,
       SB_LINKRESET_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -138,6 +155,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_REQ_LINKRESET_MSGCODE,
       SB_LINKRESET_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -147,6 +165,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_REQ_DISABLED_MSGCODE,
       SB_DISABLED_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -156,6 +175,7 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITHOUT_DATA,
       SB_ADAPTER0_RSP_DISABLED_MSGCODE,
       SB_DISABLED_SUBCODE,
+      16'h0000,
       64'h0
     );
   endfunction
@@ -166,7 +186,16 @@ package ucie_d2d_dv_pkg;
       SB_OP_MSG_WITH_64B_DATA,
       SB_ADVCAP_ADAPTER_MSGCODE,
       SB_ADVCAP_ADAPTER_SUBCODE
-    );
+    ) && (msg[55:40] !== 16'hffff);
+  endfunction
+
+  function automatic bit sb_is_advcap_adapter_stall(input logic [127:0] msg);
+    return sb_msg_matches(
+      msg,
+      SB_OP_MSG_WITH_64B_DATA,
+      SB_ADVCAP_ADAPTER_MSGCODE,
+      SB_ADVCAP_ADAPTER_SUBCODE
+    ) && (msg[55:40] === 16'hffff);
   endfunction
 
   function automatic bit sb_is_adapter0_rsp_active(input logic [127:0] msg);

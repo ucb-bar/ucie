@@ -37,6 +37,7 @@ object SideBandMessage{
     val RSP_LINKRESET: UInt = "b011001".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val RSP_DISABLED: UInt = "b011100".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val ADV_CAP: UInt = "b100100".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
+    val ADV_CAP_STALL: UInt = "b100101".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
     val REGISTER_ACCESS: UInt = "b101000".U(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)
 }
 

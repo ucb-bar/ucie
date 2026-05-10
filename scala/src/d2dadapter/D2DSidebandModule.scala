@@ -110,7 +110,11 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
         }.elsewhen(SBMsgCompare(sidebandChannel.io.layer.out.bits, SBM.LINKMGMT_ADAPTER0_RSP_DISABLE)) {
             io.sb.rcv := SideBandMessage.RSP_DISABLED
         }.elsewhen(SBMsgCompare(sidebandChannel.io.layer.out.bits, SBM.ADVCAP_ADAPTER)) {
-            io.sb.rcv := SideBandMessage.ADV_CAP
+            when(sidebandChannel.io.layer.out.bits(55, 40) === "hFFFF".U) {
+                io.sb.rcv := SideBandMessage.ADV_CAP_STALL
+            }.otherwise {
+                io.sb.rcv := SideBandMessage.ADV_CAP
+            }
         }
     }
 
