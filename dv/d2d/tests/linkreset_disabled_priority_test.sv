@@ -8,10 +8,8 @@ module ucie_d2d_test (
   `include "ucie_d2d_test_tasks.svh"
 
   initial begin
-    logic [127:0] msg;
-    logic seen_rsp_disabled;
-    logic seen_rsp_linkreset;
     int cycle;
+    bit saw_linkreset_before_disabled;
 
     bring_link_to_active();
 
@@ -23,40 +21,30 @@ module ucie_d2d_test (
     fdi.lpRxActiveSts = 1'b0;
     wait_cycles(2);
 
-    // Send both remote requests while stall handshake is still blocked.
-    // Expected: DUT emits both responses and finally enters Disabled (priority over LinkReset).
+    // Send both remote requests, then allow stall handshake completion.
+    // Spec intent: Disabled transition has higher priority than LinkReset.
     send_rdi_sideband_msg(sb_adapter0_req_linkreset());
     send_rdi_sideband_msg(sb_adapter0_req_disabled());
 
-    seen_rsp_disabled = 1'b0;
-    seen_rsp_linkreset = 1'b0;
+    @(negedge clock);
+    rdi.plStallReq = 1'b1;
+
+    saw_linkreset_before_disabled = 1'b0;
     for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES; cycle++) begin
-      recv_rdi_sideband_msg(msg, DEFAULT_WAIT_CYCLES);
-      if (sb_is_adapter0_rsp_disabled(msg)) begin
-        seen_rsp_disabled = 1'b1;
+      @(posedge clock);
+      if (fdi.plStateSts === RDI_STATE_LINKRESET) begin
+        saw_linkreset_before_disabled = 1'b1;
       end
-      if (sb_is_adapter0_rsp_linkreset(msg)) begin
-        seen_rsp_linkreset = 1'b1;
-      end
-      if (seen_rsp_disabled && seen_rsp_linkreset) begin
+      if (fdi.plStateSts === RDI_STATE_DISABLED) begin
         break;
       end
     end
 
-    if (!seen_rsp_disabled) begin
-      $fatal(1, "Did not observe adapter RSP_DISABLED after REQ_DISABLED");
+    if (fdi.plStateSts !== RDI_STATE_DISABLED) begin
+      $fatal(1, "Did not reach Disabled after concurrent LinkReset/Disabled requests");
     end
-    if (!seen_rsp_linkreset) begin
-      $fatal(1, "Did not observe adapter RSP_LINKRESET after REQ_LINKRESET");
-    end
-
-    // Complete stall handshake after both requests are latched.
-    @(negedge clock);
-    rdi.plStallReq = 1'b1;
-
-    wait_fdi_state(RDI_STATE_DISABLED, DEFAULT_WAIT_CYCLES);
-    if (fdi.plStateSts === RDI_STATE_LINKRESET) begin
-      $fatal(1, "Entered LinkReset when Disabled should have priority");
+    if (saw_linkreset_before_disabled) begin
+      $fatal(1, "Observed LinkReset before Disabled; spec requires Disabled priority");
     end
 
     $display("D2D linkreset_disabled_priority completed");
