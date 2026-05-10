@@ -36,6 +36,10 @@ class AdapterSM(
   val sbParams: SidebandParams,
 ) extends Module {
   val io = IO(new AdapterSMIO(fdiParams, rdiParams))
+  // Simulation-friendly parameter exchange timeout budget in cycles.
+  // Replace with a clock-derived value when the final platform frequency is fixed.
+  private val ParamExchTimeoutCycles = 700
+  private val ParamExchTimeoutWidth = log2Ceil(ParamExchTimeoutCycles + 1)
 
   // Top-level state / output registers
   val linkStateReg = RegInit(RDIState.reset)
@@ -56,6 +60,8 @@ class AdapterSM(
   val activeSbMsgExtRspReg = RegInit(false.B)
   val activeSbMsgExtReqReg = RegInit(false.B)
   val transitionToActiveReg = RegInit(false.B)
+  val paramExchTimeoutCntReg = RegInit(0.U(ParamExchTimeoutWidth.W))
+  val paramExchTimeoutFiredReg = RegInit(false.B)
 
   // Link-reset request/response tracking
   val linkResetFdiReqReg = RegInit(false.B)
@@ -81,6 +87,7 @@ class AdapterSM(
 
   // Common state-change helpers
   val linkErrorPhySts = io.rdi_pl_state_sts === RDIState.linkError
+  val linkErrorEvent = linkErrorPhySts || paramExchTimeoutFiredReg
   val stallHandshakeDone = linkMgmtStallReqReg && io.linkmgmt_stalldone
   val rxDeactive = !io.fdi_lp_rx_active_sts && !fdiPlRxActiveReqReg
   val retrainPhySts = io.rdi_pl_state_sts === RDIState.retrain
@@ -213,7 +220,7 @@ class AdapterSM(
   val linkInitSbAccepted = linkInitSbSelected && io.sb_rdy
 
   // LinkError propagation from protocol to PHY.
-  rdiLpLinkErrorReg := io.fdi_lp_linkerror
+  rdiLpLinkErrorReg := io.fdi_lp_linkerror || paramExchTimeoutFiredReg
 
   // Link-init state update
   when(linkStateReg === RDIState.reset) {
@@ -296,6 +303,20 @@ class AdapterSM(
     activeSbMsgExtRspReg := false.B
     activeSbMsgExtReqReg := false.B
     transitionToActiveReg := false.B
+  }
+
+  // Parameter exchange timeout handling (spec Step 8 baseline).
+  when(linkStateReg === RDIState.reset && linkInitStateReg === LinkInitState.PARAM_EXCH) {
+    when(!(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag)) {
+      when(paramExchTimeoutCntReg < ParamExchTimeoutCycles.U) {
+        paramExchTimeoutCntReg := paramExchTimeoutCntReg + 1.U
+      }.otherwise {
+        paramExchTimeoutFiredReg := true.B
+      }
+    }
+  }.otherwise {
+    paramExchTimeoutCntReg := 0.U
+    paramExchTimeoutFiredReg := false.B
   }
 
   // Link-reset state update
@@ -411,14 +432,14 @@ class AdapterSM(
   }
 
   // RX-active arbitration
-  when(linkStateReg === RDIState.active) {
-    when(linkResetEntry || disabledEntry || retrainPhySts || linkErrorPhySts) {
+    when(linkStateReg === RDIState.active) {
+    when(linkResetEntry || disabledEntry || retrainPhySts || linkErrorEvent) {
       fdiPlRxActiveReqReg := false.B
     }.otherwise {
       fdiPlRxActiveReqReg := true.B
     }
   }.otherwise {
-    when(linkResetEntry || disabledEntry || linkErrorPhySts) {
+    when(linkResetEntry || disabledEntry || linkErrorEvent) {
       fdiPlRxActiveReqReg := false.B
     }.otherwise {
       fdiPlRxActiveReqReg := linkInitFdiPlRxActiveReq
@@ -427,7 +448,7 @@ class AdapterSM(
 
   // Inband-presence arbitration
   when(linkStateReg === RDIState.reset) {
-    when(linkErrorPhySts) {
+    when(linkErrorEvent) {
       fdiPlInbandPresReg := false.B
     }.otherwise {
       fdiPlInbandPresReg := linkInitFdiPlInbandPres
@@ -439,7 +460,7 @@ class AdapterSM(
   ) {
     fdiPlInbandPresReg := false.B
   }.otherwise {
-    when(linkErrorPhySts) {
+    when(linkErrorEvent) {
       fdiPlInbandPresReg := false.B
     }.otherwise {
       fdiPlInbandPresReg := true.B
@@ -480,7 +501,7 @@ class AdapterSM(
   // Unified link-state machine
   switch(linkStateReg) {
     is(RDIState.reset) {
-      when(linkErrorPhySts) {
+      when(linkErrorEvent) {
         linkStateReg := RDIState.linkError
       }.elsewhen(disabledEntry && rxDeactive) {
         linkStateReg := RDIState.disabled
@@ -491,7 +512,7 @@ class AdapterSM(
       }
     }
     is(RDIState.active) {
-      when(linkErrorPhySts) {
+      when(linkErrorEvent) {
         linkStateReg := RDIState.linkError
       }.elsewhen(disabledEntry && rxDeactive && stallHandshakeDone) {
         linkStateReg := RDIState.disabled
@@ -502,7 +523,7 @@ class AdapterSM(
       }
     }
     is(RDIState.retrain) {
-      when(linkErrorPhySts) {
+      when(linkErrorEvent) {
         linkStateReg := RDIState.linkError
       }.elsewhen(disabledEntry) {
         linkStateReg := RDIState.disabled
@@ -517,7 +538,7 @@ class AdapterSM(
       }
     }
     is(RDIState.disabled) {
-      when(linkErrorPhySts) {
+      when(linkErrorEvent) {
         linkStateReg := RDIState.linkError
       }.elsewhen(io.fdi_lp_state_req === RDIStateReq.active ||
                  io.rdi_pl_state_sts === RDIState.reset) {
@@ -525,7 +546,7 @@ class AdapterSM(
       }
     }
     is(RDIState.linkReset) {
-      when(linkErrorPhySts) {
+      when(linkErrorEvent) {
         linkStateReg := RDIState.linkError
       }.elsewhen(disabledEntry && rxDeactive) {
         linkStateReg := RDIState.disabled
