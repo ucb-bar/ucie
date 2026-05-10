@@ -19,11 +19,13 @@ package ucie_d2d_dv_pkg;
   localparam logic [3:0] RDI_STATE_LINKRESET = 4'h9;
   localparam logic [3:0] RDI_STATE_LINKERROR = 4'ha;
   localparam logic [3:0] RDI_STATE_RETRAIN = 4'hb;
+  localparam logic [3:0] RDI_STATE_DISABLED = 4'hc;
 
   localparam logic [3:0] RDI_STATE_REQ_NOP = 4'h0;
   localparam logic [3:0] RDI_STATE_REQ_ACTIVE = 4'h1;
   localparam logic [3:0] RDI_STATE_REQ_LINKRESET = 4'h9;
   localparam logic [3:0] RDI_STATE_REQ_RETRAIN = 4'hb;
+  localparam logic [3:0] RDI_STATE_REQ_DISABLED = 4'hc;
 
   localparam logic [4:0] SB_OP_MSG_WITHOUT_DATA = 5'b10010;
   localparam logic [4:0] SB_OP_MSG_WITH_64B_DATA = 5'b11011;
@@ -46,6 +48,7 @@ package ucie_d2d_dv_pkg;
       RDI_STATE_LINKRESET: return "LinkReset";
       RDI_STATE_LINKERROR: return "LinkError";
       RDI_STATE_RETRAIN:   return "Retrain";
+      RDI_STATE_DISABLED:  return "Disabled";
       default:             return "Unknown";
     endcase
   endfunction
