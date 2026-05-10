@@ -84,12 +84,12 @@ interface ucie_d2d_rdi_if #(
     int cycle;
 
     msg = '0;
-    for (cycle = 0; cycle < max_cycles && !lpCfgVld; cycle++) begin
+    for (cycle = 0; cycle < max_cycles && lpCfgVld !== 1'b1; cycle++) begin
       @(posedge lclk) begin
       end
     end
 
-    if (!lpCfgVld) begin
+    if (lpCfgVld !== 1'b1) begin
       $fatal(1, "Timed out waiting for RDI sideband output");
     end
 

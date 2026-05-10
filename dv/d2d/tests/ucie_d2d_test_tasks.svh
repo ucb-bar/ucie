@@ -9,7 +9,7 @@ task automatic wait_fdi_state(input logic [3:0] state, input int max_cycles);
   int cycle;
 
   for (cycle = 0; cycle < max_cycles; cycle++) begin
-    if (fdi.plStateSts == state) begin
+    if (fdi.plStateSts === state) begin
       return;
     end
     @(posedge clock) begin
@@ -23,7 +23,7 @@ task automatic wait_fdi_rx_active_req(input int max_cycles);
   int cycle;
 
   for (cycle = 0; cycle < max_cycles; cycle++) begin
-    if (fdi.plRxActiveReq) begin
+    if (fdi.plRxActiveReq === 1'b1) begin
       return;
     end
     @(posedge clock) begin
@@ -52,24 +52,30 @@ task automatic complete_active_bringup();
 
   rdi.drive_state(RDI_STATE_ACTIVE);
 
+  $display("D2D bring-up: waiting for adapter ADV_CAP");
   rdi.recv_sideband_msg(msg, DEFAULT_WAIT_CYCLES);
   if (!sb_is_advcap_adapter(msg)) begin
     $fatal(1, "Expected adapter ADV_CAP sideband message, got 0x%032h", msg);
   end
 
+  $display("D2D bring-up: sending remote ADV_CAP");
   rdi.send_sideband_msg(sb_advcap_adapter());
   wait_cycles(8);
 
+  $display("D2D bring-up: sending remote REQ_ACTIVE");
   rdi.send_sideband_msg(sb_adapter0_req_active());
 
+  $display("D2D bring-up: waiting for FDI plRxActiveReq");
   wait_fdi_rx_active_req(DEFAULT_WAIT_CYCLES);
   fdi.lpRxActiveSts = 1'b1;
 
+  $display("D2D bring-up: waiting for adapter RSP_ACTIVE");
   rdi.recv_sideband_msg(msg, DEFAULT_WAIT_CYCLES);
   if (!sb_is_adapter0_rsp_active(msg)) begin
     $fatal(1, "Expected adapter RSP_ACTIVE sideband message, got 0x%032h", msg);
   end
 
+  $display("D2D bring-up: sending remote RSP_ACTIVE");
   rdi.send_sideband_msg(sb_adapter0_rsp_active());
   wait_fdi_state(RDI_STATE_ACTIVE, DEFAULT_WAIT_CYCLES);
 endtask

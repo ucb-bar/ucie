@@ -85,7 +85,9 @@ package ucie_d2d_dv_pkg;
     input logic [7:0] msgcode,
     input logic [7:0] msgsubcode
   );
-    return msg[4:0] == opcode && msg[21:14] == msgcode && msg[39:32] == msgsubcode;
+    return (msg[4:0] === opcode) &&
+      (msg[21:14] === msgcode) &&
+      (msg[39:32] === msgsubcode);
   endfunction
 
   function automatic logic [127:0] sb_advcap_adapter();

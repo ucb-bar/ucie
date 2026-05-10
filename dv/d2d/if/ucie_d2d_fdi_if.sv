@@ -68,12 +68,12 @@ interface ucie_d2d_fdi_if #(
     int cycle;
 
     msg = '0;
-    for (cycle = 0; cycle < max_cycles && !plCfgVld; cycle++) begin
+    for (cycle = 0; cycle < max_cycles && plCfgVld !== 1'b1; cycle++) begin
       @(posedge lclk) begin
       end
     end
 
-    if (!plCfgVld) begin
+    if (plCfgVld !== 1'b1) begin
       $fatal(1, "Timed out waiting for FDI sideband output");
     end
 
