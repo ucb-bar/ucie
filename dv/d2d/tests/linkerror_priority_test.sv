@@ -7,14 +7,6 @@ module ucie_d2d_test (
   import ucie_d2d_dv_pkg::*;
   `include "ucie_d2d_test_tasks.svh"
 
-  task automatic recover_to_active();
-    fdi.lpStateReq = RDI_STATE_REQ_NOP;
-    fdi.lpRxActiveSts = 1'b0;
-    wait_fdi_state(RDI_STATE_RESET, DEFAULT_WAIT_CYCLES);
-    rdi.drive_state(RDI_STATE_RESET);
-    complete_active_bringup();
-  endtask
-
   task automatic expect_linkerror_priority(input logic [3:0] competing_req, input string competing_name);
     int cycle;
 
@@ -51,10 +43,6 @@ module ucie_d2d_test (
     bring_link_to_active();
 
     expect_linkerror_priority(RDI_STATE_REQ_LINKRESET, "LinkReset");
-    $display("D2D linkerror_priority linkreset competition completed");
-
-    recover_to_active();
-    expect_linkerror_priority(RDI_STATE_REQ_DISABLED, "Disabled");
 
     $display("D2D linkerror_priority completed");
     $finish;

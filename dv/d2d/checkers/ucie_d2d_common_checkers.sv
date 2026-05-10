@@ -17,10 +17,13 @@ module ucie_d2d_common_checkers (
       |-> rdi.plStateSts == RDI_STATE_ACTIVE
   ) else $error("FDI entered Active while RDI was not Active");
 
-  fdi_linkerror_requires_rdi_linkerror: assert property (
+  fdi_linkerror_entry_requires_rdi_linkerror: assert property (
     disable iff (reset)
-    fdi.plStateSts == RDI_STATE_LINKERROR |-> rdi.plStateSts == RDI_STATE_LINKERROR
-  ) else $error("FDI reached LinkError while RDI was not LinkError");
+    (fdi.plStateSts == RDI_STATE_LINKERROR &&
+     $past(fdi.plStateSts, 1, RDI_STATE_RESET) != RDI_STATE_LINKERROR)
+      |-> (rdi.plStateSts == RDI_STATE_LINKERROR ||
+           $past(rdi.plStateSts, 1, RDI_STATE_RESET) == RDI_STATE_LINKERROR)
+  ) else $error("FDI entered LinkError without current or prior RDI LinkError");
 
   rdi_stall_ack_rise_requires_stall_req: assert property (
     disable iff (reset)

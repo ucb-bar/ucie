@@ -11,7 +11,7 @@ ELAB_MAIN ?= edu.berkeley.cs.uciedigital.d2dadapter.D2DAdapterDvElaborate
 ELAB_TOP ?= D2DAdapterDvTop
 TB_TOP ?= ucie_d2d_dv_top
 TEST ?= smoke
-REGRESSION_TESTS ?= smoke active_ordering no_early_data linkerror_propagation linkerror_priority stall_handshake
+REGRESSION_TESTS ?= smoke active_ordering no_early_data linkerror_propagation linkerror_priority linkerror_disabled_priority stall_handshake
 
 VCS ?= vcs -full64
 VCS_OPTS ?= \
