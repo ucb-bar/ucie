@@ -2,6 +2,7 @@ package edu.berkeley.cs.uciedigital.d2dadapter
 
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
+import chisel3.simulator.HasSimulator.simulators.vcs
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband.SidebandParams
 import org.scalatest.funspec.AnyFunSpec
