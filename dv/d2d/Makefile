@@ -11,6 +11,7 @@ ELAB_MAIN ?= edu.berkeley.cs.uciedigital.d2dadapter.D2DAdapterDvElaborate
 ELAB_TOP ?= D2DAdapterDvTop
 TB_TOP ?= ucie_d2d_dv_top
 TEST ?= smoke
+RUN_ARGS ?=
 REGRESSION_TESTS ?= smoke active_ordering stage3_rdi_active_gate no_early_data fdi_bringup_after_param rdi_retrain_propagation linkerror_propagation linkerror_priority linkerror_disabled_priority linkerror_exit_blocked linkreset_disabled_priority stall_handshake
 
 VCS ?= vcs -full64
@@ -86,7 +87,7 @@ vcs: $(RTL_FILELIST)
 		-l $(SIM_DIR)/vcs_compile_$(TEST).log
 
 run: vcs
-	$(SIMV) -l $(SIM_DIR)/vcs_run_$(TEST).log
+	$(SIMV) $(RUN_ARGS) -l $(SIM_DIR)/vcs_run_$(TEST).log
 
 regression:
 	@for test in $(REGRESSION_TESTS); do \

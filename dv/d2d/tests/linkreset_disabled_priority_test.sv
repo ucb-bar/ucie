@@ -10,6 +10,8 @@ module ucie_d2d_test (
   initial begin
     int cycle;
     bit saw_linkreset_before_disabled;
+    logic [127:0] msg;
+    bit saw_rsp_disabled;
 
     bring_link_to_active();
 
@@ -21,13 +23,39 @@ module ucie_d2d_test (
     fdi.lpRxActiveSts = 1'b0;
     wait_cycles(2);
 
-    // Drive both state-entry responses from remote side, then allow stall handshake completion.
+    // Competing requests:
+    // 1) local LinkReset request on FDI
+    // 2) remote Disabled request over sideband
     // Spec intent: Disabled transition has higher priority than LinkReset.
-    send_rdi_sideband_msg(sb_adapter0_rsp_linkreset());
-    send_rdi_sideband_msg(sb_adapter0_rsp_disabled());
+    fdi.lpStateReq = RDI_STATE_REQ_LINKRESET;
+    send_rdi_sideband_msg(sb_adapter0_req_disabled());
+
+    // Ensure the disabled request was consumed and responded to before checking state outcome.
+    saw_rsp_disabled = 1'b0;
+    for (cycle = 0; cycle < 8; cycle++) begin
+      recv_rdi_sideband_msg(msg, DEFAULT_WAIT_CYCLES);
+      if (sb_is_adapter0_rsp_disabled(msg)) begin
+        saw_rsp_disabled = 1'b1;
+        break;
+      end
+    end
+    if (!saw_rsp_disabled) begin
+      $fatal(1, "Did not observe adapter RSP_DISABLED after remote REQ_DISABLED");
+    end
+
+    // Complete the Adapter-controlled FDI stall handshake.
+    for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES; cycle++) begin
+      @(posedge clock);
+      if (fdi.plStallReq) begin
+        break;
+      end
+    end
+    if (!fdi.plStallReq) begin
+      $fatal(1, "Timed out waiting for FDI plStallReq during Disabled/LinkReset arbitration");
+    end
 
     @(negedge clock);
-    rdi.plStallReq = 1'b1;
+    fdi.lpStallAck = 1'b1;
 
     saw_linkreset_before_disabled = 1'b0;
     for (cycle = 0; cycle < DEFAULT_WAIT_CYCLES; cycle++) begin
