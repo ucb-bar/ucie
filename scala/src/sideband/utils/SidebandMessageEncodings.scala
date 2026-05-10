@@ -375,10 +375,19 @@ object SBMsgCreate {
       case "D2D" => "b001".U(3.W)
       case "PHY" => "b010".U(3.W)
     }
-    var dstid: UInt = src match {
+    var dstid: UInt = dst match {
+      case "Stack0ProtocolLayer" => "b000".U(3.W)
+      case "Stack1ProtocolLayer" => "b100".U(3.W)
       case "D2D" => "b001".U(3.W) 
       case "PHY" => "b010".U(3.W)
     }
+    val dstLayer: UInt = dst match {
+      case "Stack0ProtocolLayer" => LayerId.protocol.U(2.W)
+      case "Stack1ProtocolLayer" => LayerId.protocol.U(2.W)
+      case "D2D" => LayerId.d2d.U(2.W)
+      case "PHY" => LayerId.logPhy.U(2.W)
+    }
+    val route: UInt = Cat(remote.B.asUInt, dstLayer, 0.U(2.W))
     dstid = (dstid | Cat(remote.B.asUInt, 0.U(2.W)))
     val cp = 0.U(1.W)
     val dp = 0.U(1.W)
@@ -387,7 +396,7 @@ object SBMsgCreate {
     val opcode = base(0)
 
     val msg = Cat(dp, cp, 0.U(3.W), dstid, msgInfo, msgSubcode, 
-                  srcid, 0.U(2.W), 0.U(5.W), msgCode, 0.U(9.W), opcode)
+                  srcid, 0.U(2.W), route, msgCode, 0.U(9.W), opcode)
 
     Cat(data, msg)
   }

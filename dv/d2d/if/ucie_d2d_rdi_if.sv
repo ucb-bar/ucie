@@ -72,10 +72,32 @@ interface ucie_d2d_rdi_if #(
     plCfgVld = 1'b1;
     for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
       plCfg = msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH];
-      @(posedge lclk);
+      @(posedge lclk) begin
+      end
     end
     plCfgVld = 1'b0;
     plCfg = '0;
+  endtask
+
+  task automatic recv_sideband_msg(output logic [127:0] msg, input int max_cycles);
+    int beat;
+    int cycle;
+
+    msg = '0;
+    for (cycle = 0; cycle < max_cycles && !lpCfgVld; cycle++) begin
+      @(posedge lclk) begin
+      end
+    end
+
+    if (!lpCfgVld) begin
+      $fatal(1, "Timed out waiting for RDI sideband output");
+    end
+
+    for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+      msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH] = lpCfg;
+      @(posedge lclk) begin
+      end
+    end
   endtask
 
 endinterface

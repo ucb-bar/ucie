@@ -63,4 +63,25 @@ interface ucie_d2d_fdi_if #(
     lpStateReq = 4'h0;
   endtask
 
+  task automatic recv_sideband_msg(output logic [127:0] msg, input int max_cycles);
+    int beat;
+    int cycle;
+
+    msg = '0;
+    for (cycle = 0; cycle < max_cycles && !plCfgVld; cycle++) begin
+      @(posedge lclk) begin
+      end
+    end
+
+    if (!plCfgVld) begin
+      $fatal(1, "Timed out waiting for FDI sideband output");
+    end
+
+    for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+      msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH] = plCfg;
+      @(posedge lclk) begin
+      end
+    end
+  endtask
+
 endinterface

@@ -60,7 +60,8 @@ class D2DMainbandModule(
 
   // Stall Control
   val txStallStateReg = RegInit(D2DMainbandTxStallState.running)
-  val txStallRequested = io.state.mainbandStallReq && (io.state.d2dState === RDIState.active)
+  val isActive = io.state.d2dState === RDIState.active
+  val txStallRequested = io.state.mainbandStallReq && isActive
   val txBufferEmpty = !dataBuffSntFillReg
 
   val stallBlocksFdiIngress =
@@ -68,7 +69,7 @@ class D2DMainbandModule(
   val stallBlocksRdiTx = txStallStateReg === D2DMainbandTxStallState.stalled
 
   val txBeatSentToRdi =
-    io.rdi.plTrdy && dataBuffSntFillReg && !stallBlocksRdiTx
+    isActive && io.rdi.plTrdy && dataBuffSntFillReg && !stallBlocksRdiTx
   val txDrainComplete = txBufferEmpty || txBeatSentToRdi
 
   switch(txStallStateReg) {
@@ -93,10 +94,10 @@ class D2DMainbandModule(
 
   // TX datapath with stall gating
   io.rdi.lpData := dataBuffSntReg
-  io.rdi.lpIrdy := dataBuffSntFillReg && !stallBlocksRdiTx
-  io.rdi.lpValid := dataBuffSntFillReg && !stallBlocksRdiTx
+  io.rdi.lpIrdy := isActive && dataBuffSntFillReg && !stallBlocksRdiTx
+  io.rdi.lpValid := isActive && dataBuffSntFillReg && !stallBlocksRdiTx
 
-  val canAcceptFdi = (!dataBuffSntFillReg || txBeatSentToRdi) && !stallBlocksFdiIngress
+  val canAcceptFdi = isActive && (!dataBuffSntFillReg || txBeatSentToRdi) && !stallBlocksFdiIngress
   val txBeatAcceptedFromFdi = canAcceptFdi && io.fdi.lpValid && io.fdi.lpIrdy
   io.fdi.plTrdy := canAcceptFdi
 
@@ -104,7 +105,9 @@ class D2DMainbandModule(
 
   dataBuffSntReg := dataBuffSntReg
   dataBuffSntFillReg := dataBuffSntFillReg
-  when(!dataBuffSntFillReg) {
+  when(!isActive) {
+    dataBuffSntFillReg := false.B
+  }.elsewhen(!dataBuffSntFillReg) {
     when(txBeatAcceptedFromFdi) {
       dataBuffSntFillReg := true.B
       dataBuffSntReg := io.fdi.lpData

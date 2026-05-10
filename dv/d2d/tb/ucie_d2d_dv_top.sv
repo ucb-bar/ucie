@@ -125,7 +125,8 @@ module ucie_d2d_dv_top;
     end
 
     repeat (timeout_cycles) begin
-      @(posedge clock);
+      @(posedge clock) begin
+      end
     end
     $fatal(1, "D2D DV test timeout after %0d cycles", timeout_cycles);
   end

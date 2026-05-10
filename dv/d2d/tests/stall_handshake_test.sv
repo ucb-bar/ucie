@@ -13,7 +13,8 @@ module ucie_d2d_test (
     rdi.plStallReq = 1'b1;
 
     while (!rdi.lpStallAck) begin
-      @(posedge clock);
+      @(posedge clock) begin
+      end
     end
 
     if (!rdi.plStallReq) begin

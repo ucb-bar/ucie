@@ -61,6 +61,7 @@ package ucie_d2d_dv_pkg;
     header = '0;
     header[4:0] = opcode;
     header[21:14] = msgcode;
+    header[25:24] = 2'b01; // Route to the local D2D layer in the current switch.
     header[31:29] = 3'b001; // D2D source.
     header[39:32] = msgsubcode;
     header[58:56] = 3'b101; // Remote D2D destination.
@@ -76,6 +77,15 @@ package ucie_d2d_dv_pkg;
     input logic [63:0] data
   );
     return {data, sb_header(opcode, msgcode, msgsubcode, data)};
+  endfunction
+
+  function automatic bit sb_msg_matches(
+    input logic [127:0] msg,
+    input logic [4:0] opcode,
+    input logic [7:0] msgcode,
+    input logic [7:0] msgsubcode
+  );
+    return msg[4:0] == opcode && msg[21:14] == msgcode && msg[39:32] == msgsubcode;
   endfunction
 
   function automatic logic [127:0] sb_advcap_adapter();
@@ -111,6 +121,24 @@ package ucie_d2d_dv_pkg;
       SB_ADAPTER0_RSP_LINKRESET_MSGCODE,
       SB_LINKRESET_SUBCODE,
       64'h0
+    );
+  endfunction
+
+  function automatic bit sb_is_advcap_adapter(input logic [127:0] msg);
+    return sb_msg_matches(
+      msg,
+      SB_OP_MSG_WITH_64B_DATA,
+      SB_ADVCAP_ADAPTER_MSGCODE,
+      SB_ADVCAP_ADAPTER_SUBCODE
+    );
+  endfunction
+
+  function automatic bit sb_is_adapter0_rsp_active(input logic [127:0] msg);
+    return sb_msg_matches(
+      msg,
+      SB_OP_MSG_WITHOUT_DATA,
+      SB_ADAPTER0_RSP_ACTIVE_MSGCODE,
+      SB_ACTIVE_SUBCODE
     );
   endfunction
 
