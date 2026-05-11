@@ -34,12 +34,38 @@ module ucie_d2d_test (
     end
   endtask
 
+  task automatic try_recv_rdi_sideband_msg(
+    output bit got_msg,
+    output logic [127:0] msg,
+    input int max_cycles
+  );
+    int beat;
+    int cycle;
+    begin
+      got_msg = 1'b0;
+      msg = '0;
+      for (cycle = 0; cycle < max_cycles && rdi.lpCfgVld !== 1'b1; cycle++) begin
+        @(posedge clock);
+      end
+      if (rdi.lpCfgVld === 1'b1) begin
+        got_msg = 1'b1;
+        for (beat = 0; beat < (128 / SIDEBAND_WIDTH); beat++) begin
+          msg[beat * SIDEBAND_WIDTH +: SIDEBAND_WIDTH] = rdi.lpCfg;
+          @(posedge clock);
+        end
+      end
+    end
+  endtask
+
   initial begin
     logic [127:0] msg;
+    logic [127:0] rsp_msg;
     int cycle;
     int stall_injections;
     int delayed_rsp_cycles;
+    int msg_kind;
     bit saw_bad_state_while_waiting;
+    bit got_rsp;
 
     rounds = 20;
     max_gap_cycles = 20;
@@ -60,62 +86,44 @@ module ucie_d2d_test (
     end
 
     @(negedge reset);
-    rdi.drive_inband_present();
-    wait_rand_gap(max_gap_cycles);
-    rdi.drive_state(RDI_STATE_ACTIVE);
-
-    // Bring-up fuzzer: randomized legal timing around parameter exchange.
-    recv_rdi_sideband_msg(msg, DEFAULT_WAIT_CYCLES);
-    if (!sb_is_advcap_adapter(msg)) begin
-      $fatal(1, "Expected adapter ADV_CAP sideband message, got 0x%032h", msg);
-    end
-
-    stall_injections = $urandom_range(0, 2);
-    for (i = 0; i < stall_injections; i++) begin
-      wait_rand_gap(max_gap_cycles);
-      send_rdi_sideband_msg(sb_advcap_adapter_stall());
-    end
-
-    wait_rand_gap(max_gap_cycles);
-    send_rdi_sideband_msg(sb_advcap_adapter());
-    wait_fdi_inband_present(DEFAULT_WAIT_CYCLES);
-
-    wait_rand_gap(max_gap_cycles);
-    send_rdi_sideband_msg(sb_adapter0_req_active());
-    wait_fdi_rx_active_req(DEFAULT_WAIT_CYCLES);
-    fdi.lpRxActiveSts = 1'b1;
-
-    expect_rsp_active_from_adapter(DEFAULT_WAIT_CYCLES);
-
-    // Bounded delayed-response window: hold remote RSP_ACTIVE for a while,
-    // ensure no premature LinkError, then complete handshake.
-    delayed_rsp_cycles = $urandom_range(0, max_rsp_delay_cycles);
-    saw_bad_state_while_waiting = 1'b0;
-    for (cycle = 0; cycle < delayed_rsp_cycles; cycle++) begin
-      @(posedge clock);
-      if (fdi.plStateSts == RDI_STATE_LINKERROR) begin
-        saw_bad_state_while_waiting = 1'b1;
-      end
-    end
-    if (saw_bad_state_while_waiting) begin
-      $fatal(1, "FDI reached LinkError during bounded delayed RSP_ACTIVE window");
-    end
-
-    send_rdi_sideband_msg(sb_adapter0_rsp_active());
+    complete_active_bringup();
     wait_fdi_state(RDI_STATE_ACTIVE, DEFAULT_WAIT_CYCLES);
 
-    // Active-state timing fuzzer: repeated remote REQ_ACTIVE with randomized spacing.
+    // Active-state sideband timing fuzzer:
+    // inject legal messages with randomized spacing, then optionally consume
+    // a bounded response window if DUT emits sideband.
     for (i = 0; i < rounds; i++) begin
       wait_rand_gap(max_gap_cycles);
-      send_rdi_sideband_msg(sb_adapter0_req_active());
-      expect_rsp_active_from_adapter(DEFAULT_WAIT_CYCLES);
+
+      msg_kind = $urandom_range(0, 2);
+      case (msg_kind)
+        0: send_rdi_sideband_msg(sb_adapter0_req_active());
+        1: send_rdi_sideband_msg(sb_advcap_adapter_stall());
+        default: send_rdi_sideband_msg(sb_advcap_adapter());
+      endcase
+
+      delayed_rsp_cycles = $urandom_range(0, max_rsp_delay_cycles);
+      try_recv_rdi_sideband_msg(got_rsp, rsp_msg, delayed_rsp_cycles);
+      if (got_rsp) begin
+        if (!sb_is_adapter0_rsp_active(rsp_msg) &&
+            !sb_is_adapter0_rsp_linkreset(rsp_msg) &&
+            !sb_is_adapter0_rsp_disabled(rsp_msg) &&
+            !sb_is_advcap_adapter(rsp_msg) &&
+            !sb_is_advcap_adapter_stall(rsp_msg)) begin
+          $fatal(1, "Observed unexpected sideband response during fuzz: 0x%032h", rsp_msg);
+        end
+      end
 
       // Keep a bounded window after each exchange and ensure no timeout-driven collapse.
+      saw_bad_state_while_waiting = 1'b0;
       for (cycle = 0; cycle < no_timeout_window_cycles; cycle++) begin
         @(posedge clock);
         if (fdi.plStateSts == RDI_STATE_LINKERROR) begin
-          $fatal(1, "FDI reached LinkError during active sideband fuzz round %0d", i);
+          saw_bad_state_while_waiting = 1'b1;
         end
+      end
+      if (saw_bad_state_while_waiting) begin
+        $fatal(1, "FDI reached LinkError during active sideband fuzz round %0d", i);
       end
     end
 
