@@ -28,6 +28,7 @@ class RdiControllerLoopbackHarness(sbParams: SidebandParams = new SidebandParams
     val plStateSts = Output(RDIState())
     val plInbandPres = Output(Bool())
     val plClkReq = Output(Bool())
+    val plStallReq = Output(Bool())
     val doingRdiBringup = Output(Bool())
   })
 
@@ -59,6 +60,7 @@ class RdiControllerLoopbackHarness(sbParams: SidebandParams = new SidebandParams
   io.plStateSts := dut.io.rdi.plStateSts
   io.plInbandPres := dut.io.rdi.plInbandPres
   io.plClkReq := dut.io.rdi.plClkReq
+  io.plStallReq := dut.io.rdi.plStallReq
   io.doingRdiBringup := dut.io.doingRdiBringup
 }
 
