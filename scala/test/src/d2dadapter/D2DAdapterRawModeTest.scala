@@ -9,6 +9,7 @@ import org.scalatest.funspec.AnyFunSpec
 
 class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
   import D2DAdapterTestUtils._
+  implicit private val simBackend = vcs
 
   private def initAdapterInputs(dut: D2DAdapter): Unit = {
     dut.io.fdi.lpIrdy.poke(false.B)
