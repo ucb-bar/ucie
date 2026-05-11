@@ -3,13 +3,16 @@ package edu.berkeley.cs.uciedigital.d2dadapter
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.vcs
+import svsim.CommonCompilationSettings
+import svsim.vcs.Backend.CompilationSettings
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband.SidebandParams
 import org.scalatest.funspec.AnyFunSpec
 
 class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
   import D2DAdapterTestUtils._
-  implicit private val simBackend = vcs
+  implicit private val simBackend: chisel3.simulator.HasSimulator =
+    vcs(CommonCompilationSettings.default, CompilationSettings())
 
   private def initAdapterInputs(dut: D2DAdapter): Unit = {
     dut.io.fdi.lpIrdy.poke(false.B)

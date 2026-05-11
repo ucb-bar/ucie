@@ -14,6 +14,7 @@ class D2DSidebandModuleIO() extends Bundle{
     val rcv = Output(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)) // sideband requested signals
     val snt = Input(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH)) // tell sideband module to send request of state change
     val rdy = Output(Bool())// sideband can consume the op in sideband_snt. 
+    val remote_advcap_raw_ok = Output(Bool()) // decoded remote AdvCap raw/streaming stack0 support
 }
 
 class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) extends Module{
@@ -76,6 +77,7 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
     )
     )
     val sbTxValid = WireDefault(false.B)
+    val remoteAdvcapRawOkReg = RegInit(false.B)
 
     // D2D/link-management -> sideband channel
     sidebandChannel.io.layer.in.bits := sbTxMsg
@@ -85,6 +87,7 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
     // sideband channel -> D2D/link-management
     sidebandChannel.io.layer.out.ready := true.B
     io.sb.rcv := SideBandMessage.NOP
+    io.sb.remote_advcap_raw_ok := remoteAdvcapRawOkReg
 
     when(sidebandChannel.io.layer.out.valid) {
         when(SBMsgCompare(sidebandChannel.io.layer.out.bits, SBM.LINKMGMT_ADAPTER0_REQ_ACTIVE)) {
@@ -114,6 +117,11 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams) 
                 io.sb.rcv := SideBandMessage.ADV_CAP_STALL
             }.otherwise {
                 io.sb.rcv := SideBandMessage.ADV_CAP
+                // Raw-mode compatibility for this project scope:
+                // Data bit0=Raw, bit4=Streaming, bit7=Stack0 enable.
+                remoteAdvcapRawOkReg := sidebandChannel.io.layer.out.bits(64) &&
+                  sidebandChannel.io.layer.out.bits(68) &&
+                  sidebandChannel.io.layer.out.bits(71)
             }
         }
     }

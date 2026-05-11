@@ -21,6 +21,7 @@ class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams) extends Bu
   val sb_snd = Output(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH))
   val sb_rcv = Input(UInt(D2DAdapterSignalSize.SIDEBAND_MESSAGE_OP_WIDTH))
   val sb_rdy = Input(Bool())
+  val sb_remote_advcap_raw_ok = Input(Bool())
 
   val linkmgmt_stallreq = Output(Bool())
   val linkmgmt_stalldone = Input(Bool())
@@ -250,7 +251,7 @@ class AdapterSM(
           paramExchSbMsgSntFlag := paramExchSbMsgSntFlag
         }
 
-        when(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag) {
+        when(paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag && io.sb_remote_advcap_raw_ok) {
           linkInitStateReg := LinkInitState.FDI_BRINGUP
         }
       }

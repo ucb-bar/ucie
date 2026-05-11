@@ -75,6 +75,7 @@ class D2DAdapter(val fdiParams: FdiParams, val rdiParams: RdiParams,
     d2dSideband.io.sb.snt := linkManager.io.sb_snd
     linkManager.io.sb_rcv := d2dSideband.io.sb.rcv
     linkManager.io.sb_rdy := d2dSideband.io.sb.rdy
+    linkManager.io.sb_remote_advcap_raw_ok := d2dSideband.io.sb.remote_advcap_raw_ok
 
     io.fdi.plCfg := d2dSideband.io.fdi.plCfg
     io.fdi.plCfgVld := d2dSideband.io.fdi.plCfgVld
