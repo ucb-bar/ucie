@@ -98,4 +98,40 @@ object `package` extends ScalaModule, PublishModule {
       def testParallelism = false
     }
   }
+
+  object logphytest extends ScalaModule {
+    def moduleDir = super.moduleDir / os.up
+    def scalaVersion = "2.13.18"
+    def chiselVersion = "7.8.0"
+
+    def mvnDeps = Seq(
+      mvn"org.chipsalliance::chisel:${chiselVersion}",
+    )
+
+    def scalacPluginMvnDeps = Seq(
+      mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
+    )
+
+    def sources = Task.Sources(
+      "src/interfaces",
+      "src/sideband/utils",
+      "src/sideband/modules",
+      "src/sideband/D2DSidebandChannel.scala",
+      "src/utils/SkidBuffer.scala",
+      "src/logphy",
+      "src/d2dadapter",
+    )
+
+    object test extends ScalaTests, TestModule.ScalaTest {
+      def mvnDeps = Seq(
+        mvn"org.scalatest::scalatest:3.2.19",
+      )
+
+      def sources = Task.Sources(
+        "src/logphy"
+      )
+
+      def testParallelism = false
+    }
+  }
 }
