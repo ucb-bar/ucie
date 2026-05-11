@@ -58,6 +58,15 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
           cycles += 1
         }
 
+        // Request clocks first, then perform state-triggered bring-up.
+        dut.io.cfgSidebandActive.poke(true.B)
+        cycles = 0
+        while (!dut.io.rdi.plClkReq.peekBoolean() && cycles < 30) {
+          stepWithClkAck(dut)
+          cycles += 1
+        }
+        assert(dut.io.rdi.plClkReq.peekBoolean(), "plClkReq did not assert during pre-bring-up clock request")
+
         // Trigger bring-up through RDI request transition NOP -> ACTIVE.
         dut.io.rdi.lpStateReq.poke(RDIStateReq.active)
 
@@ -76,9 +85,18 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
       simulate(new RDIController(new SidebandParams())) { dut =>
         initController(dut)
         stepWithClkAck(dut, 2)
+
+        // Request clocks before asserting doRdiBringup to satisfy reset-exit assertions.
+        dut.io.cfgSidebandActive.poke(true.B)
+        var cycles = 0
+        while (!dut.io.rdi.plClkReq.peekBoolean() && cycles < 30) {
+          stepWithClkAck(dut)
+          cycles += 1
+        }
+        assert(dut.io.rdi.plClkReq.peekBoolean(), "plClkReq did not assert during pre-bring-up clock request")
+
         dut.io.doRdiBringup.poke(true.B)
 
-        var cycles = 0
         var sawBringup = false
         while (!sawBringup && cycles < 20) {
           sawBringup = dut.io.doingRdiBringup.peekBoolean()
