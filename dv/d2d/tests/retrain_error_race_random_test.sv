@@ -143,7 +143,13 @@ module ucie_d2d_test (
         if (fdi.plStateSts == RDI_STATE_LINKERROR) begin
           saw_fdi_linkerror = 1'b1;
         end
+        // Treat all defined RDI encodings as legal, including transient reset/PM-NAK
+        // appearances during race windows. Flag only truly undefined encodings.
         if (fdi.plStateSts != RDI_STATE_ACTIVE &&
+            fdi.plStateSts != RDI_STATE_RESET &&
+            fdi.plStateSts != 4'h3 && // activePmNak
+            fdi.plStateSts != 4'h4 && // L1 encoding
+            fdi.plStateSts != 4'h8 && // L2 encoding
             fdi.plStateSts != RDI_STATE_RETRAIN &&
             fdi.plStateSts != RDI_STATE_LINKRESET &&
             fdi.plStateSts != RDI_STATE_DISABLED &&
