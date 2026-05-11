@@ -16,7 +16,7 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
   private def initController(dut: RDIController): Unit = {
     dut.io.rdi.lpStateReq.poke(RDIStateReq.nop)
     dut.io.rdi.lpWakeReq.poke(false.B)
-    dut.io.rdi.lpClkAck.poke(true.B)
+    dut.io.rdi.lpClkAck.poke(false.B)
     dut.io.rdi.lpStallAck.poke(false.B)
 
     dut.io.ltsmState.poke(LTState.sRESET)
@@ -32,18 +32,29 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
     dut.io.sbLaneIo.tx.ready.poke(true.B)
   }
 
+  // Model the lower-layer clock-ack behavior with a one-cycle delay.
+  private def stepWithClkAck(dut: RDIController, cycles: Int = 1): Unit = {
+    var i = 0
+    while (i < cycles) {
+      val req = dut.io.rdi.plClkReq.peekBoolean()
+      dut.io.rdi.lpClkAck.poke(req.B)
+      dut.clock.step()
+      i += 1
+    }
+  }
+
   describe("RDI-triggered bring-up start behavior") {
     it("does not start bring-up early, and starts bring-up after NOP-to-ACTIVE trigger") {
       simulate(new RDIController(new SidebandParams())) { dut =>
         initController(dut)
-        dut.clock.step(4)
+        stepWithClkAck(dut, 4)
 
         // No early bring-up while request remains NOP in RESET.
         var cycles = 0
         while (cycles < 20) {
           dut.io.doingRdiBringup.expect(false.B)
           dut.io.rdi.plStateSts.expect(RDIState.reset)
-          dut.clock.step()
+          stepWithClkAck(dut)
           cycles += 1
         }
 
@@ -54,7 +65,7 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
         var sawBringup = false
         while (!sawBringup && cycles < 30) {
           sawBringup = dut.io.doingRdiBringup.peekBoolean()
-          dut.clock.step()
+          stepWithClkAck(dut)
           cycles += 1
         }
         assert(sawBringup, "RDI bring-up did not start after NOP-to-ACTIVE request transition")
@@ -64,14 +75,14 @@ class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
     it("can also start bring-up when doRdiBringup is asserted in RESET") {
       simulate(new RDIController(new SidebandParams())) { dut =>
         initController(dut)
-        dut.clock.step(2)
+        stepWithClkAck(dut, 2)
         dut.io.doRdiBringup.poke(true.B)
 
         var cycles = 0
         var sawBringup = false
         while (!sawBringup && cycles < 20) {
           sawBringup = dut.io.doingRdiBringup.peekBoolean()
-          dut.clock.step()
+          stepWithClkAck(dut)
           cycles += 1
         }
         assert(sawBringup, "RDI bring-up did not start when doRdiBringup was asserted")
