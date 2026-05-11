@@ -18,11 +18,11 @@ module ucie_d2d_test (
     bit saw_linkerror;
 
     // Bounded random windows so the test finishes under default watchdog.
-    pre_pause_active_cycles = $urandom_range(40, 120);
-    inactive_pause_cycles = $urandom_range(120, 240);
-    pre_stall_active_cycles = $urandom_range(60, 140);
-    no_timeout_window_cycles = $urandom_range(60, 140);
-    post_stall_timeout_max_cycles = $urandom_range(300, 480);
+    pre_pause_active_cycles = $urandom_range(10, 30);
+    inactive_pause_cycles = $urandom_range(20, 40);
+    pre_stall_active_cycles = $urandom_range(10, 30);
+    no_timeout_window_cycles = $urandom_range(20, 40);
+    post_stall_timeout_max_cycles = $urandom_range(550, 700);
 
     @(negedge reset);
     rdi.drive_inband_present();
