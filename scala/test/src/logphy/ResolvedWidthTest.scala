@@ -65,11 +65,13 @@ class ResolvedWidthTest extends AnyFunSpec with ChiselSim {
         initLogicalPhy(dut)
 
         val legal = Set(
-          LinkWidth.x16.litValue,
           LinkWidth.x8.litValue,
           LinkWidth.x4.litValue,
-          LinkWidth.x2.litValue,
-          LinkWidth.x1.litValue
+          LinkWidth.x16.litValue,
+          LinkWidth.x32.litValue,
+          LinkWidth.x64.litValue,
+          LinkWidth.x128.litValue,
+          LinkWidth.x256.litValue
         )
 
         // For default LogicalPhy params in this environment, resolved width should
