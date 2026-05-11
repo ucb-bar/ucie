@@ -80,6 +80,30 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
     msg
   }
 
+  private def drainRdiSidebandMsgs(dut: D2DAdapter, cycleBudget: Int, sidebandWidth: Int = 32): Seq[BigInt] = {
+    val beats = 128 / sidebandWidth
+    val msgs = scala.collection.mutable.ArrayBuffer.empty[BigInt]
+    var cycles = 0
+
+    while (cycles < cycleBudget) {
+      if (dut.io.rdi.lpCfgVld.peekBoolean()) {
+        var msg = BigInt(0)
+        for (beat <- 0 until beats) {
+          val lane = dut.io.rdi.lpCfg.peek().litValue
+          msg |= lane << (beat * sidebandWidth)
+          dut.clock.step()
+          cycles += 1
+        }
+        msgs += msg
+      } else {
+        dut.clock.step()
+        cycles += 1
+      }
+    }
+
+    msgs.toSeq
+  }
+
   private def bringupToActiveWithRemoteAdvCap(
       dut: D2DAdapter,
       remoteAdvCapData: BigInt,
@@ -166,6 +190,65 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
         }
 
         assert(!reachedActive, "FDI reached Active even though remote raw capability was not advertised")
+      }
+    }
+
+    it("keeps Stack1 disabled in single-stack raw operation") {
+      simulate(new D2DAdapter(FdiParams(32, 32), RdiParams(32, 32), new SidebandParams())) { dut =>
+        initAdapterInputs(dut)
+        dut.clock.step(2)
+
+        dut.io.rdi.plInbandPres.poke(true.B)
+        dut.clock.step(5)
+        dut.io.rdi.plStateSts.poke(RDIState.active)
+
+        val localAdvCap = recvRdiSidebandMsg(dut)
+        assert(
+          msgMatches(localAdvCap, OpcodeMsgWith64B, MsgCodeAdvCapAdapter, SubcodeAdvCap),
+          f"Expected local ADV_CAP, got 0x$localAdvCap%032x"
+        )
+        val cap = (localAdvCap >> 64) & ((BigInt(1) << 64) - 1)
+        val stack1Enable = ((cap >> 1) & 1).toInt
+        assert(stack1Enable == 0, f"Stack1 capability bit must be 0, cap=0x$cap%016x")
+
+        sendRdiSidebandMsg(dut, sbAdvcapAdapter(data = AdvCapRawStreamingStack0))
+
+        var cycles = 0
+        while (!dut.io.fdi.plInbandPres.peekBoolean() && cycles < 200) {
+          dut.clock.step()
+          cycles += 1
+        }
+        assert(dut.io.fdi.plInbandPres.peekBoolean(), "Timed out waiting for FDI inband present")
+
+        sendRdiSidebandMsg(dut, sbAdapter0ReqActive())
+        cycles = 0
+        while (!dut.io.fdi.plRxActiveReq.peekBoolean() && cycles < 200) {
+          dut.clock.step()
+          cycles += 1
+        }
+        assert(dut.io.fdi.plRxActiveReq.peekBoolean(), "Timed out waiting for FDI plRxActiveReq")
+        dut.io.fdi.lpRxActiveSts.poke(true.B)
+
+        val localRspActive = recvRdiSidebandMsg(dut)
+        assert(
+          msgMatches(localRspActive, OpcodeMsgNoData, MsgCodeAdapter0RspActive, SubcodeActive),
+          f"Expected local RSP_ACTIVE, got 0x$localRspActive%032x"
+        )
+        sendRdiSidebandMsg(dut, sbAdapter0RspActive())
+
+        val postMsgs = drainRdiSidebandMsgs(dut, cycleBudget = 80)
+        val sawAdapter1Msg = postMsgs.exists { msg =>
+          val code = msgCode(msg)
+          code == MsgCodeAdapter1ReqActive || code == MsgCodeAdapter1RspActive
+        }
+        assert(!sawAdapter1Msg, "Observed Stack1 link-management sideband activity in single-stack mode")
+
+        cycles = 0
+        while (dut.io.fdi.plStateSts.peek().litValue != FDIState.active.litValue && cycles < 200) {
+          dut.clock.step()
+          cycles += 1
+        }
+        assert(dut.io.fdi.plStateSts.peek().litValue == FDIState.active.litValue, "FDI did not reach Active")
       }
     }
   }

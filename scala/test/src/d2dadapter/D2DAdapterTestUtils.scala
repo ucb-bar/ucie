@@ -8,6 +8,8 @@ object D2DAdapterTestUtils {
   val MsgCodeFinCapAdapter: Int = 0x02
   val MsgCodeAdapter0ReqActive: Int = 0x03
   val MsgCodeAdapter0RspActive: Int = 0x04
+  val MsgCodeAdapter1ReqActive: Int = 0x05
+  val MsgCodeAdapter1RspActive: Int = 0x06
 
   val SubcodeAdvCap: Int = 0x00
   val SubcodeActive: Int = 0x01
@@ -55,9 +57,7 @@ object D2DAdapterTestUtils {
   def sbAdapter0RspActive(): BigInt =
     sbMsg(OpcodeMsgNoData, MsgCodeAdapter0RspActive, SubcodeActive)
 
-  def msgMatches(msg: BigInt, opcode: Int, msgCode: Int, msgSubcode: Int): Boolean = {
-    val expectedCode = msgCode
-    val expectedSubcode = msgSubcode
+  def msgMatches(msg: BigInt, opcode: Int, expectedCode: Int, expectedSubcode: Int): Boolean = {
     val op = msgOpcode(msg)
     val code = msgCode(msg)
     val sub = msgSubcode(msg)
@@ -71,3 +71,4 @@ object D2DAdapterTestUtils {
   def msgSubcode(msg: BigInt): Int = ((msg >> 32) & BigInt(0xff)).toInt
 
 }
+ 
