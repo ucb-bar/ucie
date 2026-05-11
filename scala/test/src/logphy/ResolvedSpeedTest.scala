@@ -69,7 +69,7 @@ class ResolvedSpeedTest extends AnyFunSpec with ChiselSim {
         var cycles = 0
         while (cycles < 40) {
           val presented = dut.io.rdi.plSpeedmode.peek().litValue
-          val selected = dut.ltsm.io.phyCtrlIo.freqSel.peek().litValue
+          val selected = dut.io.analog.ctrl.freqSel.peek().litValue
           assert(
             presented == selected,
             f"RDI plSpeedmode mismatch: presented=0x$presented%x selected=0x$selected%x"
@@ -87,7 +87,7 @@ class ResolvedSpeedTest extends AnyFunSpec with ChiselSim {
         cycles = 0
         while (cycles < 80) {
           val presented = dut.io.rdi.plSpeedmode.peek().litValue
-          val selected = dut.ltsm.io.phyCtrlIo.freqSel.peek().litValue
+          val selected = dut.io.analog.ctrl.freqSel.peek().litValue
           assert(
             presented == selected,
             f"RDI plSpeedmode mismatch during/after trigger: presented=0x$presented%x selected=0x$selected%x"
