@@ -114,9 +114,11 @@ object `package` extends ScalaModule, PublishModule {
 
     def sources = Task.Sources(
       "src/interfaces",
+      "src/sideband",
       "src/sideband/utils",
       "src/sideband/modules",
       "src/sideband/D2DSidebandChannel.scala",
+      "src/utils",
       "src/utils/SkidBuffer.scala",
       "src/logphy",
       "src/d2dadapter",
