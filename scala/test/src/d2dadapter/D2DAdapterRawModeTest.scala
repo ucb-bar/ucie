@@ -80,7 +80,11 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
     msg
   }
 
-  private def bringupToActiveWithRemoteAdvCap(dut: D2DAdapter, remoteAdvCapData: BigInt): Unit = {
+  private def bringupToActiveWithRemoteAdvCap(
+      dut: D2DAdapter,
+      remoteAdvCapData: BigInt,
+      expectProgressToFdiBringup: Boolean
+  ): Unit = {
     initAdapterInputs(dut)
     dut.clock.step(2)
 
@@ -95,6 +99,10 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
     )
 
     sendRdiSidebandMsg(dut, sbAdvcapAdapter(data = remoteAdvCapData))
+
+    if (!expectProgressToFdiBringup) {
+      return
+    }
 
     var cycles = 0
     while (!dut.io.fdi.plInbandPres.peekBoolean() && cycles < 200) {
@@ -124,7 +132,11 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
   describe("D2DAdapter raw mode bring-up (Steps 11/12)") {
     it("advertises raw-streaming AdvCap and reaches Active with matching remote raw AdvCap") {
       simulate(new D2DAdapter(FdiParams(32, 32), RdiParams(32, 32), new SidebandParams())) { dut =>
-        bringupToActiveWithRemoteAdvCap(dut, AdvCapRawStreamingStack0)
+        bringupToActiveWithRemoteAdvCap(
+          dut,
+          AdvCapRawStreamingStack0,
+          expectProgressToFdiBringup = true
+        )
 
         var cycles = 0
         while (dut.io.fdi.plStateSts.peek().litValue != FDIState.active.litValue && cycles < 200) {
@@ -139,7 +151,11 @@ class D2DAdapterRawModeTest extends AnyFunSpec with ChiselSim {
       simulate(new D2DAdapter(FdiParams(32, 32), RdiParams(32, 32), new SidebandParams())) { dut =>
         // Remote side clears raw bit (bit0) while keeping Streaming+Stack0 shape.
         val remoteNoRaw = AdvCapRawStreamingStack0 & ~BigInt(1)
-        bringupToActiveWithRemoteAdvCap(dut, remoteNoRaw)
+        bringupToActiveWithRemoteAdvCap(
+          dut,
+          remoteNoRaw,
+          expectProgressToFdiBringup = false
+        )
 
         var reachedActive = false
         var cycles = 0
