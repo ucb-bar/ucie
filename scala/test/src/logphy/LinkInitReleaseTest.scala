@@ -91,6 +91,18 @@ class LinkInitReleaseTest extends AnyFunSpec with ChiselSim {
     }
   }
 
+  private def preRequestClocks(dut: RdiControllerLoopbackHarness): Unit = {
+    dut.io.plPhyInRecenter.poke(true.B)
+    dut.io.lpClkAck.poke(true.B)
+
+    var cycles = 0
+    while (!dut.io.plClkReq.peekBoolean() && cycles < 40) {
+      dut.clock.step()
+      cycles += 1
+    }
+    assert(dut.io.plClkReq.peekBoolean(), "plClkReq did not assert during pre-request clock handshake")
+  }
+
   describe("RDI Active release after LINKINIT") {
     it("does not release RDI Active before LINKINIT and releases after LINKINIT begins") {
       simulate(new RdiControllerLoopbackHarness()) { dut =>
@@ -104,6 +116,9 @@ class LinkInitReleaseTest extends AnyFunSpec with ChiselSim {
           stepWithClkAck(dut, 8)
           dut.io.plStateSts.expect(RDIState.reset)
         }
+
+        // Satisfy clock-handshake requirements before reset-exit transition.
+        preRequestClocks(dut)
 
         // Enter LINKINIT; controller should force RDI bring-up and complete to Active.
         dut.io.ltsmState.poke(LTState.sLINKINIT)
