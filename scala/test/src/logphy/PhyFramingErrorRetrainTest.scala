@@ -72,6 +72,8 @@ class PhyFramingErrorRetrainTest extends AnyFunSpec with ChiselSim {
     it("asserts stall and transitions to retrain after handshake in active mode") {
       simulate(new RdiControllerLoopbackHarness(new SidebandParams())) { dut =>
         bringupToActive(dut)
+        dut.io.ltsmState.poke(LTState.sACTIVE)
+        stepWithClkAck(dut, 4)
 
         // Trigger retrain path under framing-error condition in Active.
         dut.io.validFramingError.poke(true.B)
