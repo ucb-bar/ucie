@@ -2,11 +2,17 @@ package edu.berkeley.cs.uciedigital.logphy
 
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
+import chisel3.simulator.HasSimulator.simulators.vcs
+import svsim.CommonCompilationSettings
+import svsim.vcs.Backend.CompilationSettings
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 import org.scalatest.funspec.AnyFunSpec
 
 class RdiTrainingTriggerTest extends AnyFunSpec with ChiselSim {
+  implicit private val simBackend: chisel3.simulator.HasSimulator =
+    vcs(CommonCompilationSettings.default, CompilationSettings())
+
   private def initController(dut: RDIController): Unit = {
     dut.io.rdi.lpStateReq.poke(RDIStateReq.nop)
     dut.io.rdi.lpWakeReq.poke(false.B)
