@@ -56,10 +56,12 @@ object D2DAdapterTestUtils {
     sbMsg(OpcodeMsgNoData, MsgCodeAdapter0RspActive, SubcodeActive)
 
   def msgMatches(msg: BigInt, opcode: Int, msgCode: Int, msgSubcode: Int): Boolean = {
+    val expectedCode = msgCode
+    val expectedSubcode = msgSubcode
     val op = msgOpcode(msg)
     val code = msgCode(msg)
     val sub = msgSubcode(msg)
-    op == opcode && code == msgCode && sub == msgSubcode
+    op == opcode && code == expectedCode && sub == expectedSubcode
   }
 
   def msgOpcode(msg: BigInt): Int = (msg & BigInt(0x1f)).toInt
