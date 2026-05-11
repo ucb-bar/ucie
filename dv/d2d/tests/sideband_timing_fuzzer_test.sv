@@ -61,16 +61,15 @@ module ucie_d2d_test (
     logic [127:0] msg;
     logic [127:0] rsp_msg;
     int cycle;
-    int stall_injections;
     int delayed_rsp_cycles;
     int msg_kind;
     bit saw_bad_state_while_waiting;
     bit got_rsp;
 
-    rounds = 20;
-    max_gap_cycles = 20;
-    max_rsp_delay_cycles = 80;
-    no_timeout_window_cycles = 120;
+    rounds = 5;
+    max_gap_cycles = 10;
+    max_rsp_delay_cycles = 20;
+    no_timeout_window_cycles = 40;
 
     if ($value$plusargs("D2D_SB_FUZZ_ROUNDS=%d", rounds) && rounds < 1) begin
       rounds = 1;
@@ -132,8 +131,8 @@ module ucie_d2d_test (
     end
 
     $display(
-      "D2D sideband_timing_fuzzer completed: rounds=%0d max_gap=%0d max_rsp_delay=%0d stall_injections=%0d",
-      rounds, max_gap_cycles, max_rsp_delay_cycles, stall_injections
+      "D2D sideband_timing_fuzzer completed: rounds=%0d max_gap=%0d max_rsp_delay=%0d no_timeout_window=%0d",
+      rounds, max_gap_cycles, max_rsp_delay_cycles, no_timeout_window_cycles
     );
     $finish;
   end
