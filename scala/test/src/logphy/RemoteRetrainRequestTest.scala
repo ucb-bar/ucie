@@ -9,9 +9,33 @@ import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 import org.scalatest.funspec.AnyFunSpec
 
-class PhyFramingErrorRetrainTest extends AnyFunSpec with ChiselSim {
+class RemoteRetrainRequestTest extends AnyFunSpec with ChiselSim {
   implicit private val simBackend: chisel3.simulator.HasSimulator =
     vcs(CommonCompilationSettings.default, CompilationSettings())
+
+  private val OpcodeMsgWithoutData = 0x12
+  private val MsgCodeRdiReq = 0x01
+  private val SubcodeRetrain = 0x0B
+
+  private def sbMsg(
+      opcode: Int,
+      msgCode: Int,
+      msgSubcode: Int,
+      msgInfo: Int = 0
+  ): BigInt = {
+    var header = BigInt(0)
+    header |= BigInt(opcode & 0x1f)
+    header |= BigInt(msgCode & 0xff) << 14
+    header |= BigInt(0x18) << 22 // remote + logPhy layer + reserved
+    header |= BigInt(0x2) << 29 // PHY source
+    header |= BigInt(msgSubcode & 0xff) << 32
+    header |= BigInt(msgInfo & 0xffff) << 40
+    header |= BigInt(0x6) << 56 // remote PHY destination
+    header
+  }
+
+  private def sbRdiReqRetrain(): BigInt =
+    sbMsg(OpcodeMsgWithoutData, MsgCodeRdiReq, SubcodeRetrain)
 
   private def initHarness(dut: RdiControllerLoopbackHarness): Unit = {
     dut.io.lpStateReq.poke(RDIStateReq.nop)
@@ -68,31 +92,46 @@ class PhyFramingErrorRetrainTest extends AnyFunSpec with ChiselSim {
     preRequestClocks(dut)
     dut.io.ltsmState.poke(LTState.sLINKINIT)
     waitForState(dut, RDIState.active, 140, "RDI did not reach Active during bring-up")
+    dut.io.ltsmState.poke(LTState.sACTIVE)
+    stepWithClkAck(dut, 4)
   }
 
-  describe("Valid framing error retrain handling") {
-    it("asserts stall and transitions to retrain after handshake in active mode") {
+  describe("Remote retrain request propagation") {
+    it("propagates remote retrain request to local retrain without premature return to active") {
       simulate(new RdiControllerLoopbackHarness(new SidebandParams())) { dut =>
         bringupToActive(dut)
-        dut.io.ltsmState.poke(LTState.sACTIVE)
-        stepWithClkAck(dut, 4)
 
-        // Trigger retrain path under framing-error condition in Active.
-        dut.io.validFramingError.poke(true.B)
-        dut.io.lpStateReq.poke(RDIStateReq.retrain)
+        val retrainReq = sbRdiReqRetrain()
+        dut.io.rxInjectBits.poke(retrainReq.U)
+        dut.io.rxInjectValid.poke(true.B)
 
-        var sawStallReq = false
         var cycles = 0
-        while (!sawStallReq && cycles < 80) {
-          sawStallReq = dut.io.plStallReq.peekBoolean()
+        while (!dut.io.rxInjectReady.peekBoolean() && cycles < 40) {
           stepWithClkAck(dut)
           cycles += 1
         }
-        assert(sawStallReq, "plStallReq did not assert after valid framing error in Active")
+        assert(dut.io.rxInjectReady.peekBoolean(), "Remote retrain request was not accepted by RDI sideband lane")
+        stepWithClkAck(dut, 1)
+        dut.io.rxInjectValid.poke(false.B)
+        dut.io.rxInjectBits.poke(0.U)
 
-        // Complete stall handshake and require retrain entry.
-        dut.io.lpStallAck.poke(true.B)
-        waitForState(dut, RDIState.retrain, 120, "RDI did not transition to Retrain after framing-error stall handshake")
+        waitForState(
+          dut,
+          RDIState.retrain,
+          120,
+          "Remote retrain request did not propagate to local RDI Retrain state"
+        )
+
+        var remainedNonActive = true
+        cycles = 0
+        while (cycles < 60) {
+          if (dut.io.plStateSts.peek().litValue == RDIState.active.litValue) {
+            remainedNonActive = false
+          }
+          stepWithClkAck(dut)
+          cycles += 1
+        }
+        assert(remainedNonActive, "RDI returned to Active prematurely after remote retrain request")
       }
     }
   }

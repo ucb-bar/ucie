@@ -30,6 +30,9 @@ class RdiControllerLoopbackHarness(sbParams: SidebandParams = new SidebandParams
     val plClkReq = Output(Bool())
     val plStallReq = Output(Bool())
     val doingRdiBringup = Output(Bool())
+    val rxInjectValid = Input(Bool())
+    val rxInjectBits = Input(UInt(sbParams.sbNodeMsgWidth.W))
+    val rxInjectReady = Output(Bool())
   })
 
   val dut = Module(new RDIController(sbParams))
@@ -53,9 +56,11 @@ class RdiControllerLoopbackHarness(sbParams: SidebandParams = new SidebandParams
   rxQueue.io.enq.bits := dut.io.sbLaneIo.tx.bits.data
   dut.io.sbLaneIo.tx.ready := rxQueue.io.enq.ready
 
-  dut.io.sbLaneIo.rx.valid := rxQueue.io.deq.valid
-  dut.io.sbLaneIo.rx.bits.data := rxQueue.io.deq.bits
-  rxQueue.io.deq.ready := dut.io.sbLaneIo.rx.ready
+  val useInject = io.rxInjectValid
+  dut.io.sbLaneIo.rx.valid := Mux(useInject, io.rxInjectValid, rxQueue.io.deq.valid)
+  dut.io.sbLaneIo.rx.bits.data := Mux(useInject, io.rxInjectBits, rxQueue.io.deq.bits)
+  io.rxInjectReady := Mux(useInject, dut.io.sbLaneIo.rx.ready, false.B)
+  rxQueue.io.deq.ready := !useInject && dut.io.sbLaneIo.rx.ready
 
   io.plStateSts := dut.io.rdi.plStateSts
   io.plInbandPres := dut.io.rdi.plInbandPres
@@ -81,6 +86,8 @@ class LinkInitReleaseTest extends AnyFunSpec with ChiselSim {
     dut.io.cfgSidebandActive.poke(false.B)
     dut.io.plPhyInRecenter.poke(false.B)
     dut.io.clocksUngatedAndStable.poke(true.B)
+    dut.io.rxInjectValid.poke(false.B)
+    dut.io.rxInjectBits.poke(0.U)
   }
 
   private def stepWithClkAck(dut: RdiControllerLoopbackHarness, cycles: Int = 1): Unit = {

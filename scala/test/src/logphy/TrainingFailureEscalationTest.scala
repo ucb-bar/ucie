@@ -26,6 +26,8 @@ class TrainingFailureEscalationTest extends AnyFunSpec with ChiselSim {
     dut.io.cfgSidebandActive.poke(false.B)
     dut.io.plPhyInRecenter.poke(false.B)
     dut.io.clocksUngatedAndStable.poke(true.B)
+    dut.io.rxInjectValid.poke(false.B)
+    dut.io.rxInjectBits.poke(0.U)
   }
 
   private def stepWithClkAck(dut: RdiControllerLoopbackHarness, cycles: Int = 1): Unit = {
