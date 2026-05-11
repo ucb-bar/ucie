@@ -100,5 +100,39 @@ class D2DAdapterCapabilityTest extends AnyFunSpec with ChiselSim {
         assert(bit(cap, 3) == 0, f"Enhanced_Multi_Protocol_Enable bit must be 0, cap=0x$cap%016x")
       }
     }
+
+    it("advertises only functionality supported by the instantiated adapter build") {
+      val dataBytes = 32
+      val sidebandWidth = 32
+      simulate(new D2DAdapter(FdiParams(dataBytes, sidebandWidth), RdiParams(dataBytes, sidebandWidth), new SidebandParams())) {
+        dut =>
+          // Interface shape checks for this elaborated build.
+          assert(dut.io.fdi.lpData.getWidth == dataBytes * 8, s"FDI width mismatch: expected ${dataBytes * 8}")
+          assert(dut.io.rdi.lpData.getWidth == dataBytes * 8, s"RDI width mismatch: expected ${dataBytes * 8}")
+          assert(dut.io.fdi.lpCfg.getWidth == sidebandWidth, s"FDI sideband width mismatch: expected $sidebandWidth")
+          assert(dut.io.rdi.plCfg.getWidth == sidebandWidth, s"RDI sideband width mismatch: expected $sidebandWidth")
+
+          initAdapterInputs(dut)
+          dut.clock.step(2)
+          dut.io.rdi.plInbandPres.poke(true.B)
+          dut.clock.step(5)
+          dut.io.rdi.plStateSts.poke(RDIState.active)
+
+          val localAdvCap = recvRdiSidebandMsg(dut)
+          assert(
+            msgMatches(localAdvCap, OpcodeMsgWith64B, MsgCodeAdvCapAdapter, SubcodeAdvCap),
+            f"Expected local ADV_CAP, got 0x$localAdvCap%032x"
+          )
+
+          val cap = (localAdvCap >> 64) & ((BigInt(1) << 64) - 1)
+
+          // In this project build, the supported/advertised capability set is raw+streaming on stack0 only.
+          assert(cap == AdvCapRawStreamingStack0, f"Unexpected capability bitmap for this build: cap=0x$cap%016x")
+
+          // Guard against unsupported protocol-stack advertisement.
+          assert(bit(cap, 1) == 0, "Stack1 must remain unadvertised in this single-stack build")
+          assert(bit(cap, 2) == 0 && bit(cap, 3) == 0, "Multi-protocol support must not be advertised")
+        }
+    }
   }
 }
