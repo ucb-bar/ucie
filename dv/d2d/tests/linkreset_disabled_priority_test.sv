@@ -16,7 +16,7 @@ module ucie_d2d_test (
     bring_link_to_active();
 
     if (fdi.plStateSts !== RDI_STATE_ACTIVE || rdi.plStateSts !== RDI_STATE_ACTIVE) begin
-      $fatal(1, "Step7 test did not start from Active");
+      $fatal(1, "Test did not start from Active");
     end
 
     // Keep RX inactive so active->{Disabled/LinkReset} transition is legal.

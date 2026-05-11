@@ -12,7 +12,7 @@ ELAB_TOP ?= D2DAdapterDvTop
 TB_TOP ?= ucie_d2d_dv_top
 TEST ?= smoke
 RUN_ARGS ?=
-REGRESSION_TESTS ?= smoke active_ordering stage3_rdi_active_gate no_early_data fdi_bringup_after_param rdi_retrain_propagation linkerror_propagation linkerror_priority linkerror_disabled_priority linkerror_exit_blocked linkreset_disabled_priority stall_handshake
+REGRESSION_TESTS ?= smoke active_ordering rdi_active_gate no_early_data fdi_bringup_after_param rdi_retrain_propagation linkerror_propagation linkerror_priority linkerror_disabled_priority linkerror_exit_blocked linkreset_disabled_priority stall_handshake
 
 VCS ?= vcs -full64
 VCS_OPTS ?= \

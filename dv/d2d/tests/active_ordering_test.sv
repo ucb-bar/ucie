@@ -41,7 +41,7 @@ module ucie_d2d_test (
 
     @(negedge reset);
 
-    // Stage 3 adapter initialization must be gated by RDI Active.
+    // Adapter initialization must be gated by RDI Active.
     rdi.drive_inband_present();
     wait_pre_rdi_active_quiet(10);
 

@@ -69,7 +69,7 @@ class D2DAdapterCapabilityTest extends AnyFunSpec with ChiselSim {
 
   private def bit(data: BigInt, idx: Int): Int = ((data >> idx) & 1).toInt
 
-  describe("D2DAdapter advertised capability (Step 13)") {
+  describe("D2DAdapter advertised capability") {
     it("emits raw single-stack capability map consistent with project profile") {
       simulate(new D2DAdapter(FdiParams(32, 32), RdiParams(32, 32), new SidebandParams())) { dut =>
         initAdapterInputs(dut)
