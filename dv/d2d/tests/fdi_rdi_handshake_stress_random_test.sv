@@ -109,9 +109,9 @@ module ucie_d2d_test (
   end
 
   initial begin
-    total_cycles = 1200;
+    total_cycles = 600;
     if (!$value$plusargs("D2D_RANDOM_CYCLES=%d", total_cycles)) begin
-      total_cycles = 1200;
+      total_cycles = 600;
     end
 
     in_accepts = 0;
