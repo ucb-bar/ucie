@@ -73,10 +73,41 @@ verilator \\
   +define+layer$$Verification$$Assume$$Temporal \\
   +define+layer$$Verification$$Cover$$Temporal \\
   -Wno-fatal \\
-  -CFLAGS "$$CXXFLAGS -std=c++17" \\
-  -LDFLAGS "$$LDFLAGS" \\
+  -CFLAGS "$${CXXFLAGS:- } -std=c++17" \\
+  -LDFLAGS "$${LDFLAGS:- }" \\
   -F ${sourceFilesList.toString} > >(tee -a verilator.out) 2> >(tee -a verilator.err >&2)
 ./simulation > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
+"""
+    )
+    path.toIO.setExecutable(true)
+  }
+
+  def writeVcsSimScript(
+      path: Path,
+      topModule: String,
+      sourceFilesList: Path,
+      incDirs: Seq[Path] = Seq.empty
+  ) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(
+      path,
+      s"""#!/bin/bash
+set -ex -o pipefail
+vcs \\
+  -full64 -j16 -fgp \\
+  -CFLAGS "$$CXXFLAGS -std=c++17" \\
+  -LDFLAGS "$$LDFLAGS" \\
+  -notice -line +lint=all,noVCDE,noONGS,noUI -error=PCWM-L -error=noZMMCM \\
+  -timescale=1ps/100fs -quiet -q +rad +vcs+lic+wait +vc+list \\
+  -f ${sourceFilesList.toString} -sverilog +systemverilogext+.sv+.svi+.svh+.svt -assert svaext +libext+.sv +v2k +verilog2001ext+.v95+.vt+.vp +libext+.v \\
+  -debug_access+all -kdb -lca \\
+  -top $topModule \\${incDirs.map(dir => s"\n  +incdir+$dir \\").mkString("")}
+  +define+layer$$Verification$$Assert$$Temporal \\
+  +define+layer$$Verification$$Assume$$Temporal \\
+  +define+layer$$Verification$$Cover$$Temporal \\
+  +define+VCS +define+FSDB +define+RANDOMIZE_MEM_INIT +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_GARBAGE_ASSIGN +define+RANDOMIZE_INVALID_ASSIGN \\
+  -o simulation -Mdir=vcs-sources > >(tee -a vcs.out) 2> >(tee -a vcs.err >&2)
+./simulation +fsdbfile=waveform.fsdb > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
 """
     )
     path.toIO.setExecutable(true)
@@ -138,8 +169,13 @@ xrun \\
     os.remove.all(sourceDir)
     os.makeDir.all(sourceDir)
     val simDir = workDir / "sim"
+    var topModule: String = "SimTop"
     ChiselStage.emitSystemVerilogFile(
-      dut,
+      {
+        val d = dut
+        topModule = d.getClass.getSimpleName
+        d
+      },
       args = Array(
         "--target-dir",
         sourceDir.toString
@@ -170,7 +206,7 @@ xrun \\
 
     writeSimScript(
       simScript,
-      "SimTop",
+      topModule,
       sourceFilesList,
       os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir) ++ {
         if (includeVamsModels) {
