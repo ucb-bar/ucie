@@ -1,22 +1,3 @@
-package edu.berkeley.cs.uciedigital.utils
-
-import chisel3._
-import circt.stage.ChiselStage
-import chisel3.util._
-import chisel3.util.random._
-import chisel3.ltl._
-import chisel3.layer.{Convention, Layer, block}
-
-
-// // All layers are declared here.  The Assert and Debug layers are nested under
-// // the Verification layer.
-// object Verification extends Layer(Convention.Bind) {
-//   object Assert extends Layer(Convention.Bind)
-//   object Debug extends Layer(Convention.Bind)
-//   object Cover extends Layer(Convention.Bind)
-// }
-
-
 /*
   Description: 
     Produces `dataWidth` bits worth of LFSR output in one cycle using an XOR tree.
@@ -32,6 +13,22 @@ import chisel3.layer.{Convention, Layer, block}
             Polynomial in binary: 1101 (X^3, X^2, X, 1)
             The value used for polynomial will be: 0x5, NOT 0xD
 */
+
+package edu.berkeley.cs.uciedigital.utils
+
+import chisel3._
+import circt.stage.ChiselStage
+// import chisel3.ltl._
+// import chisel3.layer.{Convention, Layer, block}
+
+
+// // All layers are declared here.  The Assert and Debug layers are nested under
+// // the Verification layer.
+// object Verification extends Layer(Convention.Bind) {
+//   object Assert extends Layer(Convention.Bind)
+//   object Debug extends Layer(Convention.Bind)
+//   object Cover extends Layer(Convention.Bind)
+// }
 
 class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: Int) 
   extends Module {  
