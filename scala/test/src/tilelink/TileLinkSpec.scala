@@ -15,7 +15,10 @@ import edu.berkeley.cs.chippy.{
   TLTester,
   TLTesterIO,
   TLTesterReq,
-  TLTesterResp
+  TLTesterResp,
+  TLDriver,
+  TLRequestDescriptor,
+  TLBackpressureTestWidget
 }
 import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
@@ -27,12 +30,22 @@ import java.nio.file.Paths
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.diplomacy.IdRange
 import freechips.rocketchip.diplomacy.AddressSet
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
+import chisel3.stage.DesignAnnotation
 
 abstract class TestDriver extends ExtModule {
   val digitalClock = IO(Output(Clock()))
   val ucieBypassClock = IO(Output(Clock()))
   val ucieDigitalBypassClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
+
+  def regReqs: Seq[TLRequestDescriptor] = Seq.empty
+  def mbReqs: Seq[TLRequestDescriptor] = Seq.empty
+  def mbMaxInflight: Int = 1
+  def stallCycles: Int = 0
+}
+
+abstract class SVTestDriver extends TestDriver {
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
@@ -74,40 +87,54 @@ module TLTDriver(
   input clock,
   tltBus intf
 );
-  task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx);
+  task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx, output [63:0] resp_data);
     begin
+      bit got_early_resp = 1'b0;
+      bit got_resp = 1'b0;
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
       for (int i = 0; i < 1000; i++) begin
-        @(posedge clock)
-        if (intf.req_ready) break;
+        #10;
+        if (intf.req_ready) begin
+          // Check for same-cycle resp (possible with regnode)
+          if (intf.resp_valid) begin
+            got_early_resp = 1'b1;
+            resp_data = intf.resp_bits_data;
+          end
+          break;
+        end
+        @(posedge clock);
       end
       assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
-      fork
-        @(negedge clock) intf.req_valid = 1'b0;
-        fork
-          if (!intf.resp_valid) @(posedge intf.resp_valid);
-          repeat(1000) @(posedge clock);
-        join_any
-      join
-      assert(intf.resp_valid) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
-      @(negedge clock);
+      @(posedge clock) intf.req_valid = 1'b0;
+      // Otherwise, wait for the response posedge and sample data at that posedge.
+      if (!got_early_resp) begin
+        for (int i = 0; i < 1000; i++) begin
+          @(posedge clock);
+          if (intf.resp_valid) begin
+            got_resp = 1'b1;
+            resp_data = intf.resp_bits_data;
+            break;
+          end
+        end
+      end
+      assert(got_resp || got_early_resp) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
     end
   endtask
   task write(input [63:0] addr, input [63:0] data, input string ctx);
     begin
-      op(addr, data, 1'b1, ctx);
-      @(negedge clock);
+      reg [63:0] discard;
+      op(addr, data, 1'b1, ctx, discard);
+      // @(negedge clock);
     end
   endtask
   task read(input [63:0] addr, output [63:0] result, input string ctx);
     begin
-      op(addr, 64'b0, 1'b0, ctx);
-      result = intf.resp_bits_data;
-      @(negedge clock);
+      op(addr, 64'b0, 1'b0, ctx, result);
+      // @(negedge clock);
     end
   endtask
   task expect_data(input [63:0] addr, input [63:0] data, input string ctx);
@@ -210,17 +237,26 @@ ${Codegen.indent(codegen.formatFns())}
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
 
   initial begin
-    repeat(100000) @(negedge digitalClock);
+    repeat(100000) @(posedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
   initial begin
+`ifdef FSDB
+    begin
+      string fsdbfile;
+      if (!$$value$$plusargs("fsdbfile=%s", fsdbfile)) fsdbfile = "waveform.fsdb";
+      $$fsdbDumpfile(fsdbfile);
+      $$fsdbDumpvars(0, SimTop, "+all");
+    end
+`else
     $$dumpfile("trace.vcd");
     $$dumpvars(0);
+`endif
     reset = 1'b1;
-    repeat(5) @(negedge digitalClock);
+    repeat(5) @(posedge digitalClock);
     reset = 1'b0;
-    repeat(5) @(negedge digitalClock);
+    repeat(5) @(posedge digitalClock);
 ${Codegen.indent(body, n = 2)}
     $$display("TEST PASSED");
     $$finish;
@@ -230,7 +266,7 @@ endmodule
   )
 }
 
-class SimTop[T <: TestDriver](
+class SimTop[T <: SVTestDriver](
     driver: => T
 )(implicit
     p: Parameters,
@@ -276,7 +312,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     )
   val ucieTL = LazyModule(
     new UcieTL(
-      UcieTLParams(includeDefaultModels = includeDefaultModels),
+      UcieTLParams(includeDefaultModels = includeDefaultModels, maxInflight = 1),
       Seq(AddressSet(0x0, 0xffffL)),
       TestHarness.beatBytes
     )
@@ -319,7 +355,176 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   }
 }
 
-class MmioSimpleTestDriver extends TestDriver {
+class ScalaTestDriver extends TestDriver {
+  override def desiredName = "ScalaTestDriver"
+  setInline(
+    "ScalaTestDriver.sv",
+    s"""
+`timescale 1ps/100fs
+
+module ScalaTestDriver(
+  output reg digitalClock,
+  output reg ucieBypassClock,
+  output reg ucieDigitalBypassClock,
+  output reg reset
+);
+  initial digitalClock = 1'b0;
+  initial ucieBypassClock = 1'b0;
+  initial ucieDigitalBypassClock = 1'b0;
+  always #1000 digitalClock = ~digitalClock;
+  always #62.5 ucieBypassClock = ~ucieBypassClock;
+  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+
+  initial begin
+    repeat(100000) @(posedge digitalClock);
+    $$fatal(1, "Timeout");
+  end
+
+  initial begin
+`ifdef FSDB
+    begin
+      string fsdbfile;
+      if (!$$value$$plusargs("fsdbfile=%s", fsdbfile)) fsdbfile = "waveform.fsdb";
+      $$fsdbDumpfile(fsdbfile);
+      $$fsdbDumpvars(0, ScalaSimTop, "+all");
+    end
+`else
+    $$dumpfile("trace.vcd");
+    $$dumpvars(0);
+`endif
+    reset = 1'b1;
+    repeat(5) @(posedge digitalClock);
+    reset = 1'b0;
+  end
+endmodule
+""".trim
+  )
+}
+
+class ScalaTestHarness(
+    regReqs: Seq[TLRequestDescriptor],
+    mbReqs: Seq[TLRequestDescriptor],
+    delayCycles: Int = 32,
+    startupDelayCycles: Int = 8,
+    mbMaxInflight: Int = 1,
+    stallCycles: Int = 0
+)(implicit p: Parameters, includeDefaultModels: Boolean = true)
+    extends LazyModule {
+
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  val regDriver = LazyModule(new TLDriver(regReqs))
+  val mbDriver = LazyModule(new TLDriver(mbReqs, mbMaxInflight))
+  val tlRam =
+    LazyModule(
+      new TLRAM(
+        AddressSet(0x0, 0xffffL),
+        beatBytes = TestHarness.beatBytes,
+        cacheable = false
+      )
+    )
+  val ucieTL = LazyModule(
+    new UcieTL(
+      UcieTLParams(
+        includeDefaultModels = includeDefaultModels,
+        maxInflight = mbMaxInflight
+      ),
+      Seq(AddressSet(0x0, 0xffffL)),
+      TestHarness.beatBytes
+    )
+  )
+  val backpressure = LazyModule(new TLBackpressureTestWidget(stallCycles))
+
+  ucieTL.digitalClockNode := clockNode
+  ucieTL.regNode := regDriver.node
+  backpressure.node := ucieTL.clientNode
+  tlRam.node := backpressure.node
+  ucieTL.managerNode := mbDriver.node
+
+  lazy val module = new Impl
+  class Impl extends LazyModuleImp(this) {
+    val io = IO(new Bundle {
+      val ucieBypassClock = Input(Clock())
+      val ucieDigitalBypassClock = Input(Clock())
+      val finished = Output(Bool())
+    })
+
+    clockNode.out(0)._1.clock := clock
+    clockNode.out(0)._1.reset := reset
+
+    // Wait a few cycles before starting regDriver, so the PHY's digital reset
+    // synchronizer has time to deassert ucieRst (which clocks the regs module).
+    val startupCounter = RegInit(0.U(log2Up(startupDelayCycles + 1).W))
+    when (startupCounter < startupDelayCycles.U) {
+      startupCounter := startupCounter + 1.U
+    }
+    val startupReady = startupCounter === startupDelayCycles.U
+
+    val delayCounter = RegInit(0.U(log2Up(delayCycles + 1).W))
+    when (regDriver.module.io.finished && delayCounter < delayCycles.U) {
+      delayCounter := delayCounter + 1.U
+    }
+
+    regDriver.module.io.start := startupReady
+    mbDriver.module.io.start := delayCounter === delayCycles.U
+    io.finished := mbDriver.module.io.finished
+
+    when (io.finished) {
+      printf("TEST PASSED\n")
+      chisel3.stop()
+    }
+
+    ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData
+    ucieTL.module.io.phy.rxValid := ucieTL.module.io.phy.txValid
+    ucieTL.module.io.phy.rxTrack := ucieTL.module.io.phy.txTrack
+    ucieTL.module.io.phy.rxClkP := ucieTL.module.io.phy.txClkP
+    ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
+    ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
+    ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
+    ucieTL.module.io.phy.refClkP := DontCare
+    ucieTL.module.io.phy.refClkN := DontCare
+    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
+    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    ucieTL.module.io.phy.pllRdacVref := 0.U
+  }
+}
+
+class ScalaSimTop[T <: ScalaTestDriver](
+    driver: => T
+)(implicit
+    p: Parameters,
+    includeDefaultModels: Boolean = true
+) extends RawModule {
+  val drv = Module(driver)
+
+  withClockAndReset(drv.digitalClock, drv.reset) {
+    val ucie_harness = Module(LazyModule(new ScalaTestHarness(
+      regReqs = drv.regReqs,
+      mbReqs = drv.mbReqs,
+      mbMaxInflight = drv.mbMaxInflight,
+      stallCycles = drv.stallCycles
+    )).module)
+    ucie_harness.io.ucieBypassClock := drv.ucieBypassClock
+    ucie_harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+  }
+}
+
+class ScalaTlSimpleTestDriver extends ScalaTestDriver {
+  override def regReqs = Codegen.tlSimpleRegReqs
+  override def mbReqs = Codegen.tlSimpleMbReqs
+}
+
+class ScalaTlLongTestDriver extends ScalaTestDriver {
+  override def regReqs = Codegen.tlSimpleRegReqs
+  override def mbReqs = Codegen.tlLongMbReqs
+  override def mbMaxInflight = 32
+}
+
+class ScalaTlLongStallTestDriver extends ScalaTlLongTestDriver {
+  override def stallCycles = 1024
+}
+
+class MmioSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
@@ -330,7 +535,7 @@ class MmioSimpleTestDriver extends TestDriver {
   )
 }
 
-class ManualSimpleTestDriver extends TestDriver {
+class ManualSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "ManualSimpleTestDriver",
     """
@@ -339,11 +544,20 @@ manual_simple();
   )
 }
 
-class TlSimpleTestDriver extends TestDriver {
+class TlSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "TlSimpleTestDriver",
     """
 tl_simple();
+          """.trim
+  )
+}
+
+class TlLongTestDriver extends SVTestDriver {
+  setStimulus(
+    "TlLongTestDriver",
+    """
+tl_long();
           """.trim
   )
 }
@@ -405,6 +619,96 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple Scala TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple Scala TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_VCS"
+      )
+    }
+
+    it("should support simple Scala TL test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSimpleTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Xcelium"
+      )
+    }
+
+    it("should support long Scala TL test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support long Scala TL test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_VCS"
+      )
+    }
+
+    it("should support long Scala TL test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_using_Xcelium"
+      )
+    }
+
+    it("should support long Scala TL test with RAM-side backpressure stall using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongStallTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_with_stall_using_Verilator"
+      )
+    }
+
+    it("should support long Scala TL test with RAM-side backpressure stall using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongStallTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_test_with_stall_using_VCS"
+      )
+    }
+
+    it("should be able to read/write MMIO registers using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new MmioSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_VCS"
+      )
+    }
+
+    it("should support simple manual test using VCS") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ManualSimpleTestDriver),
+        Utils.writeVcsSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_VCS"
       )
     }
 
