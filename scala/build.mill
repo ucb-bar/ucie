@@ -38,6 +38,7 @@ object `package` extends ScalaModule, PublishModule {
     def mvnDeps = Seq(
       mvn"org.scalatest::scalatest:3.2.19",
     )
+    def testParallelism = false
   }
 }
 
