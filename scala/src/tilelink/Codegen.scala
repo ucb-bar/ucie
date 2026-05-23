@@ -251,7 +251,7 @@ object Codegen {
   lazy val ucieRegmap: Seq[(Int, Seq[RegField])] = {
     implicit val p = Parameters.empty
     val ucie_dut = new RTLHarness(
-      new UcieTL(ucieParams, Seq(AddressSet(0x0, 0xffffL)), 32)
+      new UcieTL(ucieParams, Seq(AddressSet(0x0, 0xffffL)), 32, 32)
     )
     val ucie = (new chisel3.stage.phases.Elaborate)
       .transform(Seq(chisel3.stage.ChiselGeneratorAnnotation { () =>
