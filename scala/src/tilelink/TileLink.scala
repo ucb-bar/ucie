@@ -571,7 +571,7 @@ class UcieTXD(creditBits: Int = 5) extends Bundle {
   val tl = new UcieTLBundleD
 }
 
-class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: Int)(implicit
+class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: Int, blockBytes: Int)(implicit
     p: Parameters
 ) extends LazyModule {
   override lazy val desiredName = "UcieTL"
@@ -592,9 +592,9 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
             regionType =
               RegionType.UNCACHED, // Should be changed to CACHED eventually
             executable = true,
-            supportsGet = TransferSizes(1, beatBytes),
-            supportsPutFull = TransferSizes(1, beatBytes),
-            supportsPutPartial = TransferSizes(1, beatBytes),
+            supportsGet = TransferSizes(1, blockBytes),
+            supportsPutFull = TransferSizes(1, blockBytes),
+            supportsPutPartial = TransferSizes(1, blockBytes),
             fifoId = Some(0)
           )
         },
@@ -901,7 +901,7 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
   val uciephy = p(UcieTLKey) match {
     case Some(params) => {
       val uciephy =
-        params.map(x => LazyModule(new UcieTL(x, Seq(AddressSet(0x0, 0xffffL)), pbus.beatBytes)(p)))
+        params.map(x => LazyModule(new UcieTL(x, Seq(AddressSet(0x0, 0xffffL)), pbus.beatBytes, pbus.blockBytes)(p)))
 
       lazy val uciephy_tlbus =
         params.map(x => locateTLBusWrapper(x.managerWhere))
@@ -927,7 +927,7 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
 }
 
 class UcieChipletLink(val params: UcieTLParams, val sys_params: OffchipSubsystemParams, val id: Int)(implicit p: Parameters) extends ChipletLinkWrapper {
-  val ucie = LazyModule(new UcieTL(params, sys_params.managerRegion, sys_params.managerBeatBytes)(p))
+  val ucie = LazyModule(new UcieTL(params, sys_params.managerRegion, sys_params.managerBeatBytes, sys_params.managerBlockBytes)(p))
   val client_node = ucie.clientNode
   val manager_node = ucie.managerNode
   val control_manager_node = Some(ucie.regNode)

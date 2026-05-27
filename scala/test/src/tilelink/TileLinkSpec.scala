@@ -314,6 +314,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     new UcieTL(
       UcieTLParams(includeDefaultModels = includeDefaultModels, maxInflight = 1),
       Seq(AddressSet(0x0, 0xffffL)),
+      TestHarness.beatBytes,
       TestHarness.beatBytes
     )
   )
@@ -429,6 +430,7 @@ class ScalaTestHarness(
         maxInflight = mbMaxInflight
       ),
       Seq(AddressSet(0x0, 0xffffL)),
+      TestHarness.beatBytes,
       TestHarness.beatBytes
     )
   )
@@ -567,7 +569,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32))).module,
+        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32, 32))).module,
         args = Array(
           "--target-dir",
           (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
