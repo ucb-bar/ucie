@@ -781,13 +781,13 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
       managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid
 
-      when(rxABuffer.io.deq.fire) {
+      when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
         aCreditsToReturn := aCreditsToReturn + 1.U
       }
       when(creditRetValid) {
         aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
       }
-      when(rxDBuffer.io.deq.fire) {
+      when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
         dCreditsToReturn := dCreditsToReturn + 1.U
       }
       when(creditRetValid) {
