@@ -35,8 +35,10 @@ case class UcieTLParams(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
     bitCounterWidth: Int = 64,
-    creditCounterSize: Int = 64,
-    tlBufferDepth: Int = 31,
+    creditCounterSize: Int = 128,
+    creditRetThreshhold: Int = 31,
+    creditRetTimerWidth: Int = 7,
+    tlBufferDepth: Int = 63,
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     maxInflight: Int = 1,
@@ -732,12 +734,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val aCreditsToReturn = RegInit(0.U(creditBits.W))
       val dCreditsToReturn = RegInit(0.U(creditBits.W))
       val creditRetValid = Wire(Bool())
-      val creditRetTimer = RegInit(0.U(7.W)) // Arbitrary width for now
+      val creditRetTimer = RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
       val aAvail = Wire(Bool())
       val dAvail = Wire(Bool())
 
       creditRetTimer := creditRetTimer + 1.U
-      creditRetValid := (creditRetTimer === 127.U || aCreditsToReturn > 15.U || dCreditsToReturn > 15.U) && regs.module.io.mainbandSel === MainbandSel.tl
+      creditRetValid := (clientTl.d.fire || managerTl.a.fire || creditRetTimer === (1 << params.creditRetTimerWidth - 1).U || aCreditsToReturn > params.creditRetThreshhold.U || dCreditsToReturn > params.creditRetThreshhold.U) && regs.module.io.mainbandSel === MainbandSel.tl
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
