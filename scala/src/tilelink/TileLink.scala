@@ -127,6 +127,7 @@ class UcieTLRegsIO(
   )
   val phy = Flipped(new PhyRegsIO(numLanes))
   val mainbandSel = Output(MainbandSel())
+  val creditFlowEnable = Output(Bool())
 }
 
 class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
@@ -329,6 +330,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
       val mainbandSel = RegInit(MainbandSel.phytest)
       io.mainbandSel := mainbandSel
 
+      val creditFlowEnable = RegInit(true.B)
+      io.creditFlowEnable := creditFlowEnable
+
       txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
@@ -518,7 +522,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
       ) ++ Seq(
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
-        toRegFieldRw(mainbandSel, "mainbandSel")
+        toRegFieldRw(mainbandSel, "mainbandSel"),
+        toRegFieldRw(creditFlowEnable, "creditFlowEnable")
       )
 
       mmioRegs.zipWithIndex.map({
@@ -892,12 +897,14 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       aCreditCounter.io.used := managerTl.a.fire
       aCreditCounter.io.ret.valid := creditAValid || creditDValid
       aCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_a)
+      aCreditCounter.io.mode := regs.module.io.creditFlowEnable
       aAvail := aCreditCounter.io.avail
 
       val dCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
       dCreditCounter.io.used := clientTl.d.fire
       dCreditCounter.io.ret.valid := creditAValid || creditDValid
       dCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_d, rxDBuffer.io.deq.bits.credit_d)
+      dCreditCounter.io.mode := regs.module.io.creditFlowEnable
       dAvail := dCreditCounter.io.avail
     }
   }
