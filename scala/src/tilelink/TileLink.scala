@@ -735,11 +735,19 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val dCreditsToReturn = RegInit(0.U(creditBits.W))
       val creditRetValid = Wire(Bool())
       val creditRetTimer = RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
+      val creditsFull = Wire(Bool())
       val aAvail = Wire(Bool())
       val dAvail = Wire(Bool())
 
       creditRetTimer := creditRetTimer + 1.U
-      creditRetValid := (clientTl.d.fire || managerTl.a.fire || creditRetTimer === (1 << params.creditRetTimerWidth - 1).U || aCreditsToReturn > params.creditRetThreshhold.U || dCreditsToReturn > params.creditRetThreshhold.U) && regs.module.io.mainbandSel === MainbandSel.tl
+      creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
+      creditRetValid := ((clientTl.d.fire ||
+                          managerTl.a.fire ||
+                          creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
+                          aCreditsToReturn > params.creditRetThreshhold.U ||
+                          dCreditsToReturn > params.creditRetThreshhold.U) &&
+                        !creditsFull &&
+                        regs.module.io.mainbandSel === MainbandSel.tl)
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
