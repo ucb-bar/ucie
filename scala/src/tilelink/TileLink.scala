@@ -35,11 +35,14 @@ case class UcieTLParams(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
     bitCounterWidth: Int = 64,
-    creditCounterSize: Int = 64,
-    tlBufferDepth: Int = 31,
+    creditCounterSize: Int = 128,
+    creditRetThreshhold: Int = 31,
+    creditRetTimerWidth: Int = 7,
+    tlBufferDepth: Int = 63,
     managerWhere: TLBusWrapperLocation = PBUS,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     maxInflight: Int = 1,
+    clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false
 ) extends ChipletLinkParams
  with ChipletLinkWrapperInstantiationLike 
@@ -535,7 +538,7 @@ object UcieTL {
 class UcieTLBundleA extends Bundle {
   val opcode = UInt(3.W)
   val param = UInt(3.W)
-  val size = UInt(3.W)
+  val size = UInt(4.W)
   val address = UInt(64.W) // to
   val mask = UInt((UcieTL.dataBits / 8).W)
   val data = UInt(UcieTL.dataBits.W)
@@ -547,7 +550,7 @@ class UcieTLBundleD extends Bundle {
   // fixed fields during multibeat:
   val opcode = UInt(3.W)
   val param = UInt(2.W)
-  val size = UInt(3.W)
+  val size = UInt(4.W)
   val data = UInt(UcieTL.dataBits.W)
   val source = UInt(8.W) // to
   val sink = UInt(1.W) // from
@@ -609,7 +612,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         Seq(
           TLMasterParameters.v1(
             name = "ucie-client",
-            sourceId = IdRange(0, params.maxInflight)
+            sourceId = IdRange(0, 1 << params.clientIdBits)
           )
         )
       )
@@ -731,12 +734,20 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val aCreditsToReturn = RegInit(0.U(creditBits.W))
       val dCreditsToReturn = RegInit(0.U(creditBits.W))
       val creditRetValid = Wire(Bool())
-      val creditRetTimer = RegInit(0.U(7.W)) // Arbitrary width for now
+      val creditRetTimer = RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
+      val creditsFull = Wire(Bool())
       val aAvail = Wire(Bool())
       val dAvail = Wire(Bool())
 
       creditRetTimer := creditRetTimer + 1.U
-      creditRetValid := (creditRetTimer === 127.U || aCreditsToReturn > 15.U || dCreditsToReturn > 15.U) && regs.module.io.mainbandSel === MainbandSel.tl
+      creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
+      creditRetValid := ((clientTl.d.fire ||
+                          managerTl.a.fire ||
+                          creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
+                          aCreditsToReturn > params.creditRetThreshhold.U ||
+                          dCreditsToReturn > params.creditRetThreshhold.U) &&
+                        !creditsFull &&
+                        regs.module.io.mainbandSel === MainbandSel.tl)
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
@@ -780,13 +791,13 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
       managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid
 
-      when(rxABuffer.io.deq.fire) {
+      when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
         aCreditsToReturn := aCreditsToReturn + 1.U
       }
       when(creditRetValid) {
         aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
       }
-      when(rxDBuffer.io.deq.fire) {
+      when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
         dCreditsToReturn := dCreditsToReturn + 1.U
       }
       when(creditRetValid) {
