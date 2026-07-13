@@ -302,8 +302,7 @@ class LinkTrainingSM(sbParams: SidebandParams, afeParams: AfeParams, retryW: Int
   val ltsmInReset = Wire(Bool())
   ltsmInReset := false.B  
 
-  // TODO: Need to add this reset to the submodules
-  val subFsmModuleReset = (reset.asBool || ltsmInReset).asAsyncReset 
+  val subFsmModuleReset = (reset.asBool || ltsmInReset).asAsyncReset
 
   // ==============================================================================================
   // SBInit 
@@ -835,7 +834,7 @@ class LinkTrainingSM(sbParams: SidebandParams, afeParams: AfeParams, retryW: Int
   // ==============================================================================================
   // Phy Retrain Logic
   // ==============================================================================================
-  val retrainSbModule = withReset(ltsmInReset) { Module(new PhyRetrainSidebandHandshake(sbParams)) }
+  val retrainSbModule = withReset(subFsmModuleReset) { Module(new PhyRetrainSidebandHandshake(sbParams)) }
 
   retrainSbModule.io.startPhyRetrainMsgExch := false.B
   retrainSbModule.io.waitForRemoteRequest := false.B
@@ -970,8 +969,8 @@ class LinkTrainingSM(sbParams: SidebandParams, afeParams: AfeParams, retryW: Int
   // ==============================================================================================
   // TrainError Logic
   // ==============================================================================================
-  val trainErrorRequester = withReset(ltsmInReset) { Module(new TrainErrorRequester(sbParams)) }
-  val trainErrorResponder = withReset(ltsmInReset) { Module(new TrainErrorResponder(sbParams)) }
+  val trainErrorRequester = withReset(subFsmModuleReset) { Module(new TrainErrorRequester(sbParams)) }
+  val trainErrorResponder = withReset(subFsmModuleReset) { Module(new TrainErrorResponder(sbParams)) }
 
   // Requester Inputs
   when(localError && !waitTrainErrorResp && (currentState =/= LTState.sTRAINERROR)) {
