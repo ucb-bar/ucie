@@ -68,7 +68,7 @@ function string basename(string path);
     return path;
 endfunction
 
-`define UCIE_Q1_BASE 64'h4000
+`define UCIE_Q1_BASE 64'h200000
 ${codegen.formatDefines()}
 
 interface tltBus (
@@ -590,9 +590,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         enableWaves()
         // Allow reset to propagate to UCIe via reset synchronizers.
         c.clock.step(cycles = 5)
-        c.io.reg.expect(c.clock, "h4000".U, 0.U)
-        c.io.reg.write(c.clock, "h4100".U, "hdeadbeef".U)
-        c.io.reg.expect(c.clock, "h4100".U, "hdeadbeef".U)
+        c.io.reg.expect(c.clock, "h200000".U, 0.U)
+        c.io.reg.write(c.clock, "h200100".U, "hdeadbeef".U)
+        c.io.reg.expect(c.clock, "h200100".U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }
