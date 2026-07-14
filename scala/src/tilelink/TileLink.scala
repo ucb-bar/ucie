@@ -16,6 +16,8 @@ import org.chipsalliance.cde.config.{Parameters, Field, Config}
 import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
+import edu.berkeley.cs.uciedigital.top.{UcieDigitalTop, UcieDigitalTopParams}
+import edu.berkeley.cs.uciedigital.regs.{UcieRegBlock, UcieRegBlockIO, UcieRegParams, AdapterToRegs, PhyToRegs, LinkToRegs, MailboxSbResp, PhyToVendor}
 import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
@@ -31,7 +33,7 @@ import freechips.rocketchip.diplomacy.BundleBridgeSource
 import testchipip.soc.{ChipletLinkParams, ChipletLinkWrapperInstantiationLike, ChipletLinkWrapper, OffchipSubsystemParams, ChipletIO}
 
 case class UcieTLParams(
-    address: BigInt = 0x4000,
+    address: BigInt = 0x200000,
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
     bitCounterWidth: Int = 64,
@@ -43,7 +45,8 @@ case class UcieTLParams(
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
     maxInflight: Int = 1,
     clientIdBits: Int = 8,
-    includeDefaultModels: Boolean = false
+    includeDefaultModels: Boolean = false,
+    ucieRegsBaseAddress: BigInt = 0x40000
 ) extends ChipletLinkParams
  with ChipletLinkWrapperInstantiationLike 
  {
@@ -112,9 +115,11 @@ class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
 
 object MainbandSel extends ChiselEnum {
   // Allow PhyTest to control mainband
-  val phytest = Value(0.U(1.W))
+  val phytest = Value(0.U(2.W))
   // Send TL packets over mainband
-  val tl = Value(1.U(1.W))
+  val tl = Value(1.U(2.W))
+  // Route mainband through the UCIe digital controller (UcieDigitalTop)
+  val ucie = Value(2.U(2.W))
 }
 
 class UcieTLRegsIO(
@@ -130,7 +135,7 @@ class UcieTLRegsIO(
   val creditFlowEnable = Output(Bool())
 }
 
-class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
+class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegParams)(implicit
     p: Parameters
 ) extends ClockSinkDomain(ClockSinkParameters()) {
   def toRegFieldRw[T <: Data](r: T, name: String): RegField = {
@@ -149,9 +154,10 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
   def toRegFieldR[T <: Data](r: T, name: String): RegField = {
     RegField.r(r.getWidth, r.asUInt, RegFieldDesc(name, ""))
   }
+  val ucieTLRegionSize = 0x4000
   val device = new SimpleDevice("ucie_control", Seq("ucbbar,ucie"))
   val node = TLRegisterNode(
-    Seq(AddressSet(params.address, 16384 - 1)),
+    Seq(AddressSet(params.address, ucieTLRegionSize + ucieRegParams.allocation.regionSize - 1)),
     device,
     "reg/control",
     beatBytes = beatBytes
@@ -166,6 +172,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
         params.bitCounterWidth
       )
     )
+    
+    val ucieBlockIo = IO(new UcieRegBlockIO(ucieRegParams))
 
     val regmap = withClockAndReset(clock, reset) {
       // TODO: Remove and add necessary registers
@@ -532,7 +540,13 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int)(implicit
         }
       })
     }
-    node.regmap(regmap: _*)
+
+    // Spec-defined UCIe digital registers. Added after UCIe TL Regs.
+    val ucieRegmap = withClockAndReset(clock, reset) {
+      val (entries, _, _) = UcieRegBlock.build(ucieBlockIo, reset, ucieRegParams, ucieTLRegionSize)
+      entries
+    }
+    node.regmap((regmap ++ ucieRegmap): _*)
   }
 }
 
@@ -587,7 +601,16 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
   // Main digital clock node.
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
   val ucieDigitalClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
-  val regs = LazyModule(new UcieTLRegs(params, beatBytes))
+
+  val ucieRegParams = UcieDigitalTopParams.default().regs.copy(
+    baseAddress = params.ucieRegsBaseAddress,
+    numModules = 1,
+    includeRegNode = false,
+    includeInterruptNode = false
+  )
+  val ucieDigitalLazy: UcieDigitalTop =
+    LazyModule(new UcieDigitalTop(UcieDigitalTopParams.default().copy(regs = ucieRegParams)))
+  val regs = LazyModule(new UcieTLRegs(params, beatBytes, ucieRegParams))
 
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
@@ -658,31 +681,73 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
     }
     io.debug <> test.io.bumps
     test.io.debug <> phy.io.debug
-    test.io.sb <> phy.io.sb
     phy.io.clkRst.divResetb := test.io.divResetb
     test.io.regs <> regs.module.io.test
+
+    val mainbandSel = regs.module.io.mainbandSel
 
     // Async crossings
     val txTestFifo =
       Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
-    txTestFifo.io.enq <> test.io.tx
     txTestFifo.io.enq_clock := phy.io.clkRst.ucieClk
     txTestFifo.io.enq_reset := phy.io.clkRst.ucieRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txTestFifo.io.deq_reset := phy.io.clkRst.txDivRst
     // TODO: should deq ready be synchronous to deq clock?
-    txTestFifo.io.deq.ready := regs.module.io.mainbandSel === MainbandSel.phytest
+    // txTestFifo crosses both the phytest and ucie mainband tx signals to the PHY.
+    txTestFifo.io.deq.ready := mainbandSel =/= MainbandSel.tl
 
     val rxTestFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
     rxTestFifo.io.enq.bits := phy.io.rx
-    rxTestFifo.io.enq.valid := regs.module.io.mainbandSel === MainbandSel.phytest
+    rxTestFifo.io.enq.valid := mainbandSel =/= MainbandSel.tl
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
     rxTestFifo.io.enq_reset := phy.io.clkRst.rxDivRst
-    rxTestFifo.io.deq <> test.io.rx
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
+  
+    val ucieDigital = withClockAndReset(phy.io.clkRst.ucieClk, phy.io.clkRst.ucieRst) {
+      ucieDigitalLazy.module
+    }
+    ucieDigital.io.regBlockIo.foreach { rb => regs.module.ucieBlockIo <> rb }
+    val selUcie = mainbandSel === MainbandSel.ucie
+    // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
+    val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
+    val digiTxAsTxIo = Wire(new TxIO(params.numLanes))
+    digiTxAsTxIo.data := digiToPhyTx.bits.data
+    digiTxAsTxIo.valid := digiToPhyTx.bits.valid
+    digiTxAsTxIo.clkp := digiToPhyTx.bits.clkP
+    digiTxAsTxIo.clkn := digiToPhyTx.bits.clkN
+    digiTxAsTxIo.track := digiToPhyTx.bits.trk
+    txTestFifo.io.enq.valid := Mux(selUcie, digiToPhyTx.valid, test.io.tx.valid)
+    txTestFifo.io.enq.bits := Mux(selUcie, digiTxAsTxIo, test.io.tx.bits)
+    test.io.tx.ready := txTestFifo.io.enq.ready && !selUcie
+    digiToPhyTx.ready := txTestFifo.io.enq.ready && selUcie
+
+    // phyFacing RX: rxTestFifo.deq routed to PhyTest or ucieDigital by sel.
+    val digiToPhyRx = ucieDigital.io.phyFacingIo.mainbandLink.rx
+    digiToPhyRx.bits.data := rxTestFifo.io.deq.bits.data
+    digiToPhyRx.bits.valid := rxTestFifo.io.deq.bits.valid
+    digiToPhyRx.bits.trk := rxTestFifo.io.deq.bits.track
+    // TODO: RxIO has no clkp/clkn; use the forwarded-clock patterns until sampled clkP/clkN exist.
+    // Need them for training and link bringup.
+    digiToPhyRx.bits.clkP := "h55555555".U
+    digiToPhyRx.bits.clkN := "haaaaaaaa".U
+    digiToPhyRx.valid := rxTestFifo.io.deq.valid && selUcie
+    test.io.rx.bits := rxTestFifo.io.deq.bits
+    test.io.rx.valid := rxTestFifo.io.deq.valid && !selUcie
+    rxTestFifo.io.deq.ready := Mux(selUcie, digiToPhyRx.ready, test.io.rx.ready)
+
+    // Sideband: ucie mode uses ucieDigital; phytest/tl use PhyTest. Rx goes to both.
+    val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
+    phy.io.sb.txClk  := Mux(selUcie, digiSb.out.fwClock.asBool.asClock, test.io.sb.txClk)
+    phy.io.sb.txData := Mux(selUcie, digiSb.out.bits.asBool, test.io.sb.txData)
+    test.io.sb.rxClk  := phy.io.sb.rxClk
+    test.io.sb.rxData := phy.io.sb.rxData
+    digiSb.in.bits    := phy.io.sb.rxData.asUInt
+    digiSb.in.fwClock := phy.io.sb.rxClk.asUInt
+     
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
       val managerTl = managerNode.in(0)._1
@@ -752,7 +817,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
                           aCreditsToReturn > params.creditRetThreshhold.U ||
                           dCreditsToReturn > params.creditRetThreshhold.U) &&
                         !creditsFull &&
-                        regs.module.io.mainbandSel === MainbandSel.tl)
+                        regs.module.io.mainbandSel =/= MainbandSel.phytest)
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
@@ -780,21 +845,36 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
-      // Always true to send clock.
-      txTlFifo.io.enq.valid := true.B
+      // Always true to send clock when tl path.
+      txTlFifo.io.enq.valid := mainbandSel === MainbandSel.tl
       val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
       txTlFifo.io.enq.bits.clkn := "haaaaaaaa".U
       txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
-      txTlFifo.io.enq.bits.data := Mux(
+      val txFramedData = Mux(
         clientTl.d.valid,
         Cat(ucieClientTxD.asUInt, 1.U),
         Cat(ucieManagerTxA.asUInt, 0.U)
-      ).asTypeOf(txTlFifo.io.enq.bits.data)
+      )
+      txTlFifo.io.enq.bits.data := txFramedData.asTypeOf(txTlFifo.io.enq.bits.data)
 
-      clientTl.d.ready := txTlFifo.io.enq.ready && dAvail
-      managerTl.a.ready := txTlFifo.io.enq.ready && aAvail && !clientTl.d.valid
+      // chipFacing TX: route the same framed data into ucieDigital (ucie mode), crossing
+      // childClock -> ucieClk. Only the protocol data crosses (no track/clkp/clkn/valid lanes); deq is ucieClk.
+      val txAQ = Module(new AsyncQueue(chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandTx.bits), params.queueParams))
+      txAQ.io.enq.valid := mainbandSel === MainbandSel.ucie
+      txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
+      txAQ.io.enq_clock := childClock
+      txAQ.io.enq_reset := childReset
+      txAQ.io.deq_clock := phy.io.clkRst.ucieClk
+      txAQ.io.deq_reset := phy.io.clkRst.ucieRst
+      ucieDigital.io.chipFacingIo.mainbandTx.valid := txAQ.io.deq.valid
+      ucieDigital.io.chipFacingIo.mainbandTx.bits := txAQ.io.deq.bits
+      txAQ.io.deq.ready := ucieDigital.io.chipFacingIo.mainbandTx.ready
+      val txEnqReady = Mux(mainbandSel === MainbandSel.ucie, txAQ.io.enq.ready, txTlFifo.io.enq.ready)
+    
+      clientTl.d.ready := txEnqReady && dAvail
+      managerTl.a.ready := txEnqReady && aAvail && !clientTl.d.valid
 
       when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
         aCreditsToReturn := aCreditsToReturn + 1.U
@@ -819,7 +899,7 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
       val validFramer = Module(new ValidFramer(params.numLanes))
       rxTlFifo.io.enq.bits := phy.io.rx
-      rxTlFifo.io.enq.valid := regs.module.io.mainbandSel === MainbandSel.tl
+      rxTlFifo.io.enq.valid := mainbandSel === MainbandSel.tl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
       rxTlFifo.io.deq <> validFramer.io.phy
@@ -829,11 +909,25 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       validFramer.io.digital.ready := true.B
       rxABuffer.io.enq.valid := false.B
       rxDBuffer.io.enq.valid := false.B
-      val framedBits = validFramer.io.digital.bits.asUInt
+
+      // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path, crossing
+      // ucieClk -> childClock. Muxed with the tl-path ValidFramer output by mainbandSel.
+      val rxAQ = Module(new AsyncQueue(chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandRx.bits), params.queueParams))
+      rxAQ.io.enq.valid := ucieDigital.io.chipFacingIo.mainbandRx.valid && (mainbandSel === MainbandSel.ucie)
+      rxAQ.io.enq.bits := ucieDigital.io.chipFacingIo.mainbandRx.bits
+      ucieDigital.io.chipFacingIo.mainbandRx.ready := rxAQ.io.enq.ready && (mainbandSel === MainbandSel.ucie)
+      rxAQ.io.enq_clock := phy.io.clkRst.ucieClk
+      rxAQ.io.enq_reset := phy.io.clkRst.ucieRst
+      rxAQ.io.deq_clock := childClock
+      rxAQ.io.deq_reset := childReset
+      rxAQ.io.deq.ready := mainbandSel === MainbandSel.ucie
+      val framedBits = Mux(mainbandSel === MainbandSel.ucie, rxAQ.io.deq.bits.data, validFramer.io.digital.bits.asUInt)
+      val framedValid = Mux(mainbandSel === MainbandSel.ucie, rxAQ.io.deq.valid, validFramer.io.digital.valid)
+
       val tlBits = framedBits(framedBits.getWidth - 1, 1)
       rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
       rxDBuffer.io.enq.bits := tlBits.asTypeOf(rxDBuffer.io.enq.bits)
-      when(validFramer.io.digital.valid) {
+      when(framedValid) {
         when(framedBits.asUInt(0)) {
           rxDBuffer.io.enq.valid := true.B
         }.otherwise {
@@ -876,16 +970,17 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       txContClocks.clkn := "haaaaaaaa".U
       txContClocks.track := "h55555555".U
 
+      // tl mode drives from txTlFifo; phytest and ucie both drive from txTestFifo.
       phy.io.tx := Mux(
-        regs.module.io.mainbandSel === MainbandSel.phytest,
-        Mux(
-          txTestFifo.io.deq.valid,
-          txTestFifo.io.deq.bits,
-          0.U.asTypeOf(phy.io.tx)
-        ),
+        mainbandSel === MainbandSel.tl,
         Mux(
           txTlFifo.io.deq.valid,
           txContClocks,
+          0.U.asTypeOf(phy.io.tx)
+        ),
+        Mux(
+          txTestFifo.io.deq.valid,
+          txTestFifo.io.deq.bits,
           0.U.asTypeOf(phy.io.tx)
         )
       )
