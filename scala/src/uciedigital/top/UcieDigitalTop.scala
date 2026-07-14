@@ -34,6 +34,7 @@ class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams) extend
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
   val chipFacingIo = new UcieDigitalTopChipIO(params.protocol)
   val phyFacingIo  = new UcieDigitalTopPhyIO(params.logPhy.afe, params.logPhy.sideband)
+  val regBlockIo = if (!params.regs.includeRegNode) Some(Flipped(new UcieRegBlockIO(params.regs))) else None
 }
 
 class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default())(implicit p: Parameters)
@@ -41,19 +42,29 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
   private val validatedParams = params.validate()
   override lazy val desiredName = "UcieDigitalTop"
 
-  val regs = LazyModule(new UcieRegTop(validatedParams.regs))
-  val regNode = regs.node
-  val intNode = regs.intNode
-  private val regClockSource = ClockSourceNode(Seq(ClockSourceParameters()))
-  regs.clockNode := regClockSource
+  // With no node the map is spliced into an outer TLRegisterNode; expose the allocation so it can size it.
+  val ucieRegAllocation = validatedParams.regs.allocation
+  val regs: Option[UcieRegTop] =
+    if (validatedParams.regs.includeRegNode || validatedParams.regs.includeInterruptNode)
+      Some(LazyModule(new UcieRegTop(validatedParams.regs)))
+    else None
+  val regNode = regs.flatMap(_.node)
+  val intNode = regs.flatMap(_.intNode)
+  private val regClockSource = regs.map { r =>
+    val src = ClockSourceNode(Seq(ClockSourceParameters()))
+    r.clockNode := src
+    src
+  }
 
   override lazy val module = new UcieDigitalTopImpl
   class UcieDigitalTopImpl extends LazyModuleImp(this) {
     val io = IO(new UcieDigitalTopIO(validatedParams))
 
-    val (regClk, _) = regClockSource.out(0)
-    regClk.clock := clock
-    regClk.reset := reset
+    regClockSource.foreach { src =>
+      val (regClk, _) = src.out(0)
+      regClk.clock := clock
+      regClk.reset := reset
+    }
 
     val protocolLayer = Module(new ProtocolLayer(
       params = validatedParams.protocol.layer,
@@ -95,21 +106,41 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
     dontTouch(logicalPhy.io.status)
     dontTouch(logicalPhy.io.analog.ctrl) // logphy->PHY control
 
-    regs.module.io.linkReset := false.B
-    regs.module.io.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
-    regs.module.io.phyToRegs := 0.U.asTypeOf(new PhyToRegs(validatedParams.regs.numModules))
-    regs.module.io.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
-    regs.module.io.mailboxSideband.req.ready := true.B
-    regs.module.io.mailboxSideband.resp.valid := false.B
-    regs.module.io.mailboxSideband.resp.bits := 0.U.asTypeOf(new MailboxSbResp)
-    regs.module.io.phyToVendor.foreach(_ := 0.U.asTypeOf(new PhyToVendor))
-    regs.module.io.d2dToVendor.foreach(_ := DontCare)
-    dontTouch(regs.module.io.regsToAdapter)
-    dontTouch(regs.module.io.regsToPhy)
-    dontTouch(regs.module.io.regsToLink)
-    dontTouch(regs.module.io.mailboxSideband.req)
-    regs.module.io.vendorToPhy.foreach(dontTouch(_))
-    regs.module.io.linkEventIrq.foreach(dontTouch(_))
-    regs.module.io.linkErrorIrq.foreach(dontTouch(_))
+    regs.foreach { r =>
+      r.module.io.linkReset := false.B
+      r.module.io.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
+      r.module.io.phyToRegs := 0.U.asTypeOf(new PhyToRegs(validatedParams.regs.numModules))
+      r.module.io.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
+      r.module.io.mailboxSideband.req.ready := true.B
+      r.module.io.mailboxSideband.resp.valid := false.B
+      r.module.io.mailboxSideband.resp.bits := 0.U.asTypeOf(new MailboxSbResp)
+      r.module.io.phyToVendor.foreach(_ := 0.U.asTypeOf(new PhyToVendor))
+      r.module.io.d2dToVendor.foreach(_ := DontCare)
+      dontTouch(r.module.io.regsToAdapter)
+      dontTouch(r.module.io.regsToPhy)
+      dontTouch(r.module.io.regsToLink)
+      dontTouch(r.module.io.mailboxSideband.req)
+      r.module.io.vendorToPhy.foreach(dontTouch(_))
+      r.module.io.linkEventIrq.foreach(dontTouch(_))
+      r.module.io.linkErrorIrq.foreach(dontTouch(_))
+    }
+
+    // External reg block: drive our side so the integrator only needs a single <>.
+    io.regBlockIo.foreach { rb =>
+      rb.linkReset := false.B
+      rb.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
+      rb.phyToRegs := 0.U.asTypeOf(new PhyToRegs(validatedParams.regs.numModules))
+      rb.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
+      rb.mailboxSideband.req.ready := true.B
+      rb.mailboxSideband.resp.valid := false.B
+      rb.mailboxSideband.resp.bits := 0.U.asTypeOf(new MailboxSbResp)
+      rb.phyToVendor.foreach(_ := 0.U.asTypeOf(new PhyToVendor))
+      rb.d2dToVendor.foreach(_ := DontCare)
+      dontTouch(rb.regsToAdapter)
+      dontTouch(rb.regsToPhy)
+      dontTouch(rb.regsToLink)
+      dontTouch(rb.mailboxSideband.req)
+      rb.vendorToPhy.foreach(dontTouch(_))
+    }
   }
 }

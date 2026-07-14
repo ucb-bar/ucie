@@ -48,7 +48,8 @@ case class UcieRegParams(
     vendorId: Int = 0xd2de,
     hasVendorPhyBlock: Boolean = true,
     hasVendorD2dBlock: Boolean = false,
-    diplomaticIntRouting: Boolean = false
+    includeRegNode: Boolean = true,
+    includeInterruptNode: Boolean = false
 ) {
   def packageType: UciePackageType.Value = phyCapability.packageType
   require(

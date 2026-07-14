@@ -43,7 +43,7 @@ case class UcieDigitalTopParams(
       rxClockPhaseSupport = 0x0
     ),
     numModules = 1,
-    diplomaticIntRouting = true
+    includeInterruptNode = true
   ),
 ) {
   def validate(): UcieDigitalTopParams = {
