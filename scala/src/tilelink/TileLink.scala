@@ -125,7 +125,8 @@ object MainbandSel extends ChiselEnum {
 class UcieTLRegsIO(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
-    bitCounterWidth: Int = 64
+    bitCounterWidth: Int = 64,
+    addrWidth: Int = 64 // Magic number, but this is hardcoded in A packet
 ) extends Bundle {
   val test = Flipped(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
@@ -133,6 +134,7 @@ class UcieTLRegsIO(
   val phy = Flipped(new PhyRegsIO(numLanes))
   val mainbandSel = Output(MainbandSel())
   val creditFlowEnable = Output(Bool())
+  val lastSeenTLReq = Input(UInt(addrWidth.W))
 }
 
 class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegParams)(implicit
@@ -341,6 +343,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       val creditFlowEnable = RegInit(true.B)
       io.creditFlowEnable := creditFlowEnable
 
+      val lastSeenTLReq = RegInit(0.U)
+      lastSeenTLReq := io.lastSeenTLReq
+
       txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
@@ -532,6 +537,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(mainbandSel, "mainbandSel"),
         toRegFieldRw(creditFlowEnable, "creditFlowEnable")
+      ) ++ Seq(
+        RegField.r(64, lastSeenTLReq, RegFieldDesc("lastSeenTLReq", ""))
       )
 
       mmioRegs.zipWithIndex.map({
@@ -840,6 +847,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       dontTouch(ucieManagerTxA.credit_a)
       dontTouch(ucieManagerTxA.credit_d)
       ucieManagerTxA.tl := ucieManagerTlA
+
+      val lastSeenAddr = RegInit(0.U(64.W))
+      when(managerTl.a.valid) {
+        lastSeenAddr := managerTl.a.bits.address
+      }
+      regs.module.io.lastSeenTLReq := lastSeenAddr
 
       val rxABuffer = Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
       val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
