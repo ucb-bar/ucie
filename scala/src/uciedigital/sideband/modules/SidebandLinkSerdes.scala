@@ -257,7 +257,10 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
     rxQueue.io.enq.valid := recvDone
     rxQueue.io.enq.bits := completeWord
     
-    counter === 0.U // returned and assigned to idleStatus
+    // Register before the CDC to the local domain: the comparator output can
+    // glitch while the counter transitions, and the async local clock could
+    // sample the glitch.
+    RegNext(counter === 0.U, true.B)
   }
 
   io.out.valid := rxQueue.io.deq.valid
