@@ -7,7 +7,6 @@ import publish._
 trait UcieModule extends ScalaModule {
   def scalaVersion = "2.13.18"
   def chiselVersion = "7.9.0"
-  def repositories = Seq("https://ucb-substrate.github.io/chippy")
 
   def scalacPluginMvnDeps = Seq(
     mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
@@ -22,10 +21,10 @@ object `package` extends UcieModule, PublishModule {
 
   def mvnDeps = Seq(
     mvn"org.chipsalliance::chisel:${chiselVersion}",
-    mvn"edu.berkeley.cs::chippy:0.1.1",
-    mvn"edu.berkeley.cs::diplomacy:0.1.1",
-    mvn"edu.berkeley.cs::cde:0.1.1",
-    mvn"edu.berkeley.cs::rocketchip:0.1.1",
+    mvn"io.github.ucb-substrate::chippy:0.1.1",
+    mvn"io.github.ucb-substrate::diplomacy:0.1.1",
+    mvn"io.github.ucb-substrate::cde:0.1.1",
+    mvn"io.github.ucb-substrate::rocketchip:0.1.1",
   )
 
   def pomSettings = PomSettings(
@@ -60,9 +59,9 @@ object `package` extends UcieModule, PublishModule {
 
     def mvnDeps = Seq(
       mvn"org.chipsalliance::chisel:${chiselVersion}",
-      mvn"edu.berkeley.cs::cde:0.1.1",
-      mvn"edu.berkeley.cs::rocketchip:0.1.1",
-      mvn"edu.berkeley.cs::rocketchip-blocks:0.1.1",
+      mvn"io.github.ucb-substrate::cde:0.1.1",
+      mvn"io.github.ucb-substrate::rocketchip:0.1.1",
+      mvn"io.github.ucb-substrate::rocketchip-blocks:0.1.1",
     )
   }
 
