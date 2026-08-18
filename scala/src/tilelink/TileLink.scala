@@ -1078,16 +1078,28 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
     )
   )
   val ucieTL = LazyModule(ucie)
+  // Counterparts for the mainband ports. Reusing the UcieTL node parameters keeps the negotiated
+  // edges identical to a direct `managerNode := clientNode` loopback.
+  val mbClientNode = TLClientNode(ucieTL.clientNode.portParams)
+  val mbManagerNode = TLManagerNode(ucieTL.managerNode.portParams)
+
   ucieTL.digitalClockNode := clockNode
   ucieTL.regNode := node
-  // Hack to get RTL to be generated, should never be simulated.
-  ucieTL.managerNode := ucieTL.clientNode
+  ucieTL.managerNode := mbClientNode
+  mbManagerNode := ucieTL.clientNode
+
+  // Bring every diplomatic port out to the top level so that the logic behind them is not
+  // optimized out of UcieTL.
+  val io_reg = InModuleBody { node.makeIOs() }
+  val io_mb_in = InModuleBody { mbClientNode.makeIOs() }
+  val io_mb_out = InModuleBody { mbManagerNode.makeIOs() }
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
     ucieTL.module.io := DontCare
     dontTouch(ucieTL.module.io)
-    clockNode.out(0)._1 := DontCare
+    clockNode.out(0)._1.clock := clock
+    clockNode.out(0)._1.reset := reset
     val regmap = ucieTL.module.regmap
   }
 }
