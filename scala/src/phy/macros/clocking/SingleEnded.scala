@@ -1,22 +1,25 @@
-package edu.berkeley.cs.uciedigital.phy.macros
+package edu.berkeley.cs.uciedigital.phy.macros.clocking
 
 import chisel3._
 import chisel3.util._
 
 class ClkRxIO extends Bundle {
-  val vi = Input(Clock())
-  val vo = Output(Clock())
+  val Vin = Input(Clock())
+  val Vout = Output(Clock())
 }
 
+// Self-biased inverter input stage followed by a restoring inverter, so the
+// receiver is non-inverting. Port and module names match the analog IP top
+// cell; the VDD/VSS pins are connected by the physical flow.
 class ClkRx(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new ClkRxIO)
 
-  override val desiredName = "ucie_clkrx"
+  override val desiredName = "clock_receiver"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/ucie_clkrx.v")
+    addResource("/vsrc/clock_receiver.v")
   }
 }
 

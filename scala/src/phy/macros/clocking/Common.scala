@@ -1,4 +1,4 @@
-package edu.berkeley.cs.uciedigital.phy.macros
+package edu.berkeley.cs.uciedigital.phy.macros.clocking
 
 import chisel3._
 import chisel3.util._
@@ -99,36 +99,6 @@ class ClkBufVertical(implicit includeDefaultModels: Boolean = false)
 
   if (includeDefaultModels) {
     addResource("/vsrc/clkbuf_vertical.v")
-  }
-}
-
-class InvIO extends Bundle {
-  val Vin = Input(Bool())
-  val Vout = Output(Bool())
-}
-
-// Inverter cells used throughout the clocking IP, distinguished by fin count.
-class InvFinger4(implicit includeDefaultModels: Boolean = false)
-    extends BlackBox
-    with HasBlackBoxResource {
-  val io = IO(new InvIO)
-
-  override val desiredName = "inv_ulvt_finger4"
-
-  if (includeDefaultModels) {
-    addResource("/vsrc/inv_ulvt_finger4.v")
-  }
-}
-
-class InvFinger6(implicit includeDefaultModels: Boolean = false)
-    extends BlackBox
-    with HasBlackBoxResource {
-  val io = IO(new InvIO)
-
-  override val desiredName = "inv_ulvt_finger6"
-
-  if (includeDefaultModels) {
-    addResource("/vsrc/inv_ulvt_finger6.v")
   }
 }
 

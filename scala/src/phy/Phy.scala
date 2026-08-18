@@ -5,6 +5,7 @@ import chisel3.util._
 import chisel3.experimental.dataview._
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 import edu.berkeley.cs.uciedigital.phy.macros._
+import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 object Phy {
   val SerdesRatio = 32
