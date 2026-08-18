@@ -114,7 +114,6 @@ object MainLogPhySidebandChannel extends App {
     args = Array("-td", "./generatedVerilog/sideband"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"

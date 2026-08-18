@@ -4,12 +4,21 @@ import mill._
 import scalalib._
 import publish._
 
-object `package` extends ScalaModule, PublishModule {
+trait UcieModule extends ScalaModule {
   def scalaVersion = "2.13.18"
-  def publishVersion = "0.0.1"
-  def chiselVersion = "7.8.0"
-  def artifactName = "ucie"
+  def chiselVersion = "7.9.0"
   def repositories = Seq("https://ucb-substrate.github.io/chippy")
+
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
+  )
+}
+
+object `package` extends UcieModule, PublishModule {
+  def publishVersion = "0.0.1"
+  def artifactName = "ucie"
+
+  def moduleDeps = Seq(testchipip)
 
   def mvnDeps = Seq(
     mvn"org.chipsalliance::chisel:${chiselVersion}",
@@ -17,10 +26,6 @@ object `package` extends ScalaModule, PublishModule {
     mvn"edu.berkeley.cs::diplomacy:0.1.1",
     mvn"edu.berkeley.cs::cde:0.1.1",
     mvn"edu.berkeley.cs::rocketchip:0.1.1",
-    mvn"edu.berkeley.cs::testchipip:0.1.1",
-  )
-  def scalacPluginMvnDeps = Seq(
-    mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
   )
 
   def pomSettings = PomSettings(
@@ -34,6 +39,32 @@ object `package` extends ScalaModule, PublishModule {
       Developer("rahulk29", "Rahul Kumar", "https://github.com/rahulk29")
     )
   )
+
+  // Vendored from the `chiplet-router` branch of https://github.com/ucb-bar/testchipip, which
+  // carries the chiplet link support (`testchipip.soc.ChipletLink*`) that published testchipip
+  // releases do not.
+  object testchipip extends UcieModule, PublishModule {
+    def publishVersion = "0.1.1-chiplet-router"
+
+    def sources = Task.Sources("src/main/scala")
+    def resources = Task.Sources("src/main/resources")
+
+    def pomSettings = PomSettings(
+      description = "Test chip IP, vendored for chiplet link support",
+      organization = "edu.berkeley.cs",
+      url = "https://github.com/ucb-bar/testchipip",
+      licenses = Seq(License.`BSD-3-Clause`),
+      versionControl = VersionControl.github("ucb-bar", "testchipip"),
+      developers = Seq()
+    )
+
+    def mvnDeps = Seq(
+      mvn"org.chipsalliance::chisel:${chiselVersion}",
+      mvn"edu.berkeley.cs::cde:0.1.1",
+      mvn"edu.berkeley.cs::rocketchip:0.1.1",
+      mvn"edu.berkeley.cs::rocketchip-blocks:0.1.1",
+    )
+  }
 
   object test extends ScalaTests, TestModule.ScalaTest {
     def mvnDeps = Seq(
