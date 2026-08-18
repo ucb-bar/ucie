@@ -9,7 +9,6 @@ object MainRDIWakeHandshakeResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -23,7 +22,6 @@ object MainRDIClockHandshakeRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -37,7 +35,6 @@ object MainRDIController extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -51,7 +48,6 @@ object MainRDIStallRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -65,7 +61,6 @@ object MainRDIStateMachine extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -79,7 +74,6 @@ object MainRDIStateMachineRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -93,7 +87,6 @@ object MainRDIStateMachineResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
