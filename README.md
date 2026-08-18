@@ -4,6 +4,45 @@ An open-source implementation of the UCIe 3.0 specification.
 
 You can request a copy of the UCIe specification [here](https://www.uciexpress.org/3-0-spec-download).
 
+## Setup
+
+Make sure Scala is installed, then check out the submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+## Generating RTL
+
+The top level is `UcieTL`: the analog PHY, the UCIe digital stack (protocol layer, die-to-die
+adapter, and logical PHY), and the register block reachable over TileLink. To generate it, run the
+following from the `scala/` folder:
+
+```bash
+./mill test.testOnly edu.berkeley.cs.uciedigital.tilelink.TileLinkSpec -- -z "should generate valid SystemVerilog"
+```
+
+This writes SystemVerilog to `scala/build/UcieTL_should_generate_valid_SystemVerilog`. `UcieTL` has
+diplomatic ports, so it is elaborated inside `RTLHarness`, which supplies the TileLink master and the
+clock source those ports need.
+
+Omitting `-- -z ...` runs the rest of `TileLinkSpec`, which includes Verilator, VCS, and Xcelium
+simulations.
+
+Some individual blocks have their own generators under `scala/src`, each writing to a subdirectory of
+`scala/generatedVerilog`. For example:
+
+```bash
+./mill runMain edu.berkeley.cs.uciedigital.logphy.MainLogicalPhy
+./mill runMain edu.berkeley.cs.uciedigital.protocol.MainProtocolLayer
+```
+
+To list every block generator:
+
+```bash
+./mill show allLocalMainClasses
+```
+
 ## Tests
 
 To run the RTL tests, make sure Scala is installed.

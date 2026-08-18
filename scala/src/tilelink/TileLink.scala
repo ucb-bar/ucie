@@ -1086,6 +1086,7 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
     ucieTL.module.io := DontCare
+    dontTouch(ucieTL.module.io)
     clockNode.out(0)._1 := DontCare
     val regmap = ucieTL.module.regmap
   }

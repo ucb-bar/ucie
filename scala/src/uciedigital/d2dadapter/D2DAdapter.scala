@@ -133,7 +133,6 @@ object MainD2DAdapter extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"

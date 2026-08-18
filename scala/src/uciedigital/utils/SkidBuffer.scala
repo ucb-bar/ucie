@@ -35,7 +35,6 @@ object MainSkidBuffer extends App {
     args = Array("-td", "./generatedVerilog/utils/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",

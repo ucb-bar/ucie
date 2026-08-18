@@ -9,7 +9,6 @@ object MainTrainErrorRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -23,7 +22,6 @@ object MainTrainErrorResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -37,7 +35,6 @@ object MainPhyRetrainSidebandHandshake extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -51,7 +48,6 @@ object MainPhyRetrainRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -65,7 +61,6 @@ object MainPhyRetrainResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -79,7 +74,6 @@ object MainTxD2CPointTestRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -93,7 +87,6 @@ object MainTxD2CPointTestResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -107,7 +100,6 @@ object MainRxD2CPointTestRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -121,7 +113,6 @@ object MainRxD2CPointTestResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -135,7 +126,6 @@ object MainTxD2CEyeWidthSweepRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -149,7 +139,6 @@ object MainTxD2CEyeWidthSweepResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -163,7 +152,6 @@ object MainRxD2CEyeWidthSweepRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -177,7 +165,6 @@ object MainRxD2CEyeWidthSweepResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -191,7 +178,6 @@ object MainMBInitSM extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -205,7 +191,6 @@ object MainMBInitRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -219,7 +204,6 @@ object MainMBInitResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -233,7 +217,6 @@ object MainLinkTrainingSM extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -247,7 +230,6 @@ object MainSBInit extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -261,7 +243,6 @@ object MainSBInitRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -275,7 +256,6 @@ object MainSBInitResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables",
@@ -289,7 +269,6 @@ object MainMBTrainSM extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -303,7 +282,6 @@ object MainMBTrainRequester extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
@@ -317,7 +295,6 @@ object MainMBTrainResponder extends App {
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
-      "-g",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
