@@ -6,16 +6,6 @@ You can request a copy of the UCIe specification [here](https://www.uciexpress.o
 
 ## Tests
 
-Currently, tests require installing [Chippy](git@github.com:ucb-substrate/chippy.git) from source:
-
-```bash
-git clone https://github.com/ucb-substrate/chippy.git
-cd chippy
-git checkout ucie-dev
-git submodule update --init --recursive
-./mill __.publishLocal
-```
-
 To run the RTL tests, make sure Scala is installed.
 
 Then, run the following from the `scala/` folder.
