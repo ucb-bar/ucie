@@ -636,7 +636,7 @@ class PhyTest(
   }
 
   // TODO: Move to PHY
-  // val refclkrx = Module(new ClkRx(sim))
+  // val refclkrx = Module(new DiffClkRx(sim))
   // refclkrx.io.vip := io.top.refClkP
   // refclkrx.io.vin := io.top.refClkN
   // val refclkbuf = Module(new DiffBuffer(sim))
@@ -645,7 +645,7 @@ class PhyTest(
   // io.refClkP := refclkbuf.io.voutp
   // io.refClkN := refclkbuf.io.voutn
 
-  // val bpclkrx = Module(new ClkRx(sim))
+  // val bpclkrx = Module(new DiffClkRx(sim))
   // bpclkrx.io.vip := io.top.bypassClkP
   // bpclkrx.io.vin := io.top.bypassClkN
   // val bpclkbuf = Module(new DiffBuffer(sim))

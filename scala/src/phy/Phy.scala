@@ -148,7 +148,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   digitalRstSync.io.clk := io.clkRst.ucieClk
   io.clkRst.ucieRst := !digitalRstSync.io.rstbSync
 
-  val clkDist = Module(new ClkDistNetwork)
+  val clkDist = Module(new DiffClkDistNetwork)
   clkDist.io.bypassClkP := io.top.bypassClkP
   clkDist.io.bypassClkN := io.top.bypassClkN
 

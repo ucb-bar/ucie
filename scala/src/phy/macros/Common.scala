@@ -3,25 +3,6 @@ package edu.berkeley.cs.uciedigital.phy.macros
 import chisel3._
 import chisel3.util._
 
-class ClkRxIO extends Bundle {
-  val vip = Input(Clock())
-  val vin = Input(Clock())
-  val vop = Output(Clock())
-  val von = Output(Clock())
-}
-
-class ClkRx(implicit includeDefaultModels: Boolean = false)
-    extends BlackBox
-    with HasBlackBoxResource {
-  val io = IO(new ClkRxIO)
-
-  override val desiredName = "ucie_clkrx"
-
-  if (includeDefaultModels) {
-    addResource("/vsrc/ucie_clkrx.v")
-  }
-}
-
 class ClkMuxClockIO extends Bundle {
   val in0 = Input(Clock())
   val in1 = Input(Clock())
@@ -39,6 +20,8 @@ class ClkMuxIO extends Bundle {
   val outb = Output(Clock())
 }
 
+// Single-ended 2:1 clock mux cell. Differential clocking instantiates one per
+// polarity; single-ended clocking instantiates one.
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
@@ -143,67 +126,5 @@ class ClkGate(implicit includeDefaultModels: Boolean = false)
 
   if (includeDefaultModels) {
     addResource("/vsrc/ucie_clk_gate.sv")
-  }
-}
-
-class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
-  val bypassClkP = Input(Clock())
-  val bypassClkN = Input(Clock())
-
-  val clkMuxP = Flipped(new ClkMuxClockIO)
-  val clkMuxN = Flipped(new ClkMuxClockIO)
-
-  val txClkDivClk = Output(Clock())
-  val rxClkDivClk = Output(Clock())
-
-  val rxClkP = Input(Clock())
-  val rxClkN = Input(Clock())
-  val txLaneClkP = Output(Vec(numLanes + 4, Clock()))
-  val txLaneClkN = Output(Vec(numLanes + 4, Clock()))
-  val rxLaneClk = Output(Vec(numLanes + 2, Clock()))
-}
-
-class ClkDistNetwork(implicit includeDefaultModels: Boolean = false)
-    extends RawModule {
-  val io = IO(new ClkDistNetworkIO)
-
-  val verilogBlackBox = Module(new VerilogClkDistNetwork)
-  verilogBlackBox.io.bypassClkP := io.bypassClkP
-  verilogBlackBox.io.bypassClkN := io.bypassClkN
-  io.clkMuxP <> verilogBlackBox.io.clkMuxP
-  io.clkMuxN <> verilogBlackBox.io.clkMuxN
-  io.txClkDivClk := verilogBlackBox.io.txClkDivClk
-  io.rxClkDivClk := verilogBlackBox.io.rxClkDivClk
-  verilogBlackBox.io.rxClkP := io.rxClkP
-  verilogBlackBox.io.rxClkN := io.rxClkN
-  io.txLaneClkP := verilogBlackBox.io.txLaneClkP.asTypeOf(io.txLaneClkP)
-  io.txLaneClkN := verilogBlackBox.io.txLaneClkN.asTypeOf(io.txLaneClkN)
-  io.rxLaneClk := verilogBlackBox.io.rxLaneClk.asTypeOf(io.rxLaneClk)
-}
-
-class VerilogClkDistNetwork(implicit includeDefaultModels: Boolean = false)
-    extends BlackBox
-    with HasBlackBoxResource {
-  val io = IO(new Bundle {
-    val bypassClkP = Input(Clock())
-    val bypassClkN = Input(Clock())
-
-    val clkMuxP = Flipped(new ClkMuxClockIO)
-    val clkMuxN = Flipped(new ClkMuxClockIO)
-
-    val txClkDivClk = Output(Clock())
-    val rxClkDivClk = Output(Clock())
-
-    val rxClkP = Input(Clock())
-    val rxClkN = Input(Clock())
-    val txLaneClkP = Output(UInt(20.W))
-    val txLaneClkN = Output(UInt(20.W))
-    val rxLaneClk = Output(UInt(18.W))
-  })
-
-  override val desiredName = "ucie_clk_dist_network"
-
-  if (includeDefaultModels) {
-    addResource("/vsrc/ucie_clk_dist_network.sv")
   }
 }
