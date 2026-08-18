@@ -569,7 +569,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     it("should generate valid SystemVerilog") {
       implicit val p = Parameters.empty
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32, 32))).module,
+        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32, 32)(
+              new freechips.rocketchip.subsystem.WithoutTLMonitors
+          ))).module,
         args = Array(
           "--target-dir",
           (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
