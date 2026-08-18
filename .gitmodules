@@ -1,0 +1,4 @@
+[submodule "scala/testchipip"]
+	path = scala/testchipip
+	url = https://github.com/ucb-bar/testchipip.git
+	branch = chiplet-router
