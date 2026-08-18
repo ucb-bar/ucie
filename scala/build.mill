@@ -9,14 +9,15 @@ object `package` extends ScalaModule, PublishModule {
   def publishVersion = "0.0.1"
   def chiselVersion = "7.8.0"
   def artifactName = "ucie"
+  def repositories = Seq("https://ucb-substrate.github.io/chippy")
 
   def mvnDeps = Seq(
     mvn"org.chipsalliance::chisel:${chiselVersion}",
-    mvn"edu.berkeley.cs::chippy:0.0.1",
-    mvn"edu.berkeley.cs::diplomacy:0.0.1",
-    mvn"edu.berkeley.cs::cde:0.0.1",
-    mvn"edu.berkeley.cs::rocketchip:0.0.1",
-    mvn"edu.berkeley.cs::testchipip:0.0.1",
+    mvn"edu.berkeley.cs::chippy:0.1.1",
+    mvn"edu.berkeley.cs::diplomacy:0.1.1",
+    mvn"edu.berkeley.cs::cde:0.1.1",
+    mvn"edu.berkeley.cs::rocketchip:0.1.1",
+    mvn"edu.berkeley.cs::testchipip:0.1.1",
   )
   def scalacPluginMvnDeps = Seq(
     mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
