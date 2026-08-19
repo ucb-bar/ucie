@@ -276,7 +276,10 @@ object Codegen {
       )
     }.toMap
 
-  lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] = {
+  /** MMIO setup for a TL loopback test: brings up the PHY, then hands the link
+    * to the TL path selected by `mainbandSel`.
+    */
+  def tlRegReqs(mainbandSel: BigInt): Seq[TLRequestDescriptor] = {
     def write(name: String, value: BigInt): TLRequestDescriptor =
       TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
 
@@ -309,10 +312,16 @@ object Codegen {
     reqs += write("rxFsmRst", 1)
     reqs += write("commonTxFsmRst", 1)
 
-    reqs += write("mainbandSel", 1)
+    reqs += write("mainbandSel", mainbandSel)
 
     reqs.toSeq
   }
+
+  lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] =
+    tlRegReqs(MainbandSel.tl.litValue)
+
+  lazy val tlSidebandRegReqs: Seq[TLRequestDescriptor] =
+    tlRegReqs(MainbandSel.sbtl.litValue)
 
   lazy val tlSimpleMbReqs: Seq[TLRequestDescriptor] = Seq(
     TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
@@ -950,14 +959,16 @@ class Codegen(f: Formatter) {
     sb.toString
   }
 
-  def formatTlSimpleLoopbackFn(): String = {
+  /** A single TL write/read round trip over the link selected by `mainbandSel`.
+    */
+  def formatTlLoopbackFn(name: String, mainbandSel: BigInt): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
       formatWriteNamedReg(
         "mainbandSel",
-        f.formatLong(1)
+        f.formatLong(mainbandSel.toLong)
       )
     )
     body.append(f.formatWaitCycles(32))
@@ -975,9 +986,15 @@ class Codegen(f: Formatter) {
         f.formatLong(0xdeadbeefL)
       )
     )
-    sb.append(f.formatFn("tl_simple", body.toString))
+    sb.append(f.formatFn(name, body.toString))
     sb.toString
   }
+
+  def formatTlSimpleLoopbackFn(): String =
+    formatTlLoopbackFn("tl_simple", MainbandSel.tl.litValue)
+
+  def formatTlSidebandLoopbackFn(): String =
+    formatTlLoopbackFn("tl_sideband", MainbandSel.sbtl.litValue)
 
   def formatTlLongLoopbackFn(): String = {
     val sb = new StringBuilder
@@ -1028,6 +1045,7 @@ class Codegen(f: Formatter) {
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatTlSimpleLoopbackFn())
+    sb.append(formatTlSidebandLoopbackFn())
     sb.append(formatTlLongLoopbackFn())
     sb.toString
   }
