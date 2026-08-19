@@ -167,6 +167,18 @@ class PhyClkRstIO extends Bundle {
   val rxDivRst = Output(Bool())
 }
 
+// Combinational bit remap of a serdes word: `dout(i)` is driven by
+// `din(permutation(i))`.
+//
+// One sits on each TX lane's serializer input and each RX lane's
+// deserializer output so that a bit ordering mismatch between the digital
+// word and the analog tile (or between the two dies) can be corrected from
+// software. The identity permutation (`permutation(i) = i`) is the reset
+// value and leaves the word untouched.
+//
+// `permutation` is not required to be a bijection: repeating an index
+// broadcasts that bit, which is useful for driving fixed patterns during
+// bring-up.
 class Shuffler(width: Int) extends RawModule {
   val io = IO(new Bundle {
     val din = Input(UInt(width.W))
@@ -194,6 +206,7 @@ class RxLaneDigitalCtlIO extends Bundle {
   val afeBypassEn = Bool()
   val afeOpCycles = UInt(16.W)
   val afeOverlapCycles = UInt(16.W)
+  val shuffler = Vec(32, UInt(5.W))
   val sample_negedge = Bool()
   val delay = UInt(7.W)
 }
@@ -328,8 +341,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
   // TX lanes
   for (lane <- 0 until numLanes + 4) {
-    val txLane = Module(new TxLane);
-    txLane.suggestName(if (lane < numLanes) {
+    val laneName = if (lane < numLanes) {
       s"txdata$lane"
     } else if (lane == numLanes) {
       "txvalid"
@@ -339,12 +351,23 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       "txclkn"
     } else {
       "txtrack"
-    });
+    }
+
+    // Bit remap applied immediately before the serializer, so the permutation
+    // is in terms of the physical lane and is unaffected by the valid lane
+    // remap above.
+    val txShuffler = Module(new Shuffler(Phy.SerdesRatio))
+    txShuffler.suggestName(s"${laneName}_shuffler")
+    txShuffler.io.din := txLaneDin(lane)
+    txShuffler.io.permutation := io.regs.txctl(lane).shuffler
+
+    val txLane = Module(new TxLane);
+    txLane.suggestName(laneName);
     txLane.io.dll_reset := io.regs.txctl(lane).dll_reset
     txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
     txLane.io.ser_resetb := io.clkRst.divResetb
     txLane.io.clk := clkDist.io.txLaneClk(lane)
-    txLane.io.din := txLaneDin(lane)
+    txLane.io.din := txShuffler.io.dout
     if (lane < numLanes) {
       io.top.txData(lane) := txLane.io.dout
     } else if (lane == numLanes) {
@@ -386,19 +409,34 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     rxClkN.io.clkin := io.top.rxClkN
 
     for (lane <- 0 until numLanes + 2) {
+      val laneName = if (lane < numLanes) {
+        s"rxdata$lane"
+      } else if (lane == numLanes) {
+        "rxvalid"
+      } else {
+        "rxtrack"
+      }
+
       val rxLane = Module(new RxDataLane)
       val rxLaneAfeCtl = RxAfeCtl.connect(rxLane.io.ctl, io.regs.rxctl(lane))
+      rxLane.suggestName(laneName)
       if (lane < numLanes) {
-        rxLane.suggestName(s"rxdata$lane")
         rxLane.io.din := io.top.rxData(lane)
       } else if (lane == numLanes) {
-        rxLane.suggestName(s"rxvalid")
         rxLane.io.din := io.top.rxValid
       } else {
-        rxLane.suggestName(s"rxtrack")
         rxLane.io.din := io.top.rxTrack
       }
-      rxLaneDout(lane) := rxLane.io.dout
+
+      // Bit remap applied immediately after the deserializer, mirroring the
+      // TX side: the permutation is in terms of the physical lane, before the
+      // valid lane remap is undone below.
+      val rxShuffler = Module(new Shuffler(Phy.SerdesRatio))
+      rxShuffler.suggestName(s"${laneName}_shuffler")
+      rxShuffler.io.din := rxLane.io.dout
+      rxShuffler.io.permutation := io.regs.rxctl(lane).shuffler
+
+      rxLaneDout(lane) := rxShuffler.io.dout
       rxLane.io.clk := clkDist.io.rxLaneClk(lane)
       rxLane.io.resetb := io.clkRst.divResetb
     }
