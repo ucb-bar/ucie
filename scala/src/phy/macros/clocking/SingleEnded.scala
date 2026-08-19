@@ -24,14 +24,17 @@ class ClkRx(implicit includeDefaultModels: Boolean = false)
 }
 
 class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
-  val bypassClk = Input(Clock())
-
-  val clkMux = Flipped(new ClkMuxClockIO)
+  // In-phase TX clock, distributed to the data, valid, and track lanes.
+  val txClk = Input(Clock())
+  // Quadrature TX clock, distributed to the two forwarded-clock lanes so that
+  // the transmitted clock lands in the center of the data eye.
+  val txClkQ = Input(Clock())
 
   val txClkDivClk = Output(Clock())
   val rxClkDivClk = Output(Clock())
 
   val rxClk = Input(Clock())
+  // Every lane clock is single-ended; each TX tile makes its own complement.
   val txLaneClk = Output(Vec(numLanes + 4, Clock()))
   val rxLaneClk = Output(Vec(numLanes + 2, Clock()))
 }
@@ -41,8 +44,8 @@ class ClkDistNetwork(implicit includeDefaultModels: Boolean = false)
   val io = IO(new ClkDistNetworkIO)
 
   val verilogBlackBox = Module(new VerilogClkDistNetwork)
-  verilogBlackBox.io.bypassClk := io.bypassClk
-  io.clkMux <> verilogBlackBox.io.clkMux
+  verilogBlackBox.io.txClk := io.txClk
+  verilogBlackBox.io.txClkQ := io.txClkQ
   io.txClkDivClk := verilogBlackBox.io.txClkDivClk
   io.rxClkDivClk := verilogBlackBox.io.rxClkDivClk
   verilogBlackBox.io.rxClk := io.rxClk
@@ -54,9 +57,8 @@ class VerilogClkDistNetwork(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
-    val bypassClk = Input(Clock())
-
-    val clkMux = Flipped(new ClkMuxClockIO)
+    val txClk = Input(Clock())
+    val txClkQ = Input(Clock())
 
     val txClkDivClk = Output(Clock())
     val rxClkDivClk = Output(Clock())

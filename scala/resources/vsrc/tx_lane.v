@@ -2,8 +2,7 @@ module tx_lane (
   input dll_reset,
   input dll_resetb,
   input ser_resetb,
-  input clkp,
-  input clkn,
+  input clk,
   input din_0,
   input din_1,
   input din_2,
@@ -218,7 +217,7 @@ module tx_lane (
     ctr <= 3'b1;
     shiftReg <= 32'b0;
   end
-  always @(posedge clkp) begin
+  always @(posedge clk) begin
     if (ser_resetb) begin
       ctr <= ctr + 1'b1;
       shiftReg <= shiftReg >> 1'b1;
@@ -263,7 +262,10 @@ module tx_lane (
       end
     end
   end
-  always @(posedge clkn) begin
+  // Second half of the DDR serializer: the tile takes a single-ended clock
+  // and makes its own complement internally, so the falling edge here is
+  // what the second serializer phase used to key off.
+  always @(negedge clk) begin
     shiftReg <= shiftReg >> 1'b1;
   end
   assign divclk = divClock;

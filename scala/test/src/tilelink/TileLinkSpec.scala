@@ -347,12 +347,8 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := DontCare
-    ucieTL.module.io.phy.refClkN := DontCare
-    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
-    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
-    ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
 
@@ -482,12 +478,8 @@ class ScalaTestHarness(
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := DontCare
-    ucieTL.module.io.phy.refClkN := DontCare
-    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
-    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
-    ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
 

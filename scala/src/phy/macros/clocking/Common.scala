@@ -170,7 +170,7 @@ class ClockingTileIO extends Bundle {
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val FreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
   val DigBypassClk = Input(Clock())
-  val AnalogBypassClk = Input(Clock())
+  val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())
   val TxClkQ = Output(Clock())
   val TxClk = Output(Clock())
