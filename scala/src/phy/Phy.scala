@@ -9,6 +9,101 @@ import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 object Phy {
   val SerdesRatio = 32
+
+  // Lanes that can be selected to carry the valid signal: the `numLanes` data
+  // lanes, the dedicated valid lane, and the track lane. The forwarded clock
+  // lanes are excluded since the RX side has no counterpart for them.
+  def validLaneSelCount(numLanes: Int): Int = numLanes + 2
+
+  // Width of a valid lane select field.
+  def validLaneSelWidth(numLanes: Int): Int =
+    log2Ceil(validLaneSelCount(numLanes))
+
+  // Select code for the dedicated valid lane, i.e. no remapping. This is the
+  // reset value of both selects.
+  def dedicatedValidLaneSel(numLanes: Int): Int = numLanes
+
+  // Select code for the track lane. The mainband protocol does not use track,
+  // so moving valid there works around a broken valid lane without giving up a
+  // data lane.
+  def trackValidLaneSel(numLanes: Int): Int = numLanes + 1
+
+  // Physical TX lane index carrying the valid signal.
+  //
+  // The TX lane order is data, valid, clk P, clk N, track, so only the track
+  // code needs remapping. Out of range codes fall back to the dedicated valid
+  // lane.
+  def txValidLane(sel: UInt, numLanes: Int): UInt =
+    MuxLookup(sel, dedicatedValidLaneSel(numLanes).U)(
+      (0 to numLanes).map(s => s.U -> s.U) :+
+        (trackValidLaneSel(numLanes).U -> (numLanes + 3).U)
+    )
+
+  // Physical RX lane index carrying the valid signal.
+  //
+  // The RX lane order is data, valid, track, which already matches the select
+  // codes. Out of range codes fall back to the dedicated valid lane.
+  def rxValidLane(sel: UInt, numLanes: Int): UInt =
+    Mux(
+      sel <= trackValidLaneSel(numLanes).U,
+      sel,
+      dedicatedValidLaneSel(numLanes).U
+    )
+
+  // Applies the valid lane remap, returning what each of the `numLanes + 4` TX
+  // lanes should drive.
+  //
+  // The selected lane and the dedicated valid lane swap roles, so the
+  // dedicated lane drives whatever the selected lane would have driven. Track
+  // is the only spare lane, so selecting it keeps all `numLanes` data lanes;
+  // selecting a data lane instead costs that lane's data. The forwarded clock
+  // lanes are never remapped.
+  def txValidRemap(tx: TxIO, sel: UInt, numLanes: Int): Vec[UInt] = {
+    val validLane = txValidLane(sel, numLanes)
+    val src = Wire(Vec(numLanes + 4, Bits(SerdesRatio.W)))
+    for (lane <- 0 until numLanes) {
+      src(lane) := tx.data(lane)
+    }
+    src(numLanes) := tx.valid
+    src(numLanes + 1) := tx.clkp
+    src(numLanes + 2) := tx.clkn
+    src(numLanes + 3) := tx.track
+    // Payload displaced onto the dedicated valid lane by the remap.
+    val displaced = src(validLane)
+    val din = Wire(Vec(numLanes + 4, Bits(SerdesRatio.W)))
+    for (lane <- 0 until numLanes + 4) {
+      if (lane == numLanes) {
+        din(lane) := Mux(validLane === numLanes.U, tx.valid, displaced)
+      } else if (lane == numLanes + 1 || lane == numLanes + 2) {
+        din(lane) := src(lane)
+      } else {
+        din(lane) := Mux(validLane === lane.U, tx.valid, src(lane))
+      }
+    }
+    din
+  }
+
+  // Undoes the remap the partner die's TX applied, recovering an `RxIO` from
+  // the `numLanes + 2` RX lane outputs: valid comes off the selected lane, and
+  // the selected lane's payload comes off the dedicated valid lane.
+  def rxValidRemap(laneDout: Vec[UInt], sel: UInt, numLanes: Int): RxIO = {
+    val validLane = rxValidLane(sel, numLanes)
+    val rx = Wire(new RxIO(numLanes))
+    rx.valid := laneDout(validLane)
+    for (lane <- 0 until numLanes) {
+      rx.data(lane) := Mux(
+        validLane === lane.U,
+        laneDout(numLanes),
+        laneDout(lane)
+      )
+    }
+    rx.track := Mux(
+      validLane === trackValidLaneSel(numLanes).U,
+      laneDout(numLanes),
+      laneDout(numLanes + 1)
+    )
+    rx
+  }
 }
 
 class TxIO(numLanes: Int = 16) extends Bundle {
@@ -117,6 +212,18 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // RX CONTROL
   // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
+
+  // VALID LANE REMAP
+  // Physical lane carrying the valid signal, so that a broken valid lane does
+  // not take the whole link down. Codes 0 to `numLanes - 1` select a data lane,
+  // `Phy.dedicatedValidLaneSel` (the reset value) selects the dedicated valid
+  // lane, and `Phy.trackValidLaneSel` selects the track lane.
+  //
+  // The TX and RX directions travel over different wires and are selected
+  // independently: this die's `txValidLaneSel` must match the partner die's
+  // `rxValidLaneSel`, and vice versa.
+  val txValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
+  val rxValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -214,6 +321,11 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.clk := rxClkDiv.io.clkout_3
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
 
+  // TX valid lane remap. The select is quasi-static configuration, like the
+  // rest of `io.regs`, and is used combinationally in the TX divided clock
+  // domain.
+  val txLaneDin = Phy.txValidRemap(io.tx, io.regs.txValidLaneSel, numLanes)
+
   // TX lanes
   for (lane <- 0 until numLanes + 4) {
     val txLane = Module(new TxLane);
@@ -232,20 +344,16 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
     txLane.io.ser_resetb := io.clkRst.divResetb
     txLane.io.clk := clkDist.io.txLaneClk(lane)
+    txLane.io.din := txLaneDin(lane)
     if (lane < numLanes) {
-      txLane.io.din := io.tx.data(lane)
       io.top.txData(lane) := txLane.io.dout
     } else if (lane == numLanes) {
-      txLane.io.din := io.tx.valid
       io.top.txValid := txLane.io.dout
     } else if (lane == numLanes + 1) {
-      txLane.io.din := io.tx.clkp
       io.top.txClkP := txLane.io.dout.asClock
     } else if (lane == numLanes + 2) {
-      txLane.io.din := io.tx.clkn
       io.top.txClkN := txLane.io.dout.asClock
     } else {
-      txLane.io.din := io.tx.track
       io.top.txTrack := txLane.io.dout
     }
     txLane.io.ctl.driver := io.regs.txctl(lane).driver
@@ -257,6 +365,9 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   //
   // RX AFE control is on the UCIe digital clock to ensure that it is always toggling,
   // even when forwarded clock is gated.
+  //
+  // Lane outputs are collected before the valid lane remap is undone below.
+  val rxLaneDout = Wire(Vec(numLanes + 2, Bits(Phy.SerdesRatio.W)))
   withClockAndReset(io.clkRst.ucieClk, io.clkRst.ucieRst) {
     // Set up clocking
     val rxClkP = Module(new RxClkLane)
@@ -280,20 +391,21 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       if (lane < numLanes) {
         rxLane.suggestName(s"rxdata$lane")
         rxLane.io.din := io.top.rxData(lane)
-        io.rx.data(lane) := rxLane.io.dout
       } else if (lane == numLanes) {
         rxLane.suggestName(s"rxvalid")
         rxLane.io.din := io.top.rxValid
-        io.rx.valid := rxLane.io.dout
       } else {
         rxLane.suggestName(s"rxtrack")
         rxLane.io.din := io.top.rxTrack
-        io.rx.track := rxLane.io.dout
       }
+      rxLaneDout(lane) := rxLane.io.dout
       rxLane.io.clk := clkDist.io.rxLaneClk(lane)
       rxLane.io.resetb := io.clkRst.divResetb
     }
   }
+
+  // RX valid lane remap, undoing the swap the partner die's TX applied.
+  io.rx := Phy.rxValidRemap(rxLaneDout, io.regs.rxValidLaneSel, numLanes)
 
   // TODO: Move loopback to PhyTest
   // val txLoopbackFifo = Module(
