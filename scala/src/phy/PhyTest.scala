@@ -214,12 +214,12 @@ object PhyTest {
   /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
     * one).
     */
-  val lfsrTaps: Set[Int] = LFSR.tapsMaxPeriod.get(LfsrWidth).get.head
+  val LfsrTaps: Set[Int] = LFSR.tapsMaxPeriod.get(LfsrWidth).get.head
   // Running the feedback backwards to recover the bit that fell out of the state
   // only works if the state's oldest bit is a tap.
   require(
-    lfsrTaps.max == LfsrWidth,
-    s"LFSR taps $lfsrTaps must include $LfsrWidth"
+    LfsrTaps.max == LfsrWidth,
+    s"LFSR taps $LfsrTaps must include $LfsrWidth"
   )
 
   /** Number of framings each lane is scored against: nominal, one UI early, one
@@ -235,17 +235,17 @@ object PhyTest {
   val SignatureWidth = Phy.SerdesRatio
 
   /** Maximal period tap points, in LFSR convention (indexed from one). */
-  val signatureTaps: Seq[Int] =
+  val SignatureTaps: Seq[Int] =
     LFSR.tapsMaxPeriod.get(SignatureWidth).get.head.toSeq.sorted
 
-  private val signatureMask = (BigInt(1) << SignatureWidth) - 1
+  private val SignatureMask = (BigInt(1) << SignatureWidth) - 1
 
   private def rotateLeft(word: BigInt, n: Int): BigInt = {
     val shift = ((n % SignatureWidth) + SignatureWidth) % SignatureWidth
-    if (shift == 0) word & signatureMask
+    if (shift == 0) word & SignatureMask
     else
-      (((word << shift) | ((word & signatureMask) >> (SignatureWidth - shift))) &
-        signatureMask)
+      (((word << shift) | ((word & SignatureMask) >> (SignatureWidth - shift))) &
+        SignatureMask)
   }
 
   /** Software model of one signature update, matching the RTL bit for bit.
@@ -256,11 +256,11 @@ object PhyTest {
     * signature expected for a given `rxPacketsReceived`.
     */
   def signatureNext(signature: BigInt, laneWords: Seq[BigInt]): BigInt = {
-    val folded = laneWords.zipWithIndex.foldLeft(signature & signatureMask) {
+    val folded = laneWords.zipWithIndex.foldLeft(signature & SignatureMask) {
       case (acc, (word, lane)) => acc ^ rotateLeft(word, lane)
     }
-    val feedback = signatureTaps.map(t => (folded >> (t - 1)) & 1).reduce(_ ^ _)
-    ((folded << 1) & signatureMask) | feedback
+    val feedback = SignatureTaps.map(t => (folded >> (t - 1)) & 1).reduce(_ ^ _)
+    ((folded << 1) & SignatureMask) | feedback
   }
 }
 
@@ -302,7 +302,7 @@ class PhyTest(
     val lfsr = Module(
       new FibonacciLFSR(
         PhyTest.LfsrWidth,
-        taps = PhyTest.lfsrTaps,
+        taps = PhyTest.LfsrTaps,
         step = Phy.SerdesRatio
       )
     )
@@ -341,7 +341,7 @@ class PhyTest(
     val lfsr = Module(
       new FibonacciLFSR(
         PhyTest.LfsrWidth,
-        taps = PhyTest.lfsrTaps,
+        taps = PhyTest.LfsrTaps,
         step = Phy.SerdesRatio
       )
     )
@@ -364,7 +364,7 @@ class PhyTest(
   // Fibonacci feedback backwards: it is the only unknown in the tap XOR that
   // produced the state's newest bit.
   def refWordDelayed(state: UInt): UInt = {
-    val recovered = PhyTest.lfsrTaps.toSeq.sorted.init
+    val recovered = PhyTest.LfsrTaps.toSeq.sorted.init
       .map(t => state(t))
       .foldLeft(state(0))(_ ^ _)
     Cat(
@@ -415,7 +415,7 @@ class PhyTest(
     .map { case (word, lane) => rotateLeft(word, lane) }
     .foldLeft(rxSignature)(_ ^ _)
   val rxSignatureFeedback =
-    PhyTest.signatureTaps.map(t => rxSignatureFolded(t - 1)).reduce(_ ^ _)
+    PhyTest.SignatureTaps.map(t => rxSignatureFolded(t - 1)).reduce(_ ^ _)
   when(rxSignatureUpdate) {
     rxSignature := Cat(
       rxSignatureFolded(PhyTest.SignatureWidth - 2, 0),
