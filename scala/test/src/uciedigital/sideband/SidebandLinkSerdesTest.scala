@@ -1038,6 +1038,69 @@ class SidebandLinkSerdesTest extends AnyFunSpec with ChiselSim with VerilatorCov
     }
   }
 
+  describe("Deserializer forwarded-clock domain reset behavior") {
+    val timeoutCycles = 512
+
+    it("Dropped a packet when reset asserted while the forwarded clock keeps running") {
+      simulate((new DeserializerTestHarness(sbLinkW, msgW, timeoutCycles)))
+      { c =>
+        val data = dataForOpcode(SBMsgOpcode.MemoryWrite_64b, 128)
+        val cleanData = dataForOpcode(SBMsgOpcode.CompletionWithoutData, 64)
+
+        resetDeserializer(c, SBRxTxMode.PACKET)
+
+        // Get mid-packet so the forwarded-clock domain is actively assembling bits.
+        driveDataEdges(c, data, 0, 20)
+
+        // The remote die does not stop transmitting just because we reset: keep
+        // the forwarded clock toggling while reset is high. Those edges clock the
+        // fwClock-domain registers through their (async) reset arm.
+        c.reset.poke(true.B)
+        driveDataEdges(c, data, 20, 8)
+        c.clock.step(3)
+        c.reset.poke(false.B)
+        c.io.in.bits.poke(0.U)
+        c.io.in.fwClock.poke(false.B)
+        c.clock.step(10)
+
+        // The partial packet must not escape.
+        expectNoDeserializerOutput(c, 20)
+
+        // And reception must still work afterwards.
+        serializeData(c, cleanData.U, 64)
+        expectDeserializerPacket(c, cleanData, 64)
+      }
+    }
+
+    it("Held the timed-out state until reset released it") {
+      simulate((new DeserializerTestHarness(sbLinkW, msgW, timeoutCycles)))
+      { c =>
+        val partialData = dataForOpcode(SBMsgOpcode.MemoryWrite_64b, 128)
+        val cleanData = dataForOpcode(SBMsgOpcode.CompletionWithoutData, 64)
+
+        resetDeserializer(c, SBRxTxMode.PACKET)
+        serializeData(c, partialData.U, 128, timeoutCyclesTarget = 12)
+
+        // Let the watchdog reach its limit, then SIT in the timed-out state so
+        // the counter's hold branch (counter == desTimeoutCycles) is exercised.
+        c.clock.step(timeoutCycles + 4)
+        for(_ <- 0 until 20) {
+          c.io.ctrl.desTimedout.expect(true.B)
+          c.clock.step()
+        }
+
+        c.reset.poke(true.B)
+        c.clock.step(5)
+        c.reset.poke(false.B)
+        c.clock.step(10)
+        c.io.ctrl.desTimedout.expect(false.B)
+
+        serializeData(c, cleanData.U, 64)
+        expectDeserializerPacket(c, cleanData, 64)
+      }
+    }
+  }
+
   class LinkSerdesTestHarness extends Module {
     val io = IO(new Bundle {
       val ctrl = new Bundle {

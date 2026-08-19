@@ -1,0 +1,6 @@
+# Coverage outputs stay local; only this .gitignore and the scripts below are tracked.
+*
+!.gitignore
+!run_verdi_coverage.sh
+!view_coverage.sh
+!area_summary.sh
