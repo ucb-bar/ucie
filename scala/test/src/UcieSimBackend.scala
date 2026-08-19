@@ -10,7 +10,7 @@
                                                   build/chiselsim/<Test>/<scenario>/workdir-vcs/
 
     Merge/view coverage: see verdi_coverage/run_verdi_coverage.sh.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital
 

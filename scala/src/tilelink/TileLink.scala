@@ -17,7 +17,16 @@ import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
 import edu.berkeley.cs.uciedigital.top.{UcieDigitalTop, UcieDigitalTopParams}
-import edu.berkeley.cs.uciedigital.regs.{UcieRegBlock, UcieRegBlockIO, UcieRegParams, AdapterToRegs, PhyToRegs, LinkToRegs, MailboxSbResp, PhyToVendor}
+import edu.berkeley.cs.uciedigital.regs.{
+  UcieRegBlock,
+  UcieRegBlockIO,
+  UcieRegParams,
+  AdapterToRegs,
+  PhyToRegs,
+  LinkToRegs,
+  MailboxSbResp,
+  PhyToVendor
+}
 import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
@@ -30,7 +39,13 @@ import freechips.rocketchip.diplomacy.RegionType
 import freechips.rocketchip.diplomacy.TransferSizes
 import freechips.rocketchip.diplomacy.IdRange
 import freechips.rocketchip.diplomacy.BundleBridgeSource
-import testchipip.soc.{ChipletLinkParams, ChipletLinkWrapperInstantiationLike, ChipletLinkWrapper, OffchipSubsystemParams, ChipletIO}
+import testchipip.soc.{
+  ChipletLinkParams,
+  ChipletLinkWrapperInstantiationLike,
+  ChipletLinkWrapper,
+  OffchipSubsystemParams,
+  ChipletIO
+}
 
 case class UcieTLParams(
     address: BigInt = 0x200000,
@@ -48,14 +63,18 @@ case class UcieTLParams(
     includeDefaultModels: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000
 ) extends ChipletLinkParams
- with ChipletLinkWrapperInstantiationLike 
- {
+    with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
   def controlManagerBusWhere = Some(managerWhere)
-  def instantiate(params: OffchipSubsystemParams, id: Int)(implicit p: Parameters): ChipletLinkWrapper = LazyModule(new UcieChipletLink(this, params, id))
+  def instantiate(params: OffchipSubsystemParams, id: Int)(implicit
+      p: Parameters
+  ): ChipletLinkWrapper = LazyModule(new UcieChipletLink(this, params, id))
   assert(isPow2(creditCounterSize), s"Credit counter size must be a power of 2")
-  assert(tlBufferDepth < creditCounterSize / 2, s"TL buffer depth must be less than half of max credits")
- }
+  assert(
+    tlBufferDepth < creditCounterSize / 2,
+    s"TL buffer depth must be less than half of max credits"
+  )
+}
 
 case object UcieTLKey extends Field[Option[Seq[UcieTLParams]]](None)
 
@@ -78,20 +97,20 @@ class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
   // Bypass and reference clocks should be connected at top level
   def connect(io: ChipletIO): Unit = io match {
     case io: UcieBumpsIO => {
-      phy.rxData      := io.phy.txData
-      phy.rxValid     := io.phy.txValid
-      phy.rxTrack     := io.phy.txTrack
-      phy.rxClkP      := io.phy.txClkP
-      phy.rxClkN      := io.phy.txClkN
-      phy.sbRxClk     := io.phy.sbTxClk
-      phy.sbRxData    := io.phy.sbTxData
+      phy.rxData := io.phy.txData
+      phy.rxValid := io.phy.txValid
+      phy.rxTrack := io.phy.txTrack
+      phy.rxClkP := io.phy.txClkP
+      phy.rxClkN := io.phy.txClkN
+      phy.sbRxClk := io.phy.sbTxClk
+      phy.sbRxData := io.phy.sbTxData
 
-      io.phy.rxData   := phy.txData
-      io.phy.rxValid  := phy.txValid
-      io.phy.rxTrack  := phy.txTrack
-      io.phy.rxClkP   := phy.txClkP
-      io.phy.rxClkN   := phy.txClkN
-      io.phy.sbRxClk  := phy.sbTxClk
+      io.phy.rxData := phy.txData
+      io.phy.rxValid := phy.txValid
+      io.phy.rxTrack := phy.txTrack
+      io.phy.rxClkP := phy.txClkP
+      io.phy.rxClkN := phy.txClkN
+      io.phy.sbRxClk := phy.sbTxClk
       io.phy.sbRxData := phy.sbTxData
     }
     case _ => assert(false, s"IO does not match UcieBumpsIO: ${io.getClass}")
@@ -133,7 +152,11 @@ class UcieTLRegsIO(
   val lastSeenTLReq = Input(UInt(addrWidth.W))
 }
 
-class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegParams)(implicit
+class UcieTLRegs(
+    params: UcieTLParams,
+    beatBytes: Int,
+    ucieRegParams: UcieRegParams
+)(implicit
     p: Parameters
 ) extends ClockSinkDomain(ClockSinkParameters()) {
   def toRegFieldRw[T <: Data](r: T, name: String): RegField = {
@@ -155,7 +178,12 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
   val ucieTLRegionSize = 0x4000
   val device = new SimpleDevice("ucie_control", Seq("ucbbar,ucie"))
   val node = TLRegisterNode(
-    Seq(AddressSet(params.address, ucieTLRegionSize + ucieRegParams.allocation.regionSize - 1)),
+    Seq(
+      AddressSet(
+        params.address,
+        ucieTLRegionSize + ucieRegParams.allocation.regionSize - 1
+      )
+    ),
     device,
     "reg/control",
     beatBytes = beatBytes
@@ -170,7 +198,7 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         params.bitCounterWidth
       )
     )
-    
+
     val ucieBlockIo = IO(new UcieRegBlockIO(ucieRegParams))
 
     val regmap = withClockAndReset(clock, reset) {
@@ -320,6 +348,16 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       val commonTxPacketsToSend = RegInit(0.U(params.bitCounterWidth.W))
       val commonData = RegInit(VecInit(Seq.fill(16)(0.U(64.W))))
 
+      // Sideband tester: stages one 64-bit packet each way over the
+      // single-bit sideband. See `SidebandTestRegsIO`.
+      val sbTxPacket = RegInit(0.U(io.test.sb.txPacket.getWidth.W))
+      val sbTxSend = Wire(DecoupledIO(UInt(1.W)))
+      val sbRxPop = Wire(DecoupledIO(UInt(1.W)))
+      val sbRxRst = Wire(DecoupledIO(UInt(1.W)))
+      sbTxSend.ready := true.B
+      sbRxPop.ready := true.B
+      sbRxRst.ready := true.B
+
       val mainbandSel = RegInit(MainbandSel.phytest)
       io.mainbandSel := mainbandSel
 
@@ -372,6 +410,10 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
       io.test.rxDataOffset := applyShift(rxDataOffset)
+      io.test.sb.txPacket := applyShift(sbTxPacket)
+      io.test.sb.txSend := applyShift(sbTxSend.valid)
+      io.test.sb.rxPop := applyShift(sbRxPop.valid)
+      io.test.sb.rxRst := applyShift(sbRxRst.valid)
       io.phy.clkPhaseSel := applyShift(clkPhaseSel)
       io.phy.clkFreqSel := applyShift(clkFreqSel)
       io.phy.clkGateEn := applyShift(clkGateEn)
@@ -502,9 +544,16 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         toRegFieldRw(mainbandSel, "mainbandSel"),
         toRegFieldRw(creditFlowEnable, "creditFlowEnable"),
         toRegFieldRw(txValidLaneSel, "txValidLaneSel"),
-        toRegFieldRw(rxValidLaneSel, "rxValidLaneSel")
-      ) ++ Seq(
-        RegField.r(64, lastSeenTLReq, RegFieldDesc("lastSeenTLReq", ""))
+        toRegFieldRw(rxValidLaneSel, "rxValidLaneSel"),
+        RegField.r(64, lastSeenTLReq, RegFieldDesc("lastSeenTLReq", "")),
+        toRegFieldRw(sbTxPacket, "sbTxPacket"),
+        RegField.w(1, sbTxSend, RegFieldDesc("sbTxSend", "")),
+        toRegFieldR(applyShift(io.test.sb.txBusy), "sbTxBusy"),
+        toRegFieldR(applyShift(io.test.sb.rxPacket), "sbRxPacket"),
+        toRegFieldR(applyShift(io.test.sb.rxValid), "sbRxValid"),
+        RegField.w(1, sbRxPop, RegFieldDesc("sbRxPop", "")),
+        toRegFieldR(applyShift(io.test.sb.rxOverflow), "sbRxOverflow"),
+        RegField.w(1, sbRxRst, RegFieldDesc("sbRxRst", ""))
       )
 
       mmioRegs.zipWithIndex.map({
@@ -516,7 +565,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
 
     // Spec-defined UCIe digital registers. Added after UCIe TL Regs.
     val ucieRegmap = withClockAndReset(clock, reset) {
-      val (entries, _, _) = UcieRegBlock.build(ucieBlockIo, reset, ucieRegParams, ucieTLRegionSize)
+      val (entries, _, _) =
+        UcieRegBlock.build(ucieBlockIo, reset, ucieRegParams, ucieTLRegionSize)
       entries
     }
     node.regmap((regmap ++ ucieRegmap): _*)
@@ -566,7 +616,12 @@ class UcieTXD(creditBits: Int = 5) extends Bundle {
   val tl = new UcieTLBundleD
 }
 
-class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: Int, blockBytes: Int)(implicit
+class UcieTL(
+    params: UcieTLParams,
+    managerRegion: Seq[AddressSet],
+    beatBytes: Int,
+    blockBytes: Int
+)(implicit
     p: Parameters
 ) extends LazyModule {
   override lazy val desiredName = "UcieTL"
@@ -575,14 +630,21 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
   val ucieDigitalClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
 
-  val ucieRegParams = UcieDigitalTopParams.default().regs.copy(
-    baseAddress = params.ucieRegsBaseAddress,
-    numModules = 1,
-    includeRegNode = false,
-    includeInterruptNode = false
-  )
+  val ucieRegParams = UcieDigitalTopParams
+    .default()
+    .regs
+    .copy(
+      baseAddress = params.ucieRegsBaseAddress,
+      numModules = 1,
+      includeRegNode = false,
+      includeInterruptNode = false
+    )
   val ucieDigitalLazy: UcieDigitalTop =
-    LazyModule(new UcieDigitalTop(UcieDigitalTopParams.default().copy(regs = ucieRegParams)))
+    LazyModule(
+      new UcieDigitalTop(
+        UcieDigitalTopParams.default().copy(regs = ucieRegParams)
+      )
+    )
   val regs = LazyModule(new UcieTLRegs(params, beatBytes, ucieRegParams))
 
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
@@ -590,7 +652,8 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
   val managerNode = TLManagerNode(
     Seq(
       TLSlavePortParameters.v1(
-        managers = managerRegion.map { as => TLSlaveParameters.v1(
+        managers = managerRegion.map { as =>
+          TLSlaveParameters.v1(
             address = AddressSet.misaligned(as.base, as.mask + 1),
             resources = device.reg,
             regionType =
@@ -679,10 +742,10 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
-  
-    val ucieDigital = withClockAndReset(phy.io.clkRst.ucieClk, phy.io.clkRst.ucieRst) {
-      ucieDigitalLazy.module
-    }
+    val ucieDigital =
+      withClockAndReset(phy.io.clkRst.ucieClk, phy.io.clkRst.ucieRst) {
+        ucieDigitalLazy.module
+      }
     ucieDigital.io.regBlockIo.foreach { rb => regs.module.ucieBlockIo <> rb }
     val selUcie = mainbandSel === MainbandSel.ucie
     // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
@@ -714,13 +777,17 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
 
     // Sideband: ucie mode uses ucieDigital; phytest/tl use PhyTest. Rx goes to both.
     val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
-    phy.io.sb.txClk  := Mux(selUcie, digiSb.out.fwClock.asBool.asClock, test.io.sb.txClk)
+    phy.io.sb.txClk := Mux(
+      selUcie,
+      digiSb.out.fwClock.asBool.asClock,
+      test.io.sb.txClk
+    )
     phy.io.sb.txData := Mux(selUcie, digiSb.out.bits.asBool, test.io.sb.txData)
-    test.io.sb.rxClk  := phy.io.sb.rxClk
+    test.io.sb.rxClk := phy.io.sb.rxClk
     test.io.sb.rxData := phy.io.sb.rxData
-    digiSb.in.bits    := phy.io.sb.rxData.asUInt
+    digiSb.in.bits := phy.io.sb.rxData.asUInt
     digiSb.in.fwClock := phy.io.sb.rxClk.asUInt
-     
+
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
       val managerTl = managerNode.in(0)._1
@@ -742,7 +809,10 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       ucieClientTlD.size := clientTl.d.bits.size
       ucieClientTlD.data := clientTl.d.bits.data
       ucieClientTlD.source := clientTl.d.bits.source
-      ucieClientTlD.sink := clientTl.d.bits.sink(ucieClientTlD.sink.getWidth - 1, 0) // Truncate since sink will always be 0
+      ucieClientTlD.sink := clientTl.d.bits.sink(
+        ucieClientTlD.sink.getWidth - 1,
+        0
+      ) // Truncate since sink will always be 0
       ucieClientTlD.denied := clientTl.d.bits.denied
       ucieClientTlD.corrupt := clientTl.d.bits.corrupt
 
@@ -777,7 +847,8 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       val aCreditsToReturn = RegInit(0.U(creditBits.W))
       val dCreditsToReturn = RegInit(0.U(creditBits.W))
       val creditRetValid = Wire(Bool())
-      val creditRetTimer = RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
+      val creditRetTimer =
+        RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
       val creditsFull = Wire(Bool())
       val aAvail = Wire(Bool())
       val dAvail = Wire(Bool())
@@ -785,12 +856,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       creditRetTimer := creditRetTimer + 1.U
       creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
       creditRetValid := ((clientTl.d.fire ||
-                          managerTl.a.fire ||
-                          creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
-                          aCreditsToReturn > params.creditRetThreshhold.U ||
-                          dCreditsToReturn > params.creditRetThreshhold.U) &&
-                        !creditsFull &&
-                        regs.module.io.mainbandSel =/= MainbandSel.phytest)
+        managerTl.a.fire ||
+        creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
+        aCreditsToReturn > params.creditRetThreshhold.U ||
+        dCreditsToReturn > params.creditRetThreshhold.U) &&
+        !creditsFull &&
+        regs.module.io.mainbandSel =/= MainbandSel.phytest)
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
@@ -820,8 +891,10 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       }
       regs.module.io.lastSeenTLReq := lastSeenAddr
 
-      val rxABuffer = Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
-      val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
+      val rxABuffer =
+        Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
+      val rxDBuffer =
+        Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock when tl path.
@@ -836,11 +909,18 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         Cat(ucieClientTxD.asUInt, 1.U),
         Cat(ucieManagerTxA.asUInt, 0.U)
       )
-      txTlFifo.io.enq.bits.data := txFramedData.asTypeOf(txTlFifo.io.enq.bits.data)
+      txTlFifo.io.enq.bits.data := txFramedData.asTypeOf(
+        txTlFifo.io.enq.bits.data
+      )
 
       // chipFacing TX: route the same framed data into ucieDigital (ucie mode), crossing
       // childClock -> ucieClk. Only the protocol data crosses (no track/clkp/clkn/valid lanes); deq is ucieClk.
-      val txAQ = Module(new AsyncQueue(chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandTx.bits), params.queueParams))
+      val txAQ = Module(
+        new AsyncQueue(
+          chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandTx.bits),
+          params.queueParams
+        )
+      )
       txAQ.io.enq.valid := mainbandSel === MainbandSel.ucie
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
@@ -850,8 +930,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       ucieDigital.io.chipFacingIo.mainbandTx.valid := txAQ.io.deq.valid
       ucieDigital.io.chipFacingIo.mainbandTx.bits := txAQ.io.deq.bits
       txAQ.io.deq.ready := ucieDigital.io.chipFacingIo.mainbandTx.ready
-      val txEnqReady = Mux(mainbandSel === MainbandSel.ucie, txAQ.io.enq.ready, txTlFifo.io.enq.ready)
-    
+      val txEnqReady = Mux(
+        mainbandSel === MainbandSel.ucie,
+        txAQ.io.enq.ready,
+        txTlFifo.io.enq.ready
+      )
+
       clientTl.d.ready := txEnqReady && dAvail
       managerTl.a.ready := txEnqReady && aAvail && !clientTl.d.valid
 
@@ -891,7 +975,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
 
       // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path, crossing
       // ucieClk -> childClock. Muxed with the tl-path ValidFramer output by mainbandSel.
-      val rxAQ = Module(new AsyncQueue(chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandRx.bits), params.queueParams))
+      val rxAQ = Module(
+        new AsyncQueue(
+          chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandRx.bits),
+          params.queueParams
+        )
+      )
       rxAQ.io.enq.valid := ucieDigital.io.chipFacingIo.mainbandRx.valid && (mainbandSel === MainbandSel.ucie)
       rxAQ.io.enq.bits := ucieDigital.io.chipFacingIo.mainbandRx.bits
       ucieDigital.io.chipFacingIo.mainbandRx.ready := rxAQ.io.enq.ready && (mainbandSel === MainbandSel.ucie)
@@ -900,8 +989,16 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       rxAQ.io.deq_clock := childClock
       rxAQ.io.deq_reset := childReset
       rxAQ.io.deq.ready := mainbandSel === MainbandSel.ucie
-      val framedBits = Mux(mainbandSel === MainbandSel.ucie, rxAQ.io.deq.bits.data, validFramer.io.digital.bits.asUInt)
-      val framedValid = Mux(mainbandSel === MainbandSel.ucie, rxAQ.io.deq.valid, validFramer.io.digital.valid)
+      val framedBits = Mux(
+        mainbandSel === MainbandSel.ucie,
+        rxAQ.io.deq.bits.data,
+        validFramer.io.digital.bits.asUInt
+      )
+      val framedValid = Mux(
+        mainbandSel === MainbandSel.ucie,
+        rxAQ.io.deq.valid,
+        validFramer.io.digital.valid
+      )
 
       val tlBits = framedBits(framedBits.getWidth - 1, 1)
       rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
@@ -964,20 +1061,34 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
         )
       )
 
-      val creditAValid = rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
-      val creditDValid = rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
+      val creditAValid =
+        rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
+      val creditDValid =
+        rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
 
-      val aCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
+      val aCreditCounter = Module(
+        new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
+      )
       aCreditCounter.io.used := managerTl.a.fire
       aCreditCounter.io.ret.valid := creditAValid || creditDValid
-      aCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_a, rxDBuffer.io.deq.bits.credit_a)
+      aCreditCounter.io.ret.bits := Mux(
+        creditAValid,
+        rxABuffer.io.deq.bits.credit_a,
+        rxDBuffer.io.deq.bits.credit_a
+      )
       aCreditCounter.io.mode := regs.module.io.creditFlowEnable
       aAvail := aCreditCounter.io.avail
 
-      val dCreditCounter = Module(new CreditCounter(params.creditCounterSize, params.tlBufferDepth))
+      val dCreditCounter = Module(
+        new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
+      )
       dCreditCounter.io.used := clientTl.d.fire
       dCreditCounter.io.ret.valid := creditAValid || creditDValid
-      dCreditCounter.io.ret.bits := Mux(creditAValid, rxABuffer.io.deq.bits.credit_d, rxDBuffer.io.deq.bits.credit_d)
+      dCreditCounter.io.ret.bits := Mux(
+        creditAValid,
+        rxABuffer.io.deq.bits.credit_d,
+        rxDBuffer.io.deq.bits.credit_d
+      )
       dCreditCounter.io.mode := regs.module.io.creditFlowEnable
       dAvail := dCreditCounter.io.avail
     }
@@ -993,7 +1104,16 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
   val uciephy = p(UcieTLKey) match {
     case Some(params) => {
       val uciephy =
-        params.map(x => LazyModule(new UcieTL(x, Seq(AddressSet(0x0, 0xffffL)), pbus.beatBytes, pbus.blockBytes)(p)))
+        params.map(x =>
+          LazyModule(
+            new UcieTL(
+              x,
+              Seq(AddressSet(0x0, 0xffffL)),
+              pbus.beatBytes,
+              pbus.blockBytes
+            )(p)
+          )
+        )
 
       lazy val uciephy_tlbus =
         params.map(x => locateTLBusWrapper(x.managerWhere))
@@ -1018,8 +1138,20 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
   }
 }
 
-class UcieChipletLink(val params: UcieTLParams, val sys_params: OffchipSubsystemParams, val id: Int)(implicit p: Parameters) extends ChipletLinkWrapper {
-  val ucie = LazyModule(new UcieTL(params, sys_params.managerRegion, sys_params.managerBeatBytes, sys_params.managerBlockBytes)(p))
+class UcieChipletLink(
+    val params: UcieTLParams,
+    val sys_params: OffchipSubsystemParams,
+    val id: Int
+)(implicit p: Parameters)
+    extends ChipletLinkWrapper {
+  val ucie = LazyModule(
+    new UcieTL(
+      params,
+      sys_params.managerRegion,
+      sys_params.managerBeatBytes,
+      sys_params.managerBlockBytes
+    )(p)
+  )
   val client_node = ucie.clientNode
   val manager_node = ucie.managerNode
   val control_manager_node = Some(ucie.regNode)

@@ -312,7 +312,10 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     )
   val ucieTL = LazyModule(
     new UcieTL(
-      UcieTLParams(includeDefaultModels = includeDefaultModels, maxInflight = 1),
+      UcieTLParams(
+        includeDefaultModels = includeDefaultModels,
+        maxInflight = 1
+      ),
       Seq(AddressSet(0x0, 0xffffL)),
       TestHarness.beatBytes,
       TestHarness.beatBytes
@@ -452,13 +455,13 @@ class ScalaTestHarness(
     // Wait a few cycles before starting regDriver, so the PHY's digital reset
     // synchronizer has time to deassert ucieRst (which clocks the regs module).
     val startupCounter = RegInit(0.U(log2Up(startupDelayCycles + 1).W))
-    when (startupCounter < startupDelayCycles.U) {
+    when(startupCounter < startupDelayCycles.U) {
       startupCounter := startupCounter + 1.U
     }
     val startupReady = startupCounter === startupDelayCycles.U
 
     val delayCounter = RegInit(0.U(log2Up(delayCycles + 1).W))
-    when (regDriver.module.io.finished && delayCounter < delayCycles.U) {
+    when(regDriver.module.io.finished && delayCounter < delayCycles.U) {
       delayCounter := delayCounter + 1.U
     }
 
@@ -466,7 +469,7 @@ class ScalaTestHarness(
     mbDriver.module.io.start := delayCounter === delayCycles.U
     io.finished := mbDriver.module.io.finished
 
-    when (io.finished) {
+    when(io.finished) {
       printf("TEST PASSED\n")
       chisel3.stop()
     }
@@ -492,12 +495,16 @@ class ScalaSimTop[T <: ScalaTestDriver](
   val drv = Module(driver)
 
   withClockAndReset(drv.digitalClock, drv.reset) {
-    val ucie_harness = Module(LazyModule(new ScalaTestHarness(
-      regReqs = drv.regReqs,
-      mbReqs = drv.mbReqs,
-      mbMaxInflight = drv.mbMaxInflight,
-      stallCycles = drv.stallCycles
-    )).module)
+    val ucie_harness = Module(
+      LazyModule(
+        new ScalaTestHarness(
+          regReqs = drv.regReqs,
+          mbReqs = drv.mbReqs,
+          mbMaxInflight = drv.mbMaxInflight,
+          stallCycles = drv.stallCycles
+        )
+      ).module
+    )
     ucie_harness.io.ucieBypassClock := drv.ucieBypassClock
     ucie_harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
   }
@@ -559,9 +566,14 @@ tl_long();
 class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
-      implicit val p: Parameters = new freechips.rocketchip.subsystem.WithoutTLMonitors
+      implicit val p: Parameters =
+        new freechips.rocketchip.subsystem.WithoutTLMonitors
       ChiselStage.emitSystemVerilogFile(
-        LazyModule(new RTLHarness(new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32, 32))).module,
+        LazyModule(
+          new RTLHarness(
+            new UcieTL(UcieTLParams(), Seq(AddressSet(0x0, 0xffffL)), 32, 32)
+          )
+        ).module,
         args = Array(
           "--target-dir",
           (Utils.buildRoot / "UcieTL_should_generate_valid_SystemVerilog").toString
@@ -676,7 +688,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should support long Scala TL test with RAM-side backpressure stall using Verilator") {
+    it(
+      "should support long Scala TL test with RAM-side backpressure stall using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new ScalaSimTop(new ScalaTlLongStallTestDriver),
@@ -685,7 +699,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should support long Scala TL test with RAM-side backpressure stall using VCS") {
+    it(
+      "should support long Scala TL test with RAM-side backpressure stall using VCS"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new ScalaSimTop(new ScalaTlLongStallTestDriver),

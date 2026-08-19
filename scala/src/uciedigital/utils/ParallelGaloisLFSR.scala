@@ -1,57 +1,63 @@
 /*
-  Description: 
+  Description:
     Produces `dataWidth` bits worth of LFSR output in one cycle using an XOR tree.
     It will combinationally calculate the output bits based on the current state. When it is
     time to increment, it will step `dataWidth` times in a cycle. The next state is also
     calculated combinationally based on current state.
 
     Note:
-    * This LFSR is based on Galois architecture.
-    * The polynomial arguments corresponds to the taps.
+ * This LFSR is based on Galois architecture.
+ * The polynomial arguments corresponds to the taps.
         !!! Forgo the leading term bit in polynomial !!!
-        Ex: If polynomial is G(X) = X^3 + X^2 + 1 
+        Ex: If polynomial is G(X) = X^3 + X^2 + 1
             Polynomial in binary: 1101 (X^3, X^2, X, 1)
             The value used for polynomial will be: 0x5, NOT 0xD
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.utils
 
 import chisel3._
 
-class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: Int) 
-  extends Module {  
+class ParallelGaloisLFSR(
+    seed: Int,
+    lfsrWidth: Int,
+    dataWidth: Int,
+    polynomial: Int
+) extends Module {
   val io = IO(new Bundle {
     val resetLfsr = Input(Bool())
     val increment = Input(Bool())
-    val lfsrOutput = Output(UInt(dataWidth.W)) 
-    val state = Output(UInt(lfsrWidth.W))    
+    val lfsrOutput = Output(UInt(dataWidth.W))
+    val state = Output(UInt(lfsrWidth.W))
   })
 
   require(seed > 0, "Seed needs to be positive")
   require(dataWidth > 0, "Dath width needs to be positive")
-  
+
   // rows: lfsrWidth, cols: lfsrWidth
-  var stateUpdateMatrix: Array[Array[Int]] = Array.ofDim[Int](lfsrWidth, lfsrWidth) 
-  
+  var stateUpdateMatrix: Array[Array[Int]] =
+    Array.ofDim[Int](lfsrWidth, lfsrWidth)
+
   // rows: lfsrWidth, cols: dataWidth
-  var dataOutMatrix: Array[Array[Int]] = Array.ofDim[Int](lfsrWidth, dataWidth) 
-  
-  val serialGalois = new SerialGaloisLFSR(initSeed = seed, poly = polynomial, width = lfsrWidth)
+  var dataOutMatrix: Array[Array[Int]] = Array.ofDim[Int](lfsrWidth, dataWidth)
+
+  val serialGalois =
+    new SerialGaloisLFSR(initSeed = seed, poly = polynomial, width = lfsrWidth)
 
   // construct the matrix
-  for(i <- 0 until lfsrWidth) {
+  for (i <- 0 until lfsrWidth) {
     val oneHot = 1 << i
     serialGalois.reseed(oneHot)
-    val (state, outputs)= serialGalois.doCycleOutput(dataWidth)
+    val (state, outputs) = serialGalois.doCycleOutput(dataWidth)
 
     // populate state update matrix columns
-    for(j <- 0 until lfsrWidth) {
-      stateUpdateMatrix(i)(j) = if(state(j) == '1') 1 else 0      
+    for (j <- 0 until lfsrWidth) {
+      stateUpdateMatrix(i)(j) = if (state(j) == '1') 1 else 0
     }
-  
+
     // populate data out matrix columns
-    for(j <- 0 until dataWidth) {
-      dataOutMatrix(i)(j) = if(outputs(j) == '1') 1 else 0      
+    for (j <- 0 until dataWidth) {
+      dataOutMatrix(i)(j) = if (outputs(j) == '1') 1 else 0
     }
   }
 
@@ -61,25 +67,25 @@ class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: 
   val dataOutputWire = WireInit(VecInit(Seq.fill(dataWidth)(0.U)))
 
   // Compute stateUpdate combinationally based on current lfsr state
-  for(j <- 0 until lfsrWidth) {
+  for (j <- 0 until lfsrWidth) {
     val terms = scala.collection.mutable.ArrayBuffer[Bool]()
-    for(i <- 0 until lfsrWidth) {
-      val doXor = stateUpdateMatrix(i)(j)      
-      if(doXor == 1) {
+    for (i <- 0 until lfsrWidth) {
+      val doXor = stateUpdateMatrix(i)(j)
+      if (doXor == 1) {
         terms += stateReg(i)
-      }    
+      }
     }
     stateUpdateWire(lfsrWidth - 1 - j) := terms.reduce(_ ^ _)
   }
 
   // Compute dataOutput combinationally based on current lfsr state
-  for(j <- 0 until dataWidth) {
+  for (j <- 0 until dataWidth) {
     val terms = scala.collection.mutable.ArrayBuffer[Bool]()
-    for(i <- 0 until lfsrWidth) {
-      val doXor = dataOutMatrix(i)(j)      
-      if(doXor == 1) {
+    for (i <- 0 until lfsrWidth) {
+      val doXor = dataOutMatrix(i)(j)
+      if (doXor == 1) {
         terms += stateReg(i)
-      }    
+      }
     }
     dataOutputWire(dataWidth - 1 - j) := terms.reduce(_ ^ _)
   }
@@ -88,23 +94,24 @@ class ParallelGaloisLFSR(seed: Int, lfsrWidth: Int, dataWidth: Int, polynomial: 
     stateReg := seed.U
   }.otherwise {
     when(io.increment) {
-      stateReg := stateUpdateWire.asUInt    
+      stateReg := stateUpdateWire.asUInt
     }
   }
 
   io.state := stateReg
-  io.lfsrOutput := dataOutputWire.asUInt 
+  io.lfsrOutput := dataOutputWire.asUInt
 }
 
 class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
-  private val polynomial: Int = poly  
+  private val polynomial: Int = poly
   private var state: Int = initSeed
   private var seed: Int = initSeed
   private val mask: Int = (1 << width) - 1
 
   def getState(): Int = state
   def getStateHex(): String = f"0x${state}%X"
-  def getStateBitStr(): String = state.toBinaryString.reverse.padTo(width, '0').reverse
+  def getStateBitStr(): String =
+    state.toBinaryString.reverse.padTo(width, '0').reverse
 
   def reset(): Unit = {
     state = seed
@@ -112,7 +119,7 @@ class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
 
   def reseed(newSeed: Int): Unit = {
     state = newSeed
-    seed = newSeed    
+    seed = newSeed
   }
 
   def getMsb(): Int = {
@@ -124,7 +131,7 @@ class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
     val msb = (state >> (width - 1)) & 1
 
     state = (state << 1) & mask
-    if(msb == 1) {
+    if (msb == 1) {
       state = state ^ polynomial
     }
     msb
@@ -132,7 +139,7 @@ class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
 
   def doCycleOutput(numCycles: Int): (String, String) = {
     var bitStr = ""
-    for(i <- 0 until numCycles) {
+    for (i <- 0 until numCycles) {
       val msb = increment()
       bitStr += msb.toBinaryString
     }

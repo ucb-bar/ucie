@@ -11,6 +11,6 @@ object MainLogicalPhy extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

@@ -12,7 +12,7 @@ object MainTrainErrorRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -25,7 +25,7 @@ object MainTrainErrorResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -38,7 +38,7 @@ object MainPhyRetrainSidebandHandshake extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -51,7 +51,7 @@ object MainPhyRetrainRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -64,7 +64,7 @@ object MainPhyRetrainResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -76,8 +76,8 @@ object MainTxD2CPointTestRequester extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -89,8 +89,8 @@ object MainTxD2CPointTestResponder extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -102,8 +102,8 @@ object MainRxD2CPointTestRequester extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -115,8 +115,8 @@ object MainRxD2CPointTestResponder extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -128,8 +128,8 @@ object MainTxD2CEyeWidthSweepRequester extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -141,8 +141,8 @@ object MainTxD2CEyeWidthSweepResponder extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -154,8 +154,8 @@ object MainRxD2CEyeWidthSweepRequester extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -167,8 +167,8 @@ object MainRxD2CEyeWidthSweepResponder extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -181,7 +181,7 @@ object MainMBInitSM extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -194,7 +194,7 @@ object MainMBInitRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -207,7 +207,7 @@ object MainMBInitResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -220,7 +220,7 @@ object MainLinkTrainingSM extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -232,8 +232,8 @@ object MainSBInit extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -245,8 +245,8 @@ object MainSBInitRequester extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -258,8 +258,8 @@ object MainSBInitResponder extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }
 
@@ -272,7 +272,7 @@ object MainMBTrainSM extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -285,7 +285,7 @@ object MainMBTrainRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -298,6 +298,6 @@ object MainMBTrainResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

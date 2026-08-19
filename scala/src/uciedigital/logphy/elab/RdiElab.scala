@@ -12,7 +12,7 @@ object MainRDIWakeHandshakeResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -25,7 +25,7 @@ object MainRDIClockHandshakeRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -38,7 +38,7 @@ object MainRDIController extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -51,7 +51,7 @@ object MainRDIStallRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -64,7 +64,7 @@ object MainRDIStateMachine extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -77,7 +77,7 @@ object MainRDIStateMachineRequester extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }
 
@@ -90,6 +90,6 @@ object MainRDIStateMachineResponder extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

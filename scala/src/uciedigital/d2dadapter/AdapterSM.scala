@@ -5,7 +5,8 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.sideband._
 import edu.berkeley.cs.uciedigital.interfaces._
 
-class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams) extends Bundle {
+class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams)
+    extends Bundle {
   val fdi_lp_state_req = Input(RDIStateReq())
   val fdi_lp_linkerror = Input(Bool())
   val fdi_lp_rx_active_sts = Input(Bool())
@@ -26,14 +27,13 @@ class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams) extends Bu
   val linkmgmt_stalldone = Input(Bool())
 }
 
-/**
-  * Unified adapter state machine that folds the legacy link-management,
+/** Unified adapter state machine that folds the legacy link-management,
   * link-init, link-reset, and disabled-state submodules into one module.
   */
 class AdapterSM(
-  val fdiParams: FdiParams,
-  val rdiParams: RdiParams,
-  val sbParams: SidebandParams,
+    val fdiParams: FdiParams,
+    val rdiParams: RdiParams,
+    val sbParams: SidebandParams
 ) extends Module {
   val io = IO(new AdapterSMIO(fdiParams, rdiParams))
 
@@ -113,7 +113,9 @@ class AdapterSM(
         linkInitRdiLpStateReq := RDIStateReq.active
         linkInitFdiPlRxActiveReq := activeSbMsgReqRcvFlag
 
-        when(io.fdi_lp_rx_active_sts && linkInitFdiPlRxActiveReq && !activeSbMsgExtRspReg) {
+        when(
+          io.fdi_lp_rx_active_sts && linkInitFdiPlRxActiveReq && !activeSbMsgExtRspReg
+        ) {
           linkInitSbSnd := SideBandMessage.RSP_ACTIVE
         }.elsewhen(transitionToActiveReg && !activeSbMsgExtReqReg) {
           linkInitSbSnd := SideBandMessage.REQ_ACTIVE
@@ -138,12 +140,14 @@ class AdapterSM(
   val linkResetSbSnd = WireDefault(SideBandMessage.NOP)
   when(
     linkStateReg === RDIState.reset ||
-    linkStateReg === RDIState.active ||
-    linkStateReg === RDIState.retrain
+      linkStateReg === RDIState.active ||
+      linkStateReg === RDIState.retrain
   ) {
     linkResetEntry := linkResetSbMsgExtRspReg || linkResetSbMsgRspRcvFlag
 
-    when(linkResetFdiReqReg && !linkResetSbMsgReqRcvFlag && !linkResetSbMsgExtReqReg) {
+    when(
+      linkResetFdiReqReg && !linkResetSbMsgReqRcvFlag && !linkResetSbMsgExtReqReg
+    ) {
       linkResetSbSnd := SideBandMessage.REQ_LINKRESET
     }.elsewhen(linkResetSbMsgReqRcvFlag && !linkResetSbMsgExtRspReg) {
       linkResetSbSnd := SideBandMessage.RSP_LINKRESET
@@ -155,13 +159,15 @@ class AdapterSM(
   val disabledSbSnd = WireDefault(SideBandMessage.NOP)
   when(
     linkStateReg === RDIState.reset ||
-    linkStateReg === RDIState.active ||
-    linkStateReg === RDIState.retrain ||
-    linkStateReg === RDIState.linkReset
+      linkStateReg === RDIState.active ||
+      linkStateReg === RDIState.retrain ||
+      linkStateReg === RDIState.linkReset
   ) {
     disabledEntry := disabledSbMsgExtRspReg || disabledSbMsgRspRcvReg
 
-    when(disabledFdiReqReg && !disabledSbMsgReqRcvReg && !disabledSbMsgExtReqReg) {
+    when(
+      disabledFdiReqReg && !disabledSbMsgReqRcvReg && !disabledSbMsgExtReqReg
+    ) {
       disabledSbSnd := SideBandMessage.REQ_DISABLED
     }.elsewhen(disabledSbMsgReqRcvReg && !disabledSbMsgExtRspReg) {
       disabledSbSnd := SideBandMessage.RSP_DISABLED
@@ -266,20 +272,26 @@ class AdapterSM(
           activeSbMsgReqRcvFlag := activeSbMsgReqRcvFlag
         }
 
-        when(linkInitSbAccepted && linkInitSbSnd === SideBandMessage.RSP_ACTIVE) {
+        when(
+          linkInitSbAccepted && linkInitSbSnd === SideBandMessage.RSP_ACTIVE
+        ) {
           activeSbMsgExtRspReg := true.B
         }.otherwise {
           activeSbMsgExtRspReg := activeSbMsgExtRspReg
         }
 
-        when(linkInitSbAccepted && linkInitSbSnd === SideBandMessage.REQ_ACTIVE) {
+        when(
+          linkInitSbAccepted && linkInitSbSnd === SideBandMessage.REQ_ACTIVE
+        ) {
           activeSbMsgExtReqReg := true.B
         }.otherwise {
           activeSbMsgExtReqReg := activeSbMsgExtReqReg
         }
 
-        when(io.fdi_lp_state_req === RDIStateReq.active &&
-             fdiLpStateReqPrevReg === RDIStateReq.nop) {
+        when(
+          io.fdi_lp_state_req === RDIStateReq.active &&
+            fdiLpStateReqPrevReg === RDIStateReq.nop
+        ) {
           transitionToActiveReg := true.B
         }.otherwise {
           transitionToActiveReg := transitionToActiveReg
@@ -309,31 +321,35 @@ class AdapterSM(
   // Link-reset state update
   when(
     linkStateReg === RDIState.reset ||
-    linkStateReg === RDIState.active ||
-    linkStateReg === RDIState.retrain
+      linkStateReg === RDIState.active ||
+      linkStateReg === RDIState.retrain
   ) {
     when(
       linkStateReg === RDIState.reset &&
-      io.fdi_lp_state_req === RDIStateReq.linkReset &&
-      fdiLpStateReqPrevReg === RDIStateReq.nop
+        io.fdi_lp_state_req === RDIStateReq.linkReset &&
+        fdiLpStateReqPrevReg === RDIStateReq.nop
     ) {
       linkResetFdiReqReg := true.B
     }.elsewhen(
       io.fdi_lp_state_req === RDIStateReq.linkReset &&
-      linkStateReg =/= RDIState.reset
+        linkStateReg =/= RDIState.reset
     ) {
       linkResetFdiReqReg := true.B
     }.otherwise {
       linkResetFdiReqReg := linkResetFdiReqReg
     }
 
-    when(linkResetSbAccepted && linkResetSbSnd === SideBandMessage.REQ_LINKRESET) {
+    when(
+      linkResetSbAccepted && linkResetSbSnd === SideBandMessage.REQ_LINKRESET
+    ) {
       linkResetSbMsgExtReqReg := true.B
     }.otherwise {
       linkResetSbMsgExtReqReg := linkResetSbMsgExtReqReg
     }
 
-    when(linkResetSbAccepted && linkResetSbSnd === SideBandMessage.RSP_LINKRESET) {
+    when(
+      linkResetSbAccepted && linkResetSbSnd === SideBandMessage.RSP_LINKRESET
+    ) {
       linkResetSbMsgExtRspReg := true.B
     }.otherwise {
       linkResetSbMsgExtRspReg := linkResetSbMsgExtRspReg
@@ -361,19 +377,19 @@ class AdapterSM(
   // Disabled state update
   when(
     linkStateReg === RDIState.reset ||
-    linkStateReg === RDIState.active ||
-    linkStateReg === RDIState.retrain ||
-    linkStateReg === RDIState.linkReset
+      linkStateReg === RDIState.active ||
+      linkStateReg === RDIState.retrain ||
+      linkStateReg === RDIState.linkReset
   ) {
     when(
       linkStateReg === RDIState.reset &&
-      io.fdi_lp_state_req === RDIStateReq.disabled &&
-      fdiLpStateReqPrevReg === RDIStateReq.nop
+        io.fdi_lp_state_req === RDIStateReq.disabled &&
+        fdiLpStateReqPrevReg === RDIStateReq.nop
     ) {
       disabledFdiReqReg := true.B
     }.elsewhen(
       io.fdi_lp_state_req === RDIStateReq.disabled &&
-      linkStateReg =/= RDIState.reset
+        linkStateReg =/= RDIState.reset
     ) {
       disabledFdiReqReg := true.B
     }.otherwise {
@@ -442,8 +458,8 @@ class AdapterSM(
     }
   }.elsewhen(
     linkStateReg === RDIState.linkError ||
-    linkStateReg === RDIState.disabled ||
-    linkStateReg === RDIState.linkReset
+      linkStateReg === RDIState.disabled ||
+      linkStateReg === RDIState.linkReset
   ) {
     fdiPlInbandPresReg := false.B
   }.otherwise {
@@ -465,8 +481,10 @@ class AdapterSM(
   }.elsewhen(linkStateReg === RDIState.retrain) {
     rdiLpStateReqReg := RDIStateReq.nop
   }.elsewhen(linkStateReg === RDIState.linkError) {
-    when(io.fdi_lp_state_req === RDIStateReq.active &&
-         io.rdi_pl_state_sts === RDIState.linkError) {
+    when(
+      io.fdi_lp_state_req === RDIStateReq.active &&
+        io.rdi_pl_state_sts === RDIState.linkError
+    ) {
       rdiLpStateReqReg := RDIStateReq.active
     }.otherwise {
       rdiLpStateReqReg := RDIStateReq.nop
@@ -519,16 +537,20 @@ class AdapterSM(
       }
     }
     is(RDIState.linkError) {
-      when((io.fdi_lp_state_req === RDIStateReq.active ||
-            io.rdi_pl_state_sts === RDIState.linkError) && rxDeactive) {
+      when(
+        (io.fdi_lp_state_req === RDIStateReq.active ||
+          io.rdi_pl_state_sts === RDIState.linkError) && rxDeactive
+      ) {
         linkStateReg := RDIState.reset
       }
     }
     is(RDIState.disabled) {
       when(linkErrorPhySts) {
         linkStateReg := RDIState.linkError
-      }.elsewhen(io.fdi_lp_state_req === RDIStateReq.active ||
-                 io.rdi_pl_state_sts === RDIState.reset) {
+      }.elsewhen(
+        io.fdi_lp_state_req === RDIStateReq.active ||
+          io.rdi_pl_state_sts === RDIState.reset
+      ) {
         linkStateReg := RDIState.reset
       }
     }
@@ -537,8 +559,10 @@ class AdapterSM(
         linkStateReg := RDIState.linkError
       }.elsewhen(disabledEntry && rxDeactive) {
         linkStateReg := RDIState.disabled
-      }.elsewhen(io.fdi_lp_state_req === RDIStateReq.active ||
-                 io.rdi_pl_state_sts === RDIState.reset) {
+      }.elsewhen(
+        io.fdi_lp_state_req === RDIStateReq.active ||
+          io.rdi_pl_state_sts === RDIState.reset
+      ) {
         linkStateReg := RDIState.reset
       }
     }

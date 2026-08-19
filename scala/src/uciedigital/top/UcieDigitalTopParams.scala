@@ -1,50 +1,53 @@
 /*
   Description:
     Parameter groupings for the UCIe top-level integration wrapper.
-*/
+ */
 package edu.berkeley.cs.uciedigital.top
 
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.logphy.AfeParams
 import edu.berkeley.cs.uciedigital.protocol.ProtocolLayerParams
 import edu.berkeley.cs.uciedigital.regs.{PhyCapabilityRegParams, UcieRegParams}
-import edu.berkeley.cs.uciedigital.sideband.{SidebandPriorityQueueDepths, SidebandParams}
+import edu.berkeley.cs.uciedigital.sideband.{
+  SidebandPriorityQueueDepths,
+  SidebandParams
+}
 
 case class ProtocolTopParams(
-  fdi: FdiParams,
-  layer: ProtocolLayerParams = ProtocolLayerParams(),
+    fdi: FdiParams,
+    layer: ProtocolLayerParams = ProtocolLayerParams()
 )
 
 case class AdapterTopParams(
-  fdi: FdiParams,
-  rdi: RdiParams,
-  sideband: SidebandParams = new SidebandParams(),
+    fdi: FdiParams,
+    rdi: RdiParams,
+    sideband: SidebandParams = new SidebandParams()
 )
 
 case class LogicalPhyTopParams(
-  afe: AfeParams = AfeParams(),
-  sideband: SidebandParams = new SidebandParams(),
-  rdi: RdiParams,
-  retryW: Int = 10,
-  desTimeoutCycles: Int = 512,
-  queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
+    afe: AfeParams = AfeParams(),
+    sideband: SidebandParams = new SidebandParams(),
+    rdi: RdiParams,
+    retryW: Int = 10,
+    desTimeoutCycles: Int = 512,
+    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
 )
 
 case class UcieDigitalTopParams(
-  protocol: ProtocolTopParams,
-  adapter: AdapterTopParams,
-  logPhy: LogicalPhyTopParams,
-  regs: UcieRegParams = UcieRegParams(
-    phyCapability = PhyCapabilityRegParams(
-      terminatedLink = false,
-      txEqSupport = false,
-      txVswingCode = 0x1,
-      rxClockModeSupport = 0x0,
-      rxClockPhaseSupport = 0x0
-    ),
-    numModules = 1,
-    includeInterruptNode = true
-  ),
+    protocol: ProtocolTopParams,
+    adapter: AdapterTopParams,
+    logPhy: LogicalPhyTopParams,
+    regs: UcieRegParams = UcieRegParams(
+      phyCapability = PhyCapabilityRegParams(
+        terminatedLink = false,
+        txEqSupport = false,
+        txVswingCode = 0x1,
+        rxClockModeSupport = 0x0,
+        rxClockPhaseSupport = 0x0
+      ),
+      numModules = 1,
+      includeInterruptNode = true
+    )
 ) {
   def validate(): UcieDigitalTopParams = {
     require(
@@ -77,14 +80,14 @@ object UcieDigitalTopParams {
 
   // Convenience helper to build a fully aligned top-level parameter set from shared interface values.
   def withSharedInterfaces(
-    fdi: FdiParams,
-    rdi: RdiParams,
-    protocolLayer: ProtocolLayerParams = ProtocolLayerParams(),
-    afe: AfeParams = AfeParams(),
-    sideband: SidebandParams = new SidebandParams(),
-    retryW: Int = 10,
-    desTimeoutCycles: Int = 512,
-    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
+      fdi: FdiParams,
+      rdi: RdiParams,
+      protocolLayer: ProtocolLayerParams = ProtocolLayerParams(),
+      afe: AfeParams = AfeParams(),
+      sideband: SidebandParams = new SidebandParams(),
+      retryW: Int = 10,
+      desTimeoutCycles: Int = 512,
+      queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
   ): UcieDigitalTopParams = {
     UcieDigitalTopParams(
       protocol = ProtocolTopParams(

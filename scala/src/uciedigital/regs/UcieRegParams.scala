@@ -84,7 +84,16 @@ object UcieRegParams {
   val widthEncoding: Map[Int, Int] =
     Map(16 -> 0x0, 32 -> 0x1, 64 -> 0x2, 128 -> 0x3, 256 -> 0x4, 8 -> 0x7)
   val speedEncoding: Map[Int, Int] =
-    Map(4 -> 0x0, 8 -> 0x1, 12 -> 0x2, 16 -> 0x3, 24 -> 0x4, 32 -> 0x5, 48 -> 0x6, 64 -> 0x7)
+    Map(
+      4 -> 0x0,
+      8 -> 0x1,
+      12 -> 0x2,
+      16 -> 0x3,
+      24 -> 0x4,
+      32 -> 0x5,
+      48 -> 0x6,
+      64 -> 0x7
+    )
 
   def locatorCountEncoding(numLocators: Int): Int = numLocators match {
     case 1 => 0x7
@@ -124,11 +133,16 @@ object UcieRegMap {
     val phyVendorBase = if (params.hasVendorPhyBlock) Some(vendorBase) else None
     val d2dVendorBase =
       if (params.hasVendorD2dBlock) {
-        Some(if (params.hasVendorPhyBlock) vendorBase + VendorBlockSize else vendorBase)
+        Some(
+          if (params.hasVendorPhyBlock) vendorBase + VendorBlockSize
+          else vendorBase
+        )
       } else None
 
     val numVendorBlocks =
-      (if (params.hasVendorPhyBlock) 1 else 0) + (if (params.hasVendorD2dBlock) 1 else 0)
+      (if (params.hasVendorPhyBlock) 1 else 0) + (if (params.hasVendorD2dBlock)
+                                                    1
+                                                  else 0)
     val usedBytes = vendorBase + numVendorBlocks * VendorBlockSize
 
     val numLocators = 1 + numVendorBlocks
@@ -139,7 +153,8 @@ object UcieRegMap {
       phyVendorBase = phyVendorBase,
       d2dVendorBase = d2dVendorBase,
       numLocators = numLocators,
-      capabilityDescriptorLocatorCode = UcieRegParams.locatorCountEncoding(numLocators),
+      capabilityDescriptorLocatorCode =
+        UcieRegParams.locatorCountEncoding(numLocators),
       usedBytes = usedBytes,
       regionSize = nextPow2(usedBytes)
     )

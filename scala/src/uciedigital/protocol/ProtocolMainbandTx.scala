@@ -1,7 +1,7 @@
 /*
   Description:
     Sends raw mainband beats from the chip-facing interface onto FDI when the link is active.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.protocol
 
@@ -46,14 +46,16 @@ class ProtocolMainbandTx(nBytes: Int, depth: Int) extends Module {
   when(io.stallRequested) {
     flushQueue := true.B
   }
-  
+
   io.txIdle := !queue.io.deq.valid || flushQueue
 
   block(Verification) {
     block(Verification.Assert) {
       when(io.fdi.lpValid) {
-        assert(io.active,
-          "FATAL: ProtocolMainbandTx presented TX data while FDI was not ACTIVE")
+        assert(
+          io.active,
+          "FATAL: ProtocolMainbandTx presented TX data while FDI was not ACTIVE"
+        )
       }
     }
   }

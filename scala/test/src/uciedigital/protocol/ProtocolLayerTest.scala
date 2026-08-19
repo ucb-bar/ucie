@@ -64,7 +64,8 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
     dut.clock.step()
 
     dut.io.status.negotiatedProtocolValid.expect(true.B)
-    dut.io.status.negotiatedProtocol.expect(FDIProtocol.streamingNoManagementTransport)
+    dut.io.status.negotiatedProtocol
+      .expect(FDIProtocol.streamingNoManagementTransport)
     dut.io.status.negotiatedFlitFormat.expect(FDIFlitFormat.rawFormat)
     dut.io.fdi.lpStateReq.expect(FDIStateReq.nop)
   }
@@ -99,12 +100,21 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
     }
   }
 
-  private def pokeChipTx(dut: ProtocolLayer, data: BigInt, valid: Boolean): Unit = {
+  private def pokeChipTx(
+      dut: ProtocolLayer,
+      data: BigInt,
+      valid: Boolean
+  ): Unit = {
     dut.io.mainbandTx.valid.poke(valid.B)
-    dut.io.mainbandTx.bits.data.poke(data.U(dut.io.mainbandTx.bits.data.getWidth.W))
+    dut.io.mainbandTx.bits.data
+      .poke(data.U(dut.io.mainbandTx.bits.data.getWidth.W))
   }
 
-  private def pokeFdiRx(dut: ProtocolLayer, data: BigInt, valid: Boolean): Unit = {
+  private def pokeFdiRx(
+      dut: ProtocolLayer,
+      data: BigInt,
+      valid: Boolean
+  ): Unit = {
     dut.io.fdi.plValid.poke(valid.B)
     dut.io.fdi.plData.poke(data.U(dut.io.fdi.plData.getWidth.W))
   }
@@ -131,7 +141,8 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
         dut.clock.step()
 
         dut.io.status.negotiatedProtocolValid.expect(true.B)
-        dut.io.status.negotiatedProtocol.expect(FDIProtocol.pcieNoManagementTransport)
+        dut.io.status.negotiatedProtocol
+          .expect(FDIProtocol.pcieNoManagementTransport)
         dut.io.status.negotiatedFlitFormat.expect(FDIFlitFormat.rawFormat)
         dut.io.fdi.lpStateReq.expect(FDIStateReq.nop)
         dut.io.fdi.lpWakeReq.expect(true.B)
@@ -149,10 +160,12 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
 
   describe("ProtocolLayer runtime behavior") {
     it("forwards TX only in ACTIVE and respects backpressure and stall") {
-      simulate(new ProtocolLayer(
-        params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
-        sbParams = new SidebandParams()
-      )) { dut =>
+      simulate(
+        new ProtocolLayer(
+          params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
+          sbParams = new SidebandParams()
+        )
+      ) { dut =>
         initDut(dut)
         dut.clock.step()
 
@@ -208,10 +221,12 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
     }
 
     it("captures RX only after rx-active and clears runtime state cleanly") {
-      simulate(new ProtocolLayer(
-        params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
-        sbParams = new SidebandParams()
-      )) { dut =>
+      simulate(
+        new ProtocolLayer(
+          params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
+          sbParams = new SidebandParams()
+        )
+      ) { dut =>
         initDut(dut)
         enterStreamingRawActive(dut, requestRxActive = false, plTrdy = true)
 
@@ -230,7 +245,8 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
 
         pokeFdiRx(dut, 0, valid = false)
         dut.io.mainbandRx.valid.expect(true.B)
-        dut.io.mainbandRx.bits.data.expect(rxData.U(dut.io.mainbandRx.bits.data.getWidth.W))
+        dut.io.mainbandRx.bits.data
+          .expect(rxData.U(dut.io.mainbandRx.bits.data.getWidth.W))
 
         dut.io.mainbandRx.ready.poke(true.B)
         dut.clock.step()
@@ -293,11 +309,15 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it(s"runs a seeded constrained-random protocol layer test (seed = 0x${seed.toHexString})") {
-      simulate(new ProtocolLayer(
-        params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
-        sbParams = new SidebandParams()
-      )) { dut =>
+    it(
+      s"runs a seeded constrained-random protocol layer test (seed = 0x${seed.toHexString})"
+    ) {
+      simulate(
+        new ProtocolLayer(
+          params = ProtocolLayerParams(txQueueDepth = 2, rxQueueDepth = 2),
+          sbParams = new SidebandParams()
+        )
+      ) { dut =>
         val rand = new Random(seed)
         val expectedTx = mutable.Queue[BigInt]()
         val expectedRx = mutable.Queue[BigInt]()
@@ -311,7 +331,8 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
         dut.clock.step()
         dut.io.fdi.lpClkAck.expect(false.B)
 
-        var prevNegotiatedValid = dut.io.status.negotiatedProtocolValid.peekBoolean()
+        var prevNegotiatedValid =
+          dut.io.status.negotiatedProtocolValid.peekBoolean()
 
         for (_ <- 0 until 80) {
           val stall = rand.nextInt(8) == 0
@@ -322,9 +343,9 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
           val offerTx = !stall && rand.nextBoolean()
           val txData = BigInt(txWidth, rand)
 
-          val sendRx = expectedRx.isEmpty && 
-                       !dut.io.mainbandRx.valid.peekBoolean() &&
-                       (rand.nextInt(3) == 0)
+          val sendRx = expectedRx.isEmpty &&
+            !dut.io.mainbandRx.valid.peekBoolean() &&
+            (rand.nextInt(3) == 0)
           val rxData = BigInt(rxWidth, rand)
 
           dut.io.fdi.plStallReq.poke(stall.B)
@@ -335,7 +356,8 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
           pokeFdiRx(dut, rxData, sendRx)
 
           dut.io.status.negotiatedProtocolValid.expect(true.B)
-          dut.io.status.negotiatedProtocol.expect(FDIProtocol.streamingNoManagementTransport)
+          dut.io.status.negotiatedProtocol
+            .expect(FDIProtocol.streamingNoManagementTransport)
           dut.io.status.negotiatedFlitFormat.expect(FDIFlitFormat.rawFormat)
           dut.io.status.rxOverflow.expect(false.B)
           dut.io.fdi.lpWakeReq.expect(true.B)
@@ -344,10 +366,12 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
             dut.io.status.stalled.expect(true.B)
           }
           if (prevNegotiatedValid && dut.io.fdi.plInbandPres.peekBoolean()) {
-            dut.io.status.negotiatedProtocol.expect(FDIProtocol.streamingNoManagementTransport)
+            dut.io.status.negotiatedProtocol
+              .expect(FDIProtocol.streamingNoManagementTransport)
             dut.io.status.negotiatedFlitFormat.expect(FDIFlitFormat.rawFormat)
           }
-          prevNegotiatedValid = dut.io.status.negotiatedProtocolValid.peekBoolean()
+          prevNegotiatedValid =
+            dut.io.status.negotiatedProtocolValid.peekBoolean()
 
           if (stall) {
             expectedTx.clear()
@@ -360,10 +384,15 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
           if (dut.io.fdi.lpValid.peekBoolean()) {
             dut.io.fdi.plStateSts.expect(FDIState.active)
             if (plTrdy) {
-              assert(expectedTx.nonEmpty, "Observed FDI TX beat without a matching chip TX beat")
+              assert(
+                expectedTx.nonEmpty,
+                "Observed FDI TX beat without a matching chip TX beat"
+              )
               val observedTx = dut.io.fdi.lpData.peek().litValue
-              assert(observedTx == expectedTx.dequeue(),
-                s"FDI TX data mismatch: saw 0x${observedTx.toString(16)}")
+              assert(
+                observedTx == expectedTx.dequeue(),
+                s"FDI TX data mismatch: saw 0x${observedTx.toString(16)}"
+              )
             }
           }
 
@@ -372,10 +401,15 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
           }
 
           if (dut.io.mainbandRx.valid.peekBoolean()) {
-            assert(expectedRx.nonEmpty, "Observed chip RX beat without a matching FDI RX beat")
+            assert(
+              expectedRx.nonEmpty,
+              "Observed chip RX beat without a matching FDI RX beat"
+            )
             val observedRx = dut.io.mainbandRx.bits.data.peek().litValue
-            assert(observedRx == expectedRx.front,
-              s"Chip RX data mismatch: saw 0x${observedRx.toString(16)}")
+            assert(
+              observedRx == expectedRx.front,
+              s"Chip RX data mismatch: saw 0x${observedRx.toString(16)}"
+            )
             if (rxReady) {
               expectedRx.dequeue()
             }
@@ -392,18 +426,29 @@ class ProtocolLayerTest extends AnyFunSpec with ChiselSim {
         pokeFdiRx(dut, 0, valid = false)
 
         var drainCycles = 0
-        while ((expectedTx.nonEmpty || expectedRx.nonEmpty) && drainCycles < 20) {
-          if (dut.io.fdi.lpValid.peekBoolean() && dut.io.fdi.plTrdy.peekBoolean()) {
+        while (
+          (expectedTx.nonEmpty || expectedRx.nonEmpty) && drainCycles < 20
+        ) {
+          if (
+            dut.io.fdi.lpValid.peekBoolean() && dut.io.fdi.plTrdy.peekBoolean()
+          ) {
             assert(expectedTx.nonEmpty, "Unexpected extra TX beat during drain")
             val observedTx = dut.io.fdi.lpData.peek().litValue
-            assert(observedTx == expectedTx.dequeue(),
-              s"FDI TX drain mismatch: saw 0x${observedTx.toString(16)}")
+            assert(
+              observedTx == expectedTx.dequeue(),
+              s"FDI TX drain mismatch: saw 0x${observedTx.toString(16)}"
+            )
           }
-          if (dut.io.mainbandRx.valid.peekBoolean() && dut.io.mainbandRx.ready.peekBoolean()) {
+          if (
+            dut.io.mainbandRx.valid.peekBoolean() && dut.io.mainbandRx.ready
+              .peekBoolean()
+          ) {
             assert(expectedRx.nonEmpty, "Unexpected extra RX beat during drain")
             val observedRx = dut.io.mainbandRx.bits.data.peek().litValue
-            assert(observedRx == expectedRx.front,
-              s"Chip RX drain mismatch: saw 0x${observedRx.toString(16)}")
+            assert(
+              observedRx == expectedRx.front,
+              s"Chip RX drain mismatch: saw 0x${observedRx.toString(16)}"
+            )
             expectedRx.dequeue()
           }
           dut.clock.step()

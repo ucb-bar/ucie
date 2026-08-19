@@ -1,7 +1,7 @@
 /*
-  Description: 
+  Description:
     Bundles that are used within the LogPHY layer.
-*/
+ */
 package edu.berkeley.cs.uciedigital.logphy
 
 import edu.berkeley.cs.uciedigital.sideband._
@@ -15,14 +15,16 @@ class SidebandCtrlIO extends Bundle {
   val rxTxMode = Output(SBRxTxMode())
   val sbReset = Output(Bool())
   val freezeAcceptingPackets = Output(Bool())
-  val allPacketsSent = Input(Bool())  // Used in TrainError to make all packets are sent
+  val allPacketsSent = Input(
+    Bool()
+  ) // Used in TrainError to make all packets are sent
 }
 
-class MainbandLaneCtrlIO (afeParams: AfeParams) extends Bundle {
+class MainbandLaneCtrlIO(afeParams: AfeParams) extends Bundle {
   val txDataEn = Output(Vec(afeParams.mbLanes, Bool()))
   val txClkEn = Output(Bool())
   val txValidEn = Output(Bool())
-  val txTrackEn = Output(Bool())            
+  val txTrackEn = Output(Bool())
   val rxDataEn = Output(Vec(afeParams.mbLanes, Bool()))
   val rxClkEn = Output(Bool())
   val rxValidEn = Output(Bool())
@@ -39,28 +41,30 @@ class SidebandLanes(sbMsgWidth: Int) extends Bundle {
   /*
     As of UCIe 3.0, for internal logPHY IOs, the sideband clock is only used
     in the deserializer, so it isn't included in internal routing.
-  */
+   */
   val data = Bits(sbMsgWidth.W)
 }
 
-class SidebandLaneIO(sbParams: SidebandParams) extends Bundle {  
+class SidebandLaneIO(sbParams: SidebandParams) extends Bundle {
   val tx = Decoupled(new SidebandLanes(sbParams.sbNodeMsgWidth))
   val rx = Flipped(Decoupled(new SidebandLanes(sbParams.sbNodeMsgWidth)))
 }
 
 class MainbandLanes(mbNumLanes: Int, mbSerializerRatio: Int) extends Bundle {
-  val data    = Vec(mbNumLanes, Bits(mbSerializerRatio.W))
-  val valid   = Bits(mbSerializerRatio.W)
-  val clkP    = Bits(mbSerializerRatio.W)
-  val clkN    = Bits(mbSerializerRatio.W)
-  val trk     = Bits(mbSerializerRatio.W)
+  val data = Vec(mbNumLanes, Bits(mbSerializerRatio.W))
+  val valid = Bits(mbSerializerRatio.W)
+  val clkP = Bits(mbSerializerRatio.W)
+  val clkN = Bits(mbSerializerRatio.W)
+  val trk = Bits(mbSerializerRatio.W)
 }
 
 class MainbandLaneIO(afeParams: AfeParams) extends Bundle {
   val tx = Decoupled(
-    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
-  val rx = Flipped(Decoupled(
-    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)))
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
+  val rx = Flipped(
+    Decoupled(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+  )
 }
 
 class SidebandPhyLinkIO(sbLinkWidth: Int) extends Bundle {

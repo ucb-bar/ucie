@@ -7,7 +7,6 @@ import chisel3.layer.{Layer, LayerConfig, block}
 import chisel3.layers.Verification
 import chisel3.util._
 
-
 // ============================================================================================
 // Bundles
 // ============================================================================================
@@ -44,24 +43,24 @@ class LogicalPhyStatusIO extends Bundle {
   val sideband = new LogicalPhySidebandStatusIO()
 }
 
-class LogicalPhyAnalogIO(afeParams: AfeParams, sbParams: SidebandParams) extends Bundle {
+class LogicalPhyAnalogIO(afeParams: AfeParams, sbParams: SidebandParams)
+    extends Bundle {
   val mainband = new MainbandLaneIO(afeParams)
   val sidebandLink = new SidebandPhyLinkIO(sbParams.sbLinkWidth)
   val status = Input(new PhyStatusFromPhyIO())
   val ctrl = Output(new PhyControlToPhyIO(afeParams))
 }
 
-
 // ============================================================================================
 // Module
 // ============================================================================================
 class LogicalPhy(
-  afeParams: AfeParams = new AfeParams(),
-  sbParams: SidebandParams = new SidebandParams(),
-  rdiParams: RdiParams = RdiParams(64, 32),
-  retryW: Int = 10,
-  desTimeoutCycles: Int = 512,
-  queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
+    afeParams: AfeParams = new AfeParams(),
+    sbParams: SidebandParams = new SidebandParams(),
+    rdiParams: RdiParams = RdiParams(64, 32),
+    retryW: Int = 10,
+    desTimeoutCycles: Int = 512,
+    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
 ) extends Module {
   // Current integration target is Standard Package operation in Streaming RAW mode only.
   val io = IO(new Bundle {
@@ -73,23 +72,28 @@ class LogicalPhy(
 
   val ltsm = Module(new LinkTrainingSM(sbParams, afeParams, retryW))
   val rdiController = Module(new RDIController(sbParams))
-  val mainbandLaneController = Module(new MainbandLaneController(afeParams, rdiParams))
+  val mainbandLaneController = Module(
+    new MainbandLaneController(afeParams, rdiParams)
+  )
   val patternReader = Module(new PatternReader(afeParams))
   val patternWriter = Module(new PatternWriter(afeParams))
   val phyControlTranslator = Module(new PhyControlSignalTranslator(afeParams))
   val phyLaneTrainer = Module(new PhyLaneTrainer(afeParams))
   val scrambler = Module(new UcieLFSR(afeParams))
   val descrambler = Module(new UcieLFSR(afeParams))
-  val logPhySidebandChannel = withReset(reset.asBool || ltsm.io.sbCtrlIo.sbReset) {
-    Module(new LogPhySidebandChannel(
-      sbMsgWidth = sbParams.sbNodeMsgWidth,
-      sbLinkWidth = sbParams.sbLinkWidth,
-      rdiNcWidth = rdiParams.ncWidth,
-      numCredits = sbParams.maxCrd,
-      desTimeoutCycles = desTimeoutCycles,
-      queueDepths = queueDepths
-    ))
-  }
+  val logPhySidebandChannel =
+    withReset(reset.asBool || ltsm.io.sbCtrlIo.sbReset) {
+      Module(
+        new LogPhySidebandChannel(
+          sbMsgWidth = sbParams.sbNodeMsgWidth,
+          sbLinkWidth = sbParams.sbLinkWidth,
+          rdiNcWidth = rdiParams.ncWidth,
+          numCredits = sbParams.maxCrd,
+          desTimeoutCycles = desTimeoutCycles,
+          queueDepths = queueDepths
+        )
+      )
+    }
 
   // ============================================================================================
   // Control/status wiring
@@ -116,9 +120,9 @@ class LogicalPhy(
   // ============================================================================================
   val phyInRecenter =
     (ltsm.io.ltState === LTState.sSBINIT) ||
-    (ltsm.io.ltState === LTState.sMBINIT) ||
-    (ltsm.io.ltState === LTState.sMBTRAIN) ||
-    (ltsm.io.ltState === LTState.sPHYRETRAIN)
+      (ltsm.io.ltState === LTState.sMBINIT) ||
+      (ltsm.io.ltState === LTState.sMBTRAIN) ||
+      (ltsm.io.ltState === LTState.sPHYRETRAIN)
 
   rdiController.io.rdi.lpStateReq := io.rdi.lpStateReq
   rdiController.io.rdi.lpWakeReq := io.rdi.lpWakeReq
@@ -146,7 +150,9 @@ class LogicalPhy(
   // ============================================================================================
   // Sideband packet arbitration
   // ============================================================================================
-  val sidebandRxQueue = Module(new Queue(UInt(sbParams.sbNodeMsgWidth.W), 1, pipe = true, flow = false))
+  val sidebandRxQueue = Module(
+    new Queue(UInt(sbParams.sbNodeMsgWidth.W), 1, pipe = true, flow = false)
+  )
   sidebandRxQueue.io.enq <> logPhySidebandChannel.io.layer.out
 
   val sidebandRxReadyLtsm = WireDefault(false.B)
@@ -198,8 +204,10 @@ class LogicalPhy(
 
   block(Verification) {
     block(Verification.Assert) {
-      assert(PopCount(Seq(sidebandRxReadyLtsm, sidebandRxReadyRdi)) <= 1.U,
-        "FATAL: Multiple LogicalPhy sideband consumers asserted RX ready in the same cycle")
+      assert(
+        PopCount(Seq(sidebandRxReadyLtsm, sidebandRxReadyRdi)) <= 1.U,
+        "FATAL: Multiple LogicalPhy sideband consumers asserted RX ready in the same cycle"
+      )
     }
     block(Verification.Cover) {
       cover(sidebandRxUnhandled)
@@ -208,7 +216,9 @@ class LogicalPhy(
 
   sidebandRxQueue.io.deq.ready := sidebandRxReadyLtsm || sidebandRxReadyRdi || sidebandRxUnhandled
 
-  val sidebandTxArbiter = Module(new RRArbiter(UInt(sbParams.sbNodeMsgWidth.W), 2))
+  val sidebandTxArbiter = Module(
+    new RRArbiter(UInt(sbParams.sbNodeMsgWidth.W), 2)
+  )
   sidebandTxArbiter.io.in(0).valid := ltsm.io.sbLaneIo.tx.valid
   sidebandTxArbiter.io.in(0).bits := ltsm.io.sbLaneIo.tx.bits.data
   ltsm.io.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(0).ready
@@ -217,18 +227,20 @@ class LogicalPhy(
   sidebandTxArbiter.io.in(1).bits := rdiController.io.sbLaneIo.tx.bits.data
   rdiController.io.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(1).ready
 
-  val sidebandTxQueue = Module(new Queue(UInt(sbParams.sbNodeMsgWidth.W), 1, pipe = true, flow = false))
+  val sidebandTxQueue = Module(
+    new Queue(UInt(sbParams.sbNodeMsgWidth.W), 1, pipe = true, flow = false)
+  )
   sidebandTxQueue.io.enq <> sidebandTxArbiter.io.out
   logPhySidebandChannel.io.layer.in <> sidebandTxQueue.io.deq
 
   val firstFaultSeen = WireDefault(
     sidebandRxUnhandled ||
-    logPhySidebandChannel.io.layer.status.invalidRouteCurr ||
-    logPhySidebandChannel.io.layer.status.invalidRouteUpper ||
-    logPhySidebandChannel.io.layer.status.invalidRouteLower ||
-    logPhySidebandChannel.io.layer.status.sbParityErr ||
-    logPhySidebandChannel.io.layer.status.rxPriorityQueuesFull ||
-    logPhySidebandChannel.io.layer.status.desTimedout
+      logPhySidebandChannel.io.layer.status.invalidRouteCurr ||
+      logPhySidebandChannel.io.layer.status.invalidRouteUpper ||
+      logPhySidebandChannel.io.layer.status.invalidRouteLower ||
+      logPhySidebandChannel.io.layer.status.sbParityErr ||
+      logPhySidebandChannel.io.layer.status.rxPriorityQueuesFull ||
+      logPhySidebandChannel.io.layer.status.desTimedout
   )
   val firstFaultPacket = WireDefault(0.U(sbParams.sbNodeMsgWidth.W))
   when(sidebandRxUnhandled) {
@@ -299,27 +311,37 @@ class LogicalPhy(
 
   val isActive = ltsm.io.ltState === LTState.sACTIVE
   val txTrainingLfsrActive = patternWriter.io.txLfsrCtrl.valid
-  val txRuntimeIncrement = io.analog.mainband.tx.valid && io.analog.mainband.tx.ready && isActive
+  val txRuntimeIncrement =
+    io.analog.mainband.tx.valid && io.analog.mainband.tx.ready && isActive
   val scramblerIncrement = Mux(
     txTrainingLfsrActive,
     patternWriter.io.txLfsrCtrl.increment,
     txRuntimeIncrement
   )
-  val scramblerReset = ltsm.io.scramblerReset || patternWriter.io.txLfsrCtrl.resetLfsr
+  val scramblerReset =
+    ltsm.io.scramblerReset || patternWriter.io.txLfsrCtrl.resetLfsr
 
-  scrambler.io.increment := VecInit(Seq.fill(afeParams.mbLanes)(scramblerIncrement))
+  scrambler.io.increment := VecInit(
+    Seq.fill(afeParams.mbLanes)(scramblerIncrement)
+  )
   scrambler.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(scramblerReset))
 
-  val rxRuntimeIncrement = io.analog.mainband.rx.valid && io.analog.mainband.rx.ready && isActive
+  val rxRuntimeIncrement =
+    io.analog.mainband.rx.valid && io.analog.mainband.rx.ready && isActive
   val descramblerIncrement = Mux(
     isActive,
     rxRuntimeIncrement,
     patternReader.io.rxLfsrCtrl.increment
   )
-  val descramblerReset = ltsm.io.scramblerReset || patternReader.io.rxLfsrCtrl.resetLfsr
+  val descramblerReset =
+    ltsm.io.scramblerReset || patternReader.io.rxLfsrCtrl.resetLfsr
 
-  descrambler.io.increment := VecInit(Seq.fill(afeParams.mbLanes)(descramblerIncrement))
-  descrambler.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(descramblerReset))
+  descrambler.io.increment := VecInit(
+    Seq.fill(afeParams.mbLanes)(descramblerIncrement)
+  )
+  descrambler.io.resetLfsr := VecInit(
+    Seq.fill(afeParams.mbLanes)(descramblerReset)
+  )
 
   // ============================================================================================
   // Pattern engine and runtime mainband path
@@ -327,7 +349,9 @@ class LogicalPhy(
   patternWriter.io.interfaceIo <> ltsm.io.patternWriterIo
   patternReader.io.interfaceIo <> ltsm.io.patternReaderIo
 
-  val rawRxLaneBits = Wire(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+  val rawRxLaneBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
   rawRxLaneBits := Mux(
     io.analog.mainband.rx.valid,
     io.analog.mainband.rx.bits,
@@ -345,22 +369,33 @@ class LogicalPhy(
   mainbandLaneController.io.ctrl.localRxFunctionalLanes := ltsm.io.remoteTxFunctionalLanes
   mainbandLaneController.io.mbLanes.tx.ready := io.analog.mainband.tx.ready && isActive
 
-  val activeTxLaneMask = PatternLaneMap.decodeLaneMap(ltsm.io.localTxFunctionalLanes, afeParams.mbLanes)
-  val activeRxLaneMask = PatternLaneMap.decodeLaneMap(ltsm.io.remoteTxFunctionalLanes, afeParams.mbLanes)
+  val activeTxLaneMask = PatternLaneMap.decodeLaneMap(
+    ltsm.io.localTxFunctionalLanes,
+    afeParams.mbLanes
+  )
+  val activeRxLaneMask = PatternLaneMap.decodeLaneMap(
+    ltsm.io.remoteTxFunctionalLanes,
+    afeParams.mbLanes
+  )
 
-  val scrambledTxBits = Wire(chiselTypeOf(mainbandLaneController.io.mbLanes.tx.bits))
+  val scrambledTxBits = Wire(
+    chiselTypeOf(mainbandLaneController.io.mbLanes.tx.bits)
+  )
   scrambledTxBits := mainbandLaneController.io.mbLanes.tx.bits
   for (lane <- 0 until afeParams.mbLanes) {
     scrambledTxBits.data(lane) := Mux(
       activeTxLaneMask(lane),
-      mainbandLaneController.io.mbLanes.tx.bits.data(lane) ^ scrambler.io.lfsrOutput(lane),
+      mainbandLaneController.io.mbLanes.tx.bits.data(lane) ^ scrambler.io
+        .lfsrOutput(lane),
       0.U
     )
   }
 
   val txLaneReversalEnabled = ltsm.io.doLaneReversal
 
-  val descrambledRxBits = Wire(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+  val descrambledRxBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
   descrambledRxBits := io.analog.mainband.rx.bits
   for (lane <- 0 until afeParams.mbLanes) {
     descrambledRxBits.data(lane) := Mux(
@@ -371,13 +406,18 @@ class LogicalPhy(
   }
   mainbandLaneController.io.mbLanes.rx.valid := io.analog.mainband.rx.valid && isActive
   mainbandLaneController.io.mbLanes.rx.bits := descrambledRxBits
-  io.analog.mainband.rx.ready := Mux(isActive, mainbandLaneController.io.mbLanes.rx.ready, true.B)
+  io.analog.mainband.rx.ready := Mux(
+    isActive,
+    mainbandLaneController.io.mbLanes.rx.ready,
+    true.B
+  )
 
   rdiController.io.validFramingError := mainbandLaneController.io.ctrl.validFramingError
 
   // In Streaming RAW mode, framing corruption in ACTIVE triggers pl_error and
   // the data path is stalled until retrain completes and LTSM returns to ACTIVE.
-  val plErrorPulse = isActive && mainbandLaneController.io.ctrl.validFramingError
+  val plErrorPulse =
+    isActive && mainbandLaneController.io.ctrl.validFramingError
   val suppressPlValidAfterError = RegInit(false.B)
   val prevIsActive = RegNext(isActive, false.B)
 
@@ -387,42 +427,54 @@ class LogicalPhy(
     suppressPlValidAfterError := false.B
   }
 
-
   // Clk Calibrate pattern for training, constant pattern so put here
   val fwClkPPattern = "b01010101".U(8.W)
   val fwClkNPattern = "b10101010".U(8.W)
   val fwClkPBits = Wire(UInt(afeParams.mbSerializerRatio.W))
   val fwClkNBits = Wire(UInt(afeParams.mbSerializerRatio.W))
-  fwClkPBits := VecInit(Seq.tabulate(afeParams.mbSerializerRatio)(i => fwClkPPattern(i % 8))).asUInt
-  fwClkNBits := VecInit(Seq.tabulate(afeParams.mbSerializerRatio)(i => fwClkNPattern(i % 8))).asUInt
+  fwClkPBits := VecInit(
+    Seq.tabulate(afeParams.mbSerializerRatio)(i => fwClkPPattern(i % 8))
+  ).asUInt
+  fwClkNBits := VecInit(
+    Seq.tabulate(afeParams.mbSerializerRatio)(i => fwClkNPattern(i % 8))
+  ).asUInt
 
-  val rxClkCalOverride = ltsm.io.rxClkCalSendFwClkPattern && ltsm.io.rxClkCalSendTrkPattern
+  val rxClkCalOverride =
+    ltsm.io.rxClkCalSendFwClkPattern && ltsm.io.rxClkCalSendTrkPattern
   val patternWriterSelectedForTx =
     ((ltsm.io.ltState === LTState.sMBINIT) || (ltsm.io.ltState === LTState.sMBTRAIN)) &&
-    !rxClkCalOverride &&
-    !isActive
+      !rxClkCalOverride &&
+      !isActive
   patternWriter.io.mbTxLaneIo.ready := patternWriterSelectedForTx && io.analog.mainband.tx.ready
 
-  val rxClkCalTxBits = Wire(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+  val rxClkCalTxBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
   rxClkCalTxBits.data.foreach(_ := 0.U)
   rxClkCalTxBits.valid := 0.U
   rxClkCalTxBits.clkP := Mux(ltsm.io.rxClkCalSendFwClkPattern, fwClkPBits, 0.U)
   rxClkCalTxBits.clkN := Mux(ltsm.io.rxClkCalSendFwClkPattern, fwClkNBits, 0.U)
   rxClkCalTxBits.trk := Mux(ltsm.io.rxClkCalSendTrkPattern, fwClkPBits, 0.U)
 
-  // Lane reversal 
-  val selectedTxBits = Wire(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+  // Lane reversal
+  val selectedTxBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
   selectedTxBits := 0.U.asTypeOf(chiselTypeOf(selectedTxBits))
   val reversedSelectedTxBits = Wire(chiselTypeOf(selectedTxBits))
   reversedSelectedTxBits := selectedTxBits
   for (lane <- 0 until afeParams.mbLanes) {
-    reversedSelectedTxBits.data(lane) := selectedTxBits.data((afeParams.mbLanes - 1) - lane)
+    reversedSelectedTxBits.data(lane) := selectedTxBits.data(
+      (afeParams.mbLanes - 1) - lane
+    )
   }
 
-  io.analog.mainband.tx.bits := 0.U.asTypeOf(new MainbandLanes(
-    afeParams.mbLanes,
-    afeParams.mbSerializerRatio
-  ))
+  io.analog.mainband.tx.bits := 0.U.asTypeOf(
+    new MainbandLanes(
+      afeParams.mbLanes,
+      afeParams.mbSerializerRatio
+    )
+  )
   io.analog.mainband.tx.valid := false.B
 
   when(isActive) {
@@ -445,8 +497,10 @@ class LogicalPhy(
   block(Verification) {
     block(Verification.Assert) {
       when(rxClkCalOverride) {
-        assert(io.analog.mainband.tx.ready,
-          "FATAL: LogicalPhy training TX path assumes the analog PHY is ready")
+        assert(
+          io.analog.mainband.tx.ready,
+          "FATAL: LogicalPhy training TX path assumes the analog PHY is ready"
+        )
       }
     }
   }
@@ -456,7 +510,7 @@ class LogicalPhy(
   // ============================================================================================
   val negotiatedBy8 =
     ltsm.io.negotiatedPhyParamSettings.valid &&
-    ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
+      ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
 
   val linkWidth = Wire(LinkWidth())
   linkWidth := LinkWidth.x16
@@ -465,7 +519,9 @@ class LogicalPhy(
     is("b010".U) { linkWidth := LinkWidth.x8 }
     is("b100".U) { linkWidth := LinkWidth.x4 }
     is("b101".U) { linkWidth := LinkWidth.x4 }
-    is("b011".U) { linkWidth := Mux(negotiatedBy8, LinkWidth.x8, LinkWidth.x16) }
+    is("b011".U) {
+      linkWidth := Mux(negotiatedBy8, LinkWidth.x8, LinkWidth.x16)
+    }
   }
 
   // TODO: Allow plTrdy during the LinkError pl_stallreq/lp_stallack handshake

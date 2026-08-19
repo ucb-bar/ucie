@@ -7,15 +7,20 @@ import edu.berkeley.cs.uciedigital.simutils.VerilatorCoverage
 import org.scalatest.funspec.AnyFunSpec
 import scala.collection.mutable.ArrayBuffer
 
-class SidebandInterfaceSerdesTest extends AnyFunSpec with ChiselSim with VerilatorCoverage {
+class SidebandInterfaceSerdesTest
+    extends AnyFunSpec
+    with ChiselSim
+    with VerilatorCoverage {
   val msgW = 128
   val ncWidths = Seq(8, 16, 32)
 
   val printDebugs = false
-  def printDebug(msg: String): Unit = if (printDebugs) println(s"[SidebandInterfaceSerdesTest] $msg")
+  def printDebug(msg: String): Unit =
+    if (printDebugs) println(s"[SidebandInterfaceSerdesTest] $msg")
 
   def mask(w: Int): BigInt = (BigInt(1) << w) - 1
-  def beat(msg: BigInt, i: Int, ncW: Int): BigInt = (msg >> (i * ncW)) & mask(ncW)
+  def beat(msg: BigInt, i: Int, ncW: Int): BigInt =
+    (msg >> (i * ncW)) & mask(ncW)
 
   val msgA = BigInt("0123456789abcdef0123456789abcdef", 16)
   val msgB = BigInt("fedcba9876543210fedcba9876543210", 16)

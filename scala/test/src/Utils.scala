@@ -188,12 +188,22 @@ xrun \\
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
         val constants =
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
-        val defaultModels = Seq("ucie_clk_dist_network.sv", "ucie_clk_div4.v", "ucie_clk_gate.sv", "clocking_tile.v", "clock_receiver.v", "s2d.v", "IO_ESD.v", "ucie_esd_routable.v", "ucie_rst_sync.v")
+        val defaultModels = Seq(
+          "ucie_clk_dist_network.sv",
+          "ucie_clk_div4.v",
+          "ucie_clk_gate.sv",
+          "clocking_tile.v",
+          "clock_receiver.v",
+          "s2d.v",
+          "IO_ESD.v",
+          "ucie_esd_routable.v",
+          "ucie_rst_sync.v"
+        )
         Seq(
           disciplines,
           constants,
           controlFile,
-          Utils.constants,
+          Utils.constants
         ) ++ getSourceFiles(verilogSrcDir) ++
           defaultModels.map(module => defaultVsrcDir / module)
       } else { Seq.empty }
