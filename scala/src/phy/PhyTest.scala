@@ -123,12 +123,29 @@ class PhyTestRegsIO(
   val rxPacketsReceived = Output(UInt(bitCounterWidth.W))
   // The number of packets to receive.
   val rxPacketsToReceive = Input(UInt(bitCounterWidth.W))
-  // The number of bit errors per lane since the last FSM reset. Only applicable in `TxTestMode.lsfr`.
-  // Extra lanes for valid errors (requires 1111000011110000...) and loopback.
+  // The number of bit errors per lane since the last FSM reset, against the pattern
+  // as framed by the valid edge the RX latched onto. Only applicable in
+  // `TxTestMode.lsfr`. Extra lanes for valid errors (requires 1111000011110000...)
+  // and loopback.
   val rxBitErrors = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
-  // Pause the `rxPacketsReceived` and `rxBitErrors` counters to read them atomically.
+  // The same counts against the pattern framed one UI earlier than the valid edge
+  // indicated, and one UI later. A single bit error on the valid lane in the cycle
+  // the RX aligns leaves every later comparison one UI out of step, which pins the
+  // nominal count near half the bits received; the framing that reads clean is then
+  // the real error count. A spuriously set valid bit aligns the RX one UI early, so
+  // the pattern really started later (`rxBitErrorsLate`); a dropped valid bit aligns
+  // it one UI late, so the pattern really started earlier (`rxBitErrorsEarly`).
+  val rxBitErrorsEarly = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
+  val rxBitErrorsLate = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
+  // Pause the `rxPacketsReceived`, `rxBitErrors`, and `rxSignature` outputs to read
+  // them atomically.
   val rxPauseCounters = Input(Bool())
-  // A MISR derived from the packets received since the last FSM reset.
+  // A MISR derived from the packets received since the last FSM reset. Unlike
+  // `rxBitErrors`, this works for any TX test mode: compare it against
+  // `PhyTest.signatureNext` folded over the expected stream to check patterns the
+  // RX has no LFSR for (e.g. `TxTestMode.manual`), over runs far longer than the
+  // RX capture SRAM. Covers exactly the packets counted by `rxPacketsReceived`, so
+  // read the two under `rxPauseCounters`.
   val rxSignature = Output(UInt(32.W))
   // Data chunk lane in output buffer.
   val rxDataLane = Input(UInt(log2Ceil(numLanes + 3).W))
@@ -188,6 +205,65 @@ class PhyTestIO(
   val bumps = new DebugBumpsIO
 }
 
+/** Signature (MISR) parameters shared by [[PhyTest]] and its software model. */
+object PhyTest {
+
+  /** Width of the TX/RX pattern LFSRs. */
+  val LfsrWidth = 2 * Phy.SerdesRatio
+
+  /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
+    * one).
+    */
+  val LfsrTaps: Set[Int] = LFSR.tapsMaxPeriod.get(LfsrWidth).get.head
+  // Running the feedback backwards to recover the bit that fell out of the state
+  // only works if the state's oldest bit is a tap.
+  require(
+    LfsrTaps.max == LfsrWidth,
+    s"LFSR taps $LfsrTaps must include $LfsrWidth"
+  )
+
+  /** Number of framings each lane is scored against: nominal, one UI early, one
+    * UI late. See `rxBitErrorsEarly` in [[PhyTestRegsIO]].
+    */
+  val NumFramings = 3
+  val NominalFraming = 0
+  val EarlyFraming = 1
+  val LateFraming = 2
+
+  // A received packet is folded into the signature one lane word at a time, so
+  // the signature is as wide as a packet.
+  val SignatureWidth = Phy.SerdesRatio
+
+  /** Maximal period tap points, in LFSR convention (indexed from one). */
+  val SignatureTaps: Seq[Int] =
+    LFSR.tapsMaxPeriod.get(SignatureWidth).get.head.toSeq.sorted
+
+  private val SignatureMask = (BigInt(1) << SignatureWidth) - 1
+
+  private def rotateLeft(word: BigInt, n: Int): BigInt = {
+    val shift = ((n % SignatureWidth) + SignatureWidth) % SignatureWidth
+    if (shift == 0) word & SignatureMask
+    else
+      (((word << shift) | ((word & SignatureMask) >> (SignatureWidth - shift))) &
+        SignatureMask)
+  }
+
+  /** Software model of one signature update, matching the RTL bit for bit.
+    *
+    * `laneWords` holds the `numLanes + 3` words of a single received packet, in
+    * the order the RX buffers them: data lanes `0 until numLanes`, then valid,
+    * track, and loopback. Fold every packet the RX counts (in order) to get the
+    * signature expected for a given `rxPacketsReceived`.
+    */
+  def signatureNext(signature: BigInt, laneWords: Seq[BigInt]): BigInt = {
+    val folded = laneWords.zipWithIndex.foldLeft(signature & SignatureMask) {
+      case (acc, (word, lane)) => acc ^ rotateLeft(word, lane)
+    }
+    val feedback = SignatureTaps.map(t => (folded >> (t - 1)) & 1).reduce(_ ^ _)
+    ((folded << 1) & SignatureMask) | feedback
+  }
+}
+
 class PhyTest(
     bufferDepthPerLane: Int = 10,
     numLanes: Int = 2,
@@ -225,8 +301,8 @@ class PhyTest(
   val txLfsrs = (0 until numLanes + 1).map((i: Int) => {
     val lfsr = Module(
       new FibonacciLFSR(
-        2 * Phy.SerdesRatio,
-        taps = LFSR.tapsMaxPeriod.get(2 * Phy.SerdesRatio).get.head,
+        PhyTest.LfsrWidth,
+        taps = PhyTest.LfsrTaps,
         step = Phy.SerdesRatio
       )
     )
@@ -250,23 +326,22 @@ class PhyTest(
   val rxReceiveOffset = withReset(rxReset) {
     RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
   }
-  /// numLanes data lanes, 1 valid lane, 1 loopback lane.
-  val rxBitErrors = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(numLanes + 2)(0.U(64.W))))
-  }
+  /// One count per framing per lane: numLanes data lanes, 1 valid lane, 1 loopback
+  /// lane. See `rxBitErrorsEarly` in `PhyTestRegsIO` for what the framings mean.
+  def perFramingPerLane(width: Int) = VecInit(
+    Seq.fill(PhyTest.NumFramings)(VecInit(Seq.fill(numLanes + 2)(0.U(width.W))))
+  )
+  val rxBitErrors = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
   val rxPacketsReceivedOutput = withReset(rxReset) { RegInit(0.U(64.W)) }
-  /// numLanes data lanes, 1 valid lane, 1 loopback lane.
   val rxErrorMask = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(numLanes + 2)(0.U(Phy.SerdesRatio.W))))
+    RegInit(perFramingPerLane(Phy.SerdesRatio))
   }
-  val rxBitErrorsOutput = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(numLanes + 2)(0.U(64.W))))
-  }
+  val rxBitErrorsOutput = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
   val rxLfsrs = (0 until numLanes + 1).map((i: Int) => {
     val lfsr = Module(
       new FibonacciLFSR(
-        2 * Phy.SerdesRatio,
-        taps = LFSR.tapsMaxPeriod.get(2 * Phy.SerdesRatio).get.head,
+        PhyTest.LfsrWidth,
+        taps = PhyTest.LfsrTaps,
         step = Phy.SerdesRatio
       )
     )
@@ -276,7 +351,77 @@ class PhyTest(
     lfsr
   })
 
-  val rxSignature = withReset(rxReset) { RegInit(0.U(32.W)) }
+  // The `Phy.SerdesRatio` pattern bits a packet is compared against, oldest bit
+  // first, in the same order the TX shifts them out of its own LFSR.
+  def refWord(state: UInt): UInt =
+    Reverse(state(PhyTest.LfsrWidth - 1, Phy.SerdesRatio))
+  // The same window one UI further along the pattern, for a packet that was framed
+  // one UI late.
+  def refWordAdvanced(state: UInt): UInt =
+    Reverse(state(PhyTest.LfsrWidth - 2, Phy.SerdesRatio - 1))
+  // The same window one UI behind, for a packet that was framed one UI early. The
+  // bit that has already fallen out of the state is recovered by running the
+  // Fibonacci feedback backwards: it is the only unknown in the tap XOR that
+  // produced the state's newest bit.
+  def refWordDelayed(state: UInt): UInt = {
+    val recovered = PhyTest.LfsrTaps.toSeq.sorted.init
+      .map(t => state(t))
+      .foldLeft(state(0))(_ ^ _)
+    Cat(
+      Reverse(state(PhyTest.LfsrWidth - 1, Phy.SerdesRatio + 1)),
+      recovered
+    )
+  }
+  // A valid word repeats every packet, so shifting its reference by a UI is just a
+  // rotate.
+  def validRefAdvanced(word: UInt): UInt =
+    Cat(word(0), word(Phy.SerdesRatio - 1, 1))
+  def validRefDelayed(word: UInt): UInt =
+    Cat(word(Phy.SerdesRatio - 2, 0), word(Phy.SerdesRatio - 1))
+
+  val rxSignature = withReset(rxReset) {
+    RegInit(0.U(PhyTest.SignatureWidth.W))
+  }
+  val rxSignatureOutput = withReset(rxReset) {
+    RegInit(0.U(PhyTest.SignatureWidth.W))
+  }
+  /// Lane words of the packet that completed this cycle, and whether that packet
+  /// should be folded into the signature. Driven by the RX logic further below.
+  val rxLaneWords = Wire(Vec(numLanes + 3, UInt(Phy.SerdesRatio.W)))
+  for (lane <- 0 until numLanes + 3) {
+    rxLaneWords(lane) := 0.U
+  }
+  val rxSignatureUpdate = Wire(Bool())
+  rxSignatureUpdate := false.B
+
+  // Fold every counted packet into a MISR: XOR all of its lane words into the
+  // signature, then take one LFSR step. Unlike `rxBitErrors` this needs no model
+  // of the transmitted pattern in hardware, so it checks any TX test mode over an
+  // unbounded run length; the cost is that it is pass/fail rather than a bit error
+  // count. Lane `l` is rotated left by `l` first so that identical failures on two
+  // lanes carrying identical data (the common case for a manual pattern) cannot
+  // cancel each other out in the XOR.
+  // Kept in step with `PhyTest.signatureNext`, which models this in software.
+  def rotateLeft(word: UInt, n: Int): UInt = {
+    val shift = n % PhyTest.SignatureWidth
+    if (shift == 0) word
+    else
+      Cat(
+        word(PhyTest.SignatureWidth - 1 - shift, 0),
+        word(PhyTest.SignatureWidth - 1, PhyTest.SignatureWidth - shift)
+      )
+  }
+  val rxSignatureFolded = rxLaneWords.zipWithIndex
+    .map { case (word, lane) => rotateLeft(word, lane) }
+    .foldLeft(rxSignature)(_ ^ _)
+  val rxSignatureFeedback =
+    PhyTest.SignatureTaps.map(t => rxSignatureFolded(t - 1)).reduce(_ ^ _)
+  when(rxSignatureUpdate) {
+    rxSignature := Cat(
+      rxSignatureFolded(PhyTest.SignatureWidth - 2, 0),
+      rxSignatureFeedback
+    )
+  }
 
   val numSrams = (numLanes + 2) / 4 + 1
   val inputBuffer = (0 until numSrams).map(i =>
@@ -326,8 +471,10 @@ class PhyTest(
   }
   io.regs.txTestState := txState
   io.regs.rxPacketsReceived := rxPacketsReceivedOutput
-  io.regs.rxBitErrors := rxBitErrorsOutput
-  io.regs.rxSignature := rxSignature
+  io.regs.rxBitErrors := rxBitErrorsOutput(PhyTest.NominalFraming)
+  io.regs.rxBitErrorsEarly := rxBitErrorsOutput(PhyTest.EarlyFraming)
+  io.regs.rxBitErrorsLate := rxBitErrorsOutput(PhyTest.LateFraming)
+  io.regs.rxSignature := rxSignatureOutput
   io.regs.rxDataChunk := 0.U
   for (i <- 0 until numSrams) {
     when(i.U === io.regs.rxDataLane >> 2.U) {
@@ -495,9 +642,9 @@ class PhyTest(
   // TODO: Add loopback
   // io.rx_loopback.ready := true.B
 
-  for (i <- 0 until numLanes + 2) {
-    val newRxBitErrors = rxBitErrors(i) +& PopCount(rxErrorMask(i))
-    rxBitErrors(i) := Mux(
+  for (f <- 0 until PhyTest.NumFramings; i <- 0 until numLanes + 2) {
+    val newRxBitErrors = rxBitErrors(f)(i) +& PopCount(rxErrorMask(f)(i))
+    rxBitErrors(f)(i) := Mux(
       newRxBitErrors > maxBitCount,
       maxBitCount,
       newRxBitErrors
@@ -506,9 +653,13 @@ class PhyTest(
   when(io.regs.rxPauseCounters) {
     rxPacketsReceivedOutput := rxPacketsReceivedOutput
     rxBitErrorsOutput := rxBitErrorsOutput
+    rxSignatureOutput := rxSignatureOutput
   }.otherwise {
     rxPacketsReceivedOutput := RegNext(rxPacketsReceived)
     rxBitErrorsOutput := rxBitErrors
+    // Same pipelining as `rxPacketsReceived` so that a paused signature always
+    // covers exactly the number of packets reported alongside it.
+    rxSignatureOutput := RegNext(rxSignature)
   }
 
   // Dumb RX logic (starts recording as soon as valid goes high and never stops)
@@ -523,8 +674,8 @@ class PhyTest(
     RegInit(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
   }
 
-  for (i <- 0 until numLanes + 2) {
-    rxErrorMask(i) := 0.U
+  for (f <- 0 until PhyTest.NumFramings; i <- 0 until numLanes + 2) {
+    rxErrorMask(f)(i) := 0.U
   }
 
   // Check valid streak after each packet is dequeued.
@@ -579,6 +730,9 @@ class PhyTest(
       val shouldProcessPacket =
         fullPacketReceived && (io.regs.rxDataMode === DataMode.infinite || rxPacketsReceived < io.regs.rxPacketsToReceive)
       shouldWrite := rxPacketsReceived < maxSramPackets && fullPacketReceived
+      // Every packet counted by `rxPacketsReceived` goes into the signature,
+      // including the ones past the end of the capture SRAM.
+      rxSignatureUpdate := shouldProcessPacket
       val dataMask = Wire(UInt(64.W))
       dataMask := ((1.U << (Phy.SerdesRatio.U - startIdx)) - 1.U) << rxReceiveOffset
       val keepMask = Wire(UInt(64.W))
@@ -614,26 +768,36 @@ class PhyTest(
         when(shouldWrite) {
           toWrite(lane >> 2)(lane % 4) := newData(31, 0)
         }
+        rxLaneWords(lane) := newData(31, 0)
 
         when(shouldProcessPacket) {
+          // Score the packet against the pattern at all three framings so that a
+          // valid bit error at alignment time does not invalidate the run.
+          def scoreAgainstLfsr(lfsrIdx: Int, errIdx: Int): Unit = {
+            rxLfsrs(lfsrIdx).io.increment := true.B
+            val state = rxLfsrs(lfsrIdx).io.out.asUInt
+            rxErrorMask(PhyTest.NominalFraming)(errIdx) :=
+              newData(31, 0) ^ refWord(state)
+            rxErrorMask(PhyTest.EarlyFraming)(errIdx) :=
+              newData(31, 0) ^ refWordAdvanced(state)
+            rxErrorMask(PhyTest.LateFraming)(errIdx) :=
+              newData(31, 0) ^ refWordDelayed(state)
+          }
           // Compare data against LFSR and increment LFSR.
           if (lane < numLanes) {
-            rxLfsrs(lane).io.increment := true.B
-            val lfsrData = newData(31, 0)
-            rxErrorMask(lane) := newData(31, 0) ^ Reverse(
-              rxLfsrs(lane).io.out.asUInt
-            )(31, 0)
+            scoreAgainstLfsr(lane, lane)
           }
           // Compare valid against intended waveform.
           if (lane == numLanes) {
-            rxErrorMask(lane) := newData(31, 0) ^ io.regs.rxLfsrValid
+            rxErrorMask(PhyTest.NominalFraming)(lane) :=
+              newData(31, 0) ^ io.regs.rxLfsrValid
+            rxErrorMask(PhyTest.EarlyFraming)(lane) :=
+              newData(31, 0) ^ validRefAdvanced(io.regs.rxLfsrValid)
+            rxErrorMask(PhyTest.LateFraming)(lane) :=
+              newData(31, 0) ^ validRefDelayed(io.regs.rxLfsrValid)
           }
           if (lane == numLanes + 2) {
-            rxLfsrs(numLanes).io.increment := true.B
-            val lfsrData = newData(31, 0)
-            rxErrorMask(numLanes + 1) := newData(31, 0) ^ Reverse(
-              rxLfsrs(numLanes).io.out.asUInt
-            )(31, 0)
+            scoreAgainstLfsr(numLanes, numLanes + 1)
           }
         }
       }

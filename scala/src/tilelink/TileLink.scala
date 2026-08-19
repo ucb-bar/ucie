@@ -472,6 +472,16 @@ class UcieTLRegs(
           applyShift(io.test.rxBitErrors(i)),
           s"rxBitErrors_$i"
         )
+      }) ++ (0 until params.numLanes + 2).map((i: Int) => {
+        toRegFieldR(
+          applyShift(io.test.rxBitErrorsEarly(i)),
+          s"rxBitErrorsEarly_$i"
+        )
+      }) ++ (0 until params.numLanes + 2).map((i: Int) => {
+        toRegFieldR(
+          applyShift(io.test.rxBitErrorsLate(i)),
+          s"rxBitErrorsLate_$i"
+        )
       }) ++ Seq(
         RegField.w(1, rxFsmRst, RegFieldDesc("rxFsmRst", "")),
         toRegFieldRw(rxPacketsToReceive, "rxPacketsToReceive"),
