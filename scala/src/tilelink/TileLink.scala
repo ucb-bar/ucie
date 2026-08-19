@@ -220,6 +220,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
 
       val clkPhaseSel = RegInit(0.U(ClockingTile.phaseSelWidth.W))
       val clkFreqSel = RegInit(0.U(ClockingTile.freqSelWidth.W))
+      // TX clock is enabled out of reset so that existing bring-up sequences
+      // do not have to turn it on explicitly.
+      val clkGateEn = RegInit(true.B)
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
         w.dll_reset := true.B
@@ -354,6 +357,7 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       io.test.rxDataOffset := applyShift(rxDataOffset)
       io.phy.clkPhaseSel := applyShift(clkPhaseSel)
       io.phy.clkFreqSel := applyShift(clkFreqSel)
+      io.phy.clkGateEn := applyShift(clkGateEn)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
 
@@ -423,7 +427,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
           "rxDataChunk"
         ),
         toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
-        toRegFieldRw(clkFreqSel, "clkFreqSel")
+        toRegFieldRw(clkFreqSel, "clkFreqSel"),
+        toRegFieldRw(clkGateEn, "clkGateEn")
       ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),

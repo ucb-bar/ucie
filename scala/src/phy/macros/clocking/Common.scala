@@ -169,6 +169,10 @@ object ClockingTile {
 class ClockingTileIO extends Bundle {
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val FreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
+  // Active-high enable for the TX clock outputs. Low holds TxClk and TxClkQ
+  // at zero, which stops the clock reaching the TX lanes. DigitalClk is not
+  // gated: the digital domain has to keep running to service the RX AFEs.
+  val ClkGateEn = Input(Bool())
   val DigBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())

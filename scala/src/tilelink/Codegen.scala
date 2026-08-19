@@ -677,8 +677,6 @@ class Codegen(f: Formatter) {
     body.append(
       formatWriteNamedReg("commonTxctlDllReset", f.formatLong(0))
     )
-    body.append(
-    )
     // TODO: Gate clock before de-asserting reset.
     body.append(
       formatWriteNamedReg("divResetb", f.formatLong(1))

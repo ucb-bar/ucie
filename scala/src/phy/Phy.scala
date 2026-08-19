@@ -111,6 +111,8 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // Clocking tile control: phase code and frequency setting.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
+  // Low stops the TX clock reaching the TX lanes.
+  val clkGateEn = Input(Bool())
 
   // RX CONTROL
   // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
@@ -150,6 +152,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.BypassClk := bypassClkRx.io.Vout
   clkTile.io.PhaseSel := io.regs.clkPhaseSel
   clkTile.io.FreqSel := io.regs.clkFreqSel
+  clkTile.io.ClkGateEn := io.regs.clkGateEn
 
   io.clkRst.ucieClk := clkTile.io.DigitalClk
   val digitalRstSync = Module(new RstSync)
