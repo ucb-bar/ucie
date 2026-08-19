@@ -5,10 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-# A new push to a PR supersedes the run already in flight for it.
+# A new push to a PR supersedes the run already in flight for it. Pushes to
+# main are never cancelled, so every commit there keeps its own CI result.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
