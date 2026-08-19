@@ -161,6 +161,32 @@ class GlobalDelayLine(implicit includeDefaultModels: Boolean = false)
   }
 }
 
+object ClockingTile {
+  val phaseSelWidth = 64
+  val freqSelWidth = 3
+}
+
+class ClockingTileIO extends Bundle {
+  val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
+  val FreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
+  val DigBypassClk = Input(Clock())
+  val AnalogBypassClk = Input(Clock())
+  val DigitalClk = Output(Clock())
+  val TxClkQ = Output(Clock())
+  val TxClk = Output(Clock())
+}
+
+class ClockingTile(implicit includeDefaultModels: Boolean = false)
+extends BlackBox
+with HasBlackBoxResource {
+  val io = IO(new ClockingTileIO)
+  override val desiredName = "clocking_tile"
+
+  if (includeDefaultModels) {
+    addResource("/vsrc/clocking_tile.v")
+  }
+}
+
 class RstSyncIO extends Bundle {
   val clk = Input(Clock())
   val rstbAsync = Input(Bool())

@@ -155,12 +155,8 @@ class PhyTestRegsIO(
 }
 
 class PhyDebugIO extends Bundle {
-  val pllClkP = Output(Bool())
-  val pllClkN = Output(Bool())
-  val testPllClkP = Output(Bool())
-  val testPllClkN = Output(Bool())
-  val rxClk = Output(Bool())
-  val rxClkDivided = Output(Bool())
+  val pllClk = Output(Bool())
+  val fwdClk = Output(Bool())
 }
 
 class DebugBumpsIO extends Bundle {

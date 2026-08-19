@@ -47,10 +47,7 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
   val sbTxData = Output(Bool())
   val sbRxClk = Input(Clock())
   val sbRxData = Input(Bool())
-  val refClkP = Input(Clock())
-  val refClkN = Input(Clock())
-  val bypassClkP = Input(Clock())
-  val bypassClkN = Input(Clock())
+  val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
   val pllRdacVref = Input(Bool())
 }
