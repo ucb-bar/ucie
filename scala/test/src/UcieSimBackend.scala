@@ -49,6 +49,10 @@ package object logphy {
   implicit def ucieSimulator: HasSimulator = UcieSimBackend.fromEnv
 }
 
+package object phy {
+  implicit def ucieSimulator: HasSimulator = UcieSimBackend.fromEnv
+}
+
 package object sideband {
   implicit def ucieSimulator: HasSimulator = UcieSimBackend.fromEnv
 }
