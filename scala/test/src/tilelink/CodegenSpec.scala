@@ -31,14 +31,40 @@ class CodegenSpec extends AnyFunSpec {
     }
     it("should format write and read macros") {
       assert(f.formatWrite("drv", "0x0", "0x1") == "`WRITE(drv, 0x0, 0x1);\n")
-      assert(f.formatWriteReg("drv", "`ADDR", "64'h1") == "`WRITE_UCIE(drv, `ADDR, 64'h1);\n")
-      assert(f.formatRead("drv", "result", "`ADDR") == "reg [63:0] result;\n`READ(drv, `ADDR, result);\n")
+      assert(
+        f.formatWriteReg(
+          "drv",
+          "`ADDR",
+          "64'h1"
+        ) == "`WRITE_UCIE(drv, `ADDR, 64'h1);\n"
+      )
+      assert(
+        f.formatRead(
+          "drv",
+          "result",
+          "`ADDR"
+        ) == "reg [63:0] result;\n`READ(drv, `ADDR, result);\n"
+      )
     }
     it("should format assert macros") {
-      assert(f.formatAssertEq("drv", "`ADDR", "64'h1") == "`EXPECT(drv, `ADDR, 64'h1);\n")
-      assert(f.formatAssertEq("drv", "`ADDR", "64'h1", Some("bad")) ==
-        "`EXPECT_MSG(drv, `ADDR, 64'h1, \"bad\");\n")
-      assert(f.formatUcieAssertEq("drv", "`ADDR", "64'h1") == "`EXPECT_UCIE(drv, `ADDR, 64'h1);\n")
+      assert(
+        f.formatAssertEq(
+          "drv",
+          "`ADDR",
+          "64'h1"
+        ) == "`EXPECT(drv, `ADDR, 64'h1);\n"
+      )
+      assert(
+        f.formatAssertEq("drv", "`ADDR", "64'h1", Some("bad")) ==
+          "`EXPECT_MSG(drv, `ADDR, 64'h1, \"bad\");\n"
+      )
+      assert(
+        f.formatUcieAssertEq(
+          "drv",
+          "`ADDR",
+          "64'h1"
+        ) == "`EXPECT_UCIE(drv, `ADDR, 64'h1);\n"
+      )
     }
   }
 
@@ -71,14 +97,40 @@ class CodegenSpec extends AnyFunSpec {
     }
     it("should format write and read macros") {
       assert(f.formatWrite("drv", "0x0", "0x1") == "WRITE(drv, 0x0, 0x1);\n")
-      assert(f.formatWriteReg("drv", "ADDR", "0x1ULL") == "WRITE_UCIE(drv, ADDR, 0x1ULL);\n")
-      assert(f.formatRead("drv", "result", "ADDR") == "uint64_t result;\nREAD(drv, ADDR, result);\n")
+      assert(
+        f.formatWriteReg(
+          "drv",
+          "ADDR",
+          "0x1ULL"
+        ) == "WRITE_UCIE(drv, ADDR, 0x1ULL);\n"
+      )
+      assert(
+        f.formatRead(
+          "drv",
+          "result",
+          "ADDR"
+        ) == "uint64_t result;\nREAD(drv, ADDR, result);\n"
+      )
     }
     it("should format assert macros") {
-      assert(f.formatAssertEq("drv", "ADDR", "0x1ULL") == "EXPECT(drv, ADDR, 0x1ULL);\n")
-      assert(f.formatAssertEq("drv", "ADDR", "0x1ULL", Some("bad")) ==
-        "EXPECT_MSG(drv, ADDR, 0x1ULL, \"bad\");\n")
-      assert(f.formatUcieAssertEq("drv", "ADDR", "0x1ULL") == "EXPECT_UCIE(drv, ADDR, 0x1ULL);\n")
+      assert(
+        f.formatAssertEq(
+          "drv",
+          "ADDR",
+          "0x1ULL"
+        ) == "EXPECT(drv, ADDR, 0x1ULL);\n"
+      )
+      assert(
+        f.formatAssertEq("drv", "ADDR", "0x1ULL", Some("bad")) ==
+          "EXPECT_MSG(drv, ADDR, 0x1ULL, \"bad\");\n"
+      )
+      assert(
+        f.formatUcieAssertEq(
+          "drv",
+          "ADDR",
+          "0x1ULL"
+        ) == "EXPECT_UCIE(drv, ADDR, 0x1ULL);\n"
+      )
     }
     it("should format print statement") {
       assert(f.formatPrintStmt("hello") == "printf(\"hello\\n\");\n")
@@ -93,9 +145,17 @@ class CodegenSpec extends AnyFunSpec {
       assert(result.contains("`WRITE_UCIE(regDrv, `TX_FSM_RST, 64'h1)"))
       assert(result.contains("`WRITE_UCIE(regDrv, `RX_FSM_RST, 64'h1)"))
       assert(result.contains("`WRITE_UCIE(regDrv, `COMMON_TX_FSM_RST, 64'h1)"))
-      assert(result.contains("`EXPECT_UCIE_MSG(regDrv, `TX_TEST_STATE, `TX_TEST_STATE_IDLE"))
-      assert(result.contains("`EXPECT_UCIE_MSG(regDrv, `TX_PACKETS_SENT, 64'h0"))
-      assert(result.contains("`EXPECT_UCIE_MSG(regDrv, `RX_PACKETS_RECEIVED, 64'h0"))
+      assert(
+        result.contains(
+          "`EXPECT_UCIE_MSG(regDrv, `TX_TEST_STATE, `TX_TEST_STATE_IDLE"
+        )
+      )
+      assert(
+        result.contains("`EXPECT_UCIE_MSG(regDrv, `TX_PACKETS_SENT, 64'h0")
+      )
+      assert(
+        result.contains("`EXPECT_UCIE_MSG(regDrv, `RX_PACKETS_RECEIVED, 64'h0")
+      )
       assert(result.contains("endtask"))
     }
     it("should format full output") {
@@ -111,9 +171,15 @@ class CodegenSpec extends AnyFunSpec {
       assert(result.contains("WRITE_UCIE(regDrv, TX_FSM_RST, 0x1ULL)"))
       assert(result.contains("WRITE_UCIE(regDrv, RX_FSM_RST, 0x1ULL)"))
       assert(result.contains("WRITE_UCIE(regDrv, COMMON_TX_FSM_RST, 0x1ULL)"))
-      assert(result.contains("EXPECT_UCIE_MSG(regDrv, TX_TEST_STATE, TX_TEST_STATE_IDLE"))
+      assert(
+        result.contains(
+          "EXPECT_UCIE_MSG(regDrv, TX_TEST_STATE, TX_TEST_STATE_IDLE"
+        )
+      )
       assert(result.contains("EXPECT_UCIE_MSG(regDrv, TX_PACKETS_SENT, 0x0ULL"))
-      assert(result.contains("EXPECT_UCIE_MSG(regDrv, RX_PACKETS_RECEIVED, 0x0ULL"))
+      assert(
+        result.contains("EXPECT_UCIE_MSG(regDrv, RX_PACKETS_RECEIVED, 0x0ULL")
+      )
       assert(!result.contains("endtask"))
       assert(!result.contains("`"))
     }

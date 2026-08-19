@@ -1,11 +1,11 @@
-/* 
+/*
   Description: Contains the MBTrain state machine top, requester, and responder module.
   The top module instantiates both the requester and responder.
 
-  NOTE: 
-    * There are remaining TODOs in this file.  
-    * Multi-module (MMPL) isn't currently implemented
-*/
+  NOTE:
+ * There are remaining TODOs in this file.
+ * Multi-module (MMPL) isn't currently implemented
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -19,8 +19,8 @@ import chisel3.util._
 // ============================================================================
 object MBTrainState extends ChiselEnum {
   val sVALVREF, sDATAVREF, sSPEEDIDLE, sTXSELFCAL, sRXCLKCAL, sVALTRAINCENTER,
-  sVALTRAINVREF, sDATATRAINCENTER1, sDATATRAINVREF, sRXDESKEW, sDATATRAINCENTER2,
-  sLINKSPEED, sREPAIR, sTOPHYRETRAIN, sTOLINKINIT = Value
+      sVALTRAINVREF, sDATATRAINCENTER1, sDATATRAINVREF, sRXDESKEW,
+      sDATATRAINCENTER2, sLINKSPEED, sREPAIR, sTOPHYRETRAIN, sTOLINKINIT = Value
 }
 
 // Used by MBTrain.L1 and MBTrain.PHYRETRAIN to jump to appropriate state
@@ -35,18 +35,18 @@ object MBTrainSubstate extends ChiselEnum {
 // Modules
 // ============================================================================
 class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
-  val io = IO(new Bundle{
+  val io = IO(new Bundle {
     // IN
     val goToState = Flipped(Valid(MBTrainGoToState()))
-    val negotiatedMaxDataRate = Input(SpeedMode())    
-    val pllLock = Input(Bool()) 
+    val negotiatedMaxDataRate = Input(SpeedMode())
+    val pllLock = Input(Bool())
     val phyInRetrain = Input(Bool())
     val interpretBy8Lane = Input(Bool())
     val maxErrorThresholdPerLane = Input(UInt(16.W))
     val changeInRuntimeLinkCtrlRegs = Input(Bool())
     val currLocalTxFunctionalLanes = Input(UInt(3.W))
     val currRemoteTxFunctionalLanes = Input(UInt(3.W))
-  
+
     // OUT
     val currentState = Output(MBTrainState())
     val mbLaneCtrlIo = new MainbandLaneCtrlIO(afeParams)
@@ -66,13 +66,16 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
     val requesterSbLaneIo = new SidebandLaneIO(sbParams)
     val responderSbLaneIo = new SidebandLaneIO(sbParams)
     val txPtTestReqIntfIo = new TxInitPtTestRequesterInterfaceIO(afeParams)
-    val txEyeSweepReqIntfIo = new TxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
+    val txEyeSweepReqIntfIo =
+      new TxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
     val rxPtTestReqIntfIo = new RxInitPtTestRequesterInterfaceIO(afeParams)
-    val rxEyeSweepReqIntfIo = new RxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
+    val rxEyeSweepReqIntfIo =
+      new RxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
     val txPtTestRespIntfIo = new TxInitPtTestResponderInterfaceIO()
     val txEyeSweepRespIntfIo = new TxInitEyeWidthSweepResponderInterfaceIO()
     val rxPtTestRespIntfIo = new RxInitPtTestResponderInterfaceIO()
-    val rxEyeSweepRespIntfIo = new RxInitEyeWidthSweepResponderInterfaceIO(afeParams)
+    val rxEyeSweepRespIntfIo =
+      new RxInitEyeWidthSweepResponderInterfaceIO(afeParams)
     val trainingCtrl = Flipped(new MbTrainTestIntf(afeParams))
   })
 
@@ -99,7 +102,7 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   requester.io.txEyeSweepReqIntfIo <> io.txEyeSweepReqIntfIo
   requester.io.rxPtTestReqIntfIo <> io.rxPtTestReqIntfIo
   requester.io.rxEyeSweepReqIntfIo <> io.rxEyeSweepReqIntfIo
-  
+
   // Responder IN
   responder.io.start := io.fsmCtrl.start
   responder.io.currRemoteTxFunctionalLanes := io.currRemoteTxFunctionalLanes
@@ -134,13 +137,14 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.newRemoteFunctionalLanes := responder.io.newRemoteFunctionalLanes
   io.rxWidthChanged := responder.io.rxWidthChanged
   io.doElectricalIdleRx := responder.io.doElectricalIdleRx
-  
+
   io.trainingCtrl <> requester.io.trainingCtrl
   io.trainingCtrl.remoteRxSweepResults := responder.io.remoteRxSweepResults
 }
 
-class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
-  val io = IO(new Bundle{
+class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
+    extends Module {
+  val io = IO(new Bundle {
     // IN
     val start = Input(Bool())
     val responderRdy = Input(Bool())
@@ -154,16 +158,17 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
     val currLocalTxFunctionalLanes = Input(UInt(3.W))
     val remoteExitingToPhyretrain = Input(Bool())
     val remoteExitingToSpeedDegrade = Input(Bool())
-    val remoteExitingToRepair = Input(Bool()) 
+    val remoteExitingToRepair = Input(Bool())
     val remoteErrorInLinkspeed = Input(Bool())
-    
+
     // OUT
     val done = Output(Bool())
     val error = Output(Bool())
     val requesterRdy = Output(Bool())
     val currentState = Output(MBTrainState())
-    val transitioningState = Output(Bool())    
-    val freqSel = Valid(SpeedMode())  // Valid goes high when to update speed setting
+    val transitioningState = Output(Bool())
+    val freqSel =
+      Valid(SpeedMode()) // Valid goes high when to update speed setting
     val doElectricalIdleTx = Output(Bool())
     val completedLinkspeedStep1And2 = Output(Bool())
     val initiatingError = Output(Bool())
@@ -179,10 +184,12 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
     // Bundles with IN & OUT IOs
     val sbLaneIo = new SidebandLaneIO(sbParams)
     val txPtTestReqIntfIo = new TxInitPtTestRequesterInterfaceIO(afeParams)
-    val txEyeSweepReqIntfIo = new TxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
+    val txEyeSweepReqIntfIo =
+      new TxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
     val rxPtTestReqIntfIo = new RxInitPtTestRequesterInterfaceIO(afeParams)
-    val rxEyeSweepReqIntfIo = new RxInitEyeWidthSweepRequesterInterfaceIO(afeParams)    
-    val trainingCtrl = Flipped(new MbTrainTestIntf(afeParams))   
+    val rxEyeSweepReqIntfIo =
+      new RxInitEyeWidthSweepRequesterInterfaceIO(afeParams)
+    val trainingCtrl = Flipped(new MbTrainTestIntf(afeParams))
   })
 
   // Helper Modules
@@ -190,7 +197,7 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
 
   // FSM state register
   val currentState = RegInit(MBTrainState.sVALVREF)
-  val nextState = WireInit(currentState)  
+  val nextState = WireInit(currentState)
   currentState := nextState
   io.currentState := currentState
   io.transitioningState := currentState =/= nextState
@@ -198,14 +205,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   // Substate register
   val substateReg = RegInit(MBTrainSubstate.s0)
   val nextSubstate = WireInit(substateReg)
-  substateReg := nextSubstate 
+  substateReg := nextSubstate
 
   // Requester ready logic -- used by responder
   val requesterRdyStatusReg = RegInit(false.B)
   val requesterRdy = WireInit(false.B)
   when((currentState =/= nextState) || (substateReg =/= nextSubstate)) {
-    requesterRdyStatusReg := false.B 
-  }  
+    requesterRdyStatusReg := false.B
+  }
   when(requesterRdy) {
     requesterRdyStatusReg := true.B
   }
@@ -220,12 +227,16 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   when(errorDetectedWire) {
     errorDetectedReg := true.B
   }
-  io.error := errorDetectedReg 
+  io.error := errorDetectedReg
 
   // sbMsgExchanger Module Defaults
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
   sbMsgExchanger.io.clear := (currentState =/= nextState) || (substateReg =/= nextSubstate)
   sbMsgExchanger.io.sbLaneIo <> io.sbLaneIo
@@ -242,59 +253,59 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
 
   // Link operation defaults
   // NOTE: Currently link ops doesn't use many of these parameters,
-  // since pattern counts are fixed for normal link training operation. 
+  // since pattern counts are fixed for normal link training operation.
   // Setting them according to spec for the data bits when sending message to Remote die.
   // TX Pt test
   io.txPtTestReqIntfIo.start := false.B
   io.txPtTestReqIntfIo.patternType := PatternSelect.VALTRAIN
-  io.txPtTestReqIntfIo.linkTrainingParameters.clockPhase := 0.U        // center clock pi   
-  io.txPtTestReqIntfIo.linkTrainingParameters.dataPattern := 0.U       // LFSR
-  io.txPtTestReqIntfIo.linkTrainingParameters.validPattern := 0.U      // valtrain
-  io.txPtTestReqIntfIo.linkTrainingParameters.patternMode := 0.U       // continuous
-  io.txPtTestReqIntfIo.linkTrainingParameters.iterationCount := 1.U    // num of bursts
-  io.txPtTestReqIntfIo.linkTrainingParameters.idleCount := 0.U         // UI to wait
-  io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U     // UI to send per burst
-  io.txPtTestReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane 
-  io.txPtTestReqIntfIo.linkTrainingParameters.comparisonMode := 0.U    // per lane
+  io.txPtTestReqIntfIo.linkTrainingParameters.clockPhase := 0.U // center clock pi
+  io.txPtTestReqIntfIo.linkTrainingParameters.dataPattern := 0.U // LFSR
+  io.txPtTestReqIntfIo.linkTrainingParameters.validPattern := 0.U // valtrain
+  io.txPtTestReqIntfIo.linkTrainingParameters.patternMode := 0.U // continuous
+  io.txPtTestReqIntfIo.linkTrainingParameters.iterationCount := 1.U // num of bursts
+  io.txPtTestReqIntfIo.linkTrainingParameters.idleCount := 0.U // UI to wait
+  io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U // UI to send per burst
+  io.txPtTestReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane
+  io.txPtTestReqIntfIo.linkTrainingParameters.comparisonMode := 0.U // per lane
 
   // TX Eye Width Sweep
   io.txEyeSweepReqIntfIo.start := false.B
   io.txEyeSweepReqIntfIo.patternType := PatternSelect.VALTRAIN
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.clockPhase := 0.U        // center clock pi   
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.dataPattern := 1.U       // per lane id
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.validPattern := 0.U      // valtrain
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.patternMode := 0.U       // continuous
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.iterationCount := 1.U    // num of bursts
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.idleCount := 0.U         // UI to wait
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 2048.U     // UI to send per burst
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.clockPhase := 0.U // center clock pi
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.dataPattern := 1.U // per lane id
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.validPattern := 0.U // valtrain
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.patternMode := 0.U // continuous
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.iterationCount := 1.U // num of bursts
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.idleCount := 0.U // UI to wait
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 2048.U // UI to send per burst
   io.txEyeSweepReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane
-  io.txEyeSweepReqIntfIo.linkTrainingParameters.comparisonMode := 0.U    // per lane
+  io.txEyeSweepReqIntfIo.linkTrainingParameters.comparisonMode := 0.U // per lane
 
   // RX Pt Test
   io.rxPtTestReqIntfIo.start := false.B
   io.rxPtTestReqIntfIo.patternType := PatternSelect.VALTRAIN
-  io.rxPtTestReqIntfIo.linkTrainingParameters.clockPhase := 0.U        // center clock pi   
-  io.rxPtTestReqIntfIo.linkTrainingParameters.dataPattern := 1.U       // per lane id
-  io.rxPtTestReqIntfIo.linkTrainingParameters.validPattern := 0.U      // valtrain
-  io.rxPtTestReqIntfIo.linkTrainingParameters.patternMode := 0.U       // continuous
-  io.rxPtTestReqIntfIo.linkTrainingParameters.iterationCount := 1.U    // num of bursts
-  io.rxPtTestReqIntfIo.linkTrainingParameters.idleCount := 0.U         // UI to wait
-  io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 2048.U     // UI to send per burst
+  io.rxPtTestReqIntfIo.linkTrainingParameters.clockPhase := 0.U // center clock pi
+  io.rxPtTestReqIntfIo.linkTrainingParameters.dataPattern := 1.U // per lane id
+  io.rxPtTestReqIntfIo.linkTrainingParameters.validPattern := 0.U // valtrain
+  io.rxPtTestReqIntfIo.linkTrainingParameters.patternMode := 0.U // continuous
+  io.rxPtTestReqIntfIo.linkTrainingParameters.iterationCount := 1.U // num of bursts
+  io.rxPtTestReqIntfIo.linkTrainingParameters.idleCount := 0.U // UI to wait
+  io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 2048.U // UI to send per burst
   io.rxPtTestReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane
-  io.rxPtTestReqIntfIo.linkTrainingParameters.comparisonMode := 0.U    // per lane
+  io.rxPtTestReqIntfIo.linkTrainingParameters.comparisonMode := 0.U // per lane
 
   // RX Eye Width Sweep
   io.rxEyeSweepReqIntfIo.start := false.B
   io.rxEyeSweepReqIntfIo.patternType := PatternSelect.VALTRAIN
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.clockPhase := 0.U        // center clock pi   
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.dataPattern := 1.U       // per lane id
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.validPattern := 0.U      // valtrain
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.patternMode := 0.U       // continuous
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.iterationCount := 1.U    // num of bursts
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.idleCount := 0.U         // UI to wait
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 2048.U     // UI to send per burst
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane 
-  io.rxEyeSweepReqIntfIo.linkTrainingParameters.comparisonMode := 0.U    // per lane
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.clockPhase := 0.U // center clock pi
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.dataPattern := 1.U // per lane id
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.validPattern := 0.U // valtrain
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.patternMode := 0.U // continuous
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.iterationCount := 1.U // num of bursts
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.idleCount := 0.U // UI to wait
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 2048.U // UI to send per burst
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.maxErrorThreshold := io.maxErrorThresholdPerLane
+  io.rxEyeSweepReqIntfIo.linkTrainingParameters.comparisonMode := 0.U // per lane
 
   // MBTrain.SPEEDIDLE registers/wires
   val fromDataVref = RegInit(false.B)
@@ -302,13 +313,13 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   val currFreqSel = RegInit(SpeedMode.speed4)
   val speedChanged = RegInit(false.B)
   val isCurrFreqGreaterThan32 = Wire(Bool())
-  val prevState = RegInit(0.U(2.W))   // 1.U == L1; 2.U == PHYRETRAIN
+  val prevState = RegInit(0.U(2.W)) // 1.U == L1; 2.U == PHYRETRAIN
 
-  isCurrFreqGreaterThan32 := (currFreqSel === SpeedMode.speed48) || 
-                             (currFreqSel === SpeedMode.speed64)
+  isCurrFreqGreaterThan32 := (currFreqSel === SpeedMode.speed48) ||
+    (currFreqSel === SpeedMode.speed64)
 
   // MBTrain.TXSELFCAL registers/wires
-  val mbTrainTxSelfCalDoneReg = RegInit(false.B) 
+  val mbTrainTxSelfCalDoneReg = RegInit(false.B)
   when(io.trainingCtrl.txSelfCalDone) {
     mbTrainTxSelfCalDoneReg := true.B
   }
@@ -318,8 +329,8 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
 
     // NOTE: Trigger change once pllLock is locked after new frequency request
     when(io.pllLock) {
-      speedChanged := true.B     
-    }    
+      speedChanged := true.B
+    }
   }
 
   io.freqSel.valid := false.B
@@ -341,10 +352,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   val initiatingWidthDegradeFlag = RegInit(false.B)
   val initiatingDoneFlag = RegInit(false.B)
 
-  // Note: Detection and assessment for lane repair is done in LINKSPEED. 
+  // Note: Detection and assessment for lane repair is done in LINKSPEED.
   // REPAIR state just sends the message with appropriate functional lane code
-  val currLocalTxFunctionalLanes = Wire(UInt(3.W))  // Result found in MBInit/MBTrain.REPAIR
-  val newTxFunctionalLanes = Wire(UInt(3.W))        // Result from pt test in MBTrain.LINKSPEED
+  val currLocalTxFunctionalLanes = Wire(
+    UInt(3.W)
+  ) // Result found in MBInit/MBTrain.REPAIR
+  val newTxFunctionalLanes = Wire(
+    UInt(3.W)
+  ) // Result from pt test in MBTrain.LINKSPEED
   val laneHasErrors = Wire(Bool())
   val faultInLowerLanes = Wire(Bool())
   val faultInUpperLanes = Wire(Bool())
@@ -363,39 +378,49 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   val laneRepairDegradeCondSel = Wire(UInt(5.W))
   val linkOpsResults = RegInit(VecInit(Seq.fill(afeParams.mbLanes)(0.U(1.W))))
   val linkOpsResultsValid = RegInit(false.B)
-  
+
   currLocalTxFunctionalLanes := io.currLocalTxFunctionalLanes
 
   // Output of faultInLowerLanes and faultInUpperLanes is trusted when linkOpsResultsValid is HIGH
   when(io.interpretBy8Lane) {
-    faultInLowerLanes := Cat(linkOpsResults(0),
-                             linkOpsResults(1),
-                             linkOpsResults(2),
-                             linkOpsResults(3)).orR
-    faultInUpperLanes := Cat(linkOpsResults(4),
-                             linkOpsResults(5),
-                             linkOpsResults(6),
-                             linkOpsResults(7)).orR
+    faultInLowerLanes := Cat(
+      linkOpsResults(0),
+      linkOpsResults(1),
+      linkOpsResults(2),
+      linkOpsResults(3)
+    ).orR
+    faultInUpperLanes := Cat(
+      linkOpsResults(4),
+      linkOpsResults(5),
+      linkOpsResults(6),
+      linkOpsResults(7)
+    ).orR
   }.otherwise {
     // Get top (afeParams.mbLanes / 2) lanes
-    faultInLowerLanes := linkOpsResults.take(afeParams.mbLanes / 2).map(_.asBool).reduce(_ || _)
-    // Get bottom (afeParams.mbLanes / 2) lanes                                                    
-    faultInUpperLanes := linkOpsResults.drop(afeParams.mbLanes / 2).map(_.asBool).reduce(_ || _)
+    faultInLowerLanes := linkOpsResults
+      .take(afeParams.mbLanes / 2)
+      .map(_.asBool)
+      .reduce(_ || _)
+    // Get bottom (afeParams.mbLanes / 2) lanes
+    faultInUpperLanes := linkOpsResults
+      .drop(afeParams.mbLanes / 2)
+      .map(_.asBool)
+      .reduce(_ || _)
   }
-  
+
   isLanes0To15 := currLocalTxFunctionalLanes === "b011".U
   isLanes0To7 := isLanes0To15 && io.interpretBy8Lane
   isLowerLanes := (currLocalTxFunctionalLanes === "b001".U) ||
-                  (currLocalTxFunctionalLanes === "b100".U)
-  isUpperLanes := (currLocalTxFunctionalLanes === "b010".U) || 
-                  (currLocalTxFunctionalLanes === "b101".U)
+    (currLocalTxFunctionalLanes === "b100".U)
+  isUpperLanes := (currLocalTxFunctionalLanes === "b010".U) ||
+    (currLocalTxFunctionalLanes === "b101".U)
   onlyLowerLanesFailed := !faultInUpperLanes && faultInLowerLanes
-  onlyUpperLanesFailed := faultInUpperLanes && !faultInLowerLanes     
+  onlyUpperLanesFailed := faultInUpperLanes && !faultInLowerLanes
 
-  // Plausible conditions for width degrade (laneRepairCondSel)   
-  allLanesFailed := (isLowerLanes && faultInLowerLanes) || 
-                    (isUpperLanes && faultInUpperLanes) ||
-                    (isLanes0To15 && faultInUpperLanes && faultInLowerLanes)
+  // Plausible conditions for width degrade (laneRepairCondSel)
+  allLanesFailed := (isLowerLanes && faultInLowerLanes) ||
+    (isUpperLanes && faultInUpperLanes) ||
+    (isLanes0To15 && faultInUpperLanes && faultInLowerLanes)
 
   // Upper lanes failed to width degrade to lower lanes (when interpreting by 8 lanes)
   widthDegradeFromAllToLowerBy8 := isLanes0To7 && onlyUpperLanesFailed
@@ -410,25 +435,39 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   widthDegradeFromAllToUpper := isLanes0To15 && onlyLowerLanesFailed
 
   // TODO: SVA for one hot (or generate onehot checker hw gated with a sim flag, or wrap in layer)
-  laneRepairDegradeCondSel := Cat(allLanesFailed,
-                                  widthDegradeFromAllToLower,
-                                  widthDegradeFromAllToUpper,
-                                  widthDegradeFromAllToLowerBy8,
-                                  widthDegradeFromAllToUpperBy8)
+  laneRepairDegradeCondSel := Cat(
+    allLanesFailed,
+    widthDegradeFromAllToLower,
+    widthDegradeFromAllToUpper,
+    widthDegradeFromAllToLowerBy8,
+    widthDegradeFromAllToUpperBy8
+  )
 
   newTxFunctionalLanes := "b011".U // Default code all lanes are functional
-  newTxFunctionalLanes := Mux1H(Seq(
-    laneRepairDegradeCondSel(0) -> "b101".U, // Logical lanes 4-7 are functional
-    laneRepairDegradeCondSel(1) -> "b100".U, // Logical lanes 0-3 are functional
-    laneRepairDegradeCondSel(2) -> "b010".U, // Logical lanes 8-15 are functional
-    laneRepairDegradeCondSel(3) -> "b001".U, // Logical lanes 0-7 are functional
-    laneRepairDegradeCondSel(4) -> "b000".U, // No functional lanes (No degrade possible)
-  ))
+  newTxFunctionalLanes := Mux1H(
+    Seq(
+      laneRepairDegradeCondSel(
+        0
+      ) -> "b101".U, // Logical lanes 4-7 are functional
+      laneRepairDegradeCondSel(
+        1
+      ) -> "b100".U, // Logical lanes 0-3 are functional
+      laneRepairDegradeCondSel(
+        2
+      ) -> "b010".U, // Logical lanes 8-15 are functional
+      laneRepairDegradeCondSel(
+        3
+      ) -> "b001".U, // Logical lanes 0-7 are functional
+      laneRepairDegradeCondSel(
+        4
+      ) -> "b000".U // No functional lanes (No degrade possible)
+    )
+  )
 
   // There are no lane errors if the lane functionality test in sLINKSPEED matches the functional
   // lanes determined in from the REPAIR tests
   laneHasErrors := linkOpsResultsValid && (newTxFunctionalLanes =/= currLocalTxFunctionalLanes)
-  isWidthDegradePossible :=  (newTxFunctionalLanes =/= "b000".U)
+  isWidthDegradePossible := (newTxFunctionalLanes =/= "b000".U)
 
   io.initiatingError := initiatingErrorFlag
   io.clearPhyInRetrainFlag := clearPhyInRetrainFlag
@@ -437,14 +476,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   io.initiatingSpeedDegrade := initiatingSpeedDegradeFlag
   io.initiatingWidthDegrade := initiatingWidthDegradeFlag
   io.initiatingDone := initiatingDoneFlag
-  io.doElectricalIdleTx := false.B 
- 
+  io.doElectricalIdleTx := false.B
+
   // MBTrain.REPAIR registers/wires
   // Only set high once the width by MBTrain.REPAIR is determined, or in-progress with repair
-  val applyDegrade = WireInit(false.B) 
+  val applyDegrade = WireInit(false.B)
   io.txWidthChanged := laneHasErrors && applyDegrade
   io.newLocalFunctionalLanes := newTxFunctionalLanes
-       
+
   // IOs
   io.done := false.B
 
@@ -457,8 +496,10 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
   io.trainingCtrl.resp.inProgress := false.B
   io.trainingCtrl.resp.done := false.B
   io.trainingCtrl.resp.results.valid := false.B
-  io.trainingCtrl.resp.results.bits := 0.U.asTypeOf(io.trainingCtrl.resp.results.bits)
-  io.trainingCtrl.remoteRxSweepResults := DontCare      // Set by MBTrainResponder
+  io.trainingCtrl.resp.results.bits := 0.U.asTypeOf(
+    io.trainingCtrl.resp.results.bits
+  )
+  io.trainingCtrl.remoteRxSweepResults := DontCare // Set by MBTrainResponder
 
   // State Machine
   switch(currentState) {
@@ -485,12 +526,16 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             mbTrainTxSelfCalDoneReg := false.B
             mbTrainRxClkCalDoneReg := false.B
             prevState := 0.U
-            currFreqSel := SpeedMode.speed4            
+            currFreqSel := SpeedMode.speed4
 
-            sbMsgExchanger.io.req.valid := true.B        
-            sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALVREF_START_REQ, 
-                                                      "PHY", "PHY", true)
-            sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                 
+            sbMsgExchanger.io.req.valid := true.B
+            sbMsgExchanger.io.req.bits := SBMsgCreate(
+              SBM.MBTRAIN_VALVREF_START_REQ,
+              "PHY",
+              "PHY",
+              true
+            )
+            sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
             sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALVREF_START_RESP
 
             when(sbMsgExchanger.io.exchDone) {
@@ -498,62 +543,68 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             }
           }
         }
-        is(MBTrainSubstate.s1) {  // START RX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START RX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
-      
+
           // RX Pt Test
           io.rxPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.rxPtTestReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U 
+          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
           // RX Eye Width Sweep
           io.rxEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.rxEyeSweepReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U 
+          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.rxPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.rxPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.rxPtTestReqIntfIo.done || io.rxEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
-        }       
-        is(MBTrainSubstate.s3) {  // END
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALVREF_END_REQ, 
-                                                    "PHY", "PHY", true)
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                  
+          }
+        }
+        is(MBTrainSubstate.s3) { // END
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALVREF_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALVREF_END_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATAVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
       }
@@ -568,13 +619,17 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       io.mbLaneCtrlIo.rxValidEn := true.B
       // Track receiver is allowed to be disable
 
-      fromDataVref := true.B  // Used in sSPEEDIDLE
+      fromDataVref := true.B // Used in sSPEEDIDLE
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATAVREF_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATAVREF_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATAVREF_START_RESP
 
@@ -582,62 +637,68 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // START RX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START RX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // RX Pt Test
           io.rxPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.rxPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U 
+          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
           // RX Eye Width Sweep
           io.rxEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.rxEyeSweepReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U          
+          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.rxPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.rxPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.rxPtTestReqIntfIo.done || io.rxEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
-        }  
-        is(MBTrainSubstate.s3) {  // END
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATAVREF_END_REQ, 
-                                                    "PHY", "PHY", true)
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                 
+          }
+        }
+        is(MBTrainSubstate.s3) { // END
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATAVREF_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATAVREF_END_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sSPEEDIDLE
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
       }
@@ -651,16 +712,18 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       io.mbLaneCtrlIo.rxClkEn := true.B
       io.mbLaneCtrlIo.rxValidEn := true.B
       // Track receiver is allowed to be disable
-      
+
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // Set speed
+        is(MBTrainSubstate.s0) { // Set speed
           when(fromDataVref) {
             io.freqSel.bits := io.negotiatedMaxDataRate
             io.freqSel.valid := true.B
           }.elsewhen(prevState === 1.U) { // from L1
             io.freqSel.bits := currFreqSel
             io.freqSel.valid := true.B
-          }.elsewhen(((prevState === 2.U) || fromLinkspeed) && (currFreqSel =/= SpeedMode.speed4)) { 
+          }.elsewhen(
+            ((prevState === 2.U) || fromLinkspeed) && (currFreqSel =/= SpeedMode.speed4)
+          ) {
             // from PHYRETRAIN or MBTrain.Linkspeed
             io.freqSel.bits := (currFreqSel.asUInt - 1.U).asTypeOf(SpeedMode())
             io.freqSel.valid := true.B
@@ -671,12 +734,16 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
           when(!errorDetected && speedChanged) {
             nextSubstate := MBTrainSubstate.s1
           }
-        }       
-        is(MBTrainSubstate.s1) {  // DONE
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_SPEEDIDLE_DONE_REQ, 
-                                                    "PHY", "PHY", true)
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                  
+        }
+        is(MBTrainSubstate.s1) { // DONE
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_SPEEDIDLE_DONE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_SPEEDIDLE_DONE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
@@ -692,21 +759,26 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
           }
         }
       }
-    } 
+    }
     is(MBTrainState.sTXSELFCAL) {
-      // MB transmitters remain tristated and MB receivers are permitted to be disabled (default)    
+      // MB transmitters remain tristated and MB receivers are permitted to be disabled (default)
       // Tx Self Calibration is done by the PhyLaneTrainer module
       io.trainingCtrl.txSelfCalStart := true.B
       sbMsgExchanger.io.req.valid := mbTrainTxSelfCalDoneReg
-      sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_TXSELFCAL_DONE_REQ, "PHY", "PHY", true)
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.MBTRAIN_TXSELFCAL_DONE_REQ,
+        "PHY",
+        "PHY",
+        true
+      )
       sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
-      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_TXSELFCAL_DONE_RESP    
+      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_TXSELFCAL_DONE_RESP
 
       requesterRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
         nextState := MBTrainState.sRXCLKCAL
-        mbTrainTxSelfCalDoneReg := false.B  // Reset for possible next iteration                 
-      }  
+        mbTrainTxSelfCalDoneReg := false.B // Reset for possible next iteration
+      }
     }
     is(MBTrainState.sRXCLKCAL) {
       io.mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
@@ -718,10 +790,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Data and valid receivers are permitted to be disabled
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXCLKCAL_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXCLKCAL_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXCLKCAL_START_RESP
 
@@ -730,26 +806,30 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
               nextSubstate := MBTrainSubstate.s1
             }.otherwise {
               nextSubstate := MBTrainSubstate.s3
-            }            
+            }
           }
         }
-        is(MBTrainSubstate.s1) {  // CALIBRATION FOR > 32 GT/S
+        is(MBTrainSubstate.s1) { // CALIBRATION FOR > 32 GT/S
           // TODO: Missing implementation for > 32 GT/s
           //       MBTrainSubstate.s1 and .s2 reserved for > 32 GT/s.
           //       Change done state if more substates are required.
           errorDetectedWire := true.B
         }
-        is(MBTrainSubstate.s3) {  // DONE
+        is(MBTrainSubstate.s3) { // DONE
           // Rx Clk Cal is possibly done by the PhyLaneTrainer module
           io.trainingCtrl.rxClkCalStart := true.B
-          sbMsgExchanger.io.req.valid := mbTrainRxClkCalDoneReg        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXCLKCAL_DONE_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := mbTrainRxClkCalDoneReg
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXCLKCAL_DONE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXCLKCAL_DONE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
-          when(io.requesterRdy && io.responderRdy) {            
+          when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sVALTRAINCENTER
             nextSubstate := MBTrainSubstate.s0
             mbTrainRxClkCalDoneReg := false.B
@@ -768,73 +848,83 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Track receiver is allowed to be disable
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINCENTER_START_REQ, 
-                                                    "PHY", "PHY", true)
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                 
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINCENTER_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINCENTER_START_RESP
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // START TX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START TX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // TX Pt Test
           io.txPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.txPtTestReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U 
+          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
           // TX Eye Width Sweep
           io.txEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.txEyeSweepReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U          
+          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.txPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.txPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.txPtTestReqIntfIo.done || io.txEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s3) {  // DONE
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINCENTER_DONE_REQ, 
-                                                    "PHY", "PHY", true)
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                 
+        is(MBTrainSubstate.s3) { // DONE
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINCENTER_DONE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINCENTER_DONE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sVALTRAINVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
       }
@@ -850,10 +940,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Track receiver is allowed to be disable
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINVREF_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINVREF_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINVREF_START_RESP
 
@@ -861,62 +955,68 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // START RX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START RX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
-      
+
           // RX Pt Test
           io.rxPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.rxPtTestReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U 
+          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
           // RX Eye Width Sweep
           io.rxEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.rxEyeSweepReqIntfIo.patternType := PatternSelect.VALTRAIN
-          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U 
+          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 1024.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.rxPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.rxPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.rxPtTestReqIntfIo.done || io.rxEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
-        }  
-        is(MBTrainSubstate.s3) {  // DONE
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINVREF_DONE_REQ, 
-                                                    "PHY", "PHY", true)
+          }
+        }
+        is(MBTrainSubstate.s3) { // DONE
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINVREF_DONE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINVREF_DONE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATATRAINCENTER1
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
       }
@@ -932,10 +1032,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Track receiver is allowed to be disable
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER1_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER1_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER1_START_RESP
 
@@ -943,62 +1047,68 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // START TX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START TX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // TX Pt Test
           io.txPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.txPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U 
+          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
           // TX Eye Width Sweep
           io.txEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.txEyeSweepReqIntfIo.patternType := PatternSelect.LFSR
-          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U          
+          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.txPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.txPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.txPtTestReqIntfIo.done || io.txEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s3) {  // END
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER1_END_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s3) { // END
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER1_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER1_END_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATATRAINVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
       }
@@ -1019,10 +1129,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // MBTRAIN.RXDESKEW.
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINVREF_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINVREF_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINVREF_START_RESP
 
@@ -1030,65 +1144,71 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // START RX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START RX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // RX Pt Test
           io.rxPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.rxPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U 
+          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
           // RX Eye Width Sweep
           io.rxEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.rxEyeSweepReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U          
+          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.rxPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.rxPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.rxPtTestReqIntfIo.done || io.rxEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s3) {  // END
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINVREF_END_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s3) { // END
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINVREF_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINVREF_END_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sRXDESKEW
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
-      }      
+      }
     }
     is(MBTrainState.sRXDESKEW) {
       io.mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
@@ -1100,10 +1220,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Data and valid receivers are permitted to be disabled
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXDESKEW_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXDESKEW_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXDESKEW_START_RESP
 
@@ -1113,64 +1237,70 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             }.otherwise {
               nextSubstate := MBTrainSubstate.s2
             }
-            
+
           }
         }
-        is(MBTrainSubstate.s1) {  // CALIBRATION FOR > 32 GT/S
+        is(MBTrainSubstate.s1) { // CALIBRATION FOR > 32 GT/S
           // TODO: Missing implementation for > 32 GT/s
           //       MBTrainSubstate.s1 and .s2 reserved for > 32 GT/s.
           //       Change done state if more substates are required.
           errorDetectedWire := true.B
         }
-        is(MBTrainSubstate.s2) {  // START RX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s2) { // START RX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // RX Pt Test
           io.rxPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.rxPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U 
+          io.rxPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
           // RX Eye Width Sweep
           io.rxEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.rxEyeSweepReqIntfIo.patternType := PatternSelect.LFSR
-          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U          
+          io.rxEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s3
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s4
           }
         }
-        is(MBTrainSubstate.s3) {  // Doing Test
+        is(MBTrainSubstate.s3) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.rxPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.rxPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.rxPtTestReqIntfIo.done || io.rxEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s2
-          }          
-        }        
-        is(MBTrainSubstate.s4) {  // DONE
+          }
+        }
+        is(MBTrainSubstate.s4) { // DONE
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXDESKEW_END_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXDESKEW_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXDESKEW_END_RESP
 
@@ -1193,76 +1323,86 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       // Track receiver is allowed to be disable
 
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER2_START_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER2_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER2_START_RESP
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // START TX-INITIATED LINK OPERATION
+        is(MBTrainSubstate.s1) { // START TX-INITIATED LINK OPERATION
           io.trainingCtrl.capableTest.isRxType := true.B
           io.trainingCtrl.capableTest.testKind := TrainingTestType.Either
           io.trainingCtrl.req.readyForReq := true.B
-                          
+
           io.trainingCtrl.resp.inProgress := false.B
           io.trainingCtrl.resp.done := false.B
 
           // TX Pt Test
           io.txPtTestReqIntfIo.start := io.trainingCtrl.req.start &&
-                                        io.trainingCtrl.req.testKind === TrainingTestType.PointTest
+            io.trainingCtrl.req.testKind === TrainingTestType.PointTest
           io.txPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U 
+          io.txPtTestReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
           // TX Eye Width Sweep
           io.txEyeSweepReqIntfIo.start := io.trainingCtrl.req.start &&
-                                          io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
+            io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep
           io.txEyeSweepReqIntfIo.patternType := PatternSelect.LFSR
-          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U          
+          io.txEyeSweepReqIntfIo.linkTrainingParameters.burstCount := 4096.U
 
-          when(io.trainingCtrl.req.start && 
+          when(
+            io.trainingCtrl.req.start &&
               ((io.trainingCtrl.req.testKind === TrainingTestType.PointTest) ||
-               (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))) {         
+                (io.trainingCtrl.req.testKind === TrainingTestType.EyeWidthSweep))
+          ) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.trainingCtrl.req.complete) {
             nextSubstate := MBTrainSubstate.s3
           }
         }
-        is(MBTrainSubstate.s2) {  // Doing Test
+        is(MBTrainSubstate.s2) { // Doing Test
           io.trainingCtrl.resp.inProgress := true.B
-          // No back pressure mechanism for results, so PhyLaneTrainer must accept when 
+          // No back pressure mechanism for results, so PhyLaneTrainer must accept when
           // result valid goes high
           io.trainingCtrl.resp.results.valid := io.txPtTestReqIntfIo.ptTestResults.valid ||
-                                                io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
-          
+            io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid
+
           when(io.txPtTestReqIntfIo.ptTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txPtTestReqIntfIo.ptTestResults.bits
           }.elsewhen(io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid) {
             io.trainingCtrl.resp.results.bits := io.txEyeSweepReqIntfIo.eyeSweepTestResults.bits
-          }         
+          }
 
           when(io.txPtTestReqIntfIo.done || io.txEyeSweepReqIntfIo.done) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s3) {  // END
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER2_END_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s3) { // END
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER2_END_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER2_END_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sLINKSPEED
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
         }
-      } 
+      }
     }
     is(MBTrainState.sLINKSPEED) {
       io.mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
@@ -1274,7 +1414,7 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
       io.mbLaneCtrlIo.rxValidEn := true.B
       // Track receiver is allowed to be disable
 
-      fromLinkspeed := true.B   // Used in sSPEEDIDLE
+      fromLinkspeed := true.B // Used in sSPEEDIDLE
 
       switch(substateReg) {
         is(MBTrainSubstate.s0) {
@@ -1285,26 +1425,30 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
           initiatingDoneFlag := false.B
           linkOpsResultsValid := false.B
 
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_START_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_START_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_START_RESP
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          } 
+          }
         }
         is(MBTrainSubstate.s1) { // Start TX D2C PT TEST, and wait for result
           io.txPtTestReqIntfIo.start := true.B
           io.txPtTestReqIntfIo.patternType := PatternSelect.LFSR
-          // linkTrainingParameters stay as defaults 
+          // linkTrainingParameters stay as defaults
 
           when(io.txPtTestReqIntfIo.ptTestResults.valid) {
             linkOpsResults := io.txPtTestReqIntfIo.ptTestResults.bits
-            linkOpsResultsValid := true.B            
+            linkOpsResultsValid := true.B
           }
-       
+
           when(io.txPtTestReqIntfIo.done) {
             completedLinkspeedStep1And2Flag := true.B // Goes HIGH when the state transitions
           }
@@ -1313,75 +1457,87 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.txPtTestReqIntfIo.done && !laneHasErrors) {
             nextSubstate := MBTrainSubstate.s5
-          }                             
+          }
         }
-        is(MBTrainSubstate.s2) {  // SINGLE MODULE - ERRORS ENCOUNTERED (Exchange ERROR msg)
+        is(MBTrainSubstate.s2) { // SINGLE MODULE - ERRORS ENCOUNTERED (Exchange ERROR msg)
           io.doElectricalIdleTx := true.B
 
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_ERROR_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_ERROR_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           initiatingErrorFlag := sbMsgExchanger.io.msgSent
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                            
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_ERROR_RESP
 
-          when(sbMsgExchanger.io.msgReceived) {   // Remote has error in lanes
+          when(sbMsgExchanger.io.msgReceived) { // Remote has error in lanes
             clearPhyInRetrainFlag := true.B
 
             when(isWidthDegradePossible) {
-              nextSubstate := MBTrainSubstate.s3  // Do repair
+              nextSubstate := MBTrainSubstate.s3 // Do repair
             }.elsewhen(!isWidthDegradePossible) {
-              nextSubstate := MBTrainSubstate.s4  // Do speed degrade
-            } 
-          }.elsewhen(io.remoteExitingToPhyretrain) {      
-            nextSubstate := MBTrainSubstate.s7    // To an intermediate sync state
+              nextSubstate := MBTrainSubstate.s4 // Do speed degrade
+            }
+          }.elsewhen(io.remoteExitingToPhyretrain) {
+            nextSubstate := MBTrainSubstate.s7 // To an intermediate sync state
           }
         }
-        is(MBTrainSubstate.s3) {  // EXIT TO REPAIR    
+        is(MBTrainSubstate.s3) { // EXIT TO REPAIR
           io.doElectricalIdleTx := true.B
-                        
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ, 
-                                                    "PHY", "PHY", true)
+
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           initiatingWidthDegradeFlag := sbMsgExchanger.io.msgSent
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                            
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_RESP
 
           // NOTE: Speed degrade takes priority if both msgReceived and remoteExitingToSpeedDegrade
-          // are high, in the off chance. However, as per the spec, local shouldn't receive a 
+          // are high, in the off chance. However, as per the spec, local shouldn't receive a
           // response to the {exit to repair req} when remote is going to speed degrade, because
           // you can't have both errors and no errors found.
           when(io.remoteExitingToSpeedDegrade) {
-            nextSubstate := MBTrainSubstate.s9    // To an intermediate sync state            
+            nextSubstate := MBTrainSubstate.s9 // To an intermediate sync state
           }.elsewhen(sbMsgExchanger.io.msgReceived) {
             requesterRdy := true.B
             when(io.requesterRdy && io.responderRdy) {
               nextSubstate := MBTrainSubstate.s0
-              nextState := MBTrainState.sREPAIR 
-            }            
-          }         
+              nextState := MBTrainState.sREPAIR
+            }
+          }
         }
-        is(MBTrainSubstate.s4) {  // EXIT TO SPEED DEGRADE   
+        is(MBTrainSubstate.s4) { // EXIT TO SPEED DEGRADE
           io.doElectricalIdleTx := true.B
 
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           initiatingSpeedDegradeFlag := sbMsgExchanger.io.msgSent
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                            
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.responderRdy && io.requesterRdy) {
             // State transition with Responder into SPEEDIDLE
             nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sSPEEDIDLE 
-          }          
+            nextState := MBTrainState.sSPEEDIDLE
+          }
         }
-        is(MBTrainSubstate.s5) {  // SINGLE-/MULTI-MODULE - NO ERRORS
+        is(MBTrainSubstate.s5) { // SINGLE-/MULTI-MODULE - NO ERRORS
           // TODO: Set clock phase on transmitters to sample data eye at optmimal pt
           //       should be set already at this point...todo is here to make sure before sign-off
 
@@ -1389,16 +1545,20 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
           // at the moment
           when(io.phyInRetrain) {
             when(io.changeInRuntimeLinkCtrlRegs) {
-              sbMsgExchanger.io.req.valid := true.B        
-              sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ, 
-                                                        "PHY", "PHY", true)
-              initiatingExitToPhyretrainFlag := sbMsgExchanger.io.msgSent 
+              sbMsgExchanger.io.req.valid := true.B
+              sbMsgExchanger.io.req.bits := SBMsgCreate(
+                SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ,
+                "PHY",
+                "PHY",
+                true
+              )
+              initiatingExitToPhyretrainFlag := sbMsgExchanger.io.msgSent
 
-              sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                            
+              sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
               sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP
-              
+
               requesterRdy := sbMsgExchanger.io.exchDone
-              when(io.requesterRdy && io.responderRdy) {                
+              when(io.requesterRdy && io.responderRdy) {
                 nextSubstate := MBTrainSubstate.s0
                 nextState := MBTrainState.sTOPHYRETRAIN
               }
@@ -1411,13 +1571,17 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s6
           }
         }
-        is(MBTrainSubstate.s6) {  // DONE
-          sbMsgExchanger.io.req.valid := true.B        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_DONE_REQ, 
-                                                    "PHY", "PHY", true)
+        is(MBTrainSubstate.s6) { // DONE
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_DONE_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           initiatingDoneFlag := sbMsgExchanger.io.msgSent
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                            
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_DONE_RESP
 
           requesterRdy := sbMsgExchanger.io.exchDone && !io.remoteErrorInLinkspeed
@@ -1431,85 +1595,96 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s9
           }.elsewhen(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sTOLINKINIT                                    
-          }                       
+            nextState := MBTrainState.sTOLINKINIT
+          }
         }
-        is(MBTrainSubstate.s7) {        
-        // Intermediate synchronization state for when io.remoteExitingToPhyretrain is HIGH
-        // Only transition when Responder has sent the resp to exit to phyretrain req
-        requesterRdy := true.B
-        when(io.responderRdy && io.requesterRdy) {
-          nextSubstate := MBTrainSubstate.s0
-          nextState := MBTrainState.sTOPHYRETRAIN
+        is(MBTrainSubstate.s7) {
+          // Intermediate synchronization state for when io.remoteExitingToPhyretrain is HIGH
+          // Only transition when Responder has sent the resp to exit to phyretrain req
+          requesterRdy := true.B
+          when(io.responderRdy && io.requesterRdy) {
+            nextSubstate := MBTrainSubstate.s0
+            nextState := MBTrainState.sTOPHYRETRAIN
+          }
+        }
+        is(MBTrainSubstate.s8) {
+          io.doElectricalIdleTx := true.B
+          // Intermediate synchronization state for when io.remoteExitingToRepair is HIGH
+          // Only transition when Responder has sent the resp to exit to repair req
+          requesterRdy := true.B
+          when(io.responderRdy && io.requesterRdy) {
+            nextSubstate := MBTrainSubstate.s0
+            nextState := MBTrainState.sREPAIR
+          }
+        }
+        is(MBTrainSubstate.s9) {
+          io.doElectricalIdleTx := true.B
+          // Intermediate synchronization state for when io.remoteExitingToSpeedDegrade is HIGH
+          // Only transition when Responder has sent the resp to exit to speed degrade req
+          requesterRdy := true.B
+          when(io.responderRdy && io.requesterRdy) {
+            nextSubstate := MBTrainSubstate.s0
+            nextState := MBTrainState.sSPEEDIDLE
+          }
         }
       }
-      is(MBTrainSubstate.s8) {
-        io.doElectricalIdleTx := true.B
-        // Intermediate synchronization state for when io.remoteExitingToRepair is HIGH
-        // Only transition when Responder has sent the resp to exit to repair req
-        requesterRdy := true.B
-        when(io.responderRdy && io.requesterRdy) {
-          nextSubstate := MBTrainSubstate.s0
-          nextState := MBTrainState.sREPAIR
-        }
-      }
-      is(MBTrainSubstate.s9) {
-        io.doElectricalIdleTx := true.B
-        // Intermediate synchronization state for when io.remoteExitingToSpeedDegrade is HIGH
-        // Only transition when Responder has sent the resp to exit to speed degrade req
-        requesterRdy := true.B
-        when(io.responderRdy && io.requesterRdy) {
-          nextSubstate := MBTrainSubstate.s0
-          nextState := MBTrainState.sSPEEDIDLE
-        }
-       }  
-      }          
     }
     is(MBTrainState.sREPAIR) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // INIT
+        is(MBTrainSubstate.s0) { // INIT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_INIT_REQ, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_INIT_REQ,
+            "PHY",
+            "PHY",
+            true
+          )
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_INIT_RESP
-          
-          when(sbMsgExchanger.io.exchDone) {          
-            nextSubstate := MBTrainSubstate.s1
-          } 
-        }
-        is(MBTrainSubstate.s1) { // APPLY DEGRADE          
-          sbMsgExchanger.io.req.valid := true.B 
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_REQ, 
-                                                    "PHY", "PHY", true, 
-                                                    msgInfo = Cat(0.U(12.W), 
-                                                                  newTxFunctionalLanes))
-          applyDegrade := true.B          
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent                                                    
+          when(sbMsgExchanger.io.exchDone) {
+            nextSubstate := MBTrainSubstate.s1
+          }
+        }
+        is(MBTrainSubstate.s1) { // APPLY DEGRADE
+          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_REQ,
+            "PHY",
+            "PHY",
+            true,
+            msgInfo = Cat(0.U(12.W), newTxFunctionalLanes)
+          )
+          applyDegrade := true.B
+
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_RESP
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s2
           }
         }
-        is(MBTrainSubstate.s2) {  // END
+        is(MBTrainSubstate.s2) { // END
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_END_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s0
             nextState := MBTrainState.sTXSELFCAL
           }
-        }        
+        }
       }
-    }    
-    is(MBTrainState.sTOPHYRETRAIN) {      
-      nextSubstate := MBTrainSubstate.s0      
+    }
+    is(MBTrainState.sTOPHYRETRAIN) {
+      nextSubstate := MBTrainSubstate.s0
       when(io.goToState.valid) {
         prevState := 2.U
         nextSubstate := MBTrainSubstate.s0
@@ -1524,10 +1699,10 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextState := MBTrainState.sREPAIR
           }
         }
-      }     
+      }
     }
     is(MBTrainState.sTOLINKINIT) {
-      io.done := true.B      
+      io.done := true.B
       when(io.goToState.valid) {
         prevState := 1.U
         nextSubstate := MBTrainSubstate.s0
@@ -1541,14 +1716,15 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams) extends M
           is(MBTrainGoToState.goToREPAIR) {
             nextState := MBTrainState.sREPAIR
           }
-        } 
+        }
       }
     }
   }
 }
 
-class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
-  val io = IO(new Bundle{
+class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
+    extends Module {
+  val io = IO(new Bundle {
     // IN
     val start = Input(Bool())
     val currRemoteTxFunctionalLanes = Input(UInt(3.W))
@@ -1582,7 +1758,8 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
     val txPtTestRespIntfIo = new TxInitPtTestResponderInterfaceIO()
     val txEyeSweepRespIntfIo = new TxInitEyeWidthSweepResponderInterfaceIO()
     val rxPtTestRespIntfIo = new RxInitPtTestResponderInterfaceIO()
-    val rxEyeSweepRespIntfIo = new RxInitEyeWidthSweepResponderInterfaceIO(afeParams)
+    val rxEyeSweepRespIntfIo =
+      new RxInitEyeWidthSweepResponderInterfaceIO(afeParams)
   })
 
   // Helper Modules
@@ -1590,21 +1767,21 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
 
   // FSM state register
   val currentState = RegInit(MBTrainState.sVALVREF)
-  val nextState = WireInit(currentState)  
+  val nextState = WireInit(currentState)
   currentState := nextState
   io.currentState := currentState
 
   // Substate register
   val substateReg = RegInit(MBTrainSubstate.s0)
   val nextSubstate = WireInit(substateReg)
-  substateReg := nextSubstate 
+  substateReg := nextSubstate
 
   // Responder ready logic -- used by requester
   val responderRdyStatusReg = RegInit(false.B)
   val responderRdy = WireInit(false.B)
   when((currentState =/= nextState) || (substateReg =/= nextSubstate)) {
-    responderRdyStatusReg := false.B 
-  }  
+    responderRdyStatusReg := false.B
+  }
   when(responderRdy) {
     responderRdyStatusReg := true.B
   }
@@ -1620,11 +1797,15 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
     errorDetectedReg := true.B
   }
   io.error := errorDetectedReg
-  
+
   // sbMsgExchanger Module Defaults
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
   sbMsgExchanger.io.clear := (currentState =/= nextState) || (substateReg =/= nextSubstate)
   sbMsgExchanger.io.sbLaneIo.tx <> io.sbLaneIo.tx
@@ -1632,9 +1813,9 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
   sbMsgExchanger.io.sbLaneIo.rx.bits.data := io.sbLaneIo.rx.bits.data
 
   when(currentState === MBTrainState.sLINKSPEED) { // need to wait on mutiple messages in sLINKSPEED
-    io.sbLaneIo.rx.ready := false.B    
+    io.sbLaneIo.rx.ready := false.B
   }.otherwise {
-    io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready 
+    io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
   }
 
   // Link operation IOs
@@ -1648,7 +1829,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
   io.rxPtTestRespIntfIo.patternType := PatternSelect.LFSR
 
   io.rxEyeSweepRespIntfIo.start := false.B
-  io.rxEyeSweepRespIntfIo.patternType := PatternSelect.LFSR  
+  io.rxEyeSweepRespIntfIo.patternType := PatternSelect.LFSR
 
   // MBTrain.RXCLKCAL registers/wires
   val rxClkCalSendFwClkPattern = RegInit(false.B)
@@ -1662,19 +1843,19 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
   val localCompletedSteps1And2 = Wire(Bool())
   val localNotInitiatingPhyRetrain = Wire(Bool())
   val localNotInitiatingSpeedDegrade = Wire(Bool())
-  val remoteErrorInLinkspeedFlag = RegInit(false.B)    
+  val remoteErrorInLinkspeedFlag = RegInit(false.B)
   val remoteExitingToRepairFlag = RegInit(false.B)
   val remoteExitingToSpeedDegradeFlag = RegInit(false.B)
   val remoteExitingToPhyretrainFlag = RegInit(false.B)
 
   localNotInitiatingSpeedDegrade := (io.localInitiatingError && io.localInitiatingWidthDegrade) ||
-                                    io.localInitiatingDone                                                                        
+    io.localInitiatingDone
   localCompletedSteps1And2 := io.localCompletedSteps1And2
   localNotInitiatingPhyRetrain := io.localInitiatingError ^ io.localInitiatingDone
   io.remoteErrorInLinkspeed := remoteErrorInLinkspeedFlag
-  io.remoteExitingToRepair := remoteExitingToRepairFlag           
-  io.remoteExitingToSpeedDegrade := remoteExitingToSpeedDegradeFlag 
-  io.remoteExitingToPhyretrain := remoteExitingToPhyretrainFlag 
+  io.remoteExitingToRepair := remoteExitingToRepairFlag
+  io.remoteExitingToSpeedDegrade := remoteExitingToSpeedDegradeFlag
+  io.remoteExitingToPhyretrain := remoteExitingToPhyretrainFlag
   io.doElectricalIdleRx := false.B
 
   // MBTrain.REPAIR registers/wires
@@ -1683,7 +1864,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
   val widthChanged = WireInit(false.B)
 
   currRemoteFunctionalLanesWire := io.currRemoteTxFunctionalLanes
-  incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42,40)
+  incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42, 40)
   io.newRemoteFunctionalLanes := incRemoteFuncLanesWire
   io.rxWidthChanged := widthChanged
 
@@ -1695,29 +1876,33 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
   switch(currentState) {
     is(MBTrainState.sVALVREF) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
+        is(MBTrainSubstate.s0) { // START
           when(io.start) {
             rxClkCalSendFwClkPattern := false.B
             rxClkCalSendTrkPattern := false.B
 
-            sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+            sbMsgExchanger.io.rxRefBitPattern.valid := true.B
             sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALVREF_START_REQ
 
-            sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-            sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALVREF_START_RESP, 
-                                                      "PHY", "PHY", true)
+            sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+            sbMsgExchanger.io.req.bits := SBMsgCreate(
+              SBM.MBTRAIN_VALVREF_START_RESP,
+              "PHY",
+              "PHY",
+              true
+            )
 
             when(sbMsgExchanger.io.exchDone) {
               nextSubstate := MBTrainSubstate.s1
-            }   
-          }       
+            }
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.rxEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
           // If Remote ran a RX-initiated Eye Width Sweep, send the PhyLaneTrainer the result
@@ -1727,41 +1912,49 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             io.remoteRxSweepResults.bits := io.rxEyeSweepRespIntfIo.remoteEyeSweepTestResults.bits
           }
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALVREF_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALVREF_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALVREF_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATAVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
+        }
       }
     }
-    is(MBTrainState.sDATAVREF) {     
+    is(MBTrainState.sDATAVREF) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATAVREF_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATAVREF_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATAVREF_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxPtTestRespIntfIo.patternType := PatternSelect.LFSR          
+          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxPtTestRespIntfIo.patternType := PatternSelect.LFSR
           io.rxEyeSweepRespIntfIo.patternType := PatternSelect.LFSR
 
           // If Remote ran a RX-initiated Eye Width Sweep, send the PhyLaneTrainer the result
@@ -1771,51 +1964,63 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             io.remoteRxSweepResults.bits := io.rxEyeSweepRespIntfIo.remoteEyeSweepTestResults.bits
           }
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATAVREF_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATAVREF_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATAVREF_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sSPEEDIDLE
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      } 
+        }
+      }
     }
-    is(MBTrainState.sSPEEDIDLE) {    
-      // The correct width if a width degrade has happen will already be set by time  
-      // Local die is in this state.      
-      sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+    is(MBTrainState.sSPEEDIDLE) {
+      // The correct width if a width degrade has happen will already be set by time
+      // Local die is in this state.
+      sbMsgExchanger.io.rxRefBitPattern.valid := true.B
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_DONE_REQ
 
-      sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-      sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_DONE_RESP, 
-                                                "PHY", "PHY", true)
+      sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.MBTRAIN_LINKSPEED_DONE_RESP,
+        "PHY",
+        "PHY",
+        true
+      )
       responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
-        nextState := MBTrainState.sTXSELFCAL           
+        nextState := MBTrainState.sTXSELFCAL
       }
     }
     is(MBTrainState.sTXSELFCAL) {
-      sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+      sbMsgExchanger.io.rxRefBitPattern.valid := true.B
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_TXSELFCAL_DONE_REQ
 
-      sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-      sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_TXSELFCAL_DONE_RESP, 
-                                                "PHY", "PHY", true)
+      sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.MBTRAIN_TXSELFCAL_DONE_RESP,
+        "PHY",
+        "PHY",
+        true
+      )
       responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
-        nextState := MBTrainState.sRXCLKCAL           
-      }    
+        nextState := MBTrainState.sRXCLKCAL
+      }
     }
-    is(MBTrainState.sRXCLKCAL) {     
+    is(MBTrainState.sRXCLKCAL) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXCLKCAL_START_REQ
 
           when(sbMsgExchanger.io.msgReceived) {
@@ -1823,92 +2028,112 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             rxClkCalSendTrkPattern := true.B
           }
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXCLKCAL_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXCLKCAL_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END          
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s1) { // END
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXCLKCAL_DONE_REQ
 
           when(sbMsgExchanger.io.msgReceived) {
             rxClkCalSendFwClkPattern := false.B
             rxClkCalSendTrkPattern := false.B
-          }  
+          }
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXCLKCAL_DONE_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXCLKCAL_DONE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sVALTRAINCENTER
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }  
+        }
+      }
     }
     is(MBTrainState.sVALTRAINCENTER) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINCENTER_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINCENTER_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINCENTER_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.txEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINCENTER_DONE_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINCENTER_DONE_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINCENTER_DONE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sVALTRAINVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }  
+        }
+      }
     }
     is(MBTrainState.sVALTRAINVREF) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINVREF_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINVREF_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINVREF_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // DONE
+        is(MBTrainSubstate.s1) { // DONE
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.rxEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
           // If Remote ran a RX-initiated Eye Width Sweep, send the PhyLaneTrainer the result
@@ -1918,78 +2143,94 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             io.remoteRxSweepResults.bits := io.rxEyeSweepRespIntfIo.remoteEyeSweepTestResults.bits
           }
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_VALTRAINVREF_DONE_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_VALTRAINVREF_DONE_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_VALTRAINVREF_DONE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATATRAINCENTER1
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }   
+        }
+      }
     }
     is(MBTrainState.sDATATRAINCENTER1) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER1_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER1_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER1_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txPtTestRespIntfIo.patternType := PatternSelect.LFSR          
+          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txPtTestRespIntfIo.patternType := PatternSelect.LFSR
           io.txEyeSweepRespIntfIo.patternType := PatternSelect.LFSR
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER1_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER1_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER1_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATATRAINVREF
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }        
+        }
+      }
     }
     is(MBTrainState.sDATATRAINVREF) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINVREF_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINVREF_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINVREF_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.rxEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
           // If Remote ran a RX-initiated Eye Width Sweep, send the PhyLaneTrainer the result
@@ -1999,41 +2240,49 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             io.remoteRxSweepResults.bits := io.rxEyeSweepRespIntfIo.remoteEyeSweepTestResults.bits
           }
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINVREF_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINVREF_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINVREF_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sRXDESKEW
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }    
+        }
+      }
     }
-    is(MBTrainState.sRXDESKEW) {   
+    is(MBTrainState.sRXDESKEW) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXDESKEW_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXDESKEW_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXDESKEW_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.rxPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.rxPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.rxEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
           // If Remote ran a RX-initiated Eye Width Sweep, send the PhyLaneTrainer the result
@@ -2043,61 +2292,73 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             io.remoteRxSweepResults.bits := io.rxEyeSweepRespIntfIo.remoteEyeSweepTestResults.bits
           }
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_RXDESKEW_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_RXDESKEW_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_RXDESKEW_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sDATATRAINCENTER2
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }    
+        }
+      }
     }
     is(MBTrainState.sDATATRAINCENTER2) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+        is(MBTrainSubstate.s0) { // START
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER2_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER2_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER2_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
-          }          
+          }
         }
-        is(MBTrainSubstate.s1) {  // END
+        is(MBTrainSubstate.s1) { // END
           // "Wake up" both pt test, and sweep circuits. The circuit will start depending
           // on appropriate message receieved.
-          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived 
-          io.txPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN          
+          io.txPtTestRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txEyeSweepRespIntfIo.start := !sbMsgExchanger.io.msgReceived
+          io.txPtTestRespIntfIo.patternType := PatternSelect.VALTRAIN
           io.txEyeSweepRespIntfIo.patternType := PatternSelect.VALTRAIN
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                  
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_DATATRAINCENTER2_END_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived        
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_DATATRAINCENTER2_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_DATATRAINCENTER2_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBTrainState.sLINKSPEED
-            nextSubstate := MBTrainSubstate.s0            
+            nextSubstate := MBTrainSubstate.s0
           }
-        }      
-      }     
+        }
+      }
     }
-    is(MBTrainState.sLINKSPEED) {   
+    is(MBTrainState.sLINKSPEED) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // START
+        is(MBTrainSubstate.s0) { // START
           ptTestDoneInLinkSpeed := false.B
           remoteErrorInLinkspeedFlag := false.B
           remoteExitingToRepairFlag := false.B
@@ -2108,43 +2369,65 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_START_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_START_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_START_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {            
+        is(MBTrainSubstate.s1) {
           io.txPtTestRespIntfIo.start := !ptTestDoneInLinkSpeed
           io.txPtTestRespIntfIo.patternType := PatternSelect.LFSR
 
           when(io.txPtTestRespIntfIo.done) {
             ptTestDoneInLinkSpeed := true.B
           }
-      
+
           when(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid) {
-            when(SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.MBTRAIN_LINKSPEED_ERROR_REQ)) {
+            when(
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_ERROR_REQ
+              )
+            ) {
               io.sbLaneIo.rx.ready := true.B
               nextSubstate := MBTrainSubstate.s2
-            }.elsewhen(SBMsgCompare(io.sbLaneIo.rx.bits.data, 
-                                    SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ)) {
-              io.sbLaneIo.rx.ready := true.B 
-              nextSubstate := MBTrainSubstate.s6
-            }.elsewhen(SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.MBTRAIN_LINKSPEED_DONE_REQ)) {
+            }.elsewhen(
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ
+              )
+            ) {
               io.sbLaneIo.rx.ready := true.B
-              nextSubstate := MBTrainSubstate.s7 
+              nextSubstate := MBTrainSubstate.s6
+            }.elsewhen(
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_DONE_REQ
+              )
+            ) {
+              io.sbLaneIo.rx.ready := true.B
+              nextSubstate := MBTrainSubstate.s7
             }
-          }   
+          }
         }
-        is(MBTrainSubstate.s2) {  // Received {MBTRAIN.LINKSPEED error req}
+        is(MBTrainSubstate.s2) { // Received {MBTRAIN.LINKSPEED error req}
           remoteErrorInLinkspeedFlag := true.B
 
           when(localCompletedSteps1And2 && localNotInitiatingPhyRetrain) {
             io.doElectricalIdleRx := true.B
             sbMsgExchanger.io.req.valid := true.B
-            sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_ERROR_RESP, 
-                                                      "PHY", "PHY", true)                                                        
+            sbMsgExchanger.io.req.bits := SBMsgCreate(
+              SBM.MBTRAIN_LINKSPEED_ERROR_RESP,
+              "PHY",
+              "PHY",
+              true
+            )
           }
 
           when(io.localInitiatingExitToPhyRetrain) {
@@ -2152,28 +2435,41 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
           }.elsewhen(sbMsgExchanger.io.msgSent) {
             nextSubstate := MBTrainSubstate.s3
           }
-        } 
-        is(MBTrainSubstate.s3) {  // wait for either {exit to repair} or {exit to speed degrade}
-          io.doElectricalIdleRx := true.B          
+        }
+        is(MBTrainSubstate.s3) { // wait for either {exit to repair} or {exit to speed degrade}
+          io.doElectricalIdleRx := true.B
           when(io.sbLaneIo.rx.valid) {
-            when(SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ)) {
+            when(
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ
+              )
+            ) {
               io.sbLaneIo.rx.ready := true.B
-              nextSubstate := MBTrainSubstate.s4  
-            }.elsewhen(SBMsgCompare(io.sbLaneIo.rx.bits.data, 
-                                    SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ)) {
+              nextSubstate := MBTrainSubstate.s4
+            }.elsewhen(
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ
+              )
+            ) {
               io.sbLaneIo.rx.ready := true.B
               nextSubstate := MBTrainSubstate.s5
             }
           }
         }
-        is(MBTrainSubstate.s4) {  // Received {MBTRAIN.LINKSPEED exit to repair req}
+        is(MBTrainSubstate.s4) { // Received {MBTRAIN.LINKSPEED exit to repair req}
           io.doElectricalIdleRx := true.B
 
           when(localNotInitiatingSpeedDegrade) {
             sbMsgExchanger.io.req.valid := true.B
-            sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_RESP, 
-                                                      "PHY", "PHY", true) 
-          }          
+            sbMsgExchanger.io.req.bits := SBMsgCreate(
+              SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_RESP,
+              "PHY",
+              "PHY",
+              true
+            )
+          }
 
           remoteExitingToRepairFlag := sbMsgExchanger.io.msgSent
 
@@ -2182,48 +2478,60 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s10
           }.elsewhen(io.responderRdy && io.requesterRdy) {
             nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sREPAIR 
-          }            
+            nextState := MBTrainState.sREPAIR
+          }
         }
-        is(MBTrainSubstate.s5) {  // Received {MBTRAIN.LINKSPEED exit to speed degrade req}
+        is(MBTrainSubstate.s5) { // Received {MBTRAIN.LINKSPEED exit to speed degrade req}
           io.doElectricalIdleRx := true.B
-          
+
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_RESP, 
-                                                    "PHY", "PHY", true) 
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           remoteExitingToSpeedDegradeFlag := sbMsgExchanger.io.msgSent
 
           responderRdy := remoteExitingToSpeedDegradeFlag
-          when(io.responderRdy && io.requesterRdy) {  
+          when(io.responderRdy && io.requesterRdy) {
             nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sSPEEDIDLE 
+            nextState := MBTrainState.sSPEEDIDLE
           }
         }
-        is(MBTrainSubstate.s6) {  // Received {MBTRAIN.LINKSPEED exit to PHY retrain req}
+        is(MBTrainSubstate.s6) { // Received {MBTRAIN.LINKSPEED exit to PHY retrain req}
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP, 
-                                                    "PHY", "PHY", true) 
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           remoteExitingToPhyretrainFlag := sbMsgExchanger.io.msgSent
 
           responderRdy := remoteExitingToPhyretrainFlag
-          when(io.requesterRdy && io.responderRdy) {  
+          when(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sTOPHYRETRAIN 
-          }        
+            nextState := MBTrainState.sTOPHYRETRAIN
+          }
         }
-        is(MBTrainSubstate.s7) {  // Received {MBTRAIN.LINKSPEED done req}
+        is(MBTrainSubstate.s7) { // Received {MBTRAIN.LINKSPEED done req}
           // Only send response to done if Local (Requester) is intiating a done as well
           sbMsgExchanger.io.req.valid := io.localInitiatingDone
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_LINKSPEED_DONE_RESP,
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_LINKSPEED_DONE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
-          responderRdy := sbMsgExchanger.io.msgSent && !io.localInitiatingError     
+          responderRdy := sbMsgExchanger.io.msgSent && !io.localInitiatingError
 
           // If localInitiatingError is HIGH that means link cannot move onto LINKINIT
           // Priority is given to going into various repair states requested by Local die.
-          when(io.localInitiatingExitToPhyRetrain) { 
+          when(io.localInitiatingExitToPhyRetrain) {
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(io.localInitiatingWidthDegrade) {
             nextSubstate := MBTrainSubstate.s9
@@ -2262,25 +2570,29 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextSubstate := MBTrainSubstate.s0
             nextState := MBTrainState.sSPEEDIDLE
           }
-        } 
-      }         
+        }
+      }
     }
-    is(MBTrainState.sREPAIR) {     
+    is(MBTrainState.sREPAIR) {
       switch(substateReg) {
-        is(MBTrainSubstate.s0) {  // INIT
+        is(MBTrainSubstate.s0) { // INIT
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_INIT_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_INIT_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_INIT_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBTrainSubstate.s1
           }
         }
-        is(MBTrainSubstate.s1) {  // APPLY DEGRADE
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B                                                    
+        is(MBTrainSubstate.s1) { // APPLY DEGRADE
+          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_REQ
 
           when(sbMsgExchanger.io.resp.valid) {
@@ -2289,30 +2601,38 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
           }
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived && !errorDetected
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
 
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s2
-          }                                                    
+          }
         }
-        is(MBTrainSubstate.s2) {  // END
+        is(MBTrainSubstate.s2) { // END
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_END_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.MBTRAIN_REPAIR_END_RESP, 
-                                                    "PHY", "PHY", true)
+          sbMsgExchanger.io.req.bits := SBMsgCreate(
+            SBM.MBTRAIN_REPAIR_END_RESP,
+            "PHY",
+            "PHY",
+            true
+          )
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s0
             nextState := MBTrainState.sTXSELFCAL
           }
         }
-      } 
+      }
     }
-    is(MBTrainState.sTOPHYRETRAIN) {            
+    is(MBTrainState.sTOPHYRETRAIN) {
       when(io.goToState.valid) {
         nextSubstate := MBTrainSubstate.s0
         switch(io.goToState.bits) {
@@ -2326,9 +2646,9 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
             nextState := MBTrainState.sREPAIR
           }
         }
-      } 
+      }
     }
-    is(MBTrainState.sTOLINKINIT) { 
+    is(MBTrainState.sTOLINKINIT) {
       io.done := true.B
       when(io.goToState.valid) {
         nextSubstate := MBTrainSubstate.s0
@@ -2342,9 +2662,8 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams) extends M
           is(MBTrainGoToState.goToREPAIR) {
             nextState := MBTrainState.sREPAIR
           }
-        } 
-      }          
+        }
+      }
     }
-  }  
+  }
 }
-

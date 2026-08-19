@@ -1,7 +1,7 @@
 /*
   Description:
     File contains the RDI requester/responder state machines.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -9,7 +9,6 @@ import edu.berkeley.cs.uciedigital.sideband._
 import edu.berkeley.cs.uciedigital.interfaces._
 import chisel3._
 import chisel3.util._
-
 
 // Used for internal transitions
 object RDIStateMachineKind extends ChiselEnum {
@@ -73,8 +72,10 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
   }
 
   when(responder.io.transitionDone && requester.io.transitionDone) {
-    assert(responder.io.targetState === requester.io.targetState,
-      "FATAL: RDI requester/responder completed conflicting transitions")
+    assert(
+      responder.io.targetState === requester.io.targetState,
+      "FATAL: RDI requester/responder completed conflicting transitions"
+    )
     currentState := responder.io.targetState
   }.elsewhen(responder.io.transitionDone) {
     currentState := responder.io.targetState
@@ -82,8 +83,10 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
     currentState := requester.io.targetState
   }
 
-  assert((currentState =/= RDIState.l1) && (currentState =/= RDIState.l2),
-    "FATAL: PM entry is not implemented in the RDI state machine")
+  assert(
+    (currentState =/= RDIState.l1) && (currentState =/= RDIState.l2),
+    "FATAL: PM entry is not implemented in the RDI state machine"
+  )
 
   io.rdi.plStateSts := currentState
   io.sidebandBusy := requester.io.busy || responder.io.busy
@@ -117,7 +120,11 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
   val sbMsgExchanger = Module(new SidebandMessageExchanger(sbParams))
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
   sbMsgExchanger.io.clear := substateReg === Substate.sIdle
   sbMsgExchanger.io.sbLaneIo <> io.sbLaneIo
@@ -136,9 +143,11 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
         startTransition := true.B
         startKind := RDIStateMachineKind.linkError
         startTarget := RDIState.linkError
-      }.elsewhen(io.rdi.lpStateReq === RDIStateReq.active &&
+      }.elsewhen(
+        io.rdi.lpStateReq === RDIStateReq.active &&
           io.resetReqObserved &&
-          io.rdi.plWakeAck) {
+          io.rdi.plWakeAck
+      ) {
         startTransition := true.B
         startKind := RDIStateMachineKind.active
         startTarget := RDIState.active
@@ -265,11 +274,21 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
       rxPattern := SBM.LINKMGMT_RDI_RSP_PMNAK
     }
     is(RDIStateMachineKind.linkReset) {
-      txPattern := SBMsgCreate(SBM.LINKMGMT_RDI_REQ_LINKRESET, "PHY", "PHY", true)
+      txPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_REQ_LINKRESET,
+        "PHY",
+        "PHY",
+        true
+      )
       rxPattern := SBM.LINKMGMT_RDI_RSP_LINKRESET
     }
     is(RDIStateMachineKind.linkError) {
-      txPattern := SBMsgCreate(SBM.LINKMGMT_RDI_REQ_LINKERROR, "PHY", "PHY", true)
+      txPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_REQ_LINKERROR,
+        "PHY",
+        "PHY",
+        true
+      )
       rxPattern := SBM.LINKMGMT_RDI_RSP_LINKERROR
     }
     is(RDIStateMachineKind.retrain) {
@@ -334,7 +353,11 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
   val sbMsgExchanger = Module(new SidebandMessageExchanger(sbParams))
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
   sbMsgExchanger.io.clear := substateReg === Substate.sIdle
   sbMsgExchanger.io.sbLaneIo.tx <> io.sbLaneIo.tx
@@ -346,19 +369,26 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
   io.busy := substateReg =/= Substate.sIdle
   io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
 
-  val rxIsReqActive = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_ACTIVE)
-  val rxIsReqL1 = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_L1)
-  val rxIsReqL2 = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_L2)
-  val rxIsReqLinkReset = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_LINKRESET)
-  val rxIsReqLinkError = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_LINKERROR)
-  val rxIsReqRetrain = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_RETRAIN)
-  val rxIsReqDisabled = SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_DISABLE)
+  val rxIsReqActive =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_ACTIVE)
+  val rxIsReqL1 =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_L1)
+  val rxIsReqL2 =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_L2)
+  val rxIsReqLinkReset =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_LINKRESET)
+  val rxIsReqLinkError =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_LINKERROR)
+  val rxIsReqRetrain =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_RETRAIN)
+  val rxIsReqDisabled =
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.LINKMGMT_RDI_REQ_DISABLE)
 
   val canAcceptActiveFromReset =
     (io.currentState === RDIState.reset) &&
-    io.resetReqObserved &&
-    io.rdi.plWakeAck &&
-    (io.rdi.lpStateReq === RDIStateReq.active)
+      io.resetReqObserved &&
+      io.rdi.plWakeAck &&
+      (io.rdi.lpStateReq === RDIStateReq.active)
 
   val rspPattern = WireDefault(0.U(sbParams.sbNodeMsgWidth.W))
   val canSendResponse = WireDefault(true.B)
@@ -377,16 +407,36 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
       rspPattern := SBMsgCreate(SBM.LINKMGMT_RDI_RSP_PMNAK, "PHY", "PHY", true)
     }
     is(RDIStateMachineKind.linkReset) {
-      rspPattern := SBMsgCreate(SBM.LINKMGMT_RDI_RSP_LINKRESET, "PHY", "PHY", true)
+      rspPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_RSP_LINKRESET,
+        "PHY",
+        "PHY",
+        true
+      )
     }
     is(RDIStateMachineKind.linkError) {
-      rspPattern := SBMsgCreate(SBM.LINKMGMT_RDI_RSP_LINKERROR, "PHY", "PHY", true)
+      rspPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_RSP_LINKERROR,
+        "PHY",
+        "PHY",
+        true
+      )
     }
     is(RDIStateMachineKind.retrain) {
-      rspPattern := SBMsgCreate(SBM.LINKMGMT_RDI_RSP_RETRAIN, "PHY", "PHY", true)
+      rspPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_RSP_RETRAIN,
+        "PHY",
+        "PHY",
+        true
+      )
     }
     is(RDIStateMachineKind.disabled) {
-      rspPattern := SBMsgCreate(SBM.LINKMGMT_RDI_RSP_DISABLE, "PHY", "PHY", true)
+      rspPattern := SBMsgCreate(
+        SBM.LINKMGMT_RDI_RSP_DISABLE,
+        "PHY",
+        "PHY",
+        true
+      )
     }
   }
 
@@ -402,14 +452,20 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
         }.elsewhen(rxIsReqL1) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.pmL1
-          pendingTargetReg := Mux(io.currentState === RDIState.active,
-            RDIState.activePmNak, io.currentState)
+          pendingTargetReg := Mux(
+            io.currentState === RDIState.active,
+            RDIState.activePmNak,
+            io.currentState
+          )
           substateReg := Substate.sRespond
         }.elsewhen(rxIsReqL2) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.pmL2
-          pendingTargetReg := Mux(io.currentState === RDIState.active,
-            RDIState.activePmNak, io.currentState)
+          pendingTargetReg := Mux(
+            io.currentState === RDIState.active,
+            RDIState.activePmNak,
+            io.currentState
+          )
           substateReg := Substate.sRespond
         }.elsewhen(rxIsReqLinkReset) {
           io.sbLaneIo.rx.ready := true.B
@@ -447,4 +503,3 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
     }
   }
 }
-

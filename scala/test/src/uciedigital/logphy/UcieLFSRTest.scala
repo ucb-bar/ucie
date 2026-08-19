@@ -17,21 +17,26 @@ class UcieLFSRTest extends AnyFunSpec with ChiselSim {
   val lfsrWidth = 23
   val polynomial = BigInt(0x210125)
   val laneSeeds = Seq(
-    BigInt(0x1DBFBC),
-    BigInt(0x0607BB),
-    BigInt(0x1EC760),
-    BigInt(0x18C0DB),
-    BigInt(0x010F12),
-    BigInt(0x19CFC9),
-    BigInt(0x0277CE),
-    BigInt(0x1BB807)
+    BigInt(0x1dbfbc),
+    BigInt(0x0607bb),
+    BigInt(0x1ec760),
+    BigInt(0x18c0db),
+    BigInt(0x010f12),
+    BigInt(0x19cfc9),
+    BigInt(0x0277ce),
+    BigInt(0x1bb807)
   )
 
-  private def params = AfeParams(mbSerializerRatio = serializerRatio, mbLanes = lanes)
+  private def params =
+    AfeParams(mbSerializerRatio = serializerRatio, mbLanes = lanes)
 
   private def laneReferenceModels(): Seq[ReferenceLFSR] =
     Seq.tabulate(lanes) { lane =>
-      new ReferenceLFSR(laneSeeds(lane % laneSeeds.length), polynomial, lfsrWidth)
+      new ReferenceLFSR(
+        laneSeeds(lane % laneSeeds.length),
+        polynomial,
+        lfsrWidth
+      )
     }
 
   private def clearControls(dut: UcieLFSR): Unit = {
@@ -41,13 +46,18 @@ class UcieLFSRTest extends AnyFunSpec with ChiselSim {
     }
   }
 
-  private def expectOutputs(dut: UcieLFSR, refs: Seq[ReferenceLFSR], context: String): Unit = {
+  private def expectOutputs(
+      dut: UcieLFSR,
+      refs: Seq[ReferenceLFSR],
+      context: String
+  ): Unit = {
     for (lane <- 0 until lanes) {
       val expected = refs(lane).peekOutputWord(serializerRatio)
       val actual = dut.io.lfsrOutput(lane).peek().litValue
       assert(
         actual == expected,
-        s"$context lane $lane output mismatch: expected 0x${expected.toString(16)}, got 0x${actual.toString(16)}"
+        s"$context lane $lane output mismatch: expected 0x${expected
+            .toString(16)}, got 0x${actual.toString(16)}"
       )
     }
   }
@@ -82,7 +92,9 @@ class UcieLFSRTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("matches the reference model with randomized per-lane reset and increment") {
+    it(
+      "matches the reference model with randomized per-lane reset and increment"
+    ) {
       simulate(new UcieLFSR(params)) { dut =>
         val refs = laneReferenceModels()
         val random = new Random(randomSeed)

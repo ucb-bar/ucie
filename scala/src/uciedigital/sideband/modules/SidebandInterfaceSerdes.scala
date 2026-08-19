@@ -1,19 +1,19 @@
-/*  
-  Description: 
+/*
+  Description:
     The sideband interface serdes serializes and deserializes messages over FDI/RDI interface.
     Parameterizable to serialize/deserialize at NC_WIDTH: 8, 16, 32 as per spec.
 
     This file contains the RTL for:
       1. Serializer
-      2. Deserializer    
+      2. Deserializer
 
-    Note: 
-    * The serializer and deserializer doesn't consider the opcode during serialization, because
+    Note:
+ * The serializer and deserializer doesn't consider the opcode during serialization, because
     each credit associated with a message considers both a 64-bit header and potential 64-bit
     payload.
-      - The added latency for serializing 0s is 8, 4, 2 cycles for 
-        NC_WIDTH: 8, 16, 32, respectively.    
-*/
+      - The added latency for serializing 0s is 8, 4, 2 cycles for
+        NC_WIDTH: 8, 16, 32, respectively.
+ */
 
 package edu.berkeley.cs.uciedigital.sideband
 
@@ -28,7 +28,8 @@ import scala.math.max
 // ============================================================================
 // Sideband Interface Serializer
 // ============================================================================
-class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int) extends Module {
+class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
+    extends Module {
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(UInt(sbMsgWidth.W)))
     val out = Valid(UInt(ncWidth.W))
@@ -52,10 +53,10 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int) extends Module 
 
   when(inProgress) {
     when(!isLastBeat) {
-      dataReg := dataReg >> ncWidth   // Using ncWidth.U may generate a barrel shifter instead of rewiring
+      dataReg := dataReg >> ncWidth // Using ncWidth.U may generate a barrel shifter instead of rewiring
       beatCounter := beatCounter + 1.U
     }.otherwise {
-      when(io.in.valid) {   // Immediately loads back-to-back valid packet
+      when(io.in.valid) { // Immediately loads back-to-back valid packet
         dataReg := io.in.bits
         beatCounter := 0.U
       }.otherwise {
@@ -77,14 +78,19 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int) extends Module 
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
-        Sequence.BoolSequence(io.in.fire) |=> Sequence.BoolSequence(io.out.valid).repeat(numBeats),
+        Sequence.BoolSequence(io.in.fire) |=> Sequence
+          .BoolSequence(io.out.valid)
+          .repeat(numBeats),
         label = Some("SerializerEmitsAllBeatsAfterAccept")
       )
     }
     block(Verification.Cover) {
       cover(io.in.fire, "InterfaceSerializerInputFire")
       cover(io.out.valid && isLastBeat, "InterfaceSerializerLastBeat")
-      cover(inProgress && isLastBeat && io.in.valid && io.in.ready, "InterfaceSerializerBackToBackFinalBeatAccept")
+      cover(
+        inProgress && isLastBeat && io.in.valid && io.in.ready,
+        "InterfaceSerializerBackToBackFinalBeatAccept"
+      )
     }
   }
 }
@@ -92,10 +98,13 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int) extends Module 
 // ============================================================================
 // Sideband Interface Deserializer
 // ============================================================================
-class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int) extends Module {
+class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int)
+    extends Module {
   val io = IO(new Bundle {
     val in = Flipped(Valid(UInt(ncWidth.W)))
-    val out = Valid(UInt(sbMsgWidth.W)) // Receiving end should sink when valid is high for a cycle
+    val out = Valid(
+      UInt(sbMsgWidth.W)
+    ) // Receiving end should sink when valid is high for a cycle
   })
 
   // sbMsgWidth is the width of a sideband message, ncWidth is the interface sideband bus width
@@ -103,7 +112,7 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int) extends Modul
   val numBeats = (sbMsgWidth / ncWidth)
   val maxBeats = numBeats - 1
   val counterWidth = max(1, log2Ceil(numBeats))
-  
+
   val beatCounter = RegInit(0.U(counterWidth.W))
   val dataReg = RegInit(VecInit.fill(numBeats)(0.U(ncWidth.W)))
   val inProgress = RegInit(false.B)
@@ -111,7 +120,7 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int) extends Modul
   io.out.bits := dataReg.asUInt
   io.out.valid := inProgress && (beatCounter === 0.U)
 
-  // As per spec can be assured that consecutive phases of a packet will come in consecutive 
+  // As per spec can be assured that consecutive phases of a packet will come in consecutive
   // clock cycles
   when(io.in.valid) {
     dataReg(beatCounter) := io.in.bits
@@ -134,21 +143,31 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int) extends Modul
     block(Verification) {
       block(Verification.Assert) {
         AssertProperty(
-          Sequence.BoolSequence(io.out.valid) |=> Sequence.BoolSequence(!io.out.valid),
+          Sequence.BoolSequence(io.out.valid) |=> Sequence.BoolSequence(
+            !io.out.valid
+          ),
           label = Some("DeserializerOutputIsSingleCyclePulse")
         )
       }
       block(Verification.Cover) {
         cover(io.in.valid && !inProgress, "InterfaceDeserializerFirstBeat")
-        cover(io.in.valid && inProgress && beatCounter === maxBeats.U, "InterfaceDeserializerFinalBeat")
-        cover(!io.in.valid && inProgress && beatCounter =/= 0.U, "InterfaceDeserializerGapAbort")
+        cover(
+          io.in.valid && inProgress && beatCounter === maxBeats.U,
+          "InterfaceDeserializerFinalBeat"
+        )
+        cover(
+          !io.in.valid && inProgress && beatCounter =/= 0.U,
+          "InterfaceDeserializerGapAbort"
+        )
         cover(io.out.valid, "InterfaceDeserializerOutputPulse")
-        cover(io.out.valid && io.in.valid, "InterfaceDeserializerStreamingOutputWithNewBeat")
+        cover(
+          io.out.valid && io.in.valid,
+          "InterfaceDeserializerStreamingOutputWithNewBeat"
+        )
       }
     }
   }
 }
-
 
 object MainSBIntfSer extends App {
   ChiselStage.emitSystemVerilogFile(
@@ -157,8 +176,8 @@ object MainSBIntfSer extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
@@ -169,7 +188,7 @@ object MainSBIntfDes extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }

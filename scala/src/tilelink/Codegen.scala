@@ -264,7 +264,9 @@ object Codegen {
 
   lazy val regAddrMap: Map[String, BigInt] =
     ucieRegmap.flatMap { case (offset, fields) =>
-      fields.flatMap(_.desc.map(d => (d.name, ucieParams.address + BigInt(offset))))
+      fields.flatMap(
+        _.desc.map(d => (d.name, ucieParams.address + BigInt(offset)))
+      )
     }.toMap
 
   lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] = {
@@ -313,10 +315,18 @@ object Codegen {
   lazy val tlLongMbReqs: Seq[TLRequestDescriptor] = {
     val pattern: BigInt = BigInt(0x0100010001000100L)
     val writes = (0 until 32).map { i =>
-      TLRequestDescriptor(BigInt(i) * 8, isWrite = true, data = BigInt(i) * pattern)
+      TLRequestDescriptor(
+        BigInt(i) * 8,
+        isWrite = true,
+        data = BigInt(i) * pattern
+      )
     }
     val reads = (0 until 32).map { i =>
-      TLRequestDescriptor(BigInt(i) * 8, isWrite = false, data = BigInt(i) * pattern)
+      TLRequestDescriptor(
+        BigInt(i) * 8,
+        isWrite = false,
+        data = BigInt(i) * pattern
+      )
     }
     writes ++ reads
   }
@@ -952,7 +962,7 @@ class Codegen(f: Formatter) {
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
       formatWriteNamedReg(
-        "mainbandSel", 
+        "mainbandSel",
         f.formatLong(1)
       )
     )

@@ -1,7 +1,7 @@
 /*
   Description:
     Top-level protocol layer that ties together mainband, sideband, and FDI state handling.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.protocol
 
@@ -11,21 +11,27 @@ import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 
 class ProtocolLayer(
-  val params: ProtocolLayerParams = ProtocolLayerParams(),
-  val fdiParams: FdiParams = FdiParams(64, 32),
-  val sbParams: SidebandParams = new SidebandParams(),
+    val params: ProtocolLayerParams = ProtocolLayerParams(),
+    val fdiParams: FdiParams = FdiParams(64, 32),
+    val sbParams: SidebandParams = new SidebandParams()
 ) extends Module {
   val io = IO(new ProtocolLayerIO(params, fdiParams))
 
   val stateController = Module(new ProtocolStateController())
-  val mainbandTx = Module(new ProtocolMainbandTx(fdiParams.nBytes, params.txQueueDepth))
-  val mainbandRx = Module(new ProtocolMainbandRx(fdiParams.nBytes, params.rxQueueDepth))
-  val sidebandChannel = Module(new ProtocolSidebandChannel(
-    sbMsgWidth = sbParams.sbNodeMsgWidth,
-    fdiNcWidth = fdiParams.ncWidth,
-    numCredits = sbParams.maxCrd,
-    queueDepths = SidebandPriorityQueueDepths()
-  ))
+  val mainbandTx = Module(
+    new ProtocolMainbandTx(fdiParams.nBytes, params.txQueueDepth)
+  )
+  val mainbandRx = Module(
+    new ProtocolMainbandRx(fdiParams.nBytes, params.rxQueueDepth)
+  )
+  val sidebandChannel = Module(
+    new ProtocolSidebandChannel(
+      sbMsgWidth = sbParams.sbNodeMsgWidth,
+      fdiNcWidth = fdiParams.ncWidth,
+      numCredits = sbParams.maxCrd,
+      queueDepths = SidebandPriorityQueueDepths()
+    )
+  )
 
   stateController.io.ctrl <> io.ctrl
   stateController.io.fdi.plStateSts := io.fdi.plStateSts
@@ -91,6 +97,6 @@ object MainProtocolLayer extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

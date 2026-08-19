@@ -1,7 +1,7 @@
 /*
-  Description: 
+  Description:
     A control signal translation module for signals between analog and digital.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -42,7 +42,7 @@ class PhyControlSignalTranslator(afeParams: AfeParams) extends Module {
         val txDataEn = Input(Vec(afeParams.mbLanes, Bool()))
         val txClkEn = Input(Bool())
         val txValidEn = Input(Bool())
-        val txTrackEn = Input(Bool())            
+        val txTrackEn = Input(Bool())
         val rxDataEn = Input(Vec(afeParams.mbLanes, Bool()))
         val rxClkEn = Input(Bool())
         val rxValidEn = Input(Bool())

@@ -6,9 +6,9 @@ import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.sideband._
 
 class D2DMainbandStateIO(
-  val fdiParams: FdiParams,
-  val rdiParams: RdiParams,
-  val sbParams: SidebandParams,
+    val fdiParams: FdiParams,
+    val rdiParams: RdiParams,
+    val sbParams: SidebandParams
 ) extends Bundle {
   val d2dState = Input(RDIState())
   val rxActiveReq = Input(Bool())
@@ -22,9 +22,9 @@ object D2DMainbandTxStallState extends ChiselEnum {
 }
 
 class D2DMainbandModule(
-  val fdiParams: FdiParams,
-  val rdiParams: RdiParams,
-  val sbParams: SidebandParams,
+    val fdiParams: FdiParams,
+    val rdiParams: RdiParams,
+    val sbParams: SidebandParams
 ) extends Module {
   val io = IO(new Bundle {
     val state = new D2DMainbandStateIO(fdiParams, rdiParams, sbParams)
@@ -60,7 +60,8 @@ class D2DMainbandModule(
 
   // Stall Control
   val txStallStateReg = RegInit(D2DMainbandTxStallState.running)
-  val txStallRequested = io.state.mainbandStallReq && (io.state.d2dState === RDIState.active)
+  val txStallRequested =
+    io.state.mainbandStallReq && (io.state.d2dState === RDIState.active)
   val txBufferEmpty = !dataBuffSntFillReg
 
   val stallBlocksFdiIngress =
@@ -96,7 +97,8 @@ class D2DMainbandModule(
   io.rdi.lpIrdy := dataBuffSntFillReg && !stallBlocksRdiTx
   io.rdi.lpValid := dataBuffSntFillReg && !stallBlocksRdiTx
 
-  val canAcceptFdi = (!dataBuffSntFillReg || txBeatSentToRdi) && !stallBlocksFdiIngress
+  val canAcceptFdi =
+    (!dataBuffSntFillReg || txBeatSentToRdi) && !stallBlocksFdiIngress
   val txBeatAcceptedFromFdi = canAcceptFdi && io.fdi.lpValid && io.fdi.lpIrdy
   io.fdi.plTrdy := canAcceptFdi
 
@@ -123,8 +125,8 @@ class D2DMainbandModule(
   // RX Control
   val rxCaptureEnabled =
     (io.state.d2dState === RDIState.active) &&
-    io.state.rxActiveReq &&
-    io.state.rxActiveSts
+      io.state.rxActiveReq &&
+      io.state.rxActiveSts
   val rxBeatAcceptedFromRdi = io.rdi.plValid && rxCaptureEnabled
 
   // RX datapath: Physical -> Adapter -> Protocol

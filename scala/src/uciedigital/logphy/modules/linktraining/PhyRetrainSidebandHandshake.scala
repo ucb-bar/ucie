@@ -1,7 +1,7 @@
 /*
   Description:
     This module takes care of the sideband handshake pertaining to the PHYRETRAIN state.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -18,13 +18,13 @@ class PhyRetrainSidebandHandshake(sbParams: SidebandParams) extends Module {
     // IN
     val startPhyRetrainMsgExch = Input(Bool())
     val requesterLocalRetrainEncoding = Flipped(Valid(UInt(3.W)))
-    val waitForRemoteRequest = Input(Bool())        
+    val waitForRemoteRequest = Input(Bool())
     val responderLocalRetrainEncoding = Flipped(Valid(UInt(3.W)))
-    
+
     // OUT
-    val requesterRemoteRetrainEncoding = Valid(UInt(3.W)) 
+    val requesterRemoteRetrainEncoding = Valid(UInt(3.W))
     val responderRemoteRetrainEncoding = Valid(UInt(3.W))
-    
+
     val done = Output(Bool())
 
     // Bundle with IN & OUT IOs
@@ -38,7 +38,7 @@ class PhyRetrainSidebandHandshake(sbParams: SidebandParams) extends Module {
   // Requester IN
   requester.io.startPhyRetrainMsgExch := io.startPhyRetrainMsgExch
   requester.io.localRetrainEncoding := io.requesterLocalRetrainEncoding
-  requester.io.responderRdy := responder.io.responderRdy 
+  requester.io.responderRdy := responder.io.responderRdy
   requester.io.sbLaneIo <> io.requesterSbLaneIo
 
   // Responder IN
@@ -57,7 +57,8 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
   val io = IO(new Bundle {
     // IN
     val startPhyRetrainMsgExch = Input(Bool())
-    val localRetrainEncoding = Flipped(Valid(UInt(3.W)))  // TODO: I think valid is always true
+    val localRetrainEncoding =
+      Flipped(Valid(UInt(3.W))) // TODO: I think valid is always true
     val responderRdy = Input(Bool())
 
     // OUT
@@ -79,17 +80,21 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
   // sbMsgExchanger Module Defaults
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
-  sbMsgExchanger.io.clear := (currentState =/= nextState)  // TODO: might need a reset?
+  sbMsgExchanger.io.clear := (currentState =/= nextState) // TODO: might need a reset?
   sbMsgExchanger.io.sbLaneIo <> io.sbLaneIo
 
   // Requester ready logic -- used by responder
   val requesterRdyStatusReg = RegInit(false.B)
   val requesterRdy = WireInit(false.B)
   when(currentState =/= nextState) {
-    requesterRdyStatusReg := false.B 
-  }  
+    requesterRdyStatusReg := false.B
+  }
   when(requesterRdy) {
     requesterRdyStatusReg := true.B
   }
@@ -104,12 +109,15 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
   switch(currentState) {
     is(PhyRetrainState.sPHYRETRAIN_MSG) {
       sbMsgExchanger.io.req.valid := io.localRetrainEncoding.valid && io.startPhyRetrainMsgExch
-      sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.PHYRETRAIN_RETRAIN_START_REQ, 
-                                                "PHY", "PHY", true,
-                                                msgInfo = Cat(0.U(12.W),
-                                                              io.localRetrainEncoding.bits))
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.PHYRETRAIN_RETRAIN_START_REQ,
+        "PHY",
+        "PHY",
+        true,
+        msgInfo = Cat(0.U(12.W), io.localRetrainEncoding.bits)
+      )
 
-      sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent 
+      sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.PHYRETRAIN_RETRAIN_START_RESP
 
       when(sbMsgExchanger.io.resp.valid) {
@@ -117,7 +125,7 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
         remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(74, 72)
       }
 
-      requesterRdy := sbMsgExchanger.io.exchDone 
+      requesterRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
         nextState := PhyRetrainState.sDONE
       }
@@ -133,11 +141,12 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
   val io = IO(new Bundle {
     // IN
     val waitForRemoteRequest = Input(Bool())
-    val localRetrainEncoding = Flipped(Valid(UInt(3.W)))  // valid goes HIGH after resolving
+    val localRetrainEncoding =
+      Flipped(Valid(UInt(3.W))) // valid goes HIGH after resolving
     val requesterRdy = Input(Bool())
 
     // OUT
-    val remoteRetrainEncoding = Valid(UInt(3.W)) 
+    val remoteRetrainEncoding = Valid(UInt(3.W))
     val responderRdy = Output(Bool())
 
     // Bundle with IN & OUT IOs
@@ -155,17 +164,21 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
   // sbMsgExchanger Module Defaults
   sbMsgExchanger.io.req.bits := 0.U
   sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(0.U(5.W), 0.U(8.W), 0.U(8.W))
+  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
+    0.U(5.W),
+    0.U(8.W),
+    0.U(8.W)
+  )
   sbMsgExchanger.io.rxRefBitPattern.valid := false.B
-  sbMsgExchanger.io.clear := (currentState =/= nextState)  // TODO: might need a reset?
+  sbMsgExchanger.io.clear := (currentState =/= nextState) // TODO: might need a reset?
   sbMsgExchanger.io.sbLaneIo <> io.sbLaneIo
 
   // Responder ready logic -- used by requester
   val responderRdyStatusReg = RegInit(false.B)
   val responderRdy = WireInit(false.B)
   when(currentState =/= nextState) {
-    responderRdyStatusReg := false.B 
-  }  
+    responderRdyStatusReg := false.B
+  }
   when(responderRdy) {
     responderRdyStatusReg := true.B
   }
@@ -179,8 +192,8 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
 
   switch(currentState) {
     is(PhyRetrainState.sPHYRETRAIN_MSG) {
-      sbMsgExchanger.io.rxRefBitPattern.valid := io.waitForRemoteRequest                                            
-      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.PHYRETRAIN_RETRAIN_START_REQ 
+      sbMsgExchanger.io.rxRefBitPattern.valid := io.waitForRemoteRequest
+      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.PHYRETRAIN_RETRAIN_START_REQ
 
       when(sbMsgExchanger.io.resp.valid) {
         validRemoteRetrainEncoding := true.B
@@ -188,12 +201,15 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
       }
 
       sbMsgExchanger.io.req.valid := io.localRetrainEncoding.valid
-      sbMsgExchanger.io.req.bits := SBMsgCreate(SBM.PHYRETRAIN_RETRAIN_START_RESP, 
-                                                "PHY", "PHY", true,
-                                                msgInfo = Cat(0.U(12.W),
-                                                              io.localRetrainEncoding.bits))
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.PHYRETRAIN_RETRAIN_START_RESP,
+        "PHY",
+        "PHY",
+        true,
+        msgInfo = Cat(0.U(12.W), io.localRetrainEncoding.bits)
+      )
 
-      responderRdy := sbMsgExchanger.io.exchDone 
+      responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
         nextState := PhyRetrainState.sDONE
       }
@@ -204,5 +220,3 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
     }
   }
 }
-
-

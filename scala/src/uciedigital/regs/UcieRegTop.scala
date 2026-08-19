@@ -11,12 +11,15 @@ import freechips.rocketchip.interrupts.{IntSourceNode, IntSourcePortSimple}
 
 // Add the raw IRQ output ports used when interrupts are not routed through a diplomatic node.
 class UcieRegTopIO(params: UcieRegParams) extends UcieRegBlockIO(params) {
-  val linkEventIrq = if (params.includeInterruptNode) None else Some(Output(Bool()))
-  val linkErrorIrq = if (params.includeInterruptNode) None else Some(Output(Bool()))
+  val linkEventIrq =
+    if (params.includeInterruptNode) None else Some(Output(Bool()))
+  val linkErrorIrq =
+    if (params.includeInterruptNode) None else Some(Output(Bool()))
 }
 
-class UcieRegTop(val params: UcieRegParams, val beatBytes: Int = 4)(implicit p: Parameters)
-    extends ClockSinkDomain(ClockSinkParameters()) {
+class UcieRegTop(val params: UcieRegParams, val beatBytes: Int = 4)(implicit
+    p: Parameters
+) extends ClockSinkDomain(ClockSinkParameters()) {
 
   val allocation = params.allocation
 
@@ -24,13 +27,16 @@ class UcieRegTop(val params: UcieRegParams, val beatBytes: Int = 4)(implicit p: 
 
   val node: Option[TLRegisterNode] =
     if (params.includeRegNode) {
-      Some(TLRegisterNode(
-        address = Seq(AddressSet(params.baseAddress, allocation.regionSize - 1)),
-        device = device,
-        deviceKey = "reg/control",
-        beatBytes = beatBytes,
-        undefZero = true
-      ))
+      Some(
+        TLRegisterNode(
+          address =
+            Seq(AddressSet(params.baseAddress, allocation.regionSize - 1)),
+          device = device,
+          deviceKey = "reg/control",
+          beatBytes = beatBytes,
+          undefZero = true
+        )
+      )
     } else None
 
   val intNode: Option[IntSourceNode] =
@@ -46,7 +52,8 @@ class UcieRegTop(val params: UcieRegParams, val beatBytes: Int = 4)(implicit p: 
       withClockAndReset(clock, reset) {
         // If no node declared, build the map externally with UcieRegBlock.build
         if (node.isDefined || intNode.isDefined) {
-          val (entries, linkEventIrq, linkErrorIrq) = UcieRegBlock.build(io, reset, params)
+          val (entries, linkEventIrq, linkErrorIrq) =
+            UcieRegBlock.build(io, reset, params)
           node.foreach(_.regmap(entries: _*))
           intNode match {
             case Some(intn) =>

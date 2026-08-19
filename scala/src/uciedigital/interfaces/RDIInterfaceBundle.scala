@@ -5,7 +5,7 @@
   lp_* indicates Die-to-Die Adapter -> Physical Layer
 
   NOTE: Signal directions are relative to the Logical PHY
-*/
+ */
 package edu.berkeley.cs.uciedigital.interfaces
 
 import chisel3._

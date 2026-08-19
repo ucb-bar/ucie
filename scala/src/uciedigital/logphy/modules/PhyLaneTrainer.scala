@@ -1,7 +1,7 @@
 // Gets signals to the training, and sets the lanes appropriately
 // Signals once done and the LTSM continues
 
-// Can do specific triggers like do per lane deskew, etc and get done signals back 
+// Can do specific triggers like do per lane deskew, etc and get done signals back
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -15,35 +15,37 @@ class MbTrainTestIntf(afeParams: AfeParams) extends Bundle {
   val txSelfCalStart = Input(Bool())
   val rxClkCalStart = Input(Bool())
   val txSelfCalDone = Output(Bool())
-  val rxClkCalDone  = Output(Bool())
+  val rxClkCalDone = Output(Bool())
 
   // Signals which test the MBTrain can do
   val capableTest = Input(new Bundle {
     val isTxType = Bool()
-    val isRxType = Bool() 
+    val isRxType = Bool()
     val testKind = TrainingTestType() // Enum: Point, Sweep, Either
   })
 
   // PhyLaneTrainer requests a test with `req` and recieves response in `resp`
   val req = new Bundle {
-    val readyForReq = Input(Bool())           // MBTrain indicates it is ready for a request
+    val readyForReq = Input(
+      Bool()
+    ) // MBTrain indicates it is ready for a request
     val start = Output(Bool())
     val testKind = Output(TrainingTestType()) // Enum: Point, Sweep, Either
-    val complete = Output(Bool())             // Indicates to move on, no more testing
+    val complete = Output(Bool()) // Indicates to move on, no more testing
   }
-  
+
   val resp = new Bundle {
     val inProgress = Input(Bool())
     val done = Input(Bool())
 
     // Aggregate result is held in vec index (0)
     // Note: Must accept result when valid goes HIGH as no real need for back pressure.
-    val results = Flipped(Valid(Vec(afeParams.mbLanes, UInt(1.W))))    
+    val results = Flipped(Valid(Vec(afeParams.mbLanes, UInt(1.W))))
   }
-  
-  // Remote sends results for Remote-intiated Rx Init D2C Eye Width Sweep, 
+
+  // Remote sends results for Remote-intiated Rx Init D2C Eye Width Sweep,
   // can be used for adjusting PI phase.
-  val remoteRxSweepResults = Flipped(Valid(Vec(afeParams.mbLanes, UInt(1.W))))    
+  val remoteRxSweepResults = Flipped(Valid(Vec(afeParams.mbLanes, UInt(1.W))))
 }
 
 class MbInitTestIntf(afeParams: AfeParams) extends Bundle {
@@ -52,7 +54,7 @@ class MbInitTestIntf(afeParams: AfeParams) extends Bundle {
 }
 
 class PhyTrainIO(afeParams: AfeParams) extends Bundle {
-  val ltsmState = Input(LTSMState())    // Used to see what to train
+  val ltsmState = Input(LTSMState()) // Used to see what to train
   val mbTrain = new MbTrainTestIntf(afeParams)
   val mbInit = new MbInitTestIntf(afeParams)
 
@@ -61,29 +63,31 @@ class PhyTrainIO(afeParams: AfeParams) extends Bundle {
     val doingTxEyeWidthSweep = Input(Bool())
     val doingTxPointTest = Input(Bool())
     val doingRxEyeWidthSweep = Input(Bool())
-    val doingRxPointTest = Input(Bool())       
+    val doingRxPointTest = Input(Bool())
   }
-  
+
   val remoteStatus = new Bundle {
     val doingTxEyeWidthSweep = Input(Bool())
     val doingTxPointTest = Input(Bool())
     val doingRxEyeWidthSweep = Input(Bool())
     val doingRxPointTest = Input(Bool())
   }
-  
+
   // eyeSweepCtrl only valid when during RX Eye Width Sweeps
   val eyeSweepCtrl = new Bundle {
-    val waitingForCommand = Input(Bool()) // Test asking whether to run again or end
-    val step = Output(Bool())             
+    val waitingForCommand = Input(
+      Bool()
+    ) // Test asking whether to run again or end
+    val step = Output(Bool())
     val doneStepping = Output(Bool())
-  } 
+  }
 }
 
 class PhyLaneTrainer(afeParams: AfeParams) extends Module {
   val io = IO(new Bundle {
-    val phyTrainIo = new PhyTrainIO(afeParams)    
+    val phyTrainIo = new PhyTrainIO(afeParams)
   })
-  
+
   // Recieves a trigger on which test can be done
   // Sets the PHY code
   // and triggers to LTSM to do the handshake

@@ -23,20 +23,36 @@ class D2DPhyRegisterBlock(
     Seq(
       at(0x0) -> Seq(
         f.HWInit(16, params.vendorId, "Vendor_Id", "Vendor ID"),
-        f.HWInit(16, 0x0, "Vendor_Id_Reg_Block", "Vendor ID Register Block (D2D/PHY)")
+        f.HWInit(
+          16,
+          0x0,
+          "Vendor_Id_Reg_Block",
+          "Vendor ID Register Block (D2D/PHY)"
+        )
       ),
       at(0x4) -> Seq(
-        f.HWInit(4, 0x0, "Vendor_Reg_Block_Version", "Vendor Register Block Version"),
+        f.HWInit(
+          4,
+          0x0,
+          "Vendor_Reg_Block_Version",
+          "Vendor Register Block Version"
+        ),
         f.RsvdP(28, "Vendor_Reg_Block_Reserved_63_36")
       ),
       at(0x8) -> Seq(
-        f.HWInit(32, vendorRegBlockLength, "Vendor_Reg_Block_Length",
-          "Vendor Register Block Length")
+        f.HWInit(
+          32,
+          vendorRegBlockLength,
+          "Vendor_Reg_Block_Length",
+          "Vendor Register Block Length"
+        )
       ),
       at(0xc) -> Seq(f.RsvdP(32, "Vendor_Reg_Block_Reserved_127_96"))
     )
   }
 
   def entries(base: BigInt): Seq[RegField.Map] =
-    headerRows(base) ++ adapter.entries(base) ++ phyGlobal.entries(base) ++ phyPerModule.entries(base)
+    headerRows(base) ++ adapter.entries(base) ++ phyGlobal.entries(
+      base
+    ) ++ phyPerModule.entries(base)
 }

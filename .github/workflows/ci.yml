@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR supersedes the run already in flight for it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format and elaboration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # The mill build lives in scala/, not at the repo root.
+        working-directory: scala
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # scala/testchipip is vendored as a submodule and is a build dependency.
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache mill and coursier downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/mill
+            ~/.cache/coursier
+          key: mill-${{ runner.os }}-${{ hashFiles('scala/build.mill', 'scala/mill') }}
+          restore-keys: mill-${{ runner.os }}-
+
+      # The vendored scala/testchipip submodule is excluded via
+      # project.excludePaths in scala/.scalafmt.conf, so this only covers this
+      # repo's own sources.
+      - name: Check formatting
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+
+      # Type-checks every test, including the ones the simulate job runs.
+      - name: Compile
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.compile
+
+      # Elaboration-only suites: these run firtool but never start a simulator,
+      # so they stay green even if the simulate job is broken.
+      - name: Elaborate RTL and check register codegen
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.testOnly \
+            edu.berkeley.cs.uciedigital.phy.PhySpec \
+            edu.berkeley.cs.uciedigital.phy.PhyTestSpec \
+            edu.berkeley.cs.uciedigital.tilelink.CodegenSpec
+
+      # Every other test in TileLinkSpec drives a simulator, so select the one
+      # generator test by name rather than running the suite.
+      - name: Elaborate UcieTL
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.testOnly edu.berkeley.cs.uciedigital.tilelink.TileLinkSpec \
+            -- -z "generate valid SystemVerilog"
+
+  simulate:
+    name: Verilator simulation
+    # Independent of `check` so a formatting failure does not hide simulation
+    # results, and a simulation failure does not hide the fast checks.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: scala
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache mill and coursier downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/mill
+            ~/.cache/coursier
+          key: mill-${{ runner.os }}-${{ hashFiles('scala/build.mill', 'scala/mill') }}
+          restore-keys: mill-${{ runner.os }}-
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+          verilator --version
+
+      # Every ChiselSim suite in the repo, selected by package so that new
+      # suites are picked up without editing this file. These all default to
+      # the Verilator backend (see test/src/UcieSimBackend.scala).
+      #
+      # TileLinkSpec is deliberately excluded: its simulation tests drive
+      # Verilator, VCS, and Xcelium through hand-written scripts against the
+      # analog PHY sources rather than through ChiselSim, and the VCS/Xcelium
+      # ones cannot run here at all.
+      - name: Run ChiselSim suites
+        run: |
+          ./mill test.testOnly \
+            'edu.berkeley.cs.uciedigital.sideband.*' \
+            'edu.berkeley.cs.uciedigital.logphy.*' \
+            'edu.berkeley.cs.uciedigital.utils.*' \
+            'edu.berkeley.cs.uciedigital.protocol.*' \
+            'edu.berkeley.cs.uciedigital.phy.*'
