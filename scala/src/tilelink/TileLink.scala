@@ -140,7 +140,8 @@ object MainbandSel extends ChiselEnum {
 class UcieTLRegsIO(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
-    bitCounterWidth: Int = 64
+    bitCounterWidth: Int = 64,
+    addrWidth: Int = 64 // Magic number, but this is hardcoded in A packet
 ) extends Bundle {
   val test = Flipped(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
@@ -148,6 +149,7 @@ class UcieTLRegsIO(
   val phy = Flipped(new PhyRegsIO(numLanes))
   val mainbandSel = Output(MainbandSel())
   val creditFlowEnable = Output(Bool())
+  val lastSeenTLReq = Input(UInt(addrWidth.W))
 }
 
 class UcieTLRegs(
@@ -362,6 +364,9 @@ class UcieTLRegs(
       val creditFlowEnable = RegInit(true.B)
       io.creditFlowEnable := creditFlowEnable
 
+      val lastSeenTLReq = RegInit(0.U)
+      lastSeenTLReq := io.lastSeenTLReq
+
       txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
@@ -540,6 +545,7 @@ class UcieTLRegs(
         toRegFieldRw(creditFlowEnable, "creditFlowEnable"),
         toRegFieldRw(txValidLaneSel, "txValidLaneSel"),
         toRegFieldRw(rxValidLaneSel, "rxValidLaneSel"),
+        RegField.r(64, lastSeenTLReq, RegFieldDesc("lastSeenTLReq", "")),
         toRegFieldRw(sbTxPacket, "sbTxPacket"),
         RegField.w(1, sbTxSend, RegFieldDesc("sbTxSend", "")),
         toRegFieldR(applyShift(io.test.sb.txBusy), "sbTxBusy"),
@@ -878,6 +884,12 @@ class UcieTL(
       dontTouch(ucieManagerTxA.credit_a)
       dontTouch(ucieManagerTxA.credit_d)
       ucieManagerTxA.tl := ucieManagerTlA
+
+      val lastSeenAddr = RegInit(0.U(64.W))
+      when(managerTl.a.valid) {
+        lastSeenAddr := managerTl.a.bits.address
+      }
+      regs.module.io.lastSeenTLReq := lastSeenAddr
 
       val rxABuffer =
         Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
