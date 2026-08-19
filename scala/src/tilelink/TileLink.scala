@@ -223,6 +223,18 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       // TX clock is enabled out of reset so that existing bring-up sequences
       // do not have to turn it on explicitly.
       val clkGateEn = RegInit(true.B)
+      // Physical lane carrying the valid signal in each direction. Reset to the
+      // dedicated valid lane; see `PhyRegsIO` for the other select codes.
+      val txValidLaneSel = RegInit(
+        Phy
+          .dedicatedValidLaneSel(params.numLanes)
+          .U(Phy.validLaneSelWidth(params.numLanes).W)
+      )
+      val rxValidLaneSel = RegInit(
+        Phy
+          .dedicatedValidLaneSel(params.numLanes)
+          .U(Phy.validLaneSelWidth(params.numLanes).W)
+      )
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
         w.dll_reset := true.B
@@ -358,6 +370,8 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       io.phy.clkPhaseSel := applyShift(clkPhaseSel)
       io.phy.clkFreqSel := applyShift(clkFreqSel)
       io.phy.clkGateEn := applyShift(clkGateEn)
+      io.phy.txValidLaneSel := applyShift(txValidLaneSel)
+      io.phy.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
 
@@ -481,7 +495,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(mainbandSel, "mainbandSel"),
-        toRegFieldRw(creditFlowEnable, "creditFlowEnable")
+        toRegFieldRw(creditFlowEnable, "creditFlowEnable"),
+        toRegFieldRw(txValidLaneSel, "txValidLaneSel"),
+        toRegFieldRw(rxValidLaneSel, "rxValidLaneSel")
       )
 
       mmioRegs.zipWithIndex.map({
