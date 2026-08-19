@@ -5,6 +5,7 @@ import chisel3.util._
 import chisel3.experimental.dataview._
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 import edu.berkeley.cs.uciedigital.phy.macros._
+import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 object Phy {
   val SerdesRatio = 32
@@ -46,12 +47,8 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
   val sbTxData = Output(Bool())
   val sbRxClk = Input(Clock())
   val sbRxData = Input(Bool())
-  val refClkP = Input(Clock())
-  val refClkN = Input(Clock())
-  val bypassClkP = Input(Clock())
-  val bypassClkN = Input(Clock())
+  val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
-  val pllRdacVref = Input(Bool())
 }
 
 // PHY clock and reset IOs.
@@ -111,10 +108,11 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
   val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
   val dllCode = Output(Vec(numLanes + 4, UInt(5.W)))
-  val pllCtl = Input(new PllCtlIO)
-  val pllOutput = Output(new PllDebugOutIO)
-  // If 1, PHY uses bypass clk. If 0, PHY uses PLL clk.
-  val pllBypassEn = Input(Bool())
+  // Clocking tile control: phase code and frequency setting.
+  val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
+  val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
+  // Low stops the TX clock reaching the TX lanes.
+  val clkGateEn = Input(Bool())
 
   // RX CONTROL
   // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
@@ -141,16 +139,34 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
-  // TODO: add clock selection logic.
-  io.clkRst.ucieClk := io.top.digitalBypassClk
+  // Bypass clock pad: ESD clamp, then the clock receiver that restores the
+  // single-ended pad signal to a full-swing clock.
+  val bypassClkEsd = Module(new Esd)
+  bypassClkEsd.io.IO_signal := io.top.bypassClk.asBool
+  val bypassClkRx = Module(new ClkRx)
+  bypassClkRx.io.Vin := io.top.bypassClk
+
+  // Clocking tile: sources the digital clock and the I/Q TX clocks.
+  val clkTile = Module(new ClockingTile)
+  clkTile.io.DigBypassClk := io.top.digitalBypassClk
+  clkTile.io.BypassClk := bypassClkRx.io.Vout
+  clkTile.io.PhaseSel := io.regs.clkPhaseSel
+  clkTile.io.FreqSel := io.regs.clkFreqSel
+  clkTile.io.ClkGateEn := io.regs.clkGateEn
+
+  io.clkRst.ucieClk := clkTile.io.DigitalClk
   val digitalRstSync = Module(new RstSync)
   digitalRstSync.io.rstbAsync := !io.clkRst.reset
   digitalRstSync.io.clk := io.clkRst.ucieClk
   io.clkRst.ucieRst := !digitalRstSync.io.rstbSync
 
+  // All lane clocks are single-ended; each tile does its own single-to-
+  // differential conversion. The network sends the in-phase clock to the data,
+  // valid, and track lanes and the quadrature clock to the two forwarded-clock
+  // lanes.
   val clkDist = Module(new ClkDistNetwork)
-  clkDist.io.bypassClkP := io.top.bypassClkP
-  clkDist.io.bypassClkN := io.top.bypassClkN
+  clkDist.io.txClk := clkTile.io.TxClk
+  clkDist.io.txClkQ := clkTile.io.TxClkQ
 
   // TODO do we need to set pu/pd ctl to 0 when driver en is low?
   // TODO decide on and connect debug signals
@@ -177,24 +193,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   esdSbRxData.io.term := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
-
-  val pll = Module(new Pll)
-  pll.io.vclk_ref := io.top.refClkP.asBool
-  pll.io.vclk_refb := io.top.refClkN.asBool
-  pll.io.ctl := io.regs.pllCtl
-  pll.io.vrdac_ref := io.top.pllRdacVref
-  io.regs.pllOutput := pll.io.debug
-
-  val clkMuxP = Module(new ClkMux)
-  clkMuxP.connect(
-    clkDist.io.clkMuxP,
-    io.regs.pllBypassEn
-  )
-  val clkMuxN = Module(new ClkMux)
-  clkMuxN.connect(
-    clkDist.io.clkMuxN,
-    io.regs.pllBypassEn
-  )
 
   // Global clock dividers
   // TX
@@ -233,8 +231,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     txLane.io.dll_reset := io.regs.txctl(lane).dll_reset
     txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
     txLane.io.ser_resetb := io.clkRst.divResetb
-    txLane.io.clkp := clkDist.io.txLaneClkP(lane)
-    txLane.io.clkn := clkDist.io.txLaneClkN(lane)
+    txLane.io.clk := clkDist.io.txLaneClk(lane)
     if (lane < numLanes) {
       txLane.io.din := io.tx.data(lane)
       io.top.txData(lane) := txLane.io.dout
@@ -266,13 +263,16 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkPAfeCtl =
       RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(numLanes + 1))
     rxClkP.io.clkin := io.top.rxClkP
-    clkDist.io.rxClkP := rxClkP.io.clkout
+    // The forwarded clock arrives as a bump pair, but everything past the
+    // clock lanes is single-ended, so the distribution network is driven from
+    // the P lane alone. The N lane still terminates its bump and carries its
+    // own AFE control.
+    clkDist.io.rxClk := rxClkP.io.clkout
 
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
       RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(numLanes + 2))
     rxClkN.io.clkin := io.top.rxClkN
-    clkDist.io.rxClkN := rxClkN.io.clkout
 
     for (lane <- 0 until numLanes + 2) {
       val rxLane = Module(new RxDataLane)

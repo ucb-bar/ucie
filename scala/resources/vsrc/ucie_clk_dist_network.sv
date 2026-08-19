@@ -1,38 +1,33 @@
 module ucie_clk_dist_network(
-    input bypassClkP,
-    input bypassClkN,
-
-    output clkMuxP_in0,
-    output clkMuxP_in1,
-    input clkMuxP_out,
-    output clkMuxN_in0,
-    output clkMuxN_in1,
-    input clkMuxN_out,
+    input txClk,
+    input txClkQ,
 
     output txClkDivClk,
     output rxClkDivClk,
 
-    input rxClkP,
-    input rxClkN,
-    output [19:0] txLaneClkP,
-    output [19:0] txLaneClkN,
+    input rxClk,
+    output [19:0] txLaneClk,
     output [17:0] rxLaneClk
 );
-    assign clkMuxP_in1 = bypassClkP;
-    assign clkMuxN_in1 = bypassClkN;
+    // Lane map for numLanes = 16: 0..15 data, 16 valid, 17 and 18 the two
+    // forwarded-clock lanes, 19 track. The clock lanes run off the quadrature
+    // phase so the transmitted clock is centered in the data eye; everything
+    // else runs off the in-phase clock.
+    localparam integer TXCLKP_LANE = 17;
+    localparam integer TXCLKN_LANE = 18;
 
-    assign txClkDivClk = clkMuxP_out;
+    assign txClkDivClk = txClk;
     generate
         for (genvar i = 0; i < 20; i++) begin
-            assign txLaneClkP[i] = clkMuxP_out;
-            assign txLaneClkN[i] = clkMuxN_out;
+            assign txLaneClk[i] =
+                (i == TXCLKP_LANE || i == TXCLKN_LANE) ? txClkQ : txClk;
         end
     endgenerate
 
-    assign rxClkDivClk = rxClkP;
+    assign rxClkDivClk = rxClk;
     generate
         for (genvar i = 0; i < 18; i++) begin
-            assign rxLaneClk[i] = rxClkP;
+            assign rxLaneClk[i] = rxClk;
         end
     endgenerate
 endmodule
