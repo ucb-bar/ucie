@@ -1,16 +1,16 @@
-module ucie_rst_sync(
-  input clk,
-  input rstbAsync,
+module ucie_rst_sync (
+  input  clk,
+  input  rstbAsync,
   output rstbSync
 );
   reg [2:0] ff;
-  always @(negedge rstbAsync) begin
-    ff <= 3'd0;
+
+  always @(posedge clk or negedge rstbAsync) begin
+    if (!rstbAsync)
+      ff <= 3'b000;
+    else
+      ff <= {ff[1:0], 1'b1};
   end
-  always @(posedge clk) begin
-    ff[0] <= rstbAsync;
-    ff[1] <= ff[0];
-    ff[2] <= ff[1];
-  end
+
   assign rstbSync = ff[2];
 endmodule
