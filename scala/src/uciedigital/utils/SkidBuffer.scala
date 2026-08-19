@@ -18,7 +18,7 @@ class SkidBuffer(dataWidth: Int) extends Module {
       dataReg := io.in.bits
       bypassReg := false.B
     }
-  }.otherwise {     // skid state, bypassReg == false
+  }.otherwise { // skid state, bypassReg == false
     when(io.out.ready) {
       bypassReg := true.B
     }
@@ -26,7 +26,11 @@ class SkidBuffer(dataWidth: Int) extends Module {
 
   io.in.ready := bypassReg
   io.out.bits := Mux(bypassReg, io.in.bits, dataReg)
-  io.out.valid := Mux(bypassReg, io.in.valid, true.B) // valid data in the dataReg
+  io.out.valid := Mux(
+    bypassReg,
+    io.in.valid,
+    true.B
+  ) // valid data in the dataReg
 }
 
 object MainSkidBuffer extends App {
@@ -37,7 +41,7 @@ object MainSkidBuffer extends App {
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables",
-    ),
+      "--lowering-options=disallowLocalVariables"
+    )
   )
 }

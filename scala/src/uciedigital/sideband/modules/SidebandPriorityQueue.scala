@@ -10,15 +10,15 @@
     More queues can be added, if required.
 
     1. MessageRequestOrResponse queues messages with and without data this because training
-    messages are of this form. They must not be blocked behind other messages and need to 
+    messages are of this form. They must not be blocked behind other messages and need to
     prioritized for forward progress.
 
     2. RegAccessCompletion these messages must be unconditionally sinked according to the spec
 
     3. ReqAccessRequest has a separate credit system and provision 4 credits for them
 
-    4. Other catch all queue.    
-*/
+    4. Other catch all queue.
+ */
 
 package edu.berkeley.cs.uciedigital.sideband
 
@@ -29,14 +29,17 @@ import chisel3.ltl._
 import circt.stage.ChiselStage
 import chisel3.util._
 
-class SidebandPriorityQueue(sbMsgWidth: Int, depths: SidebandPriorityQueueDepths) extends Module {
+class SidebandPriorityQueue(
+    sbMsgWidth: Int,
+    depths: SidebandPriorityQueueDepths
+) extends Module {
   val io = IO(new Bundle {
     val enq = Flipped(Decoupled(UInt(sbMsgWidth.W)))
-    val deq = Decoupled(UInt(sbMsgWidth.W))    
+    val deq = Decoupled(UInt(sbMsgWidth.W))
   })
 
   // Put depths in a sequence, ordered from highest priority to lowest
-  // To change priority, can just change depth ordering here. Make to 
+  // To change priority, can just change depth ordering here. Make to
   // also change order in the EnqueueArbiter module below.
   val priorityDepths = Seq(
     depths.messageRequestOrResponse,
@@ -46,7 +49,8 @@ class SidebandPriorityQueue(sbMsgWidth: Int, depths: SidebandPriorityQueueDepths
   )
 
   // queue(0) has highest priority, queue(n) has lowest priority
-  val queues = priorityDepths.map(depth => Module(new Queue(UInt(sbMsgWidth.W), depth)))
+  val queues =
+    priorityDepths.map(depth => Module(new Queue(UInt(sbMsgWidth.W), depth)))
 
   // Enqueue
   val enqArbiter = Module(new EnqueueArbiter(sbMsgWidth, queues.length))
@@ -59,7 +63,7 @@ class SidebandPriorityQueue(sbMsgWidth: Int, depths: SidebandPriorityQueueDepths
   // Dequeue
   val deqArbiter = Module(new Arbiter(UInt(sbMsgWidth.W), queues.length))
 
-  for(i <- queues.indices) {
+  for (i <- queues.indices) {
     deqArbiter.io.in(i) <> queues(i).io.deq
   }
 
@@ -68,13 +72,22 @@ class SidebandPriorityQueue(sbMsgWidth: Int, depths: SidebandPriorityQueueDepths
   block(Verification) {
     block(Verification.Cover) {
       val names = Seq("ReqResp", "Completion", "RegAccessRequest", "Other")
-      for(i <- queues.indices) {
+      for (i <- queues.indices) {
         cover(queues(i).io.enq.fire, s"PriorityQueue${names(i)}Enqueue")
         cover(queues(i).io.deq.fire, s"PriorityQueue${names(i)}Dequeue")
-        cover(queues(i).io.enq.valid && !queues(i).io.enq.ready, s"PriorityQueue${names(i)}Backpressure")
+        cover(
+          queues(i).io.enq.valid && !queues(i).io.enq.ready,
+          s"PriorityQueue${names(i)}Backpressure"
+        )
       }
-      cover(queues(0).io.deq.valid && queues.drop(1).map(_.io.deq.valid).reduce(_ || _) &&
-        io.deq.fire && deqArbiter.io.chosen === 0.U, "PriorityQueueHighPriorityWinsContention")
+      cover(
+        queues(0).io.deq.valid && queues
+          .drop(1)
+          .map(_.io.deq.valid)
+          .reduce(_ || _) &&
+          io.deq.fire && deqArbiter.io.chosen === 0.U,
+        "PriorityQueueHighPriorityWinsContention"
+      )
     }
   }
 }
@@ -82,12 +95,12 @@ class SidebandPriorityQueue(sbMsgWidth: Int, depths: SidebandPriorityQueueDepths
 // ============================================================================
 
 // Helper module to select correct queue
-// NOTE: If changing priority order, make sure the enqueue arbiter 
+// NOTE: If changing priority order, make sure the enqueue arbiter
 // matches the ordering of the queues
 class EnqueueArbiter(sbMsgWidth: Int, numQueues: Int) extends Module {
   val io = IO(new Bundle {
-    val in = Flipped(Decoupled(UInt(sbMsgWidth.W))) 
-    val out = Vec(numQueues, Decoupled(UInt(sbMsgWidth.W)))       
+    val in = Flipped(Decoupled(UInt(sbMsgWidth.W)))
+    val out = Vec(numQueues, Decoupled(UInt(sbMsgWidth.W)))
   })
 
   io.out.foreach(_.bits := io.in.bits)
@@ -103,19 +116,21 @@ class EnqueueArbiter(sbMsgWidth: Int, numQueues: Int) extends Module {
   io.out(2).valid := io.in.valid && isAccRequest
   io.out(3).valid := io.in.valid && isOther
 
-  io.in.ready := (isReqRespMessage && io.out(0).ready)  ||
-                 (isAccComplete && io.out(1).ready)     ||
-                 (isAccRequest && io.out(2).ready)      ||
-                 (isOther && io.out(3).ready)
+  io.in.ready := (isReqRespMessage && io.out(0).ready) ||
+    (isAccComplete && io.out(1).ready) ||
+    (isAccRequest && io.out(2).ready) ||
+    (isOther && io.out(3).ready)
 
   // =======================================================================
   // Assertions
-  // =======================================================================  
+  // =======================================================================
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
         Sequence.BoolSequence(io.in.valid) |->
-          Sequence.BoolSequence(PopCount(VecInit(io.out.map(_.valid)).asUInt) === 1.U),
+          Sequence.BoolSequence(
+            PopCount(VecInit(io.out.map(_.valid)).asUInt) === 1.U
+          ),
         label = Some("PriorityQueueClassifiesIntoExactlyOneQueue")
       )
     }
@@ -135,7 +150,7 @@ object MainSBPriorityQueue extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }

@@ -152,6 +152,10 @@ class PhyTestRegsIO(
   val txDebugState = Output(TxTestState())
   val txDebugPacketsEnqueued = Output(UInt(bitCounterWidth.W))
   val txDebugDllCode = Output(UInt(5.W))
+
+  // SIDEBAND CONTROL
+  // ===========================
+  val sb = new SidebandTestRegsIO
 }
 
 class PhyDebugIO extends Bundle {
@@ -200,7 +204,12 @@ class PhyTest(
   io.regs.txDebugDllCode := 0.U
   io.regs.txDebugPacketsEnqueued := 0.U
   io.bumps := DontCare
-  io.sb := DontCare
+
+  // Sideband tester: owns the sideband bumps end to end, independent of the
+  // mainband TX/RX FSMs below.
+  val sbTest = Module(new SidebandTest)
+  sbTest.io.regs <> io.regs.sb
+  io.sb <> sbTest.io.sb
 
   // General computations
   val maxBitCount = VecInit(Seq.fill(bitCounterWidth)(true.B)).asUInt

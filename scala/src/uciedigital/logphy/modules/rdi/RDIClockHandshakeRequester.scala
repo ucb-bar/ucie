@@ -1,22 +1,21 @@
 /*
-  Description: 
+  Description:
     Simple that module takes care of conducting the pl_clk_req/lp_clk_ack handshake
     in a centralized place. Interfacing with the module is done through the `ctrl` signals.
 
     Note: LogPHY is the requester in this handshake.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
 import chisel3._
 import chisel3.util._
 
-
 // Module specific bundle
 class RDIClkHsRequesterCtrlIO extends Bundle {
   val startHandshake = Input(Bool())
   val releaseReq = Input(Bool())
-  val doneHandshake = Output(Bool())            
+  val doneHandshake = Output(Bool())
   val inIdle = Output(Bool())
 }
 
@@ -27,7 +26,7 @@ class RDIClockHandshakeRequester() extends Module {
     val rdi = new Bundle {
       val plClkReq = Output(Bool())
       val lpClkAck = Input(Bool())
-    }          
+    }
   })
 
   // Module specific state
@@ -40,7 +39,7 @@ class RDIClockHandshakeRequester() extends Module {
   currentState := nextState
 
   io.rdi.plClkReq := false.B
-  io.ctrl.doneHandshake := false.B  // doneHandshake goes high when lpClkAck goes HIGH
+  io.ctrl.doneHandshake := false.B // doneHandshake goes high when lpClkAck goes HIGH
 
   // Once inIdle cycles back to sIDLE, after start, then handshake fully compelete.
   io.ctrl.inIdle := currentState === State.sIDLE
@@ -55,7 +54,7 @@ class RDIClockHandshakeRequester() extends Module {
       when(io.ctrl.startHandshake) {
         nextState := State.sWAIT_ACK_ASSERT
       }
-    } 
+    }
     is(State.sWAIT_ACK_ASSERT) {
       io.rdi.plClkReq := true.B
       when(io.rdi.lpClkAck) {
@@ -65,9 +64,11 @@ class RDIClockHandshakeRequester() extends Module {
       }
     }
     is(State.sACTIVE_HOLD) {
-      assert(io.rdi.lpClkAck === true.B, 
-        "FATAL: Adapter dropped lpClkAck while plClkReq was still asserted (Clk Handshake Rule 3)")
-        
+      assert(
+        io.rdi.lpClkAck === true.B,
+        "FATAL: Adapter dropped lpClkAck while plClkReq was still asserted (Clk Handshake Rule 3)"
+      )
+
       io.rdi.plClkReq := true.B
       io.ctrl.doneHandshake := true.B
       // Per the handshake rules, pl_clk_req stays asserted only while this side
@@ -85,8 +86,7 @@ class RDIClockHandshakeRequester() extends Module {
       io.rdi.plClkReq := false.B
       when(!io.rdi.lpClkAck) {
         nextState := State.sIDLE
-      }      
+      }
     }
   }
 }
-

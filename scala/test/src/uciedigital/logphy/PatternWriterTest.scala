@@ -13,7 +13,9 @@ import scala.util.Random
 class PatternWriterWithLfsrHarness(afeParams: AfeParams) extends Module {
   val io = IO(new Bundle {
     val interfaceIo = new PatternWriterIO
-    val mbTxLaneIo = Decoupled(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+    val mbTxLaneIo = Decoupled(
+      new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+    )
     val txLfsrCtrl = new Bundle {
       val valid = Output(Bool())
       val resetLfsr = Output(Bool())
@@ -34,8 +36,12 @@ class PatternWriterWithLfsrHarness(afeParams: AfeParams) extends Module {
   patternWriter.io.mbTxLaneIo.ready := io.mbTxLaneIo.ready
 
   patternWriter.io.txLfsrCtrl.pattern := txLfsr.io.lfsrOutput
-  txLfsr.io.increment := VecInit(Seq.fill(afeParams.mbLanes)(patternWriter.io.txLfsrCtrl.increment))
-  txLfsr.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(patternWriter.io.txLfsrCtrl.resetLfsr))
+  txLfsr.io.increment := VecInit(
+    Seq.fill(afeParams.mbLanes)(patternWriter.io.txLfsrCtrl.increment)
+  )
+  txLfsr.io.resetLfsr := VecInit(
+    Seq.fill(afeParams.mbLanes)(patternWriter.io.txLfsrCtrl.resetLfsr)
+  )
 
   io.txLfsrCtrl.valid := patternWriter.io.txLfsrCtrl.valid
   io.txLfsrCtrl.resetLfsr := patternWriter.io.txLfsrCtrl.resetLfsr
@@ -59,14 +65,14 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
   val lfsrWidth = 23
   val polynomial = BigInt(0x210125)
   val laneSeeds = Seq(
-    BigInt(0x1DBFBC),
-    BigInt(0x0607BB),
-    BigInt(0x1EC760),
-    BigInt(0x18C0DB),
-    BigInt(0x010F12),
-    BigInt(0x19CFC9),
-    BigInt(0x0277CE),
-    BigInt(0x1BB807)
+    BigInt(0x1dbfbc),
+    BigInt(0x0607bb),
+    BigInt(0x1ec760),
+    BigInt(0x18c0db),
+    BigInt(0x010f12),
+    BigInt(0x19cfc9),
+    BigInt(0x0277ce),
+    BigInt(0x1bb807)
   )
 
   // ==========================================================================
@@ -74,11 +80,11 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
   // ==========================================================================
   // One cycle of expected mainband output.
   case class ExpectedMainband(
-    data: Seq[BigInt],
-    valid: BigInt,
-    clkP: BigInt,
-    clkN: BigInt,
-    trk: BigInt
+      data: Seq[BigInt],
+      valid: BigInt,
+      clkP: BigInt,
+      clkN: BigInt,
+      trk: BigInt
   )
 
   // One field of the mainband output paired with its expected value.
@@ -96,24 +102,34 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
     // ------------------------------------------------------------------------
     // Expands a repeating bit pattern into the sequence of ser. ratio wide
     // words the PatternWriter is expected to output per fire
-    def repeatedPatternWords(pattern: BigInt, patternWidth: Int): Seq[BigInt] = {
-      val commonDivisor = BigInt(patternWidth).gcd(BigInt(serializerRatio)).toInt
+    def repeatedPatternWords(
+        pattern: BigInt,
+        patternWidth: Int
+    ): Seq[BigInt] = {
+      val commonDivisor =
+        BigInt(patternWidth).gcd(BigInt(serializerRatio)).toInt
       val numPhases = patternWidth / commonDivisor
 
       Seq.tabulate(numPhases) { phase =>
-        Seq.tabulate(serializerRatio) { bit =>
-          ((pattern >> ((phase * serializerRatio + bit) % patternWidth)) & 1) << bit
-        }.foldLeft(BigInt(0))(_ | _)
+        Seq
+          .tabulate(serializerRatio) { bit =>
+            ((pattern >> ((phase * serializerRatio + bit) % patternWidth)) & 1) << bit
+          }
+          .foldLeft(BigInt(0))(_ | _)
       }
     }
 
-    val clkRepairPatternWords = repeatedPatternWords(BigInt("000055555555", 16), 48)
+    val clkRepairPatternWords =
+      repeatedPatternWords(BigInt("000055555555", 16), 48)
     val valTrainPatternWords = repeatedPatternWords(BigInt("00001111", 2), 8)
     val fwClkPPatternWords = repeatedPatternWords(BigInt("01010101", 2), 8)
     val fwClkNPatternWords = repeatedPatternWords(BigInt("10101010", 2), 8)
     val perLaneIdPatternWords = Seq.tabulate(lanes) { lane =>
       val perLaneIdPattern =
-        (BigInt("1010", 2) << 12) | (BigInt(lane & 0xff) << 4) | BigInt("1010", 2)
+        (BigInt("1010", 2) << 12) | (BigInt(lane & 0xff) << 4) | BigInt(
+          "1010",
+          2
+        )
       repeatedPatternWords(perLaneIdPattern, 16)
     }
 
@@ -138,17 +154,27 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
     // ------------------------------------------------------------------------
     def laneReferenceModels(): Seq[ReferenceLFSR] =
       Seq.tabulate(lanes) { lane =>
-        new ReferenceLFSR(laneSeeds(lane % laneSeeds.length), polynomial, lfsrWidth)
+        new ReferenceLFSR(
+          laneSeeds(lane % laneSeeds.length),
+          polynomial,
+          lfsrWidth
+        )
       }
 
     // ------------------------------------------------------------------------
     // Expected output
     // ------------------------------------------------------------------------
     // Expected mainband output for the given pattern on a given fire.
-    def expectedOutput(patternType: PatternSelect.Type, fireCount: Int, refs: Seq[ReferenceLFSR]): ExpectedMainband = {
+    def expectedOutput(
+        patternType: PatternSelect.Type,
+        fireCount: Int,
+        refs: Seq[ReferenceLFSR]
+    ): ExpectedMainband = {
       patternType match {
         case PatternSelect.CLKREPAIR =>
-          val clkRepairWord = clkRepairPatternWords(fireCount % clkRepairPatternWords.length)
+          val clkRepairWord = clkRepairPatternWords(
+            fireCount % clkRepairPatternWords.length
+          )
           ExpectedMainband(
             data = Seq.fill(lanes)(BigInt(0)),
             valid = BigInt(0),
@@ -160,7 +186,8 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
         case PatternSelect.VALTRAIN =>
           ExpectedMainband(
             data = Seq.fill(lanes)(BigInt(0)),
-            valid = valTrainPatternWords(fireCount % valTrainPatternWords.length),
+            valid =
+              valTrainPatternWords(fireCount % valTrainPatternWords.length),
             clkP = fwClkPPatternWords(fireCount % fwClkPPatternWords.length),
             clkN = fwClkNPatternWords(fireCount % fwClkNPatternWords.length),
             trk = BigInt(0)
@@ -169,9 +196,12 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
         case PatternSelect.PERLANEID =>
           ExpectedMainband(
             data = Seq.tabulate(lanes) { lane =>
-              perLaneIdPatternWords(lane)(fireCount % perLaneIdPatternWords(lane).length)
+              perLaneIdPatternWords(lane)(
+                fireCount % perLaneIdPatternWords(lane).length
+              )
             },
-            valid = valTrainPatternWords(fireCount % valTrainPatternWords.length),
+            valid =
+              valTrainPatternWords(fireCount % valTrainPatternWords.length),
             clkP = fwClkPPatternWords(fireCount % fwClkPPatternWords.length),
             clkN = fwClkNPatternWords(fireCount % fwClkNPatternWords.length),
             trk = BigInt(0)
@@ -180,7 +210,8 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
         case PatternSelect.LFSR =>
           ExpectedMainband(
             data = refs.map(_.peekOutputWord(serializerRatio)),
-            valid = valTrainPatternWords(fireCount % valTrainPatternWords.length),
+            valid =
+              valTrainPatternWords(fireCount % valTrainPatternWords.length),
             clkP = fwClkPPatternWords(fireCount % fwClkPPatternWords.length),
             clkN = fwClkNPatternWords(fireCount % fwClkNPatternWords.length),
             trk = BigInt(0)
@@ -198,36 +229,44 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
 
     // Spuriously asserts req.valid mid-pattern and checks the DUT ignores it
     // (req.ready stays low while busy).
-    def randomlyPulseRequestWhileBusy(dut: PatternWriterWithLfsrHarness, random: Random, context: String): Unit = {
+    def randomlyPulseRequestWhileBusy(
+        dut: PatternWriterWithLfsrHarness,
+        random: Random,
+        context: String
+    ): Unit = {
       val pulseBusyRequest = random.nextBoolean()
       dut.io.interfaceIo.req.valid.poke(pulseBusyRequest.B)
       dut.io.interfaceIo.req.bits.patternType.poke(PatternSelect.LFSR)
-      dut.io.interfaceIo.req.ready.expect(false.B, s"$context req.ready while busy")
+      dut.io.interfaceIo.req.ready
+        .expect(false.B, s"$context req.ready while busy")
     }
 
     // ------------------------------------------------------------------------
     // Scoreboard
     // ------------------------------------------------------------------------
     // The mainband output fields paired with their expected values.
-    def scoreboardRows(dut: PatternWriterWithLfsrHarness, expected: ExpectedMainband): Seq[ScoreboardRow] =
+    def scoreboardRows(
+        dut: PatternWriterWithLfsrHarness,
+        expected: ExpectedMainband
+    ): Seq[ScoreboardRow] =
       Seq(
         ScoreboardRow("valid", dut.io.mbTxLaneIo.bits.valid, expected.valid),
         ScoreboardRow("clkP", dut.io.mbTxLaneIo.bits.clkP, expected.clkP),
         ScoreboardRow("clkN", dut.io.mbTxLaneIo.bits.clkN, expected.clkN),
         ScoreboardRow("trk", dut.io.mbTxLaneIo.bits.trk, expected.trk)
-      ) ++ expected.data.zipWithIndex.map {
-        case (word, lane) => ScoreboardRow(s"data[$lane]", dut.io.mbTxLaneIo.bits.data(lane), word)
+      ) ++ expected.data.zipWithIndex.map { case (word, lane) =>
+        ScoreboardRow(s"data[$lane]", dut.io.mbTxLaneIo.bits.data(lane), word)
       }
 
     // Checks every mainband field against the reference, optionally printing it.
     def checkScoreboard(
-      dut: PatternWriterWithLfsrHarness,
-      patternName: String,
-      fireCount: Int,
-      totalCycles: Int,
-      expected: ExpectedMainband,
-      context: String,
-      printThisCycle: Boolean
+        dut: PatternWriterWithLfsrHarness,
+        patternName: String,
+        fireCount: Int,
+        totalCycles: Int,
+        expected: ExpectedMainband,
+        context: String,
+        printThisCycle: Boolean
     ): Unit = {
       val rows = scoreboardRows(dut, expected)
 
@@ -236,18 +275,21 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
       }
 
       rows.foreach { row =>
-        row.actual.expect(row.expected.U, s"$context ${row.field} expected ${hexWord(row.expected)}")
+        row.actual.expect(
+          row.expected.U,
+          s"$context ${row.field} expected ${hexWord(row.expected)}"
+        )
       }
     }
 
     // Checks the LFSR control signals match LFSR-vs-non-LFSR mode expectations.
     def expectLfsrCtrl(
-      dut: PatternWriterWithLfsrHarness,
-      isLfsrPattern: Boolean,
-      requestCycle: Boolean,
-      txFire: Boolean,
-      finalFire: Boolean,
-      context: String
+        dut: PatternWriterWithLfsrHarness,
+        isLfsrPattern: Boolean,
+        requestCycle: Boolean,
+        txFire: Boolean,
+        finalFire: Boolean,
+        context: String
     ): Unit = {
       dut.io.txLfsrCtrl.valid.expect(
         (isLfsrPattern && !requestCycle).B,
@@ -275,11 +317,11 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
       value + (" " * math.max(0, width - value.length))
 
     def printScoreboard(
-      dut: PatternWriterWithLfsrHarness,
-      patternName: String,
-      fireCount: Int,
-      totalCycles: Int,
-      rows: Seq[ScoreboardRow]
+        dut: PatternWriterWithLfsrHarness,
+        patternName: String,
+        fireCount: Int,
+        totalCycles: Int,
+        rows: Seq[ScoreboardRow]
     ): Unit = {
       val fieldColumnWidth = math.max(10, rows.map(_.field.length).max)
       val valueColumnWidth = math.max(10, hexWord(BigInt(0)).length)
@@ -287,7 +329,9 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
       val separator = "-" * (fieldColumnWidth + (2 * valueColumnWidth) + 24)
 
       println(s"[PatternWriterTest] $divider")
-      println(s"[PatternWriterTest] $patternName (serRatio=$serializerRatio) fire ${fireCount + 1}/$totalCycles")
+      println(
+        s"[PatternWriterTest] $patternName (serRatio=$serializerRatio) fire ${fireCount + 1}/$totalCycles"
+      )
       println(
         s"[PatternWriterTest] complete=${dut.io.interfaceIo.resp.complete.peek().litToBoolean} " +
           s"lfsrValid=${dut.io.txLfsrCtrl.valid.peek().litToBoolean} " +
@@ -316,11 +360,11 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
     // injecting random TX backpressure and spurious requests, checking the
     // mainband output and LFSR control signals throughout.
     def runPattern(
-      dut: PatternWriterWithLfsrHarness,
-      patternName: String,
-      patternType: PatternSelect.Type,
-      totalCycles: Int,
-      random: Random
+        dut: PatternWriterWithLfsrHarness,
+        patternName: String,
+        patternType: PatternSelect.Type,
+        totalCycles: Int,
+        random: Random
     ): Unit = {
       val isLfsrPattern = patternName == "LFSR"
       val refs = laneReferenceModels()
@@ -328,10 +372,20 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
       // Request the pattern.
       dut.io.interfaceIo.req.bits.patternType.poke(patternType)
       dut.io.interfaceIo.req.valid.poke(true.B)
-      dut.io.interfaceIo.req.ready.expect(true.B, s"$patternName request req.ready")
-      dut.io.mbTxLaneIo.valid.expect(false.B, s"$patternName request mbTxLaneIo.valid")
-      dut.io.interfaceIo.resp.complete.expect(false.B, s"$patternName request resp.complete")
-      expectLfsrCtrl(dut, isLfsrPattern, requestCycle = true, txFire = false, finalFire = false, s"$patternName request")
+      dut.io.interfaceIo.req.ready
+        .expect(true.B, s"$patternName request req.ready")
+      dut.io.mbTxLaneIo.valid
+        .expect(false.B, s"$patternName request mbTxLaneIo.valid")
+      dut.io.interfaceIo.resp.complete
+        .expect(false.B, s"$patternName request resp.complete")
+      expectLfsrCtrl(
+        dut,
+        isLfsrPattern,
+        requestCycle = true,
+        txFire = false,
+        finalFire = false,
+        s"$patternName request"
+      )
       dut.clock.step()
       clearRequest(dut)
 
@@ -351,7 +405,8 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
           dut.io.mbTxLaneIo.ready.poke(txFire.B)
           randomlyPulseRequestWhileBusy(dut, random, context)
           dut.io.mbTxLaneIo.valid.expect(true.B, s"$context valid")
-          dut.io.interfaceIo.resp.complete.expect(finalFire.B, s"$context complete")
+          dut.io.interfaceIo.resp.complete
+            .expect(finalFire.B, s"$context complete")
           checkScoreboard(
             dut,
             patternName,
@@ -361,7 +416,14 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
             context,
             printThisCycle = txFire // prints when there's no backpressure
           )
-          expectLfsrCtrl(dut, isLfsrPattern, requestCycle = false, txFire = txFire, finalFire = finalFire, context)
+          expectLfsrCtrl(
+            dut,
+            isLfsrPattern,
+            requestCycle = false,
+            txFire = txFire,
+            finalFire = finalFire,
+            context
+          )
           dut.clock.step()
           clearRequest(dut)
         }
@@ -374,10 +436,20 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
       // Pattern complete: DUT should be idle and ready for the next request.
       dut.io.mbTxLaneIo.ready.poke(false.B)
       clearRequest(dut)
-      dut.io.interfaceIo.req.ready.expect(true.B, s"$patternName done req.ready")
-      dut.io.mbTxLaneIo.valid.expect(false.B, s"$patternName done mbTxLaneIo.valid")
-      dut.io.interfaceIo.resp.complete.expect(false.B, s"$patternName done resp.complete")
-      expectLfsrCtrl(dut, isLfsrPattern = false, requestCycle = false, txFire = false, finalFire = false, s"$patternName done")
+      dut.io.interfaceIo.req.ready
+        .expect(true.B, s"$patternName done req.ready")
+      dut.io.mbTxLaneIo.valid
+        .expect(false.B, s"$patternName done mbTxLaneIo.valid")
+      dut.io.interfaceIo.resp.complete
+        .expect(false.B, s"$patternName done resp.complete")
+      expectLfsrCtrl(
+        dut,
+        isLfsrPattern = false,
+        requestCycle = false,
+        txFire = false,
+        finalFire = false,
+        s"$patternName done"
+      )
     }
   }
 
@@ -388,47 +460,79 @@ class PatternWriterTest extends AnyFunSpec with ChiselSim {
     serializerRatios.foreach { ratio =>
       val refModel = new RefModel(ratio)
 
-      it(s"writes CLKREPAIR with randomized request delay and TX backpressure (serRatio=$ratio)") {
+      it(
+        s"writes CLKREPAIR with randomized request delay and TX backpressure (serRatio=$ratio)"
+      ) {
         simulate(new PatternWriterWithLfsrHarness(refModel.params)) { dut =>
           val random = new Random(randomSeed)
 
           refModel.clearRequest(dut)
           dut.io.mbTxLaneIo.ready.poke(false.B)
 
-          refModel.runPattern(dut, "CLKREPAIR", PatternSelect.CLKREPAIR, refModel.clkRepairCycles, random)
+          refModel.runPattern(
+            dut,
+            "CLKREPAIR",
+            PatternSelect.CLKREPAIR,
+            refModel.clkRepairCycles,
+            random
+          )
         }
       }
 
-      it(s"writes VALTRAIN with randomized request delay and TX backpressure (serRatio=$ratio)") {
+      it(
+        s"writes VALTRAIN with randomized request delay and TX backpressure (serRatio=$ratio)"
+      ) {
         simulate(new PatternWriterWithLfsrHarness(refModel.params)) { dut =>
           val random = new Random(randomSeed)
 
           refModel.clearRequest(dut)
           dut.io.mbTxLaneIo.ready.poke(false.B)
 
-          refModel.runPattern(dut, "VALTRAIN", PatternSelect.VALTRAIN, refModel.valTrainCycles, random)
+          refModel.runPattern(
+            dut,
+            "VALTRAIN",
+            PatternSelect.VALTRAIN,
+            refModel.valTrainCycles,
+            random
+          )
         }
       }
 
-      it(s"writes PERLANEID with randomized request delay and TX backpressure (serRatio=$ratio)") {
+      it(
+        s"writes PERLANEID with randomized request delay and TX backpressure (serRatio=$ratio)"
+      ) {
         simulate(new PatternWriterWithLfsrHarness(refModel.params)) { dut =>
           val random = new Random(randomSeed)
 
           refModel.clearRequest(dut)
           dut.io.mbTxLaneIo.ready.poke(false.B)
 
-          refModel.runPattern(dut, "PERLANEID", PatternSelect.PERLANEID, refModel.perLaneIdCycles, random)
+          refModel.runPattern(
+            dut,
+            "PERLANEID",
+            PatternSelect.PERLANEID,
+            refModel.perLaneIdCycles,
+            random
+          )
         }
       }
 
-      it(s"writes LFSR with randomized request delay and TX backpressure (serRatio=$ratio)") {
+      it(
+        s"writes LFSR with randomized request delay and TX backpressure (serRatio=$ratio)"
+      ) {
         simulate(new PatternWriterWithLfsrHarness(refModel.params)) { dut =>
           val random = new Random(randomSeed)
 
           refModel.clearRequest(dut)
           dut.io.mbTxLaneIo.ready.poke(false.B)
 
-          refModel.runPattern(dut, "LFSR", PatternSelect.LFSR, refModel.lfsrCycles, random)
+          refModel.runPattern(
+            dut,
+            "LFSR",
+            PatternSelect.LFSR,
+            refModel.lfsrCycles,
+            random
+          )
         }
       }
     }

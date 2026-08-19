@@ -1,8 +1,8 @@
 /*
-  Description: 
+  Description:
     SidebandInterfaceNode encapsulates interface serdes, and any flow-control and data integrity
     logic associated with transmitting or receiving sideband messages over the RDI/FDI interface.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.sideband
 
@@ -14,28 +14,32 @@ import circt.stage.ChiselStage
 import chisel3.util._
 import edu.berkeley.cs.uciedigital.utils.SkidBuffer
 
-class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int, 
-                            queueDepths: SidebandPriorityQueueDepths) extends Module {
+class SidebandInterfaceNode(
+    sbMsgWidth: Int,
+    ncWidth: Int,
+    numCredits: Int,
+    queueDepths: SidebandPriorityQueueDepths
+) extends Module {
   val io = IO(new Bundle {
     /* Switch Facing IOs */
     // Messages coming from the switch to be serialized
-    val txIn = Flipped(Decoupled(UInt(sbMsgWidth.W))) 
-    
+    val txIn = Flipped(Decoupled(UInt(sbMsgWidth.W)))
+
     // Messages going to the switch
-    val rxOut = Decoupled(UInt(sbMsgWidth.W))         
+    val rxOut = Decoupled(UInt(sbMsgWidth.W))
 
     /* Interface Facing IOs */
     // Serialized chunks going out to RDI/FDI
     val txOut = Valid(UInt(ncWidth.W))
-    
+
     // Credits returned from the receiver
-    val txCreditReturn = Input(Bool()) 
+    val txCreditReturn = Input(Bool())
 
     // Serialized chunks coming in over RDI/FDI
     val rxIn = Flipped(Valid(UInt(ncWidth.W)))
-    
+
     // Credits returned to transmitter
-    val rxCreditReturn = Output(Bool()) 
+    val rxCreditReturn = Output(Bool())
 
     // Error signals
     val sbParityErr = Output(Bool())
@@ -47,34 +51,38 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
   val txCreditCounter = RegInit(numCredits.U((log2Ceil(numCredits) + 1).W))
 
   // Minimizes potentially large combinational path for serializer ready signal
-  val skidBuffer = Module(new SkidBuffer(sbMsgWidth)) 
-  
+  val skidBuffer = Module(new SkidBuffer(sbMsgWidth))
+
   // Serialize only if enough credits. RegisterAccessCompletition messages always get serialized
-  val isEnoughCredits = txCreditCounter =/= 0.U 
-  val isRegAccessComplete = SBM.isRegAccessComplete(skidBuffer.io.out.bits(4, 0))
+  val isEnoughCredits = txCreditCounter =/= 0.U
+  val isRegAccessComplete =
+    SBM.isRegAccessComplete(skidBuffer.io.out.bits(4, 0))
   val hasPermission = isEnoughCredits || isRegAccessComplete
 
   io.txIn <> skidBuffer.io.in
   skidBuffer.io.out.ready := serializer.io.in.ready && hasPermission
-  
+
   // Parity Set Logic -- set parity before serializing
   // NOTE: Assumption is that if data bits need to be zeroed out they will be, so DP == 0
   val headerPSet = WireDefault(skidBuffer.io.out.bits(63, 0))
-  val bitsToProtectPSet = WireDefault(headerPSet(61, 0))      // Skip DP(63), CP(62)
+  val bitsToProtectPSet = WireDefault(headerPSet(61, 0)) // Skip DP(63), CP(62)
   val calculatedCPPset = WireDefault(bitsToProtectPSet.xorR)
 
-  // Can safely skip DP bit when calculating CP bit for messages that don't use DP because 
+  // Can safely skip DP bit when calculating CP bit for messages that don't use DP because
   // it be 0 with this logic
-  val doDpCalculationPSet = !(SBMsgOpcode.OpsThatDontUseDPField.map(_.asUInt === headerPSet(4,0))
-                                                               .reduce(_ || _))
+  val doDpCalculationPSet = !(SBMsgOpcode.OpsThatDontUseDPField
+    .map(_.asUInt === headerPSet(4, 0))
+    .reduce(_ || _))
   val payloadPSet = WireDefault(skidBuffer.io.out.bits(127, 64))
   val payloadForDPPSet = WireDefault(Mux(doDpCalculationPSet, payloadPSet, 0.U))
   val calculatedDPPSet = WireDefault(payloadForDPPSet.xorR)
 
-  val newHeader = WireDefault(Cat(calculatedDPPSet, calculatedCPPset, headerPSet(61, 0)))
+  val newHeader = WireDefault(
+    Cat(calculatedDPPSet, calculatedCPPset, headerPSet(61, 0))
+  )
   val newBits = WireDefault(Cat(payloadPSet, newHeader))
 
-  serializer.io.in.valid := skidBuffer.io.out.valid && hasPermission  
+  serializer.io.in.valid := skidBuffer.io.out.valid && hasPermission
   serializer.io.in.bits := newBits
   io.txOut <> serializer.io.out
 
@@ -82,19 +90,23 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
   val consumeCredit = Wire(Bool())
   consumeCredit := skidBuffer.io.out.valid && skidBuffer.io.out.ready && !isRegAccessComplete
   val creditEmpty = txCreditCounter === 0.U
-  val blockedForCredit = skidBuffer.io.out.valid && !isRegAccessComplete && creditEmpty
-  val completionBypassCredit = serializer.io.in.fire && isRegAccessComplete && creditEmpty
+  val blockedForCredit =
+    skidBuffer.io.out.valid && !isRegAccessComplete && creditEmpty
+  val completionBypassCredit =
+    serializer.io.in.fire && isRegAccessComplete && creditEmpty
 
-  when(consumeCredit && !io.txCreditReturn) {      
+  when(consumeCredit && !io.txCreditReturn) {
     txCreditCounter := txCreditCounter - 1.U
   }.elsewhen(!consumeCredit && io.txCreditReturn) {
     txCreditCounter := txCreditCounter + 1.U
   }
-  
+
   // RX Path: rxIn --> Deserializer --> Parity Check --> PriorityQueue --> rxOut
-  val deserializer = Module(new SidebandInterfaceDeserializer(sbMsgWidth, ncWidth))
+  val deserializer = Module(
+    new SidebandInterfaceDeserializer(sbMsgWidth, ncWidth)
+  )
   val priorityQueue = Module(new SidebandPriorityQueue(sbMsgWidth, queueDepths))
-  
+
   io.rxIn <> deserializer.io.in
 
   // Parity check per spec. CP protects every header field except CP and DP
@@ -109,7 +121,8 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
   val calculatedCP = WireDefault(bitsToProtect.xorR)
   val cpError = WireDefault(expectedCP ^ calculatedCP)
 
-  val doDpCalculation = !(SBMsgOpcode.OpsThatDontUseDPField.map(_.asUInt === opcode).reduce(_ || _))
+  val doDpCalculation =
+    !(SBMsgOpcode.OpsThatDontUseDPField.map(_.asUInt === opcode).reduce(_ || _))
   val payload = WireDefault(deserializer.io.out.bits(127, 64))
   val expectedDP = header(63)
   val payloadForDP = WireDefault(Mux(doDpCalculation, payload, 0.U))
@@ -128,7 +141,7 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
 
   priorityQueue.io.enq.bits := deserializer.io.out.bits
   priorityQueue.io.enq.valid := gatedDeserializerValid
-  
+
   priorityQueue.io.deq <> io.rxOut
   io.rxCreditReturn := io.rxOut.ready && io.rxOut.valid // Return credit when message is sent out
 
@@ -142,7 +155,9 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
-        Sequence.BoolSequence(consumeCredit) |-> Sequence.BoolSequence(txCreditCounter =/= 0.U),
+        Sequence.BoolSequence(consumeCredit) |-> Sequence.BoolSequence(
+          txCreditCounter =/= 0.U
+        ),
         label = Some("NodeNeverConsumesCreditWhenEmpty")
       )
       AssertProperty(
@@ -168,11 +183,20 @@ class SidebandInterfaceNode(sbMsgWidth: Int, ncWidth: Int, numCredits: Int,
       cover(io.txCreditReturn, "InterfaceNodeTxCreditReturned")
       cover(blockedForCredit, "InterfaceNodeCreditConsumingPacketBlockedAtZero")
       cover(completionBypassCredit, "InterfaceNodeCompletionBypassesZeroCredit")
-      cover(deserializer.io.out.valid && cpError, "InterfaceNodeCpParityErrorDrop")
-      cover(deserializer.io.out.valid && dpError, "InterfaceNodeDpParityErrorDrop")
+      cover(
+        deserializer.io.out.valid && cpError,
+        "InterfaceNodeCpParityErrorDrop"
+      )
+      cover(
+        deserializer.io.out.valid && dpError,
+        "InterfaceNodeDpParityErrorDrop"
+      )
       cover(io.rxCreditReturn, "InterfaceNodeRxCreditReturned")
       cover(io.rxPriorityQueuesFull, "InterfaceNodeRxPriorityQueueFull")
-      cover(consumeCredit && sawCreditReturnAfterEmpty, "InterfaceNodeCreditReturnAllowsLaterConsume")
+      cover(
+        consumeCredit && sawCreditReturnAfterEmpty,
+        "InterfaceNodeCreditReturnAllowsLaterConsume"
+      )
     }
   }
 }
@@ -186,6 +210,6 @@ object MainSBInterfaceNode extends App {
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

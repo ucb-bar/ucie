@@ -8,12 +8,16 @@ import org.scalatest.funspec.AnyFunSpec
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
-class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCoverage {
+class SidebandLinkNodeTest
+    extends AnyFunSpec
+    with ChiselSim
+    with VerilatorCoverage {
   val msgW = 128
   val linkW = 1
 
   val printDebugs = false
-  def printDebug(msg: String): Unit = if (printDebugs) println(s"[SidebandLinkNodeTest] $msg")
+  def printDebug(msg: String): Unit =
+    if (printDebugs) println(s"[SidebandLinkNodeTest] $msg")
 
   // 128-bit (with-data) opcode per class so a tag can ride in the payload.
   val reqResp = SBMsgOpcode.MessageWith64bData.litValue
@@ -48,10 +52,15 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
     val payload = (msg >> 64) & mask(64)
     val cp = parity(header & mask(62))
     val dp = if (opsNoDp.contains(msg & 0x1f)) 0 else parity(payload)
-    (payload << 64) | (header & mask(62)) | (BigInt(cp) << 62) | (BigInt(dp) << 63)
+    (payload << 64) | (header & mask(62)) | (BigInt(cp) << 62) | (BigInt(
+      dp
+    ) << 63)
   }
 
-  def mkNode(depths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(), timeout: Int = 512) =
+  def mkNode(
+      depths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
+      timeout: Int = 512
+  ) =
     new SidebandLinkNode(msgW, linkW, 32, timeout, depths)
 
   // Drive one bit onto the link, toggling the forwarded clock.
@@ -64,7 +73,11 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
   }
 
   // Serialize a message onto rxIn as 64-bit chunks separated by 32-bit idle gaps.
-  def feedRxSerial(c: SidebandLinkNode, msg: BigInt, bitWidth: Int = 128): Unit = {
+  def feedRxSerial(
+      c: SidebandLinkNode,
+      msg: BigInt,
+      bitWidth: Int = 128
+  ): Unit = {
     val total = bitWidth + (bitWidth / 64) * 32
     for (i <- 0 until total) {
       if ((i < 64) || (i >= 96 && i < 160)) {
@@ -156,7 +169,8 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
         c.clock.step()
 
         c.io.ctrl.freezeAcceptingPackets.poke(true.B)
-        c.io.txIn.bits.poke(mkMsg(reqResp, 2).U(msgW.W)) // offered but must be refused
+        c.io.txIn.bits
+          .poke(mkMsg(reqResp, 2).U(msgW.W)) // offered but must be refused
         c.io.txIn.ready.expect(false.B)
 
         var guard = 0
@@ -223,7 +237,14 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
     it("delivers correctly-parity'd messages across all classes") {
       simulate(mkNode()) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
-        for ((op, tag) <- Seq[(BigInt, BigInt)]((reqResp, 1), (accComplete, 2), (accRequest, 3), (other, 4))) {
+        for (
+          (op, tag) <- Seq[(BigInt, BigInt)](
+            (reqResp, 1),
+            (accComplete, 2),
+            (accRequest, 3),
+            (other, 4)
+          )
+        ) {
           feedRxSerial(c, withParity(mkMsg(op, tag)))
           assert(takeRxOut(c) == tag)
         }
@@ -237,8 +258,13 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
       simulate(mkNode()) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
         c.io.rxOut.ready.poke(false.B)
-        Seq[(BigInt, BigInt)]((reqResp, 1), (other, 4), (accComplete, 2), (accRequest, 3)).foreach {
-          case (op, tag) => feedRxSerial(c, withParity(mkMsg(op, tag)))
+        Seq[(BigInt, BigInt)](
+          (reqResp, 1),
+          (other, 4),
+          (accComplete, 2),
+          (accRequest, 3)
+        ).foreach { case (op, tag) =>
+          feedRxSerial(c, withParity(mkMsg(op, tag)))
         }
         val got = (0 until 4).map(_ => takeRxOut(c))
         assert(got == Seq[BigInt](1, 2, 3, 4))
@@ -246,12 +272,20 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
     }
 
     it("asserts rxPriorityQueuesFull only for the full target queue") {
-      simulate(mkNode(SidebandPriorityQueueDepths(messageRequestOrResponse = 1))) { c =>
+      simulate(
+        mkNode(SidebandPriorityQueueDepths(messageRequestOrResponse = 1))
+      ) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
         c.io.rxOut.ready.poke(false.B)
-        feedRxSerial(c, withParity(mkMsg(reqResp, 1))) // reqResp queue (depth 1) now full
+        feedRxSerial(
+          c,
+          withParity(mkMsg(reqResp, 1))
+        ) // reqResp queue (depth 1) now full
 
-        feedRxSerial(c, withParity(mkMsg(accComplete, 2))) // different, non-full queue
+        feedRxSerial(
+          c,
+          withParity(mkMsg(accComplete, 2))
+        ) // different, non-full queue
         c.io.err.rxPriorityQueuesFull.expect(false.B)
 
         var sawFull = false
@@ -266,7 +300,9 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
       }
     }
 
-    it("delivers a constrained-random mix of classes in priority then FIFO order") {
+    it(
+      "delivers a constrained-random mix of classes in priority then FIFO order"
+    ) {
       simulate(mkNode()) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
         c.io.rxOut.ready.poke(false.B)
@@ -280,7 +316,9 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
           (op, tag)
         }
         val got = (0 until count).map(_ => takeRxOut(c))
-        val expected = sent.zipWithIndex.sortBy { case ((op, _), i) => (rank(op), i) }.map(_._1._2)
+        val expected = sent.zipWithIndex
+          .sortBy { case ((op, _), i) => (rank(op), i) }
+          .map(_._1._2)
         assert(got == expected)
         c.io.err.sbParityErr.expect(false.B)
       }
@@ -305,7 +343,9 @@ class SidebandLinkNodeTest extends AnyFunSpec with ChiselSim with VerilatorCover
     it("delivers a 64-bit message in RAW mode") {
       simulate(mkNode()) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.RAW)
-        val msg = withParity(mkMsg(SBMsgOpcode.MessageWithoutData.litValue, 0)) & mask(64)
+        val msg = withParity(
+          mkMsg(SBMsgOpcode.MessageWithoutData.litValue, 0)
+        ) & mask(64)
         feedRxSerial(c, msg, 64)
         c.io.rxOut.ready.poke(true.B)
         var guard = 0

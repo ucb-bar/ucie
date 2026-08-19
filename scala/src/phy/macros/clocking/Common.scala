@@ -181,8 +181,8 @@ class ClockingTileIO extends Bundle {
 }
 
 class ClockingTile(implicit includeDefaultModels: Boolean = false)
-extends BlackBox
-with HasBlackBoxResource {
+    extends BlackBox
+    with HasBlackBoxResource {
   val io = IO(new ClockingTileIO)
   override val desiredName = "clocking_tile"
 

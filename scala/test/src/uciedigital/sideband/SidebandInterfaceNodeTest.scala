@@ -10,16 +10,24 @@ import scala.util.Random
 
 // Two nodes wired as a full-duplex link. Each node's TX feeds the other's RX,
 // and each node's RX credit return drives the other's TX credit input.
-class TwoNodeLink(sbMsgWidth: Int, ncWidth: Int, numCredits: Int, depths: SidebandPriorityQueueDepths)
-    extends Module {
+class TwoNodeLink(
+    sbMsgWidth: Int,
+    ncWidth: Int,
+    numCredits: Int,
+    depths: SidebandPriorityQueueDepths
+) extends Module {
   val io = IO(new Bundle {
     val aTxIn = Flipped(Decoupled(UInt(sbMsgWidth.W)))
     val aRxOut = Decoupled(UInt(sbMsgWidth.W))
     val bTxIn = Flipped(Decoupled(UInt(sbMsgWidth.W)))
     val bRxOut = Decoupled(UInt(sbMsgWidth.W))
   })
-  val a = Module(new SidebandInterfaceNode(sbMsgWidth, ncWidth, numCredits, depths))
-  val b = Module(new SidebandInterfaceNode(sbMsgWidth, ncWidth, numCredits, depths))
+  val a = Module(
+    new SidebandInterfaceNode(sbMsgWidth, ncWidth, numCredits, depths)
+  )
+  val b = Module(
+    new SidebandInterfaceNode(sbMsgWidth, ncWidth, numCredits, depths)
+  )
 
   b.io.rxIn <> a.io.txOut
   a.io.txCreditReturn := b.io.rxCreditReturn
@@ -32,13 +40,17 @@ class TwoNodeLink(sbMsgWidth: Int, ncWidth: Int, numCredits: Int, depths: Sideba
   io.bRxOut <> b.io.rxOut
 }
 
-class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with VerilatorCoverage {
+class SidebandInterfaceNodeTest
+    extends AnyFunSpec
+    with ChiselSim
+    with VerilatorCoverage {
   val msgW = 128
   val ncW = 32
   val n = msgW / ncW
 
   val printDebugs = false
-  def printDebug(msg: String): Unit = if (printDebugs) println(s"[SidebandInterfaceNodeTest] $msg")
+  def printDebug(msg: String): Unit =
+    if (printDebugs) println(s"[SidebandInterfaceNodeTest] $msg")
 
   val reqResp = SBMsgOpcode.MessageWith64bData.litValue
   val accComplete = SBMsgOpcode.CompletionWithoutData.litValue
@@ -72,7 +84,9 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     val payload = (msg >> 64) & mask(64)
     val cp = parity(header & mask(62))
     val dp = if (opsNoDp.contains(msg & 0x1f)) 0 else parity(payload)
-    (payload << 64) | (header & mask(62)) | (BigInt(cp) << 62) | (BigInt(dp) << 63)
+    (payload << 64) | (header & mask(62)) | (BigInt(cp) << 62) | (BigInt(
+      dp
+    ) << 63)
   }
 
   def feedRx(c: SidebandInterfaceNode, msg: BigInt): Unit = {
@@ -111,53 +125,64 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
 
   describe("SidebandInterfaceNode link (two nodes)") {
     // count exceeds numCredits so forward progress depends on returned credits.
-    it("delivers messages intact in both directions, sustained beyond the credit limit") {
-      simulate(new TwoNodeLink(msgW, ncW, 4, SidebandPriorityQueueDepths())) { c =>
-        val count = 12
-        val rng = new Random(2)
-        val aMsgs = Seq.fill(count)(mkMsg(reqResp, BigInt(60, rng)))
-        val bMsgs = Seq.fill(count)(mkMsg(reqResp, BigInt(60, rng)))
-        c.io.aRxOut.ready.poke(true.B)
-        c.io.bRxOut.ready.poke(true.B)
+    it(
+      "delivers messages intact in both directions, sustained beyond the credit limit"
+    ) {
+      simulate(new TwoNodeLink(msgW, ncW, 4, SidebandPriorityQueueDepths())) {
+        c =>
+          val count = 12
+          val rng = new Random(2)
+          val aMsgs = Seq.fill(count)(mkMsg(reqResp, BigInt(60, rng)))
+          val bMsgs = Seq.fill(count)(mkMsg(reqResp, BigInt(60, rng)))
+          c.io.aRxOut.ready.poke(true.B)
+          c.io.bRxOut.ready.poke(true.B)
 
-        val aGot = ArrayBuffer[BigInt]()
-        val bGot = ArrayBuffer[BigInt]()
-        var ai = 0
-        var bi = 0
-        var cycles = 0
-        while ((aGot.size < count || bGot.size < count) && cycles < 1000) {
-          c.io.aTxIn.valid.poke((ai < count).B)
-          if (ai < count) {
-            c.io.aTxIn.bits.poke(aMsgs(ai).U(msgW.W))
+          val aGot = ArrayBuffer[BigInt]()
+          val bGot = ArrayBuffer[BigInt]()
+          var ai = 0
+          var bi = 0
+          var cycles = 0
+          while ((aGot.size < count || bGot.size < count) && cycles < 1000) {
+            c.io.aTxIn.valid.poke((ai < count).B)
+            if (ai < count) {
+              c.io.aTxIn.bits.poke(aMsgs(ai).U(msgW.W))
+            }
+            c.io.bTxIn.valid.poke((bi < count).B)
+            if (bi < count) {
+              c.io.bTxIn.bits.poke(bMsgs(bi).U(msgW.W))
+            }
+            if (c.io.bRxOut.valid.peek().litToBoolean) {
+              bGot += c.io.bRxOut.bits.peek().litValue
+            }
+            if (c.io.aRxOut.valid.peek().litToBoolean) {
+              aGot += c.io.aRxOut.bits.peek().litValue
+            }
+            if (ai < count && c.io.aTxIn.ready.peek().litToBoolean) {
+              ai += 1
+            }
+            if (bi < count && c.io.bTxIn.ready.peek().litToBoolean) {
+              bi += 1
+            }
+            c.clock.step()
+            cycles += 1
           }
-          c.io.bTxIn.valid.poke((bi < count).B)
-          if (bi < count) {
-            c.io.bTxIn.bits.poke(bMsgs(bi).U(msgW.W))
-          }
-          if (c.io.bRxOut.valid.peek().litToBoolean) {
-            bGot += c.io.bRxOut.bits.peek().litValue
-          }
-          if (c.io.aRxOut.valid.peek().litToBoolean) {
-            aGot += c.io.aRxOut.bits.peek().litValue
-          }
-          if (ai < count && c.io.aTxIn.ready.peek().litToBoolean) {
-            ai += 1
-          }
-          if (bi < count && c.io.bTxIn.ready.peek().litToBoolean) {
-            bi += 1
-          }
-          c.clock.step()
-          cycles += 1
-        }
-        assert(bGot.toSeq == aMsgs.map(withParity), "B did not receive what A sent")
-        assert(aGot.toSeq == bMsgs.map(withParity), "A did not receive what B sent")
+          assert(
+            bGot.toSeq == aMsgs.map(withParity),
+            "B did not receive what A sent"
+          )
+          assert(
+            aGot.toSeq == bMsgs.map(withParity),
+            "A did not receive what B sent"
+          )
       }
     }
   }
 
   describe("SidebandInterfaceNode TX credit flow") {
     it("transmits a completion even with no credits") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.txCreditReturn.poke(false.B)
         pushTx(c, mkMsg(reqResp, 1)) // consumes the only credit
 
@@ -168,7 +193,9 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     }
 
     it("stalls a credit-consuming message with no credits") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.txCreditReturn.poke(false.B)
         pushTx(c, mkMsg(reqResp, 1)) // consumes the only credit
 
@@ -182,7 +209,9 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     }
 
     it("replenishes credits via txCreditReturn") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 1, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.txCreditReturn.poke(false.B)
         pushTx(c, mkMsg(reqResp, 1))
 
@@ -199,9 +228,14 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
 
   describe("SidebandInterfaceNode RX parity") {
     it("flags a parity error and drops a message with a corrupt CP bit") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(true.B)
-        feedRx(c, withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 62)) // corrupt CP
+        feedRx(
+          c,
+          withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 62)
+        ) // corrupt CP
         var sawRx = false
         for (_ <- 0 until 8) {
           if (c.io.rxOut.valid.peek().litToBoolean) {
@@ -215,9 +249,14 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     }
 
     it("flags a parity error and drops a message with a corrupt DP bit") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(true.B)
-        feedRx(c, withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 63)) // corrupt DP
+        feedRx(
+          c,
+          withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 63)
+        ) // corrupt DP
         var sawRx = false
         for (_ <- 0 until 8) {
           if (c.io.rxOut.valid.peek().litToBoolean) {
@@ -231,7 +270,9 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     }
 
     it("drops a corrupt other-class message (CP is checked on every class)") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(true.B)
         feedRx(c, withParity(mkMsg(other, 5)) ^ (BigInt(1) << 62)) // corrupt CP
         var sawRx = false
@@ -247,9 +288,18 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
     }
 
     it("delivers correctly-parity'd messages across all classes") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(true.B)
-        for ((op, tag) <- Seq[(BigInt, BigInt)]((reqResp, 1), (accComplete, 2), (accRequest, 3), (other, 4))) {
+        for (
+          (op, tag) <- Seq[(BigInt, BigInt)](
+            (reqResp, 1),
+            (accComplete, 2),
+            (accRequest, 3),
+            (other, 4)
+          )
+        ) {
           feedRx(c, withParity(mkMsg(op, tag)))
           var guard = 0
           while (!c.io.rxOut.valid.peek().litToBoolean && guard < 12) {
@@ -267,10 +317,18 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
 
   describe("SidebandInterfaceNode RX ordering and backpressure") {
     it("dequeues received messages in priority then FIFO order") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(false.B)
-        Seq[(BigInt, BigInt)]((reqResp, 1), (other, 4), (accComplete, 2), (reqResp, 5),
-          (accRequest, 3), (other, 6)).foreach { case (op, tag) =>
+        Seq[(BigInt, BigInt)](
+          (reqResp, 1),
+          (other, 4),
+          (accComplete, 2),
+          (reqResp, 5),
+          (accRequest, 3),
+          (other, 6)
+        ).foreach { case (op, tag) =>
           feedRx(c, withParity(mkMsg(op, tag)))
         }
         c.clock.step(4)
@@ -293,9 +351,15 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
       simulate(new SidebandInterfaceNode(msgW, ncW, 32, depths)) { c =>
         c.io.rxOut.ready.poke(false.B)
         feedRx(c, withParity(mkMsg(reqResp, 1)))
-        feedRx(c, withParity(mkMsg(reqResp, 2))) // reqResp queue (depth 2) now full
+        feedRx(
+          c,
+          withParity(mkMsg(reqResp, 2))
+        ) // reqResp queue (depth 2) now full
 
-        feedRx(c, withParity(mkMsg(accComplete, 3))) // different, non-full queue
+        feedRx(
+          c,
+          withParity(mkMsg(accComplete, 3))
+        ) // different, non-full queue
         var sawFullOnOther = false
         for (_ <- 0 until 4) {
           if (c.io.rxPriorityQueuesFull.peek().litToBoolean) {
@@ -317,8 +381,12 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
       }
     }
 
-    it("delivers a constrained-random mix of classes in priority then FIFO order") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+    it(
+      "delivers a constrained-random mix of classes in priority then FIFO order"
+    ) {
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         val rng = new Random(7)
         val classes = Seq(reqResp, accComplete, accRequest, other)
         val count = 20
@@ -341,7 +409,9 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
           c.clock.step()
           guard += 1
         }
-        val expected = sent.zipWithIndex.sortBy { case ((op, _), i) => (rank(op), i) }.map(_._1._2)
+        val expected = sent.zipWithIndex
+          .sortBy { case ((op, _), i) => (rank(op), i) }
+          .map(_._1._2)
         assert(got.toSeq == expected)
         c.io.sbParityErr.expect(false.B)
       }
@@ -350,10 +420,15 @@ class SidebandInterfaceNodeTest extends AnyFunSpec with ChiselSim with Verilator
 
   describe("SidebandInterfaceNode reset") {
     it("clears queued messages and parity error on reset") {
-      simulate(new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())) { c =>
+      simulate(
+        new SidebandInterfaceNode(msgW, ncW, 32, SidebandPriorityQueueDepths())
+      ) { c =>
         c.io.rxOut.ready.poke(false.B)
         feedRx(c, withParity(mkMsg(reqResp, 1)))
-        feedRx(c, withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 62)) // parity error
+        feedRx(
+          c,
+          withParity(mkMsg(reqResp, 7)) ^ (BigInt(1) << 62)
+        ) // parity error
         c.clock.step(2)
         c.io.sbParityErr.expect(true.B)
 

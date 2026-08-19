@@ -1,7 +1,7 @@
 /*
   Description:
     Shared protocol-layer types, parameters, and IO bundles.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.protocol
 
@@ -10,8 +10,8 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.interfaces._
 
 case class ProtocolLayerParams(
-  txQueueDepth: Int = 2,
-  rxQueueDepth: Int = 2,
+    txQueueDepth: Int = 2,
+    rxQueueDepth: Int = 2
 )
 
 class ProtocolRawBeat(nBytes: Int) extends Bundle {
@@ -34,8 +34,8 @@ class ProtocolLayerStatusIO extends Bundle {
 }
 
 class ProtocolLayerIO(
-  val params: ProtocolLayerParams,
-  val fdiParams: FdiParams,
+    val params: ProtocolLayerParams,
+    val fdiParams: FdiParams
 ) extends Bundle {
   val fdi = new Fdi(fdiParams)
   val ctrl = new ProtocolLayerCtrlIO()

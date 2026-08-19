@@ -31,8 +31,12 @@ object D2DAdapterOffsets {
 class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
   import D2DAdapterOffsets._
 
-  private val uncorrStatus = f.RW1CS(6, io.uncorrErrSet.asUInt, "uncorr_err_status",
-    "Uncorrectable Error Status: Timeout/RxOverflow/Internal/SB-Fatal/SB-NonFatal/InvalidParamExch")
+  private val uncorrStatus = f.RW1CS(
+    6,
+    io.uncorrErrSet.asUInt,
+    "uncorr_err_status",
+    "Uncorrectable Error Status: Timeout/RxOverflow/Internal/SB-Fatal/SB-NonFatal/InvalidParamExch"
+  )
 
   private val uncorrMask =
     f.RWS(6, 0x3f, "uncorr_err_mask", "Uncorrectable Error Mask")
@@ -42,8 +46,12 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
     f.RWS(6, 0x2f, "uncorr_err_severity", "Uncorrectable Error Severity")
   out.uncorrSeverity := uncorrSeverity.reg
 
-  private val corrStatus = f.RW1CS(5, io.corrErrSet.asUInt, "corr_err_status",
-    "Correctable Error Status: CRC/LSM->Retrain/CorrInternal/SB-Corr/ParityErr")
+  private val corrStatus = f.RW1CS(
+    5,
+    io.corrErrSet.asUInt,
+    "corr_err_status",
+    "Correctable Error Status: CRC/LSM->Retrain/CorrInternal/SB-Corr/ParityErr"
+  )
 
   private val corrMask =
     f.RWS(5, 0x1f, "corr_err_mask", "Correctable Error Mask")
@@ -56,12 +64,22 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
     hl1Hi.reg := io.headerLog1.bits(63, 32)
   }
 
-  private val hl2TimeoutEnc = f.ROS(4, 0, "hl2_timeout_enc", "Header Log 2 Adapter Timeout encoding")
-  private val hl2RxOverflowEnc = f.ROS(3, 0, "hl2_rx_overflow_enc", "Header Log 2 Receiver overflow encoding")
-  private val hl2LsmResponse = f.ROS(3, 0, "hl2_lsm_response", "Header Log 2 Adapter LSM response type")
-  private val hl2LsmId = f.ROS(1, 0, "hl2_lsm_id", "Header Log 2 Adapter LSM id")
-  private val hl2FlitFormat = f.ROS(4, 0, "hl2_flit_format", "Header Log 2 negotiated Flit Format")
-  private val hl2FirstFatal = f.ROS(5, 0, "hl2_first_fatal", "Header Log 2 First Fatal Error Indicator")
+  private val hl2TimeoutEnc =
+    f.ROS(4, 0, "hl2_timeout_enc", "Header Log 2 Adapter Timeout encoding")
+  private val hl2RxOverflowEnc = f.ROS(
+    3,
+    0,
+    "hl2_rx_overflow_enc",
+    "Header Log 2 Receiver overflow encoding"
+  )
+  private val hl2LsmResponse =
+    f.ROS(3, 0, "hl2_lsm_response", "Header Log 2 Adapter LSM response type")
+  private val hl2LsmId =
+    f.ROS(1, 0, "hl2_lsm_id", "Header Log 2 Adapter LSM id")
+  private val hl2FlitFormat =
+    f.ROS(4, 0, "hl2_flit_format", "Header Log 2 negotiated Flit Format")
+  private val hl2FirstFatal =
+    f.ROS(5, 0, "hl2_first_fatal", "Header Log 2 First Fatal Error Indicator")
 
   when(io.uncorrErrSet(0) && !uncorrStatus.reg(0)) {
     hl2TimeoutEnc.reg := io.headerLog2.timeoutEnc
@@ -86,22 +104,45 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
   }
 
   private val hl2ParamExchSuccess =
-    f.RO(1, io.headerLog2.paramExchSuccess, "hl2_param_exch_success", "Header Log 2 Parameter Exchange Successful")
+    f.RO(
+      1,
+      io.headerLog2.paramExchSuccess,
+      "hl2_param_exch_success",
+      "Header Log 2 Parameter Exchange Successful"
+    )
 
-  private val remoteRegAccessThreshold = f.RW(4, 0x4, "remote_reg_access_threshold",
-    "Error & Link Testing Control Remote Register Access Threshold")
+  private val remoteRegAccessThreshold = f.RW(
+    4,
+    0x4,
+    "remote_reg_access_threshold",
+    "Error & Link Testing Control Remote Register Access Threshold"
+  )
   out.remoteRegAccessThreshold := remoteRegAccessThreshold.reg
 
-  private def capLog64(payload: chisel3.util.Valid[UInt], name: String, desc: String) = {
+  private def capLog64(
+      payload: chisel3.util.Valid[UInt],
+      name: String,
+      desc: String
+  ) = {
     val setLo = Mux(payload.valid, payload.bits(31, 0), 0.U)
     val setHi = Mux(payload.valid, payload.bits(63, 32), 0.U)
-    (f.RW1C(32, setLo, s"${name}_lo", desc),
-     f.RW1C(32, setHi, s"${name}_hi", desc))
+    (
+      f.RW1C(32, setLo, s"${name}_lo", desc),
+      f.RW1C(32, setHi, s"${name}_hi", desc)
+    )
   }
   private val (advAdapterLo, advAdapterHi) =
-    capLog64(io.advCapAdapter, "adv_adapter_cap", "Advertised Adapter Capability Log")
+    capLog64(
+      io.advCapAdapter,
+      "adv_adapter_cap",
+      "Advertised Adapter Capability Log"
+    )
   private val (finAdapterLo, finAdapterHi) =
-    capLog64(io.finCapAdapter, "fin_adapter_cap", "Finalized Adapter Capability Log")
+    capLog64(
+      io.finCapAdapter,
+      "fin_adapter_cap",
+      "Finalized Adapter Capability Log"
+    )
 
   private def parityLog64(offset: Int, name: String): Seq[RegField.Map] = {
     val d = "Runtime Link Testing Parity Log (feature off), RW1C tied 0"
@@ -119,10 +160,30 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
     def at(off: Int): Int = (base + off).toInt
 
     val statusMaskRows: Seq[RegField.Map] = Seq(
-      f.paddedRow(at(UncorrStatus), uncorrStatus.field, 6, f.RsvdZ(_, "uncorr_status_rsvd")),
-      f.paddedRow(at(UncorrMask), uncorrMask.field, 6, f.RsvdP(_, "uncorr_mask_rsvd")),
-      f.paddedRow(at(UncorrSeverity), uncorrSeverity.field, 6, f.RsvdP(_, "uncorr_severity_rsvd")),
-      f.paddedRow(at(CorrStatus), corrStatus.field, 5, f.RsvdZ(_, "corr_status_rsvd")),
+      f.paddedRow(
+        at(UncorrStatus),
+        uncorrStatus.field,
+        6,
+        f.RsvdZ(_, "uncorr_status_rsvd")
+      ),
+      f.paddedRow(
+        at(UncorrMask),
+        uncorrMask.field,
+        6,
+        f.RsvdP(_, "uncorr_mask_rsvd")
+      ),
+      f.paddedRow(
+        at(UncorrSeverity),
+        uncorrSeverity.field,
+        6,
+        f.RsvdP(_, "uncorr_severity_rsvd")
+      ),
+      f.paddedRow(
+        at(CorrStatus),
+        corrStatus.field,
+        5,
+        f.RsvdZ(_, "corr_status_rsvd")
+      ),
       f.paddedRow(at(CorrMask), corrMask.field, 5, f.RsvdP(_, "corr_mask_rsvd"))
     )
 
@@ -144,7 +205,12 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
     val errLinkTestingRow: Seq[RegField.Map] = Seq(
       at(ErrLinkTestingControl) -> Seq(
         remoteRegAccessThreshold.field,
-        f.RO(6, 0.U, "runtime_link_testing_tied", "Runtime Link Testing (feature off)"),
+        f.RO(
+          6,
+          0.U,
+          "runtime_link_testing_tied",
+          "Runtime Link Testing (feature off)"
+        ),
         f.RsvdP(3, "elt_rsvd_12_10"),
         f.RO(5, 0.U, "crc_injection_tied", "CRC injection (feature off)"),
         f.RsvdP(14, "elt_rsvd_31_18")
@@ -153,21 +219,21 @@ class D2DAdapterRegs(f: RegFieldTypes, io: AdapterToRegs, out: RegsToAdapter) {
 
     val parityLogRows: Seq[RegField.Map] =
       parityLog64(at(ParityLog0), "parity_log0") ++
-      parityLog64(at(ParityLog1), "parity_log1") ++
-      parityLog64(at(ParityLog2), "parity_log2") ++
-      parityLog64(at(ParityLog3), "parity_log3")
+        parityLog64(at(ParityLog1), "parity_log1") ++
+        parityLog64(at(ParityLog2), "parity_log2") ++
+        parityLog64(at(ParityLog3), "parity_log3")
 
     val adapterCapRows: Seq[RegField.Map] =
       f.rows64(at(AdvAdapterCap), advAdapterLo.field, advAdapterHi.field) ++
-      f.rows64(at(FinAdapterCap), finAdapterLo.field, finAdapterHi.field)
+        f.rows64(at(FinAdapterCap), finAdapterLo.field, finAdapterHi.field)
 
     val reservedCapRows: Seq[RegField.Map] =
       rsvdLog64(at(AdvCxlCap), "adv_cxl_cap") ++
-      rsvdLog64(at(FinCxlCap), "fin_cxl_cap") ++
-      rsvdLog64(at(AdvMultiProtCap), "adv_multiprot_cap") ++
-      rsvdLog64(at(FinMultiProtCap), "fin_multiprot_cap") ++
-      rsvdLog64(at(AdvCxlCapStack1), "adv_cxl_cap_stack1") ++
-      rsvdLog64(at(FinCxlCapStack1), "fin_cxl_cap_stack1")
+        rsvdLog64(at(FinCxlCap), "fin_cxl_cap") ++
+        rsvdLog64(at(AdvMultiProtCap), "adv_multiprot_cap") ++
+        rsvdLog64(at(FinMultiProtCap), "fin_multiprot_cap") ++
+        rsvdLog64(at(AdvCxlCapStack1), "adv_cxl_cap_stack1") ++
+        rsvdLog64(at(FinCxlCapStack1), "fin_cxl_cap_stack1")
 
     statusMaskRows ++ headerLogRows ++ errLinkTestingRow ++ parityLogRows ++
       adapterCapRows ++ reservedCapRows

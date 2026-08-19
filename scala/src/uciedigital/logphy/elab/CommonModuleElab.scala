@@ -12,8 +12,8 @@ object MainSidebandMessageExchanger extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
@@ -24,20 +24,20 @@ object MainUCIeLFSR extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
 object MainParallelGaloisLFSR extends App {
   ChiselStage.emitSystemVerilogFile(
-    new ParallelGaloisLFSR(0x1DBFBC, 23, 32, 0x210125),
+    new ParallelGaloisLFSR(0x1dbfbc, 23, 32, 0x210125),
     args = Array("-td", "./generatedVerilog/logphy/"),
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
@@ -48,8 +48,8 @@ object MainMainbandLaneController extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
@@ -60,8 +60,8 @@ object MainPatternWriter extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",      
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }
 
@@ -72,7 +72,7 @@ object MainPatternReader extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }

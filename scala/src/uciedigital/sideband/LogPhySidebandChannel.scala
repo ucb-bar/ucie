@@ -3,7 +3,7 @@
 
   Contains a SidebandInterfaceNode to facilitate communication over RDI, SidebandSwitch to route
   packets and SidebandLinkNode to facilitate communication over physical link.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.sideband
 
@@ -13,26 +13,31 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.utils.SkidBuffer
 
 class LogPhySidebandChannel(
-  sbMsgWidth: Int, sbLinkWidth: Int, rdiNcWidth: Int, numCredits: Int, desTimeoutCycles: Int,
-  queueDepths: SidebandPriorityQueueDepths) extends Module {
+    sbMsgWidth: Int,
+    sbLinkWidth: Int,
+    rdiNcWidth: Int,
+    numCredits: Int,
+    desTimeoutCycles: Int,
+    queueDepths: SidebandPriorityQueueDepths
+) extends Module {
   val io = IO(new Bundle {
     val rdi = new Bundle {
       val in = Flipped(Valid(UInt(rdiNcWidth.W)))
       val out = Valid(UInt(rdiNcWidth.W))
       val txCreditReturn = Input(Bool())
-      val rxCreditReturn = Output(Bool()) 
+      val rxCreditReturn = Output(Bool())
       val activity = Output(Bool())
     }
     val layer = new Bundle {
       val in = Flipped(Decoupled(UInt(sbMsgWidth.W)))
-      val out = Decoupled(UInt(sbMsgWidth.W))    
+      val out = Decoupled(UInt(sbMsgWidth.W))
       val status = new Bundle {
         val sbParityErr = Output(Bool())
         val rxPriorityQueuesFull = Output(Bool())
         val desTimedout = Output(Bool())
         val invalidRouteUpper = Output(Bool())
         val invalidRouteCurr = Output(Bool())
-        val invalidRouteLower = Output(Bool())        
+        val invalidRouteLower = Output(Bool())
       }
     }
     val link = new Bundle {
@@ -53,13 +58,25 @@ class LogPhySidebandChannel(
     }
   })
 
-  val layerId = LayerId.logPhy  // 2
-  val upperIds = Seq(0, 1)      // Protocol(0) and D2D(1)
-  val lowerIds = Seq()          // No lower layers
+  val layerId = LayerId.logPhy // 2
+  val upperIds = Seq(0, 1) // Protocol(0) and D2D(1)
+  val lowerIds = Seq() // No lower layers
 
-  val rdiIntfNode = Module(new SidebandInterfaceNode(sbMsgWidth, rdiNcWidth, numCredits, queueDepths))
-  val switch = Module(new SidebandSwitch(layerId, upperIds, lowerIds, sbMsgWidth))
-  val linkNode = Module(new SidebandLinkNode(sbMsgWidth, sbLinkWidth, numCredits, desTimeoutCycles, queueDepths))
+  val rdiIntfNode = Module(
+    new SidebandInterfaceNode(sbMsgWidth, rdiNcWidth, numCredits, queueDepths)
+  )
+  val switch = Module(
+    new SidebandSwitch(layerId, upperIds, lowerIds, sbMsgWidth)
+  )
+  val linkNode = Module(
+    new SidebandLinkNode(
+      sbMsgWidth,
+      sbLinkWidth,
+      numCredits,
+      desTimeoutCycles,
+      queueDepths
+    )
+  )
   val layerInBuffer = Module(new SkidBuffer(sbMsgWidth))
   val layerOutBuffer = Module(new SkidBuffer(sbMsgWidth))
 
@@ -67,8 +84,8 @@ class LogPhySidebandChannel(
   io.rdi.rxCreditReturn := rdiIntfNode.io.rxCreditReturn
   io.rdi.activity := io.rdi.in.valid || io.rdi.out.valid
   io.layer.status.sbParityErr := rdiIntfNode.io.sbParityErr || linkNode.io.err.sbParityErr
-  io.layer.status.rxPriorityQueuesFull := rdiIntfNode.io.rxPriorityQueuesFull || 
-                                          linkNode.io.err.rxPriorityQueuesFull
+  io.layer.status.rxPriorityQueuesFull := rdiIntfNode.io.rxPriorityQueuesFull ||
+    linkNode.io.err.rxPriorityQueuesFull
   io.layer.status.desTimedout := linkNode.io.err.desTimedout
   io.layer.status.invalidRouteUpper := switch.io.err.invalidRouteUpper
   io.layer.status.invalidRouteCurr := switch.io.err.invalidRouteCurr
@@ -78,7 +95,7 @@ class LogPhySidebandChannel(
   io.link.out.fwClock := linkNode.io.txOut.fwClock
 
   io.link.ctrl.allPacketsSent := linkNode.io.ctrl.allPacketsSent
-   
+
   // IOs for SidebandInterfaceNode
   rdiIntfNode.io.txCreditReturn := io.rdi.txCreditReturn
   rdiIntfNode.io.rxIn <> io.rdi.in
@@ -96,11 +113,10 @@ class LogPhySidebandChannel(
   // IOs for SidebandLinkNode
   linkNode.io.txIn <> switch.io.lowerLayer.to
   linkNode.io.rxIn.bits := io.link.in.bits
-  linkNode.io.rxIn.fwClock := io.link.in.fwClock  
+  linkNode.io.rxIn.fwClock := io.link.in.fwClock
   linkNode.io.ctrl.txMode := io.link.ctrl.txMode
-  linkNode.io.ctrl.rxMode := io.link.ctrl.rxMode  
+  linkNode.io.ctrl.rxMode := io.link.ctrl.rxMode
   linkNode.io.ctrl.freezeAcceptingPackets := io.link.ctrl.freezeAcceptingPackets
-  
 
   // TODO: Maybe add buffers for tx and rx packets to/from the layer, might cause issues with
   // timeout cycles (not sure if a concern) but breaks up long combinational path.
@@ -109,14 +125,20 @@ class LogPhySidebandChannel(
 
 object MainLogPhySidebandChannel extends App {
   ChiselStage.emitSystemVerilogFile(
-    new LogPhySidebandChannel(sbMsgWidth=128, sbLinkWidth=1, rdiNcWidth=32, numCredits=32, 
-      desTimeoutCycles=512, queueDepths=SidebandPriorityQueueDepths()),
+    new LogPhySidebandChannel(
+      sbMsgWidth = 128,
+      sbLinkWidth = 1,
+      rdiNcWidth = 32,
+      numCredits = 32,
+      desTimeoutCycles = 512,
+      queueDepths = SidebandPriorityQueueDepths()
+    ),
     args = Array("-td", "./generatedVerilog/sideband"),
     firtoolOpts = Array(
       "-O=debug",
       "--disable-all-randomization",
       "--strip-debug-info",
       "--lowering-options=disallowLocalVariables"
-    ),
+    )
   )
 }

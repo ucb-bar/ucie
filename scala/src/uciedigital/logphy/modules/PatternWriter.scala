@@ -3,11 +3,11 @@
     PatternWriter takes care of sending the various patterns done during training of the mainband.
 
   NOTE:
-  * Supports serializer ratios that exactly divide the programmed finite pattern lengths.
-  * Doesn't support burst mode at the moment since burst mode isn't used for regular link training
+ * Supports serializer ratios that exactly divide the programmed finite pattern lengths.
+ * Doesn't support burst mode at the moment since burst mode isn't used for regular link training
   operations.
     - Burst mode used in compilance and debug modes
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.logphy
 
@@ -29,9 +29,12 @@ class PatternWriterIO extends Bundle {
 class PatternWriter(afeParams: AfeParams) extends Module {
   val io = IO(new Bundle {
     val interfaceIo = new PatternWriterIO
-    val mbTxLaneIo = Decoupled(new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio))
+    val mbTxLaneIo = Decoupled(
+      new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+    )
     val txLfsrCtrl = new Bundle {
-      val pattern = Input(Vec(afeParams.mbLanes, UInt(afeParams.mbSerializerRatio.W)))
+      val pattern =
+        Input(Vec(afeParams.mbLanes, UInt(afeParams.mbSerializerRatio.W)))
       val increment = Output(Bool())
       val resetLfsr = Output(Bool())
       val valid = Output(Bool())
@@ -42,7 +45,10 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   // Parameters & helpers
   // ==========================================================================
   val serRatio = afeParams.mbSerializerRatio
-  require(serRatio > 0, "PatternWriter requires a positive mainband serializer ratio")
+  require(
+    serRatio > 0,
+    "PatternWriter requires a positive mainband serializer ratio"
+  )
   require(
     Seq(8, 16).contains(afeParams.mbLanes),
     "PatternWriter supports spec-defined 8 or 16 mainband lanes"
@@ -62,7 +68,8 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   def repeatedPatternWords(pattern: BigInt, patternWidth: Int): Seq[UInt] = {
     // Distinct number of serializer-width words before the pattern alignment
     // repeats
-    val numPhases = patternWidth / BigInt(patternWidth).gcd(BigInt(serRatio)).toInt
+    val numPhases =
+      patternWidth / BigInt(patternWidth).gcd(BigInt(serRatio)).toInt
 
     // Create a table with the different phases of the word of the pattern, then
     // populate each phase with appropriate bits depending on the serializer
@@ -81,7 +88,10 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   def lcm(a: Int, b: Int): Int = a / BigInt(a).gcd(BigInt(b)).toInt * b
 
   def selectPatternWord(words: Seq[UInt], phase: UInt): UInt = {
-    require(words.nonEmpty, "PatternWriter pattern look up must contain at least one word")
+    require(
+      words.nonEmpty,
+      "PatternWriter pattern look up must contain at least one word"
+    )
 
     if (words.length == 1) {
       words.head
@@ -106,14 +116,17 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   // PATTERN:  1010_1010_1010_1010_1010_1010_1010_1010_0000_0000_0000_0000 (48 bits)
   val clkPatternWidth = 48
   val clkRepairPattern = BigInt("000055555555", 16)
-  val clkRepairPatternWords = repeatedPatternWords(clkRepairPattern, clkPatternWidth)
-  val clkRepairPatternNumCycles = exactNumCycles("CLKREPAIR", numIter * clkPatternWidth)
+  val clkRepairPatternWords =
+    repeatedPatternWords(clkRepairPattern, clkPatternWidth)
+  val clkRepairPatternNumCycles =
+    exactNumCycles("CLKREPAIR", numIter * clkPatternWidth)
 
   // --- Valtrain ---
   // four 1's followed by four 0's
   val valTrainPattern = BigInt("00001111", 2)
   val valTrainWidth = 8
-  val valTrainPatternWords = repeatedPatternWords(valTrainPattern, valTrainWidth)
+  val valTrainPatternWords =
+    repeatedPatternWords(valTrainPattern, valTrainWidth)
   val valTrainNumCycles = exactNumCycles("VALTRAIN", numIter * valTrainWidth)
 
   // --- PerLane ID ---
@@ -123,7 +136,8 @@ class PatternWriter(afeParams: AfeParams) extends Module {
       (BigInt("1010", 2) << 12) | (BigInt(lane & 0xff) << 4) | BigInt("1010", 2)
     repeatedPatternWords(perLaneIdPattern, perLanePatternWidth)
   }
-  val perLaneNumCycles = exactNumCycles("PERLANEID", numIter * perLanePatternWidth)
+  val perLaneNumCycles =
+    exactNumCycles("PERLANEID", numIter * perLanePatternWidth)
 
   // --- LFSR ---
   val lfsrNumBits = 4096
@@ -133,8 +147,10 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   val fwClkPPattern = BigInt("01010101", 2)
   val fwClkNPattern = BigInt("10101010", 2)
   val fwClkPatternWidth = 8
-  val fwClkPPatternWords = repeatedPatternWords(fwClkPPattern, fwClkPatternWidth)
-  val fwClkNPatternWords = repeatedPatternWords(fwClkNPattern, fwClkPatternWidth)
+  val fwClkPPatternWords =
+    repeatedPatternWords(fwClkPPattern, fwClkPatternWidth)
+  val fwClkNPatternWords =
+    repeatedPatternWords(fwClkNPattern, fwClkPatternWidth)
 
   // A pattern can drive several fields whose individual patterns have
   // different widths (e.g. PERLANEID drives the 16-bit per-lane data alongside
@@ -145,7 +161,8 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   val fwClkAndValidPhases =
     lcm(patternNumPhases(valTrainWidth), patternNumPhases(fwClkPatternWidth))
   val valTrainPatternPhases = fwClkAndValidPhases
-  val perLanePatternPhases = lcm(patternNumPhases(perLanePatternWidth), fwClkAndValidPhases)
+  val perLanePatternPhases =
+    lcm(patternNumPhases(perLanePatternWidth), fwClkAndValidPhases)
   val lfsrPatternPhases = fwClkAndValidPhases
 
   val maxPatternPhases = Seq(
@@ -157,8 +174,12 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   val patternPhaseWidth = log2Ceil(math.max(2, maxPatternPhases))
   val patternPhase = RegInit(0.U(patternPhaseWidth.W))
 
-  val largestCycleCount = Seq(clkRepairPatternNumCycles, valTrainNumCycles,
-                              perLaneNumCycles, lfsrNumCycles).max
+  val largestCycleCount = Seq(
+    clkRepairPatternNumCycles,
+    valTrainNumCycles,
+    perLaneNumCycles,
+    lfsrNumCycles
+  ).max
   val cycleCountWidth = log2Ceil(math.max(2, largestCycleCount))
   val cycleCount = RegInit(0.U(cycleCountWidth.W))
 
@@ -169,18 +190,26 @@ class PatternWriter(afeParams: AfeParams) extends Module {
   val patternTypeReg = RegInit(PatternSelect.CLKREPAIR)
 
   // Max cycle / phase of the active pattern.
-  val maxCycleCount = MuxLookup(patternTypeReg, (clkRepairPatternNumCycles - 1).U(cycleCountWidth.W))(Seq(
-    PatternSelect.CLKREPAIR -> (clkRepairPatternNumCycles - 1).U,
-    PatternSelect.VALTRAIN  -> (valTrainNumCycles - 1).U,
-    PatternSelect.PERLANEID -> (perLaneNumCycles - 1).U,
-    PatternSelect.LFSR      -> (lfsrNumCycles - 1).U
-  ))
-  val patternPhaseLimit = MuxLookup(patternTypeReg, (clkRepairPhases - 1).U(patternPhaseWidth.W))(Seq(
-    PatternSelect.CLKREPAIR -> (clkRepairPhases - 1).U,
-    PatternSelect.VALTRAIN  -> (valTrainPatternPhases - 1).U,
-    PatternSelect.PERLANEID -> (perLanePatternPhases - 1).U,
-    PatternSelect.LFSR      -> (lfsrPatternPhases - 1).U
-  ))
+  val maxCycleCount = MuxLookup(
+    patternTypeReg,
+    (clkRepairPatternNumCycles - 1).U(cycleCountWidth.W)
+  )(
+    Seq(
+      PatternSelect.CLKREPAIR -> (clkRepairPatternNumCycles - 1).U,
+      PatternSelect.VALTRAIN -> (valTrainNumCycles - 1).U,
+      PatternSelect.PERLANEID -> (perLaneNumCycles - 1).U,
+      PatternSelect.LFSR -> (lfsrNumCycles - 1).U
+    )
+  )
+  val patternPhaseLimit =
+    MuxLookup(patternTypeReg, (clkRepairPhases - 1).U(patternPhaseWidth.W))(
+      Seq(
+        PatternSelect.CLKREPAIR -> (clkRepairPhases - 1).U,
+        PatternSelect.VALTRAIN -> (valTrainPatternPhases - 1).U,
+        PatternSelect.PERLANEID -> (perLanePatternPhases - 1).U,
+        PatternSelect.LFSR -> (lfsrPatternPhases - 1).U
+      )
+    )
 
   io.interfaceIo.req.ready := !inProgress
 
@@ -224,7 +253,7 @@ class PatternWriter(afeParams: AfeParams) extends Module {
     io.interfaceIo.req.fire && (io.interfaceIo.req.bits.patternType === PatternSelect.LFSR)
   io.txLfsrCtrl.increment :=
     inProgress && (patternTypeReg === PatternSelect.LFSR) && io.mbTxLaneIo.fire &&
-    (cycleCount =/= maxCycleCount)
+      (cycleCount =/= maxCycleCount)
 
   switch(patternTypeReg) {
     is(PatternSelect.CLKREPAIR) {
@@ -273,17 +302,21 @@ class PatternWriter(afeParams: AfeParams) extends Module {
       )
 
       AssertProperty(
-        Sequence.BoolSequence(io.mbTxLaneIo.fire && cycleCount === maxCycleCount) |=>
+        Sequence.BoolSequence(
+          io.mbTxLaneIo.fire && cycleCount === maxCycleCount
+        ) |=>
           Sequence.BoolSequence(!inProgress),
         label = Some("PatternWriterFinalFireClearsInProgress")
       )
       AssertProperty(
-          Sequence.BoolSequence(cycleCount <= maxCycleCount),
+        Sequence.BoolSequence(cycleCount <= maxCycleCount),
         label = Some("PatternWriterCycleCountWithinPattern")
       )
 
       AssertProperty(
-        Sequence.BoolSequence(!(io.txLfsrCtrl.resetLfsr && io.txLfsrCtrl.increment)),
+        Sequence.BoolSequence(
+          !(io.txLfsrCtrl.resetLfsr && io.txLfsrCtrl.increment)
+        ),
         label = Some("PatternWriterLfsrResetAndIncrementMutuallyExclusive")
       )
 
@@ -294,7 +327,8 @@ class PatternWriter(afeParams: AfeParams) extends Module {
       )
 
       // Used because Chisel7 LTL assertions doesn't have $stable for UInt
-      val heldLastCycle = RegNext(io.mbTxLaneIo.valid && !io.mbTxLaneIo.ready, false.B)
+      val heldLastCycle =
+        RegNext(io.mbTxLaneIo.valid && !io.mbTxLaneIo.ready, false.B)
       val previousOutputBits = RegNext(io.mbTxLaneIo.bits.asUInt)
       val previousCycleCount = RegNext(cycleCount)
       val previousPatternPhase = RegNext(patternPhase)
@@ -304,9 +338,9 @@ class PatternWriter(afeParams: AfeParams) extends Module {
         Sequence.BoolSequence(heldLastCycle) |->
           Sequence.BoolSequence(
             io.mbTxLaneIo.bits.asUInt === previousOutputBits &&
-            cycleCount === previousCycleCount &&
-            patternPhase === previousPatternPhase &&
-            patternTypeReg === previousPatternType
+              cycleCount === previousCycleCount &&
+              patternPhase === previousPatternPhase &&
+              patternTypeReg === previousPatternType
           ),
         label = Some("PatternWriterHoldsStateAndBitsUnderBackpressure")
       )

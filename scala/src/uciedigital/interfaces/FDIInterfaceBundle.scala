@@ -5,7 +5,7 @@
   lp_* indicates Protocol Layer -> Die-to-Die Adapter
 
   Signals are relative to the Protocol Layer
-*/
+ */
 package edu.berkeley.cs.uciedigital.interfaces
 
 import chisel3._

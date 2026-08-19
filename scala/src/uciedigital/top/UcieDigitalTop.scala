@@ -7,7 +7,7 @@
     - FDI/RDI/sideband width parameters define the top-level interface shape.
     - LogicalPhyTopParams contains the primary tuning knobs for bring-up and
       training experiments, such as retry width and sideband timeout depth.
-*/
+ */
 package edu.berkeley.cs.uciedigital.top
 
 import chisel3._
@@ -22,22 +22,31 @@ import edu.berkeley.cs.uciedigital.regs._
 import edu.berkeley.cs.uciedigital.sideband.SidebandParams
 
 class UcieDigitalTopChipIO(protocolParams: ProtocolTopParams) extends Bundle {
-  val mainbandTx = Flipped(Decoupled(new ProtocolRawBeat(protocolParams.fdi.nBytes)))
+  val mainbandTx = Flipped(
+    Decoupled(new ProtocolRawBeat(protocolParams.fdi.nBytes))
+  )
   val mainbandRx = Decoupled(new ProtocolRawBeat(protocolParams.fdi.nBytes))
 }
 
-class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams) extends Bundle {
+class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams)
+    extends Bundle {
   val mainbandLink = new MainbandLaneIO(afeParams)
   val sidebandLink = new SidebandPhyLinkIO(sbParams.sbLinkWidth)
 }
 
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
   val chipFacingIo = new UcieDigitalTopChipIO(params.protocol)
-  val phyFacingIo  = new UcieDigitalTopPhyIO(params.logPhy.afe, params.logPhy.sideband)
-  val regBlockIo = if (!params.regs.includeRegNode) Some(Flipped(new UcieRegBlockIO(params.regs))) else None
+  val phyFacingIo =
+    new UcieDigitalTopPhyIO(params.logPhy.afe, params.logPhy.sideband)
+  val regBlockIo =
+    if (!params.regs.includeRegNode)
+      Some(Flipped(new UcieRegBlockIO(params.regs)))
+    else None
 }
 
-class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default())(implicit p: Parameters)
+class UcieDigitalTop(
+    params: UcieDigitalTopParams = UcieDigitalTopParams.default()
+)(implicit p: Parameters)
     extends LazyModule {
   private val validatedParams = params.validate()
   override lazy val desiredName = "UcieDigitalTop"
@@ -45,7 +54,9 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
   // With no node the map is spliced into an outer TLRegisterNode; expose the allocation so it can size it.
   val ucieRegAllocation = validatedParams.regs.allocation
   val regs: Option[UcieRegTop] =
-    if (validatedParams.regs.includeRegNode || validatedParams.regs.includeInterruptNode)
+    if (
+      validatedParams.regs.includeRegNode || validatedParams.regs.includeInterruptNode
+    )
       Some(LazyModule(new UcieRegTop(validatedParams.regs)))
     else None
   val regNode = regs.flatMap(_.node)
@@ -66,24 +77,30 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
       regClk.reset := reset
     }
 
-    val protocolLayer = Module(new ProtocolLayer(
-      params = validatedParams.protocol.layer,
-      fdiParams = validatedParams.protocol.fdi,
-      sbParams = validatedParams.adapter.sideband
-    ))
-    val d2dAdapter = Module(new D2DAdapter(
-      fdiParams = validatedParams.adapter.fdi,
-      rdiParams = validatedParams.adapter.rdi,
-      sbParams = validatedParams.adapter.sideband
-    ))
-    val logicalPhy = Module(new LogicalPhy(
-      afeParams = validatedParams.logPhy.afe,
-      sbParams = validatedParams.logPhy.sideband,
-      rdiParams = validatedParams.logPhy.rdi,
-      retryW = validatedParams.logPhy.retryW,
-      desTimeoutCycles = validatedParams.logPhy.desTimeoutCycles,
-      queueDepths = validatedParams.logPhy.queueDepths
-    ))
+    val protocolLayer = Module(
+      new ProtocolLayer(
+        params = validatedParams.protocol.layer,
+        fdiParams = validatedParams.protocol.fdi,
+        sbParams = validatedParams.adapter.sideband
+      )
+    )
+    val d2dAdapter = Module(
+      new D2DAdapter(
+        fdiParams = validatedParams.adapter.fdi,
+        rdiParams = validatedParams.adapter.rdi,
+        sbParams = validatedParams.adapter.sideband
+      )
+    )
+    val logicalPhy = Module(
+      new LogicalPhy(
+        afeParams = validatedParams.logPhy.afe,
+        sbParams = validatedParams.logPhy.sideband,
+        rdiParams = validatedParams.logPhy.rdi,
+        retryW = validatedParams.logPhy.retryW,
+        desTimeoutCycles = validatedParams.logPhy.desTimeoutCycles,
+        queueDepths = validatedParams.logPhy.queueDepths
+      )
+    )
 
     // Internal connection
     protocolLayer.io.fdi <> d2dAdapter.io.fdi
@@ -109,7 +126,9 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
     regs.foreach { r =>
       r.module.io.linkReset := false.B
       r.module.io.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
-      r.module.io.phyToRegs := 0.U.asTypeOf(new PhyToRegs(validatedParams.regs.numModules))
+      r.module.io.phyToRegs := 0.U.asTypeOf(
+        new PhyToRegs(validatedParams.regs.numModules)
+      )
       r.module.io.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
       r.module.io.mailboxSideband.req.ready := true.B
       r.module.io.mailboxSideband.resp.valid := false.B
@@ -129,7 +148,9 @@ class UcieDigitalTop(params: UcieDigitalTopParams = UcieDigitalTopParams.default
     io.regBlockIo.foreach { rb =>
       rb.linkReset := false.B
       rb.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
-      rb.phyToRegs := 0.U.asTypeOf(new PhyToRegs(validatedParams.regs.numModules))
+      rb.phyToRegs := 0.U.asTypeOf(
+        new PhyToRegs(validatedParams.regs.numModules)
+      )
       rb.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
       rb.mailboxSideband.req.ready := true.B
       rb.mailboxSideband.resp.valid := false.B

@@ -2,7 +2,7 @@
   Description:
     Contains the logic for the serializer, and deserializer for
     the sideband messaging over the physical UCIe link.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.sideband
 
@@ -38,8 +38,8 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   require(sbLinkW == 1, "Sideband link width must be 1 per spec")
 
   val currentState = RegInit(SerializerState.sIdle)
-  val numBitsToSend = 64       // As per spec, tansmit in 64 bit chunks
-  val numBitsToWait = 32       // As per spec, need to wait 32 bits
+  val numBitsToSend = 64 // As per spec, tansmit in 64 bit chunks
+  val numBitsToWait = 32 // As per spec, need to wait 32 bits
 
   val packet = RegInit(0.U(msgW.W))
   val pktOpcode = RegInit(0.U(5.W))
@@ -60,17 +60,21 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   val (waitBitsCount, waitBitsDone) = Counter(waitBitsCntEn, numBitsToWait)
 
   // Packet opcodes without data
-  val isWoData = SBMsgOpcode.OpsWithoutData.map(_.asUInt === pktOpcode).reduce(_ || _)
-  val inputIsWoData = SBMsgOpcode.OpsWithoutData.map(_.asUInt === io.in.bits(4,0)).reduce(_ || _)
+  val isWoData =
+    SBMsgOpcode.OpsWithoutData.map(_.asUInt === pktOpcode).reduce(_ || _)
+  val inputIsWoData =
+    SBMsgOpcode.OpsWithoutData.map(_.asUInt === io.in.bits(4, 0)).reduce(_ || _)
   val acceptRaw = io.in.fire && io.ctrl.txMode === SBRxTxMode.RAW
-  val acceptPacketNoData = io.in.fire && io.ctrl.txMode === SBRxTxMode.PACKET && inputIsWoData
-  val acceptPacketWithData = io.in.fire && io.ctrl.txMode === SBRxTxMode.PACKET && !inputIsWoData
+  val acceptPacketNoData =
+    io.in.fire && io.ctrl.txMode === SBRxTxMode.PACKET && inputIsWoData
+  val acceptPacketWithData =
+    io.in.fire && io.ctrl.txMode === SBRxTxMode.PACKET && !inputIsWoData
 
   // txMode: RAW means send raw bits don't look at opcode (will be 64 bits)
   when(isWoData || (io.ctrl.txMode === SBRxTxMode.RAW)) {
-    numBeats := 1.U       // messages w/o data (1 64 bit chunk)
+    numBeats := 1.U // messages w/o data (1 64 bit chunk)
   }.otherwise {
-    numBeats := 2.U       // messages w/ data  (2 64-bit chunk)
+    numBeats := 2.U // messages w/ data  (2 64-bit chunk)
   }
 
   val txsbd = Module(new Ser21)
@@ -95,10 +99,10 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   outBitsCntEn := false.B
   waitBitsCntEn := false.B
 
-    // state action
+  // state action
   switch(currentState) {
     is(SerializerState.sIdle) {
-      assert(outBitsCount === 0.U,  "Output bit counter should start at 0")
+      assert(outBitsCount === 0.U, "Output bit counter should start at 0")
       assert(waitBitsCount === 0.U, "Wait bit counter should start at 0")
 
       io.in.ready := true.B
@@ -107,7 +111,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
       when(io.in.valid) {
         beatCount := 0.U
         packet := io.in.bits
-        pktOpcode := io.in.bits(4,0)
+        pktOpcode := io.in.bits(4, 0)
       }
     }
     is(SerializerState.sBitsSend) {
@@ -133,7 +137,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
         beatCount := 0.U
         io.in.ready := true.B
         packet := io.in.bits
-        pktOpcode := io.in.bits(4,0)
+        pktOpcode := io.in.bits(4, 0)
       }
     }
   }
@@ -153,7 +157,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
     is(SerializerState.sBitsWait) {
       when(waitBitsDone) {
         when(doneSending && !newPacketValid) {
-          currentState := SerializerState.sIdle     // wait for new message
+          currentState := SerializerState.sIdle // wait for new message
         }.otherwise {
           currentState := SerializerState.sBitsSend // more beats to send
         }
@@ -173,8 +177,10 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
       )
     }
     block(Verification.Cover) {
-      val firstWaitDone = currentState === SerializerState.sBitsWait && waitBitsDone && beatCount === 1.U
-      val finalWaitDone = currentState === SerializerState.sBitsWait && waitBitsDone && doneSending
+      val firstWaitDone =
+        currentState === SerializerState.sBitsWait && waitBitsDone && beatCount === 1.U
+      val finalWaitDone =
+        currentState === SerializerState.sBitsWait && waitBitsDone && doneSending
       val trackingPacket128 = RegInit(false.B)
 
       when(acceptPacketWithData) {
@@ -186,15 +192,34 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
       cover(acceptRaw, "SidebandLinkSerializerAcceptRaw64")
       cover(acceptPacketNoData, "SidebandLinkSerializerAcceptPacket64")
       cover(acceptPacketWithData, "SidebandLinkSerializerAcceptPacket128")
-      cover(currentState === SerializerState.sBitsSend && outClkEn, "SidebandLinkSerializerSendState")
-      cover(currentState === SerializerState.sBitsWait && waitBitsCntEn, "SidebandLinkSerializerWaitState")
-      cover(finalWaitDone && numBeats === 1.U, "SidebandLinkSerializer64bCompletes")
-      cover(trackingPacket128 && firstWaitDone, "SidebandLinkSerializer128bFirstChunkWaitDone")
-      cover(trackingPacket128 && finalWaitDone, "SidebandLinkSerializer128bTwoChunksWithWait")
-      cover(doneSending && newPacketValid && currentState === SerializerState.sBitsWait && io.in.ready,
-        "SidebandLinkSerializerBackToBackFinalWaitAccept")
+      cover(
+        currentState === SerializerState.sBitsSend && outClkEn,
+        "SidebandLinkSerializerSendState"
+      )
+      cover(
+        currentState === SerializerState.sBitsWait && waitBitsCntEn,
+        "SidebandLinkSerializerWaitState"
+      )
+      cover(
+        finalWaitDone && numBeats === 1.U,
+        "SidebandLinkSerializer64bCompletes"
+      )
+      cover(
+        trackingPacket128 && firstWaitDone,
+        "SidebandLinkSerializer128bFirstChunkWaitDone"
+      )
+      cover(
+        trackingPacket128 && finalWaitDone,
+        "SidebandLinkSerializer128bTwoChunksWithWait"
+      )
+      cover(
+        doneSending && newPacketValid && currentState === SerializerState.sBitsWait && io.in.ready,
+        "SidebandLinkSerializerBackToBackFinalWaitAccept"
+      )
       CoverProperty(
-        Sequence.BoolSequence(reset.asBool && currentState =/= SerializerState.sIdle),
+        Sequence.BoolSequence(
+          reset.asBool && currentState =/= SerializerState.sIdle
+        ),
         disable = None,
         label = Some("SidebandLinkSerializerResetDuringPacket")
       )
@@ -202,12 +227,14 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   }
 }
 
-
 // ============================================================================
 // Sideband Link Deserializer
 // ============================================================================
-class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCycles: Int)
-  extends Module {
+class SidebandLinkDeserializer(
+    val sbLinkW: Int,
+    val msgW: Int,
+    val desTimeoutCycles: Int
+) extends Module {
   val io = IO(new Bundle {
     val ctrl = new Bundle {
       val rxMode = Input(SBRxTxMode())
@@ -221,14 +248,19 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
   })
 
   require(sbLinkW == 1, "Sideband link width must be 1 per spec")
-  require(desTimeoutCycles > (msgW + 64), "Need to atleast let largest message process")
+  require(
+    desTimeoutCycles > (msgW + 64),
+    "Need to atleast let largest message process"
+  )
 
   val asyncQueueDepth = 2
 
   val negFwClock = (!io.in.fwClock).asClock
 
   // The assembled message word crosses to the local clock domain through an async FIFO.
-  val rxQueue = Module(new AsyncQueue(UInt(msgW.W), AsyncQueueParams(depth = asyncQueueDepth)))
+  val rxQueue = Module(
+    new AsyncQueue(UInt(msgW.W), AsyncQueueParams(depth = asyncQueueDepth))
+  )
   rxQueue.io.enq_clock := negFwClock
   rxQueue.io.enq_reset := reset.asBool
   rxQueue.io.deq_clock := clock
@@ -241,13 +273,18 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
     val maxBits = RegInit((msgW - 1).U(log2Ceil(msgW).W))
     val dataReg = RegInit(0.U(msgW.W))
 
-    val isWoData = SBMsgOpcode.OpsWithoutData.map(_.asUInt === dataReg(4, 0)).reduce(_ || _)
+    val isWoData =
+      SBMsgOpcode.OpsWithoutData.map(_.asUInt === dataReg(4, 0)).reduce(_ || _)
     val recvDone = counter === maxBits
 
     // Opcode (bits[4:0]) determines message length once the first 5 bits arrive.
     // RAW means read raw bits (will be 64 bits).
     when(counter === 5.U) {
-      maxBits := Mux(isWoData || (io.ctrl.rxMode === SBRxTxMode.RAW), 63.U, 127.U)
+      maxBits := Mux(
+        isWoData || (io.ctrl.rxMode === SBRxTxMode.RAW),
+        63.U,
+        127.U
+      )
     }
 
     val completeWord = dataReg.bitSet(counter, io.in.bits.asBool)
@@ -256,7 +293,7 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
 
     rxQueue.io.enq.valid := recvDone
     rxQueue.io.enq.bits := completeWord
-    
+
     // Register before the CDC to the local domain: the comparator output can
     // glitch while the counter transitions, and the async local clock could
     // sample the glitch.
@@ -279,7 +316,8 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
   io.ctrl.desTimedout := timeoutCounter === desTimeoutCycles.U
 
   val outputOpcode = io.out.bits(4, 0)
-  val outputIsWoData = SBMsgOpcode.OpsWithoutData.map(_.asUInt === outputOpcode).reduce(_ || _)
+  val outputIsWoData =
+    SBMsgOpcode.OpsWithoutData.map(_.asUInt === outputOpcode).reduce(_ || _)
 
   // ==========================================================================
   // Assertions
@@ -291,15 +329,17 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
 
       AssertProperty(
         Sequence.BoolSequence(outStalled) |->
-          Sequence.BoolSequence(io.out.valid && io.out.bits.asUInt === previousOutBits),
+          Sequence.BoolSequence(
+            io.out.valid && io.out.bits.asUInt === previousOutBits
+          ),
         label = Some("SidebandDeserializerHoldsOutputUnderBackpressure")
       )
 
       AssertProperty(
-          Sequence.BoolSequence(rxQueue.io.enq.valid) |->
-            Sequence.BoolSequence(rxQueue.io.enq.ready),
-          label = Some("SidebandDeserializerDoesNotDropWords")
-        )
+        Sequence.BoolSequence(rxQueue.io.enq.valid) |->
+          Sequence.BoolSequence(rxQueue.io.enq.ready),
+        label = Some("SidebandDeserializerDoesNotDropWords")
+      )
     }
     block(Verification.Cover) {
       val sawOutputStall = RegInit(false.B)
@@ -309,11 +349,26 @@ class SidebandLinkDeserializer(val sbLinkW: Int, val msgW: Int, val desTimeoutCy
         sawOutputStall := false.B
       }
 
-      cover(io.out.fire && io.ctrl.rxMode === SBRxTxMode.RAW, "SidebandLinkDeserializerRaw64Output")
-      cover(io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && outputIsWoData, "SidebandLinkDeserializerPacket64Output")
-      cover(io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && !outputIsWoData, "SidebandLinkDeserializerPacket128Output")
-      cover(io.out.valid && !io.out.ready, "SidebandLinkDeserializerOutputBackpressure")
-      cover(io.out.fire && sawOutputStall, "SidebandLinkDeserializerStalledOutputConsumed")
+      cover(
+        io.out.fire && io.ctrl.rxMode === SBRxTxMode.RAW,
+        "SidebandLinkDeserializerRaw64Output"
+      )
+      cover(
+        io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && outputIsWoData,
+        "SidebandLinkDeserializerPacket64Output"
+      )
+      cover(
+        io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && !outputIsWoData,
+        "SidebandLinkDeserializerPacket128Output"
+      )
+      cover(
+        io.out.valid && !io.out.ready,
+        "SidebandLinkDeserializerOutputBackpressure"
+      )
+      cover(
+        io.out.fire && sawOutputStall,
+        "SidebandLinkDeserializerStalledOutputConsumed"
+      )
       cover(io.ctrl.desTimedout, "SidebandLinkDeserializerTimeout")
       CoverProperty(
         Sequence.BoolSequence(reset.asBool && !idleStatusSync),
@@ -331,8 +386,8 @@ object MainSBSerdes extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 
   ChiselStage.emitSystemVerilogFile(
@@ -341,7 +396,7 @@ object MainSBSerdes extends App {
     firtoolOpts = Array(
       "-O=debug",
       "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket",  
-    ),
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
   )
 }

@@ -1,7 +1,7 @@
 /*
   Description:
     Handles protocol-layer FDI control handshakes and tracks the negotiated runtime state.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.protocol
 
@@ -47,8 +47,8 @@ class ProtocolStateController() extends Module {
     negotiatedValidReg := false.B
   }.elsewhen(
     (io.fdi.plStateSts === FDIState.reset) &&
-    io.fdi.plInbandPres &&
-    io.fdi.plProtocolVld
+      io.fdi.plInbandPres &&
+      io.fdi.plProtocolVld
   ) {
     negotiatedProtocolReg := io.fdi.plProtocol
     negotiatedFlitFormatReg := io.fdi.plProtocolFlitFmt
@@ -134,16 +134,22 @@ class ProtocolStateController() extends Module {
   block(Verification) {
     block(Verification.Assert) {
       when(io.fdi.plClkReq && !prevClkReqReg) {
-        assert(!io.fdi.lpClkAck,
-          "FATAL: lp_clk_ack must not assert in the same cycle as pl_clk_req")
+        assert(
+          !io.fdi.lpClkAck,
+          "FATAL: lp_clk_ack must not assert in the same cycle as pl_clk_req"
+        )
       }
       when(io.fdi.plRxActiveReq && !prevRxActiveReqReg) {
-        assert(!io.fdi.lpRxActiveSts,
-          "FATAL: lp_rx_active_sts must not assert in the same cycle as pl_rx_active_req")
+        assert(
+          !io.fdi.lpRxActiveSts,
+          "FATAL: lp_rx_active_sts must not assert in the same cycle as pl_rx_active_req"
+        )
       }
       when(io.fdi.lpStallAck) {
-        assert(io.txIdle,
-          "FATAL: lp_stall_ack must only assert after TX goes idle")
+        assert(
+          io.txIdle,
+          "FATAL: lp_stall_ack must only assert after TX goes idle"
+        )
       }
       when(prevNegotiatedValidReg && io.fdi.plInbandPres) {
         assert(

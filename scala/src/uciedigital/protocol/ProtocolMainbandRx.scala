@@ -1,7 +1,7 @@
 /*
   Description:
     Receives raw mainband beats from FDI and buffers them for the chip-facing interface.
-*/
+ */
 
 package edu.berkeley.cs.uciedigital.protocol
 
@@ -29,7 +29,9 @@ class ProtocolMainbandRx(nBytes: Int, depth: Int) extends Module {
   val queue = withReset(reset.asBool || io.clear) {
     Module(new Queue(new ProtocolRawBeat(nBytes), depth, pipe = true))
   }
-  val rxOverflowReg = RegInit(false.B) // Can't overflow; no spec-defined protocol backpressure
+  val rxOverflowReg = RegInit(
+    false.B
+  ) // Can't overflow; no spec-defined protocol backpressure
 
   val captureEnabled = io.active && io.rxPathActive
   val rxBeat = Wire(new ProtocolRawBeat(nBytes))
@@ -51,8 +53,10 @@ class ProtocolMainbandRx(nBytes: Int, depth: Int) extends Module {
   block(Verification) {
     block(Verification.Assert) {
       when(io.fdi.plValid) {
-        assert(captureEnabled,
-          "FATAL: ProtocolMainbandRx observed payload data while RX path was not ACTIVE")
+        assert(
+          captureEnabled,
+          "FATAL: ProtocolMainbandRx observed payload data while RX path was not ACTIVE"
+        )
       }
       assert(!rxOverflowReg, "FATAL: ProtocolMainbandRx overflowed its buffer")
     }

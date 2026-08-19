@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR supersedes the run already in flight for it. Pushes to
+# main are never cancelled, so every commit there keeps its own CI result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Format and elaboration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # The mill build lives in scala/, not at the repo root.
+        working-directory: scala
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # scala/testchipip is vendored as a submodule and is a build dependency.
+          submodules: recursive
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache mill and coursier downloads
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/mill
+            ~/.cache/coursier
+          key: mill-${{ runner.os }}-${{ hashFiles('scala/build.mill', 'scala/mill') }}
+          restore-keys: mill-${{ runner.os }}-
+
+      # The vendored scala/testchipip submodule is excluded via
+      # project.excludePaths in scala/.scalafmt.conf, so this only covers this
+      # repo's own sources.
+      - name: Check formatting
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+
+      # Type-checks everything, including the ChiselSim suites. Those are not
+      # run here: each `simulate` call builds its own Verilator model, which is
+      # far too slow for per-PR CI. Run them locally with `./mill test`.
+      - name: Compile
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.compile
+
+      # Elaboration-only suites: these run firtool but never start a simulator.
+      - name: Elaborate RTL and check register codegen
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.testOnly \
+            edu.berkeley.cs.uciedigital.phy.PhySpec \
+            edu.berkeley.cs.uciedigital.phy.PhyTestSpec \
+            edu.berkeley.cs.uciedigital.tilelink.CodegenSpec
+
+      # Every other test in TileLinkSpec drives a simulator, so select the one
+      # generator test by name rather than running the suite.
+      - name: Elaborate UcieTL
+        if: ${{ !cancelled() }}
+        run: |
+          ./mill test.testOnly edu.berkeley.cs.uciedigital.tilelink.TileLinkSpec \
+            -- -z "generate valid SystemVerilog"

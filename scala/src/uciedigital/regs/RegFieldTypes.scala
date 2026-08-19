@@ -21,7 +21,11 @@ object UcieResets {
     (sticky, nonSticky)
   }
 
-  def apply(implicitReset: Reset, domainReset: Bool, linkReset: Bool): (Bool, Bool) = {
+  def apply(
+      implicitReset: Reset,
+      domainReset: Bool,
+      linkReset: Bool
+  ): (Bool, Bool) = {
     val sticky = implicitReset.asBool || domainReset
     val nonSticky = sticky || linkReset
     (sticky, nonSticky)
@@ -56,41 +60,104 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
   def RO(width: Int, value: UInt, name: String, description: String): RegField =
     RegField.r(width, value, desc(name, description, R, volatile = true))
 
-  def HWInit(width: Int, value: BigInt, name: String, description: String): RegField =
-    RegField.r(width, value.U(width.W), desc(name, description, R, reset = Some(value)))
+  def HWInit(
+      width: Int,
+      value: BigInt,
+      name: String,
+      description: String
+  ): RegField =
+    RegField.r(
+      width,
+      value.U(width.W),
+      desc(name, description, R, reset = Some(value))
+    )
 
   def RsvdP(width: Int, name: String = "rsvdp"): RegField =
-    RegField.r(width, 0.U(width.W), desc(name, "Reserved and Preserved (RsvdP)", R, Some(0)))
+    RegField.r(
+      width,
+      0.U(width.W),
+      desc(name, "Reserved and Preserved (RsvdP)", R, Some(0))
+    )
   def RsvdZ(width: Int, name: String = "rsvdz"): RegField =
-    RegField.r(width, 0.U(width.W), desc(name, "Reserved and Zero (RsvdZ)", R, Some(0)))
+    RegField.r(
+      width,
+      0.U(width.W),
+      desc(name, "Reserved and Zero (RsvdZ)", R, Some(0))
+    )
 
-  def RW(width: Int, init: BigInt, name: String, description: String): UcieRegField = {
+  def RW(
+      width: Int,
+      init: BigInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
     val reg = nonStickyReg(width, init)
-    UcieRegField(RegField(width, reg, desc(name, description, RWacc, Some(init))), reg)
-  }
-
-  def RWS(width: Int, init: BigInt, name: String, description: String): UcieRegField = {
-    val reg = stickyReg(width, init)
-    UcieRegField(RegField(width, reg, desc(name, description, RWacc, Some(init))), reg)
-  }
-
-  def ROS(width: Int, init: BigInt, name: String, description: String): UcieRegField = {
-    val reg = stickyReg(width, init)
     UcieRegField(
-      RegField.r(width, reg, desc(name, description, R, Some(init), volatile = true)),
+      RegField(width, reg, desc(name, description, RWacc, Some(init))),
       reg
     )
   }
 
-  def RW1C(width: Int, hwSet: UInt, name: String, description: String): UcieRegField = {
+  def RWS(
+      width: Int,
+      init: BigInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
+    val reg = stickyReg(width, init)
+    UcieRegField(
+      RegField(width, reg, desc(name, description, RWacc, Some(init))),
+      reg
+    )
+  }
+
+  def ROS(
+      width: Int,
+      init: BigInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
+    val reg = stickyReg(width, init)
+    UcieRegField(
+      RegField
+        .r(width, reg, desc(name, description, R, Some(init), volatile = true)),
+      reg
+    )
+  }
+
+  def RW1C(
+      width: Int,
+      hwSet: UInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
     val reg = nonStickyReg(width, 0)
-    val d = desc(name, description, RWacc, Some(0), Some(RegFieldWrType.ONE_TO_CLEAR), volatile = true)
+    val d = desc(
+      name,
+      description,
+      RWacc,
+      Some(0),
+      Some(RegFieldWrType.ONE_TO_CLEAR),
+      volatile = true
+    )
     UcieRegField(RegField.w1ToClear(width, reg, hwSet, Some(d)), reg)
   }
 
-  def RW1CS(width: Int, hwSet: UInt, name: String, description: String): UcieRegField = {
+  def RW1CS(
+      width: Int,
+      hwSet: UInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
     val reg = stickyReg(width, 0)
-    val d = desc(name, description, RWacc, Some(0), Some(RegFieldWrType.ONE_TO_CLEAR), volatile = true)
+    val d = desc(
+      name,
+      description,
+      RWacc,
+      Some(0),
+      Some(RegFieldWrType.ONE_TO_CLEAR),
+      volatile = true
+    )
     UcieRegField(RegField.w1ToClear(width, reg, hwSet, Some(d)), reg)
   }
 
@@ -126,10 +193,23 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
       when(valid && !lock)(reg := data)
       true.B
     }
-    UcieRegField(RegField(width, reg, write, Some(desc(name, description, RWacc, Some(init)))), reg)
+    UcieRegField(
+      RegField(
+        width,
+        reg,
+        write,
+        Some(desc(name, description, RWacc, Some(init)))
+      ),
+      reg
+    )
   }
 
-  def RWO(width: Int, init: BigInt, name: String, description: String): UcieRegField = {
+  def RWO(
+      width: Int,
+      init: BigInt,
+      name: String,
+      description: String
+  ): UcieRegField = {
     val reg = nonStickyReg(width, init)
     val locked = nonStickyReg(width, 0)
     val write = RegWriteFn { (valid, data) =>
@@ -140,10 +220,23 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
       }
       true.B
     }
-    UcieRegField(RegField(width, reg, write, Some(desc(name, description, RWacc, Some(init)))), reg)
+    UcieRegField(
+      RegField(
+        width,
+        reg,
+        write,
+        Some(desc(name, description, RWacc, Some(init)))
+      ),
+      reg
+    )
   }
 
-  def paddedRow(offset: Int, field: RegField, usedBits: Int, reservedTail: Int => RegField): RegField.Map =
+  def paddedRow(
+      offset: Int,
+      field: RegField,
+      usedBits: Int,
+      reservedTail: Int => RegField
+  ): RegField.Map =
     if (usedBits >= 32) offset -> Seq(field)
     else offset -> Seq(field, reservedTail(32 - usedBits))
 
