@@ -856,9 +856,9 @@ class Pll(implicit includeDefaultModels: Boolean = false) extends RawModule {
   verilogBlackBox.io.d_accumulator_reset_31 := io.ctl.d_accumulator_reset(31)
 }
 
-class VerilogPll(clkPeriodPs: Int = 125)(implicit
+class VerilogPll(implicit
     includeDefaultModels: Boolean = false
-) extends BlackBox(Map("CLK_PERIOD_PS" -> clkPeriodPs))
+) extends BlackBox
     with HasBlackBoxResource {
   // Pins marked as "leave floating" should be outputs.
   val io = IO(new Bundle {
