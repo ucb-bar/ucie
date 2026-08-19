@@ -300,6 +300,9 @@ class UcieTLRegs(
         w.afeBypass.bEn := false.B
         w.afeBypass.bPc := true.B
         w.afeBypass.selA := false.B
+        for (i <- 0 until 32) {
+          w.shuffler(i) := i.U(5.W)
+        }
         w.sample_negedge := false.B
         w.delay := 0.U
         w
@@ -516,7 +519,10 @@ class UcieTLRegs(
           toRegFieldRw(
             rxctl(i).afeOverlapCycles,
             s"rxctl_${i}_afeOverlapCycles"
-          ),
+          )
+        ) ++ (0 until 32).map((j: Int) =>
+          toRegFieldRw(rxctl(i).shuffler(j), s"rxctl_${i}_shuffler_$j")
+        ) ++ Seq(
           toRegFieldRw(rxctl(i).sample_negedge, s"rxctl_${i}_sampleNegedge"),
           toRegFieldRw(rxctl(i).delay, s"rxctl_${i}_rxDelay")
         )
