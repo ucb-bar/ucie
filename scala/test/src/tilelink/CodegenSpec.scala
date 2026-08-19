@@ -45,7 +45,7 @@ class CodegenSpec extends AnyFunSpec {
   describe("CFormatter") {
     val f = new CFormatter
     it("should format long values") {
-      assert(f.formatLong(0xdeadbeefL) == "0xDEADBEEFULL")
+      assert(f.formatLong(0xdeadbeefL) == "0xdeadbeefULL")
       assert(f.formatLong(0L) == "0x0ULL")
     }
     it("should format boolean values") {
@@ -53,32 +53,32 @@ class CodegenSpec extends AnyFunSpec {
       assert(f.formatBool(false) == "0")
     }
     it("should format constant references") {
-      assert(f.formatConstantRef("txFsmRst") == "TX_FSM_RST")
-      assert(f.formatConstantRef("rxPacketsReceived") == "RX_PACKETS_RECEIVED")
+      assert(f.formatConstantRef("txFsmRst") == "UCIE_TX_FSM_RST")
+      assert(f.formatConstantRef("rxPacketsReceived") == "UCIE_RX_PACKETS_RECEIVED")
     }
     it("should format defines") {
-      assert(f.formatDefine("myConst", "42") == "#define MY_CONST 42\n")
+      assert(f.formatDefine("myConst", "42") == "#define UCIE_MY_CONST 42\n")
     }
     it("should format function calls") {
-      assert(f.formatFnCall("foo") == "foo();\n")
-      assert(f.formatFnCall("foo", Seq("a", "b")) == "foo(a, b);\n")
+      assert(f.formatFnCall("foo") == "foo(base);\n")
+      assert(f.formatFnCall("foo", Seq("a", "b")) == "foo(base, a, b);\n")
     }
-    it("should format functions with args") {
+    it("should format functions with an implicit base arg") {
       val result = f.formatFn("myFn", "body;\n", Seq(Arg("x", Datatype.Long)))
-      assert(result.startsWith("void myFn(uint64_t x)"))
+      assert(result.startsWith("static inline void myFn(uintptr_t base, uint64_t x)"))
       assert(result.contains("{"))
       assert(result.contains("}"))
     }
-    it("should format write and read macros") {
-      assert(f.formatWrite("drv", "0x0", "0x1") == "WRITE(drv, 0x0, 0x1);\n")
-      assert(f.formatWriteReg("drv", "ADDR", "0x1ULL") == "WRITE_UCIE(drv, ADDR, 0x1ULL);\n")
-      assert(f.formatRead("drv", "result", "ADDR") == "uint64_t result;\nREAD(drv, ADDR, result);\n")
+    it("should format write and read as base-relative MMIO accesses") {
+      assert(f.formatWrite("drv", "0x0", "0x1") == "reg_write64(base + 0x0, 0x1);\n")
+      assert(f.formatWriteReg("drv", "ADDR", "0x1ULL") == "reg_write64(base + ADDR, 0x1ULL);\n")
+      assert(f.formatRead("drv", "result", "ADDR") == "uint64_t result;\nresult = reg_read64(base + ADDR);\n")
     }
-    it("should format assert macros") {
-      assert(f.formatAssertEq("drv", "ADDR", "0x1ULL") == "EXPECT(drv, ADDR, 0x1ULL);\n")
+    it("should format asserts as plain C asserts") {
+      assert(f.formatAssertEq("drv", "ADDR", "0x1ULL") == "assert(reg_read64(base + ADDR) == (0x1ULL));\n")
       assert(f.formatAssertEq("drv", "ADDR", "0x1ULL", Some("bad")) ==
-        "EXPECT_MSG(drv, ADDR, 0x1ULL, \"bad\");\n")
-      assert(f.formatUcieAssertEq("drv", "ADDR", "0x1ULL") == "EXPECT_UCIE(drv, ADDR, 0x1ULL);\n")
+        "assert(reg_read64(base + ADDR) == (0x1ULL));\n")
+      assert(f.formatUcieAssertEq("drv", "ADDR", "0x1ULL") == "assert(reg_read64(base + ADDR) == (0x1ULL));\n")
     }
     it("should format print statement") {
       assert(f.formatPrintStmt("hello") == "printf(\"hello\\n\");\n")
@@ -105,15 +105,15 @@ class CodegenSpec extends AnyFunSpec {
 
   describe("Codegen with CFormatter") {
     val codegen = new Codegen(new CFormatter)
-    it("should format reset_fsms as a void function") {
+    it("should format reset_fsms as a base-relative MMIO function") {
       val result = codegen.formatResetFsmsFn()
-      assert(result.contains("void reset_fsms()"))
-      assert(result.contains("WRITE_UCIE(regDrv, TX_FSM_RST, 0x1ULL)"))
-      assert(result.contains("WRITE_UCIE(regDrv, RX_FSM_RST, 0x1ULL)"))
-      assert(result.contains("WRITE_UCIE(regDrv, COMMON_TX_FSM_RST, 0x1ULL)"))
-      assert(result.contains("EXPECT_UCIE_MSG(regDrv, TX_TEST_STATE, TX_TEST_STATE_IDLE"))
-      assert(result.contains("EXPECT_UCIE_MSG(regDrv, TX_PACKETS_SENT, 0x0ULL"))
-      assert(result.contains("EXPECT_UCIE_MSG(regDrv, RX_PACKETS_RECEIVED, 0x0ULL"))
+      assert(result.contains("static inline void reset_fsms(uintptr_t base)"))
+      assert(result.contains("reg_write64(base + UCIE_TX_FSM_RST, 0x1ULL);"))
+      assert(result.contains("reg_write64(base + UCIE_RX_FSM_RST, 0x1ULL);"))
+      assert(result.contains("reg_write64(base + UCIE_COMMON_TX_FSM_RST, 0x1ULL);"))
+      assert(result.contains("assert(reg_read64(base + UCIE_TX_TEST_STATE) == (UCIE_TX_TEST_STATE_IDLE));"))
+      assert(result.contains("assert(reg_read64(base + UCIE_TX_PACKETS_SENT) == (0x0ULL));"))
+      assert(result.contains("assert(reg_read64(base + UCIE_RX_PACKETS_RECEIVED) == (0x0ULL));"))
       assert(!result.contains("endtask"))
       assert(!result.contains("`"))
     }
