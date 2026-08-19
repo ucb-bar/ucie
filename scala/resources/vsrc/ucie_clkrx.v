@@ -1,7 +1,6 @@
 module ucie_clkrx(
-  input vip, vin,
-  output vop, von
+  input vi,
+  output vo
 );
-  assign vop = vip;
-  assign von = vin;
+  assign vo = vi;
 endmodule

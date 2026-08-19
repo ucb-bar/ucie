@@ -287,7 +287,6 @@ object Codegen {
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
     reqs += write("commonTxctlDllReset", 0)
-    reqs += write("pllBypassEn", 1)
     reqs += write("divResetb", 1)
 
     for (i <- 0 until 6) {
@@ -677,9 +676,6 @@ class Codegen(f: Formatter) {
     )
     body.append(
       formatWriteNamedReg("commonTxctlDllReset", f.formatLong(0))
-    )
-    body.append(
-      formatWriteNamedReg("pllBypassEn", f.formatLong(1))
     )
     // TODO: Gate clock before de-asserting reset.
     body.append(

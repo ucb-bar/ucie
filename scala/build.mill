@@ -70,6 +70,9 @@ object `package` extends UcieModule, PublishModule {
       mvn"org.scalatest::scalatest:3.2.19",
     )
     def testParallelism = false
+    // Chisel's FIRRTL converter recurses once per command, so elaborating
+    // UcieTL overflows the default JVM stack.
+    def forkArgs = Seq("-Xss64m")
   }
 }
 

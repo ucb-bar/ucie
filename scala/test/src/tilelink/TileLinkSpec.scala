@@ -347,12 +347,8 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := DontCare
-    ucieTL.module.io.phy.refClkN := DontCare
-    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
-    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
-    ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
 
@@ -482,12 +478,8 @@ class ScalaTestHarness(
     ucieTL.module.io.phy.rxClkN := ucieTL.module.io.phy.txClkN
     ucieTL.module.io.phy.sbRxClk := ucieTL.module.io.phy.sbTxClk
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
-    ucieTL.module.io.phy.refClkP := DontCare
-    ucieTL.module.io.phy.refClkN := DontCare
-    ucieTL.module.io.phy.bypassClkP := io.ucieBypassClock
-    ucieTL.module.io.phy.bypassClkN := (!io.ucieBypassClock.asBool).asClock
+    ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
-    ucieTL.module.io.phy.pllRdacVref := 0.U
   }
 }
 
@@ -585,8 +577,14 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         override def getDirectory =
           (Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_ChiselSim").toNIO
       }
-      val dut = new TestHarness()
-      simulate(LazyModule(dut).module) { c =>
+      // LazyModule.scope is pushed by the LazyModule constructor and only
+      // popped by LazyModule.apply, so apply it here rather than inside
+      // simulate's by-name argument. If simulate throws first (e.g. no
+      // verilator on PATH), an un-applied TestHarness leaks into the global
+      // scope and every later elaboration in this JVM fails with
+      // "<x>.module was constructed before LazyModule() was run on TestHarness".
+      val dut = LazyModule(new TestHarness())
+      simulate(dut.module) { c =>
         enableWaves()
         // Allow reset to propagate to UCIe via reset synchronizers.
         c.clock.step(cycles = 5)
