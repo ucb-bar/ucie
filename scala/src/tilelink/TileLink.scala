@@ -22,10 +22,10 @@ import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
-import edu.berkeley.cs.uciedigital.phy.macros.{PllCtlIO, DriverCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.DriverCtlIO
+import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
-import edu.berkeley.cs.uciedigital.phy.macros.PllDebugOutIO
 import freechips.rocketchip.diplomacy.RegionType
 import freechips.rocketchip.diplomacy.TransferSizes
 import freechips.rocketchip.diplomacy.IdRange
@@ -71,12 +71,8 @@ class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
     phy.rxClkN := false.B.asClock
     phy.sbRxClk := false.B.asClock
     phy.sbRxData := DontCare
-    phy.refClkP := false.B.asClock
-    phy.refClkN := false.B.asClock
-    phy.bypassClkP := false.B.asClock
-    phy.bypassClkN := false.B.asClock
+    phy.bypassClk := false.B.asClock
     phy.digitalBypassClk := false.B.asClock
-    phy.pllRdacVref := false.B
   }
 
   // Bypass and reference clocks should be connected at top level
@@ -125,7 +121,8 @@ object MainbandSel extends ChiselEnum {
 class UcieTLRegsIO(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
-    bitCounterWidth: Int = 64
+    bitCounterWidth: Int = 64,
+    addrWidth: Int = 64 // Magic number, but this is hardcoded in A packet
 ) extends Bundle {
   val test = Flipped(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
@@ -133,6 +130,7 @@ class UcieTLRegsIO(
   val phy = Flipped(new PhyRegsIO(numLanes))
   val mainbandSel = Output(MainbandSel())
   val creditFlowEnable = Output(Bool())
+  val lastSeenTLReq = Input(UInt(addrWidth.W))
 }
 
 class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegParams)(implicit
@@ -222,7 +220,23 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       val rxDataLane = RegInit(0.U(io.test.rxDataLane.getWidth.W))
       val rxDataOffset = RegInit(0.U(io.test.rxDataOffset.getWidth.W))
 
-      val pllBypassEn = RegInit(false.B)
+      val clkPhaseSel = RegInit(0.U(ClockingTile.phaseSelWidth.W))
+      val clkFreqSel = RegInit(0.U(ClockingTile.freqSelWidth.W))
+      // TX clock is enabled out of reset so that existing bring-up sequences
+      // do not have to turn it on explicitly.
+      val clkGateEn = RegInit(true.B)
+      // Physical lane carrying the valid signal in each direction. Reset to the
+      // dedicated valid lane; see `PhyRegsIO` for the other select codes.
+      val txValidLaneSel = RegInit(
+        Phy
+          .dedicatedValidLaneSel(params.numLanes)
+          .U(Phy.validLaneSelWidth(params.numLanes).W)
+      )
+      val rxValidLaneSel = RegInit(
+        Phy
+          .dedicatedValidLaneSel(params.numLanes)
+          .U(Phy.validLaneSelWidth(params.numLanes).W)
+      )
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
         w.dll_reset := true.B
@@ -262,35 +276,6 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         w.delay := 0.U
         w
       })))
-      val pllCtl = RegInit({
-        val w = Wire(new PllCtlIO)
-        w.dref_low := 30.U
-        w.dref_high := 98.U
-        w.dcoarse := 15.U
-        w.d_kp := 50.U
-        w.d_ki := 4.U
-        w.d_clol := true.B
-        w.d_ol_fcw := 0.U
-        w.d_accumulator_reset := "h8000".U
-        w.vco_reset := true.B
-        w.digital_reset := true.B
-        w
-      })
-      val testPllCtl = RegInit({
-        val w = Wire(new PllCtlIO)
-        w.dref_low := 30.U
-        w.dref_high := 98.U
-        w.dcoarse := 15.U
-        w.d_kp := 50.U
-        w.d_ki := 4.U
-        w.d_clol := true.B
-        w.d_ol_fcw := 0.U
-        w.d_accumulator_reset := "h8000".U
-        w.vco_reset := true.B
-        w.digital_reset := true.B
-        w
-      })
-
       // UCIe common.
       // Test PLL P/N, UCIe PLL P/N, RX CLK P/N
       val commonDriverctl = RegInit(VecInit(Seq.fill(6)({
@@ -341,6 +326,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       val creditFlowEnable = RegInit(true.B)
       io.creditFlowEnable := creditFlowEnable
 
+      val lastSeenTLReq = RegInit(0.U)
+      lastSeenTLReq := io.lastSeenTLReq
+
       txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
@@ -384,9 +372,12 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
       io.test.rxDataOffset := applyShift(rxDataOffset)
-      io.phy.pllBypassEn := applyShift(pllBypassEn)
+      io.phy.clkPhaseSel := applyShift(clkPhaseSel)
+      io.phy.clkFreqSel := applyShift(clkFreqSel)
+      io.phy.clkGateEn := applyShift(clkGateEn)
+      io.phy.txValidLaneSel := applyShift(txValidLaneSel)
+      io.phy.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
-      io.phy.pllCtl := applyShift(pllCtl)
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
 
       // String name should always be camel case with an underscore to separate indices.
@@ -454,31 +445,9 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
           applyShift(io.test.rxDataChunk),
           "rxDataChunk"
         ),
-        toRegFieldRw(pllCtl.dref_low, "pllDrefLow"),
-        toRegFieldRw(pllCtl.dref_high, "pllDrefHigh"),
-        toRegFieldRw(pllCtl.dcoarse, "pllDcoarse"),
-        toRegFieldRw(pllCtl.d_kp, "pllDKp"),
-        toRegFieldRw(pllCtl.d_ki, "pllDKi"),
-        toRegFieldRw(pllCtl.d_clol, "pllDClol"),
-        toRegFieldRw(pllCtl.d_ol_fcw, "pllDOlFcw"),
-        toRegFieldRw(pllCtl.d_accumulator_reset, "pllDAccumulatorReset"),
-        toRegFieldRw(pllCtl.vco_reset, "pllVcoReset"),
-        toRegFieldRw(pllCtl.digital_reset, "pllDigitalReset"),
-        toRegFieldRw(testPllCtl.dref_low, "testPllDrefLow"),
-        toRegFieldRw(testPllCtl.dref_high, "testPllDrefHigh"),
-        toRegFieldRw(testPllCtl.dcoarse, "testPllDcoarse"),
-        toRegFieldRw(testPllCtl.d_kp, "testPllDKp"),
-        toRegFieldRw(testPllCtl.d_ki, "testPllDKi"),
-        toRegFieldRw(testPllCtl.d_clol, "testPllDClol"),
-        toRegFieldRw(testPllCtl.d_ol_fcw, "testPllDOlFcw"),
-        toRegFieldRw(
-          testPllCtl.d_accumulator_reset,
-          "testPllDAccumulatorReset"
-        ),
-        toRegFieldRw(testPllCtl.vco_reset, "testPllVcoReset"),
-        toRegFieldRw(testPllCtl.digital_reset, "testPllDigitalReset"),
-        toRegFieldR(applyShift(io.phy.pllOutput), "pllOutput"),
-        toRegFieldRw(pllBypassEn, "pllBypassEn")
+        toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
+        toRegFieldRw(clkFreqSel, "clkFreqSel"),
+        toRegFieldRw(clkGateEn, "clkGateEn")
       ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
@@ -531,7 +500,11 @@ class UcieTLRegs(params: UcieTLParams, beatBytes: Int, ucieRegParams: UcieRegPar
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(mainbandSel, "mainbandSel"),
-        toRegFieldRw(creditFlowEnable, "creditFlowEnable")
+        toRegFieldRw(creditFlowEnable, "creditFlowEnable"),
+        toRegFieldRw(txValidLaneSel, "txValidLaneSel"),
+        toRegFieldRw(rxValidLaneSel, "rxValidLaneSel")
+      ) ++ Seq(
+        RegField.r(64, lastSeenTLReq, RegFieldDesc("lastSeenTLReq", ""))
       )
 
       mmioRegs.zipWithIndex.map({
@@ -840,6 +813,12 @@ class UcieTL(params: UcieTLParams, managerRegion: Seq[AddressSet], beatBytes: In
       dontTouch(ucieManagerTxA.credit_a)
       dontTouch(ucieManagerTxA.credit_d)
       ucieManagerTxA.tl := ucieManagerTlA
+
+      val lastSeenAddr = RegInit(0.U(64.W))
+      when(managerTl.a.valid) {
+        lastSeenAddr := managerTl.a.bits.address
+      }
+      regs.module.io.lastSeenTLReq := lastSeenAddr
 
       val rxABuffer = Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
       val rxDBuffer = Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
