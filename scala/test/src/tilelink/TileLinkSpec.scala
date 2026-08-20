@@ -565,6 +565,15 @@ tl_simple();
   )
 }
 
+class SbManualTestDriver extends SVTestDriver {
+  setStimulus(
+    "SbManualTestDriver",
+    """
+sb_manual();
+          """.trim
+  )
+}
+
 class TlSidebandTestDriver extends SVTestDriver {
   setStimulus(
     "TlSidebandTestDriver",
@@ -651,6 +660,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support manual sideband test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new SbManualTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_manual_sideband_test_using_Xcelium"
       )
     }
 

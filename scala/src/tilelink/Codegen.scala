@@ -1011,6 +1011,68 @@ class Codegen(f: Formatter) {
     sb.toString
   }
 
+  /** Sends one packet over the sideband with both bands left under PhyTest, and
+    * checks it comes back bit exact through the MMIO staging registers.
+    */
+  def formatSbManualLoopbackFn(): String = {
+    val sb = new StringBuilder
+    val body = new StringBuilder
+    // LSB and MSB are both 0, so nothing about the packet can act as framing.
+    val packet = 0x0123456789abcdeL
+    def expect(reg: String, value: String, msg: String): String =
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef(reg),
+        value,
+        msg = Some(msg)
+      )
+
+    body.append(f.formatFnCall("setup_ucie"))
+    body.append(
+      formatWriteNamedReg("sidebandMode", f.formatConstantRef("bandModeManual"))
+    )
+    body.append(formatWriteNamedReg("sbRxRst", f.formatLong(1)))
+    body.append(f.formatWaitCycles(16))
+    body.append(formatWriteNamedReg("sbTxPacket", f.formatLong(packet)))
+    body.append(formatWriteNamedReg("sbTxSend", f.formatLong(1)))
+    body.append(f.formatWaitCycles(256))
+    body.append(
+      expect(
+        "sbTxBusy",
+        f.formatLong(0),
+        "Sideband TX still busy after the packet should have gone out"
+      )
+    )
+    body.append(
+      expect(
+        "sbRxValid",
+        f.formatLong(1),
+        "Sideband RX did not receive the looped back packet"
+      )
+    )
+    body.append(
+      expect(
+        "sbRxPacket",
+        f.formatLong(packet),
+        "Sideband RX packet does not match what was sent"
+      )
+    )
+    body.append(
+      expect("sbRxOverflow", f.formatLong(0), "Sideband RX overflowed")
+    )
+    body.append(formatWriteNamedReg("sbRxPop", f.formatLong(1)))
+    body.append(f.formatWaitCycles(16))
+    body.append(
+      expect(
+        "sbRxValid",
+        f.formatLong(0),
+        "Sideband RX still valid after popping the only packet"
+      )
+    )
+    sb.append(f.formatFn("sb_manual", body.toString))
+    sb.toString
+  }
+
   def formatTlSimpleLoopbackFn(): String =
     formatTlLoopbackFn("tl_simple", "mainbandMode")
 
@@ -1062,6 +1124,7 @@ class Codegen(f: Formatter) {
     sb.append(formatSetupUcieFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
+    sb.append(formatSbManualLoopbackFn())
     sb.append(formatTlSimpleLoopbackFn())
     sb.append(formatTlSidebandLoopbackFn())
     sb.append(formatTlLongLoopbackFn())
