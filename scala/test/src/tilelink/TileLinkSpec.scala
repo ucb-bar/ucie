@@ -89,41 +89,53 @@ module TLTDriver(
 );
   task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx, output [63:0] resp_data);
     begin
-      bit got_early_resp = 1'b0;
-      bit got_resp = 1'b0;
+      // Declared and cleared separately: a variable declared inside a task is
+      // static, so an initializer here would run once at time zero and leave
+      // the flag set from the previous call.
+      bit got_resp;
+      got_resp = 1'b0;
+      // Drive on the falling edge, and sample only after a settling delay.
+      // Driving on the rising edge races the DUT sampling it: `op` returns on
+      // the posedge that carried the response, so the next call asserted
+      // req_valid at that same instant and the request could be presented in
+      // the very cycle that answered the previous one, reusing a source ID the
+      // TileLink monitor still counts as in flight.
+      @(negedge clock);
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
+      // Bounded well above a TileLink round trip over the sideband, which
+      // shifts a whole frame out one bit per cycle in each direction.
       for (int i = 0; i < 10000; i++) begin
         #10;
         if (intf.req_ready) begin
           // Check for same-cycle resp (possible with regnode)
           if (intf.resp_valid) begin
-            got_early_resp = 1'b1;
+            got_resp = 1'b1;
             resp_data = intf.resp_bits_data;
           end
           break;
         end
-        @(posedge clock);
+        @(negedge clock);
       end
       assert(intf.req_ready) else $$fatal(1, "Timeout waiting for TLT request to be ready: %s", ctx);
-      @(posedge clock) intf.req_valid = 1'b0;
-      // Otherwise, wait for the response posedge and sample data at that posedge.
-      if (!got_early_resp) begin
-        // Bounded well above a TileLink round trip over the sideband, which
-        // shifts a whole frame out one bit per cycle in each direction.
+      // The request transfers on the coming posedge; drop req_valid after it.
+      @(negedge clock);
+      intf.req_valid = 1'b0;
+      if (!got_resp) begin
         for (int i = 0; i < 10000; i++) begin
-          @(posedge clock);
+          #10;
           if (intf.resp_valid) begin
             got_resp = 1'b1;
             resp_data = intf.resp_bits_data;
             break;
           end
+          @(negedge clock);
         end
       end
-      assert(got_resp || got_early_resp) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
+      assert(got_resp) else $$fatal(1, "Timeout waiting for TLT response to be valid: %s", ctx);
     end
   endtask
   task write(input [63:0] addr, input [63:0] data, input string ctx);
@@ -627,11 +639,22 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
         enableWaves()
-        // Allow reset to propagate to UCIe via reset synchronizers.
-        c.clock.step(cycles = 5)
-        c.io.reg.expect(c.clock, "h200000".U, 0.U)
-        c.io.reg.write(c.clock, "h200100".U, "hdeadbeef".U)
-        c.io.reg.expect(c.clock, "h200100".U, "hdeadbeef".U)
+        // The clocking tile hands `digitalBypassClk` straight through as the
+        // UCIe digital clock, so that port -- not the harness clock -- is what
+        // the register block and its reset synchronizer run on. The register
+        // TL path is combinational, so advancing this clock alone carries an
+        // MMIO access.
+        val ucieClk = c.io.ucieDigitalBypassClock
+        // ChiselSim's own reset sequence only steps the harness clock, so hold
+        // reset across a few edges of this one to bring the UCIe domain out of
+        // reset with its registers initialized.
+        c.reset.poke(true.B)
+        ucieClk.step(cycles = 5)
+        c.reset.poke(false.B)
+        ucieClk.step(cycles = 5)
+        c.io.reg.expect(ucieClk, "h200000".U, 0.U)
+        c.io.reg.write(ucieClk, "h200100".U, "hdeadbeef".U)
+        c.io.reg.expect(ucieClk, "h200100".U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }
