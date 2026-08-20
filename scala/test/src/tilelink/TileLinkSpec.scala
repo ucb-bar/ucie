@@ -96,7 +96,7 @@ module TLTDriver(
       intf.req_bits_addr = addr;
       intf.req_bits_data = data;
       intf.req_bits_is_write = is_write;
-      for (int i = 0; i < 1000; i++) begin
+      for (int i = 0; i < 10000; i++) begin
         #10;
         if (intf.req_ready) begin
           // Check for same-cycle resp (possible with regnode)
@@ -112,7 +112,9 @@ module TLTDriver(
       @(posedge clock) intf.req_valid = 1'b0;
       // Otherwise, wait for the response posedge and sample data at that posedge.
       if (!got_early_resp) begin
-        for (int i = 0; i < 1000; i++) begin
+        // Bounded well above a TileLink round trip over the sideband, which
+        // shifts a whole frame out one bit per cycle in each direction.
+        for (int i = 0; i < 10000; i++) begin
           @(posedge clock);
           if (intf.resp_valid) begin
             got_resp = 1'b1;
@@ -515,10 +517,19 @@ class ScalaTlSimpleTestDriver extends ScalaTestDriver {
   override def mbReqs = Codegen.tlSimpleMbReqs
 }
 
+class ScalaTlSidebandTestDriver extends ScalaTestDriver {
+  override def regReqs = Codegen.tlSidebandRegReqs
+  override def mbReqs = Codegen.tlSimpleMbReqs
+}
+
 class ScalaTlLongTestDriver extends ScalaTestDriver {
   override def regReqs = Codegen.tlSimpleRegReqs
   override def mbReqs = Codegen.tlLongMbReqs
   override def mbMaxInflight = 32
+}
+
+class ScalaTlLongSidebandTestDriver extends ScalaTlLongTestDriver {
+  override def regReqs = Codegen.tlSidebandRegReqs
 }
 
 class ScalaTlLongStallTestDriver extends ScalaTlLongTestDriver {
@@ -550,6 +561,24 @@ class TlSimpleTestDriver extends SVTestDriver {
     "TlSimpleTestDriver",
     """
 tl_simple();
+          """.trim
+  )
+}
+
+class SbManualTestDriver extends SVTestDriver {
+  setStimulus(
+    "SbManualTestDriver",
+    """
+sb_manual();
+          """.trim
+  )
+}
+
+class TlSidebandTestDriver extends SVTestDriver {
+  setStimulus(
+    "TlSidebandTestDriver",
+    """
+tl_sideband();
           """.trim
   )
 }
@@ -634,6 +663,24 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
+    it("should support manual sideband test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new SbManualTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_manual_sideband_test_using_Xcelium"
+      )
+    }
+
+    it("should support simple TL sideband test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSidebandTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_sideband_test_using_Verilator"
+      )
+    }
+
     it("should support simple Scala TL test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
@@ -658,6 +705,33 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new ScalaSimTop(new ScalaTlSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_test_using_Xcelium"
+      )
+    }
+
+    it("should support simple Scala TL sideband test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSidebandTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_sideband_test_using_Verilator"
+      )
+    }
+
+    it("should support simple Scala TL sideband test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlSidebandTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_Scala_TL_sideband_test_using_Xcelium"
+      )
+    }
+
+    it("should support long Scala TL sideband test using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new ScalaSimTop(new ScalaTlLongSidebandTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_support_long_Scala_TL_sideband_test_using_Xcelium"
       )
     }
 

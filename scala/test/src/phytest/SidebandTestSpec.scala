@@ -1,4 +1,4 @@
-package edu.berkeley.cs.uciedigital.phy
+package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
@@ -8,10 +8,14 @@ import org.scalatest.funspec.AnyFunSpec
 // Loops the sideband tester's TX bumps back to its own RX bumps, the way
 // `UcieBumpsIO.loopback` does, so every packet sent has to come back bit exact.
 class SidebandTestLoopback extends Module {
-  val io = IO(new SidebandTestRegsIO)
+  val io = IO(new Bundle {
+    val regs = new SidebandTestRegsIO
+    val en = Input(Bool())
+  })
 
   val dut = Module(new SidebandTest)
-  dut.io.regs <> io
+  dut.io.regs <> io.regs
+  dut.io.en := io.en
   dut.io.sb.rxClk := dut.io.sb.txClk
   dut.io.sb.rxData := dut.io.sb.txData
 }
@@ -22,10 +26,11 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
   val drainCycles = SidebandTest.PacketBits + 40
 
   def idle(c: SidebandTestLoopback): Unit = {
-    c.io.txPacket.poke(0.U)
-    c.io.txSend.poke(false.B)
-    c.io.rxPop.poke(false.B)
-    c.io.rxRst.poke(false.B)
+    c.io.en.poke(true.B)
+    c.io.regs.txPacket.poke(0.U)
+    c.io.regs.txSend.poke(false.B)
+    c.io.regs.rxPop.poke(false.B)
+    c.io.regs.rxRst.poke(false.B)
   }
 
   def pulse(c: SidebandTestLoopback, sig: Bool): Unit = {
@@ -36,14 +41,14 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
   }
 
   def send(c: SidebandTestLoopback, packet: BigInt): Unit = {
-    c.io.txPacket.poke(packet.U)
-    pulse(c, c.io.txSend)
+    c.io.regs.txPacket.poke(packet.U)
+    pulse(c, c.io.regs.txSend)
     c.clock.step(drainCycles)
   }
 
   def pop(c: SidebandTestLoopback): BigInt = {
-    val got = c.io.rxPacket.peek().litValue
-    pulse(c, c.io.rxPop)
+    val got = c.io.regs.rxPacket.peek().litValue
+    pulse(c, c.io.regs.rxPop)
     got
   }
 
@@ -59,17 +64,17 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
         )
         idle(c)
         c.clock.step(4)
-        pulse(c, c.io.rxRst)
+        pulse(c, c.io.regs.rxRst)
 
         packets.foreach { p =>
           send(c, p)
           withClue(s"packet 0x${p.toString(16)}: ") {
-            c.io.rxValid.expect(true.B)
+            c.io.regs.rxValid.expect(true.B)
             assert(pop(c) == p)
           }
         }
-        c.io.rxValid.expect(false.B)
-        c.io.rxOverflow.expect(false.B)
+        c.io.regs.rxValid.expect(false.B)
+        c.io.regs.rxOverflow.expect(false.B)
       }
     }
 
@@ -78,15 +83,15 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
         val packets = Seq(BigInt(1), BigInt(2), BigInt(3))
         idle(c)
         c.clock.step(4)
-        pulse(c, c.io.rxRst)
+        pulse(c, c.io.regs.rxRst)
 
         packets.foreach(send(c, _))
         packets.foreach { p =>
-          c.io.rxValid.expect(true.B)
+          c.io.regs.rxValid.expect(true.B)
           assert(pop(c) == p)
         }
-        c.io.rxValid.expect(false.B)
-        c.io.rxOverflow.expect(false.B)
+        c.io.regs.rxValid.expect(false.B)
+        c.io.regs.rxOverflow.expect(false.B)
       }
     }
 
@@ -94,22 +99,46 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
       simulate(new SidebandTestLoopback) { c =>
         idle(c)
         c.clock.step(4)
-        pulse(c, c.io.rxRst)
+        pulse(c, c.io.regs.rxRst)
 
-        c.io.txBusy.expect(false.B)
-        c.io.txPacket.poke(BigInt("a5a5a5a5a5a5a5a5", 16).U)
-        pulse(c, c.io.txSend)
-        c.io.txBusy.expect(true.B)
+        c.io.regs.txBusy.expect(false.B)
+        c.io.regs.txPacket.poke(BigInt("a5a5a5a5a5a5a5a5", 16).U)
+        pulse(c, c.io.regs.txSend)
+        c.io.regs.txBusy.expect(true.B)
 
         // A send request mid-packet must be ignored, not corrupt the packet.
-        c.io.txPacket.poke(BigInt("deadbeefdeadbeef", 16).U)
-        pulse(c, c.io.txSend)
+        c.io.regs.txPacket.poke(BigInt("deadbeefdeadbeef", 16).U)
+        pulse(c, c.io.regs.txSend)
         c.clock.step(drainCycles)
 
-        c.io.txBusy.expect(false.B)
-        c.io.rxValid.expect(true.B)
+        c.io.regs.txBusy.expect(false.B)
+        c.io.regs.rxValid.expect(true.B)
         assert(pop(c) == BigInt("a5a5a5a5a5a5a5a5", 16))
-        c.io.rxValid.expect(false.B)
+        c.io.regs.rxValid.expect(false.B)
+      }
+    }
+
+    it("should stay off the bumps while disabled") {
+      simulate(new SidebandTestLoopback) { c =>
+        idle(c)
+        c.clock.step(4)
+        pulse(c, c.io.regs.rxRst)
+
+        // With `en` low the tester neither transmits nor assembles whatever the
+        // block that owns the sideband is putting on the wire.
+        c.io.en.poke(false.B)
+        c.io.regs.txPacket.poke(BigInt("ffffffffffffffff", 16).U)
+        pulse(c, c.io.regs.txSend)
+        c.clock.step(drainCycles)
+        c.io.regs.rxValid.expect(false.B)
+        c.io.regs.rxOverflow.expect(false.B)
+
+        // Re-enabling brings it back, aligned to the next packet.
+        c.io.en.poke(true.B)
+        c.clock.step(4)
+        send(c, BigInt("0123456789abcdef", 16))
+        c.io.regs.rxValid.expect(true.B)
+        assert(pop(c) == BigInt("0123456789abcdef", 16))
       }
     }
 
@@ -117,18 +146,18 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
       simulate(new SidebandTestLoopback) { c =>
         idle(c)
         c.clock.step(4)
-        pulse(c, c.io.rxRst)
+        pulse(c, c.io.regs.rxRst)
 
         for (i <- 0 until SidebandTest.RxQueueDepth + 2) {
           send(c, BigInt(i + 1))
         }
-        c.io.rxOverflow.expect(true.B)
+        c.io.regs.rxOverflow.expect(true.B)
 
         // Reset clears the backlog and the flag.
-        pulse(c, c.io.rxRst)
+        pulse(c, c.io.regs.rxRst)
         c.clock.step(8)
-        c.io.rxOverflow.expect(false.B)
-        c.io.rxValid.expect(false.B)
+        c.io.regs.rxOverflow.expect(false.B)
+        c.io.regs.rxValid.expect(false.B)
       }
     }
   }

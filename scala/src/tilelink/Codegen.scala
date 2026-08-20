@@ -19,7 +19,8 @@ import edu.berkeley.cs.chippy.{
 }
 import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 
-import edu.berkeley.cs.uciedigital.phy.{
+import edu.berkeley.cs.uciedigital.phytest.{
+  BandMode,
   TestTarget,
   TxTestMode,
   DataMode,
@@ -276,7 +277,14 @@ object Codegen {
       )
     }.toMap
 
-  lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] = {
+  /** MMIO setup for a TL loopback test: brings up the PHY, then puts the named
+    * band into `tl` mode. The controller stays on PhyTest, which keeps the
+    * other band under test control.
+    */
+  def tlRegReqs(
+      mainbandMode: BigInt,
+      sidebandMode: BigInt
+  ): Seq[TLRequestDescriptor] = {
     def write(name: String, value: BigInt): TLRequestDescriptor =
       TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
 
@@ -309,10 +317,18 @@ object Codegen {
     reqs += write("rxFsmRst", 1)
     reqs += write("commonTxFsmRst", 1)
 
-    reqs += write("mainbandSel", 1)
+    reqs += write("controllerSel", ControllerSel.phytest.litValue)
+    reqs += write("mainbandMode", mainbandMode)
+    reqs += write("sidebandMode", sidebandMode)
 
     reqs.toSeq
   }
+
+  lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] =
+    tlRegReqs(BandMode.tl.litValue, BandMode.manual.litValue)
+
+  lazy val tlSidebandRegReqs: Seq[TLRequestDescriptor] =
+    tlRegReqs(BandMode.manual.litValue, BandMode.tl.litValue)
 
   lazy val tlSimpleMbReqs: Seq[TLRequestDescriptor] = Seq(
     TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
@@ -551,6 +567,10 @@ class Codegen(f: Formatter) {
         ("dataModeInfinite", DataMode.infinite.litValue),
         ("testTargetMainband", TestTarget.mainband.litValue),
         ("testTargetLoopback", TestTarget.mainband.litValue),
+        ("controllerSelPhytest", ControllerSel.phytest.litValue),
+        ("controllerSelUcie", ControllerSel.ucie.litValue),
+        ("bandModeManual", BandMode.manual.litValue),
+        ("bandModeTl", BandMode.tl.litValue),
         ("defaultClkP", Codegen.defaultClkP),
         ("defaultClkN", Codegen.defaultClkN),
         ("defaultValid", Codegen.defaultValid),
@@ -739,7 +759,19 @@ class Codegen(f: Formatter) {
       )
     )
     body.append(f.formatFnCall("reset_fsms"))
-    body.append(formatWriteNamedReg("mainbandSel", f.formatLong(1)))
+    // Leave both bands under PhyTest; each test selects what it needs.
+    body.append(
+      formatWriteNamedReg(
+        "controllerSel",
+        f.formatConstantRef("controllerSelPhytest")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeManual"))
+    )
+    body.append(
+      formatWriteNamedReg("sidebandMode", f.formatConstantRef("bandModeManual"))
+    )
     sb.append(f.formatFn("setup_ucie", body.toString))
     sb.toString
   }
@@ -950,15 +982,15 @@ class Codegen(f: Formatter) {
     sb.toString
   }
 
-  def formatTlSimpleLoopbackFn(): String = {
+  /** A single TL write/read round trip over `band`, which is either
+    * `mainbandMode` or `sidebandMode`.
+    */
+  def formatTlLoopbackFn(name: String, band: String): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
-      formatWriteNamedReg(
-        "mainbandSel",
-        f.formatLong(1)
-      )
+      formatWriteNamedReg(band, f.formatConstantRef("bandModeTl"))
     )
     body.append(f.formatWaitCycles(32))
     body.append(
@@ -975,19 +1007,84 @@ class Codegen(f: Formatter) {
         f.formatLong(0xdeadbeefL)
       )
     )
-    sb.append(f.formatFn("tl_simple", body.toString))
+    sb.append(f.formatFn(name, body.toString))
     sb.toString
   }
+
+  /** Sends one packet over the sideband with both bands left under PhyTest, and
+    * checks it comes back bit exact through the MMIO staging registers.
+    */
+  def formatSbManualLoopbackFn(): String = {
+    val sb = new StringBuilder
+    val body = new StringBuilder
+    // LSB and MSB are both 0, so nothing about the packet can act as framing.
+    val packet = 0x0123456789abcdeL
+    def expect(reg: String, value: String, msg: String): String =
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef(reg),
+        value,
+        msg = Some(msg)
+      )
+
+    body.append(f.formatFnCall("setup_ucie"))
+    body.append(
+      formatWriteNamedReg("sidebandMode", f.formatConstantRef("bandModeManual"))
+    )
+    body.append(formatWriteNamedReg("sbRxRst", f.formatLong(1)))
+    body.append(f.formatWaitCycles(16))
+    body.append(formatWriteNamedReg("sbTxPacket", f.formatLong(packet)))
+    body.append(formatWriteNamedReg("sbTxSend", f.formatLong(1)))
+    body.append(f.formatWaitCycles(256))
+    body.append(
+      expect(
+        "sbTxBusy",
+        f.formatLong(0),
+        "Sideband TX still busy after the packet should have gone out"
+      )
+    )
+    body.append(
+      expect(
+        "sbRxValid",
+        f.formatLong(1),
+        "Sideband RX did not receive the looped back packet"
+      )
+    )
+    body.append(
+      expect(
+        "sbRxPacket",
+        f.formatLong(packet),
+        "Sideband RX packet does not match what was sent"
+      )
+    )
+    body.append(
+      expect("sbRxOverflow", f.formatLong(0), "Sideband RX overflowed")
+    )
+    body.append(formatWriteNamedReg("sbRxPop", f.formatLong(1)))
+    body.append(f.formatWaitCycles(16))
+    body.append(
+      expect(
+        "sbRxValid",
+        f.formatLong(0),
+        "Sideband RX still valid after popping the only packet"
+      )
+    )
+    sb.append(f.formatFn("sb_manual", body.toString))
+    sb.toString
+  }
+
+  def formatTlSimpleLoopbackFn(): String =
+    formatTlLoopbackFn("tl_simple", "mainbandMode")
+
+  def formatTlSidebandLoopbackFn(): String =
+    formatTlLoopbackFn("tl_sideband", "sidebandMode")
 
   def formatTlLongLoopbackFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
-      formatWriteNamedReg(
-        "mainbandSel",
-        f.formatLong(1)
-      )
+      formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeTl"))
     )
     body.append(f.formatWaitCycles(32))
     for (i <- 0 until 32) {
@@ -1027,7 +1124,9 @@ class Codegen(f: Formatter) {
     sb.append(formatSetupUcieFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
+    sb.append(formatSbManualLoopbackFn())
     sb.append(formatTlSimpleLoopbackFn())
+    sb.append(formatTlSidebandLoopbackFn())
     sb.append(formatTlLongLoopbackFn())
     sb.toString
   }

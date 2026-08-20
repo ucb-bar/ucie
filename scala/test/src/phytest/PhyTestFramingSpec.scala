@@ -1,10 +1,12 @@
-package edu.berkeley.cs.uciedigital.phy
+package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.util._
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
+
+import edu.berkeley.cs.uciedigital.phy.Phy
 
 class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   val lfsrSeed = Input(Vec(numLanes + 1, UInt(PhyTest.LfsrWidth.W)))
