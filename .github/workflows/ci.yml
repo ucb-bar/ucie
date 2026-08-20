@@ -62,7 +62,7 @@ jobs:
         run: |
           ./mill test.testOnly \
             edu.berkeley.cs.uciedigital.phy.PhySpec \
-            edu.berkeley.cs.uciedigital.phy.PhyTestSpec \
+            edu.berkeley.cs.uciedigital.phytest.PhyTestSpec \
             edu.berkeley.cs.uciedigital.tilelink.CodegenSpec
 
       # Every other test in TileLinkSpec drives a simulator, so select the one

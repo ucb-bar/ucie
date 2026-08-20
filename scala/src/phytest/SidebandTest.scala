@@ -1,7 +1,9 @@
-package edu.berkeley.cs.uciedigital.phy
+package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.util._
+
+import edu.berkeley.cs.uciedigital.phy.{SbIO, SidebandSerial}
 
 object SidebandTest {
   // Bits per packet. Matches the 64-bit chunk the sideband spec transmits, and
@@ -43,6 +45,12 @@ class SidebandTestRegsIO extends Bundle {
 class SidebandTestIO extends Bundle {
   val regs = new SidebandTestRegsIO
 
+  /** Low while another block owns the sideband bumps. Holds the tester's link
+    * in reset so it neither drives the bumps nor assembles that block's traffic
+    * into nonsense packets.
+    */
+  val en = Input(Bool())
+
   // PHY INTERFACE
   // ====================
   val sb = Flipped(new SbIO)
@@ -63,13 +71,13 @@ class SidebandTest extends Module {
   io.sb <> link.io.sb
 
   // The transmitter drops out of busy on its own once a packet is shifted out,
-  // so there is nothing for MMIO to reset.
-  link.io.txRst := false.B
-  link.io.tx.valid := io.regs.txSend
+  // so `en` going low is the only thing that has to reset it.
+  link.io.txRst := !io.en
+  link.io.tx.valid := io.regs.txSend && io.en
   link.io.tx.bits := io.regs.txPacket
   io.regs.txBusy := !link.io.tx.ready
 
-  link.io.rxRst := io.regs.rxRst
+  link.io.rxRst := io.regs.rxRst || !io.en
   link.io.rx.ready := io.regs.rxPop
   io.regs.rxPacket := link.io.rx.bits
   io.regs.rxValid := link.io.rx.valid

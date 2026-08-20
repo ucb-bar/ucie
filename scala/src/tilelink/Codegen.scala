@@ -19,7 +19,8 @@ import edu.berkeley.cs.chippy.{
 }
 import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 
-import edu.berkeley.cs.uciedigital.phy.{
+import edu.berkeley.cs.uciedigital.phytest.{
+  BandMode,
   TestTarget,
   TxTestMode,
   DataMode,
@@ -276,10 +277,14 @@ object Codegen {
       )
     }.toMap
 
-  /** MMIO setup for a TL loopback test: brings up the PHY, then hands the link
-    * to the TL path selected by `mainbandSel`.
+  /** MMIO setup for a TL loopback test: brings up the PHY, then puts the named
+    * band into `tl` mode. The controller stays on PhyTest, which keeps the
+    * other band under test control.
     */
-  def tlRegReqs(mainbandSel: BigInt): Seq[TLRequestDescriptor] = {
+  def tlRegReqs(
+      mainbandMode: BigInt,
+      sidebandMode: BigInt
+  ): Seq[TLRequestDescriptor] = {
     def write(name: String, value: BigInt): TLRequestDescriptor =
       TLRequestDescriptor(regAddrMap(name), isWrite = true, data = value)
 
@@ -312,16 +317,18 @@ object Codegen {
     reqs += write("rxFsmRst", 1)
     reqs += write("commonTxFsmRst", 1)
 
-    reqs += write("mainbandSel", mainbandSel)
+    reqs += write("controllerSel", ControllerSel.phytest.litValue)
+    reqs += write("mainbandMode", mainbandMode)
+    reqs += write("sidebandMode", sidebandMode)
 
     reqs.toSeq
   }
 
   lazy val tlSimpleRegReqs: Seq[TLRequestDescriptor] =
-    tlRegReqs(MainbandSel.tl.litValue)
+    tlRegReqs(BandMode.tl.litValue, BandMode.manual.litValue)
 
   lazy val tlSidebandRegReqs: Seq[TLRequestDescriptor] =
-    tlRegReqs(MainbandSel.sbtl.litValue)
+    tlRegReqs(BandMode.manual.litValue, BandMode.tl.litValue)
 
   lazy val tlSimpleMbReqs: Seq[TLRequestDescriptor] = Seq(
     TLRequestDescriptor(0, isWrite = true, data = BigInt(0xdeadbeefL)),
@@ -560,6 +567,10 @@ class Codegen(f: Formatter) {
         ("dataModeInfinite", DataMode.infinite.litValue),
         ("testTargetMainband", TestTarget.mainband.litValue),
         ("testTargetLoopback", TestTarget.mainband.litValue),
+        ("controllerSelPhytest", ControllerSel.phytest.litValue),
+        ("controllerSelUcie", ControllerSel.ucie.litValue),
+        ("bandModeManual", BandMode.manual.litValue),
+        ("bandModeTl", BandMode.tl.litValue),
         ("defaultClkP", Codegen.defaultClkP),
         ("defaultClkN", Codegen.defaultClkN),
         ("defaultValid", Codegen.defaultValid),
@@ -748,7 +759,19 @@ class Codegen(f: Formatter) {
       )
     )
     body.append(f.formatFnCall("reset_fsms"))
-    body.append(formatWriteNamedReg("mainbandSel", f.formatLong(1)))
+    // Leave both bands under PhyTest; each test selects what it needs.
+    body.append(
+      formatWriteNamedReg(
+        "controllerSel",
+        f.formatConstantRef("controllerSelPhytest")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeManual"))
+    )
+    body.append(
+      formatWriteNamedReg("sidebandMode", f.formatConstantRef("bandModeManual"))
+    )
     sb.append(f.formatFn("setup_ucie", body.toString))
     sb.toString
   }
@@ -959,17 +982,15 @@ class Codegen(f: Formatter) {
     sb.toString
   }
 
-  /** A single TL write/read round trip over the link selected by `mainbandSel`.
+  /** A single TL write/read round trip over `band`, which is either
+    * `mainbandMode` or `sidebandMode`.
     */
-  def formatTlLoopbackFn(name: String, mainbandSel: BigInt): String = {
+  def formatTlLoopbackFn(name: String, band: String): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
-      formatWriteNamedReg(
-        "mainbandSel",
-        f.formatLong(mainbandSel.toLong)
-      )
+      formatWriteNamedReg(band, f.formatConstantRef("bandModeTl"))
     )
     body.append(f.formatWaitCycles(32))
     body.append(
@@ -991,20 +1012,17 @@ class Codegen(f: Formatter) {
   }
 
   def formatTlSimpleLoopbackFn(): String =
-    formatTlLoopbackFn("tl_simple", MainbandSel.tl.litValue)
+    formatTlLoopbackFn("tl_simple", "mainbandMode")
 
   def formatTlSidebandLoopbackFn(): String =
-    formatTlLoopbackFn("tl_sideband", MainbandSel.sbtl.litValue)
+    formatTlLoopbackFn("tl_sideband", "sidebandMode")
 
   def formatTlLongLoopbackFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
     body.append(f.formatFnCall("setup_ucie"))
     body.append(
-      formatWriteNamedReg(
-        "mainbandSel",
-        f.formatLong(1)
-      )
+      formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeTl"))
     )
     body.append(f.formatWaitCycles(32))
     for (i <- 0 until 32) {

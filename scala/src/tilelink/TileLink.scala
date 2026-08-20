@@ -16,6 +16,7 @@ import org.chipsalliance.cde.config.{Parameters, Field, Config}
 import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
+import edu.berkeley.cs.uciedigital.phytest._
 import edu.berkeley.cs.uciedigital.top.{UcieDigitalTop, UcieDigitalTopParams}
 import edu.berkeley.cs.uciedigital.regs.{
   UcieRegBlock,
@@ -131,16 +132,16 @@ class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
   }
 }
 
-object MainbandSel extends ChiselEnum {
-  // Allow PhyTest to control mainband
-  val phytest = Value(0.U(2.W))
-  // Send TL packets over mainband
-  val tl = Value(1.U(2.W))
-  // Route mainband through the UCIe digital controller (UcieDigitalTop)
-  val ucie = Value(2.U(2.W))
-  // Send TL packets over the sideband instead, one frame at a time. The
-  // mainband is left to PhyTest, as in `phytest`.
-  val sbtl = Value(3.U(2.W))
+/** Which controller drives the link. */
+object ControllerSel extends ChiselEnum {
+
+  /** PhyTest owns both bands. `BandMode` then picks, per band, whether PhyTest
+    * drives it itself or TileLink frames do.
+    */
+  val phytest = Value(0.U(1.W))
+
+  /** The UCIe digital stack (`UcieDigitalTop`) owns both bands. */
+  val ucie = Value(1.U(1.W))
 }
 
 class UcieTLRegsIO(
@@ -153,7 +154,9 @@ class UcieTLRegsIO(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
   )
   val phy = Flipped(new PhyRegsIO(numLanes))
-  val mainbandSel = Output(MainbandSel())
+  val controllerSel = Output(ControllerSel())
+  val mainbandMode = Output(BandMode())
+  val sidebandMode = Output(BandMode())
   val creditFlowEnable = Output(Bool())
   val lastSeenTLReq = Input(UInt(addrWidth.W))
   // Sticky: the sideband TL receiver dropped a frame because the crossing into
@@ -370,8 +373,12 @@ class UcieTLRegs(
       sbRxPop.ready := true.B
       sbRxRst.ready := true.B
 
-      val mainbandSel = RegInit(MainbandSel.phytest)
-      io.mainbandSel := mainbandSel
+      val controllerSel = RegInit(ControllerSel.phytest)
+      val mainbandMode = RegInit(BandMode.manual)
+      val sidebandMode = RegInit(BandMode.manual)
+      io.controllerSel := controllerSel
+      io.mainbandMode := mainbandMode
+      io.sidebandMode := sidebandMode
 
       val creditFlowEnable = RegInit(true.B)
       io.creditFlowEnable := creditFlowEnable
@@ -408,6 +415,8 @@ class UcieTLRegs(
 
       io.test.testTarget := applyShift(testTarget)
       io.test.divResetb := applyShift(divResetb)
+      io.test.mainbandMode := applyShift(mainbandMode)
+      io.test.sidebandMode := applyShift(sidebandMode)
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
@@ -561,7 +570,9 @@ class UcieTLRegs(
       ) ++ Seq(
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
-        toRegFieldRw(mainbandSel, "mainbandSel"),
+        toRegFieldRw(controllerSel, "controllerSel"),
+        toRegFieldRw(mainbandMode, "mainbandMode"),
+        toRegFieldRw(sidebandMode, "sidebandMode"),
         toRegFieldRw(creditFlowEnable, "creditFlowEnable"),
         toRegFieldRw(txValidLaneSel, "txValidLaneSel"),
         toRegFieldRw(rxValidLaneSel, "rxValidLaneSel"),
@@ -751,7 +762,14 @@ class UcieTL(
     phy.io.clkRst.divResetb := test.io.divResetb
     test.io.regs <> regs.module.io.test
 
-    val mainbandSel = regs.module.io.mainbandSel
+    // One controller select, plus a per-band mode that only means anything
+    // while PhyTest is the controller. Only one band may carry TileLink at a
+    // time -- they share the credit counters and the A/D buffers -- so if both
+    // modes say `tl` the mainband wins and the sideband stays idle.
+    val selUcie = regs.module.io.controllerSel === ControllerSel.ucie
+    val selMbTl = !selUcie && regs.module.io.mainbandMode === BandMode.tl
+    val selSbTl =
+      !selUcie && !selMbTl && regs.module.io.sidebandMode === BandMode.tl
 
     // Async crossings
     val txTestFifo =
@@ -762,12 +780,12 @@ class UcieTL(
     txTestFifo.io.deq_reset := phy.io.clkRst.txDivRst
     // TODO: should deq ready be synchronous to deq clock?
     // txTestFifo crosses both the phytest and ucie mainband tx signals to the PHY.
-    txTestFifo.io.deq.ready := mainbandSel =/= MainbandSel.tl
+    txTestFifo.io.deq.ready := !selMbTl
 
     val rxTestFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
     rxTestFifo.io.enq.bits := phy.io.rx
-    rxTestFifo.io.enq.valid := mainbandSel =/= MainbandSel.tl
+    rxTestFifo.io.enq.valid := !selMbTl
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
     rxTestFifo.io.enq_reset := phy.io.clkRst.rxDivRst
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
@@ -778,7 +796,6 @@ class UcieTL(
         ucieDigitalLazy.module
       }
     ucieDigital.io.regBlockIo.foreach { rb => regs.module.ucieBlockIo <> rb }
-    val selUcie = mainbandSel === MainbandSel.ucie
     // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
     val digiTxAsTxIo = Wire(new TxIO(params.numLanes))
@@ -806,8 +823,8 @@ class UcieTL(
     test.io.rx.valid := rxTestFifo.io.deq.valid && !selUcie
     rxTestFifo.io.deq.ready := Mux(selUcie, digiToPhyRx.ready, test.io.rx.ready)
 
-    // Sideband TL link: in `sbtl` mode the framed TL packets that `tl` mode
-    // spreads across the mainband lanes are shifted out of the sideband
+    // Sideband TL link: with the sideband in `tl` mode the framed TL packets a
+    // `tl` mainband spreads across its lanes are shifted out of the sideband
     // instead, one frame at a time. The sideband is source synchronous, so this
     // runs in the digital clock domain alongside the rest of the TL path and
     // forwards a gated copy of that clock; the frames need no async crossing.
@@ -815,17 +832,15 @@ class UcieTL(
     val sbTl = withClockAndReset(childClock, childReset) {
       Module(new SidebandSerial(sbTlFrameBits, params.sbRxQueueDepth))
     }
-    val selSbTl = mainbandSel === MainbandSel.sbtl
-    // Held in reset outside `sbtl`: the receiver has no framing beyond its bit
+    // Held in reset otherwise: the receiver has no framing beyond its bit
     // counter, so it has to start counting at the first bit the partner sends
     // after both dies enter the mode.
     sbTl.io.txRst := !selSbTl
     sbTl.io.rxRst := !selSbTl
 
-    // Sideband: ucie mode uses ucieDigital; sbtl uses the TL link; phytest/tl
-    // use PhyTest. Rx goes to all of them, so while `sbtl` is running the
-    // PhyTest sideband receiver assembles the TL frames into nonsense packets
-    // and may latch `sbRxOverflow`; write `sbRxRst` after leaving the mode.
+    // Sideband bumps: ucie uses ucieDigital, a `tl` sideband uses the TL link,
+    // and otherwise PhyTest's tester drives. Rx goes to all of them; PhyTest
+    // holds its own tester in reset when its sideband is not in `manual`.
     val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
     phy.io.sb.txClk := Mux(
       selUcie,
@@ -917,7 +932,7 @@ class UcieTL(
         aCreditsToReturn > params.creditRetThreshhold.U ||
         dCreditsToReturn > params.creditRetThreshhold.U) &&
         !creditsFull &&
-        regs.module.io.mainbandSel =/= MainbandSel.phytest &&
+        (selUcie || selMbTl || selSbTl) &&
         // The mainband carries a frame every cycle, so a return always gets a
         // ride. The sideband carries one frame at a time, and returning credits
         // clears the counters whether or not the frame goes out, so hold the
@@ -960,7 +975,7 @@ class UcieTL(
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock when tl path.
-      txTlFifo.io.enq.valid := mainbandSel === MainbandSel.tl
+      txTlFifo.io.enq.valid := selMbTl
       val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
@@ -983,7 +998,7 @@ class UcieTL(
           params.queueParams
         )
       )
-      txAQ.io.enq.valid := mainbandSel === MainbandSel.ucie
+      txAQ.io.enq.valid := selUcie
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset
@@ -1002,13 +1017,15 @@ class UcieTL(
         creditRetValid)
       sbTl.io.tx.bits := txFramedData
 
+      // With no TL path selected there is nowhere for a beat to go, so hold
+      // the channels off rather than accepting beats that would be dropped.
       val txEnqReady = Mux(
-        selSbTl,
-        sbTl.io.tx.ready,
+        selUcie,
+        txAQ.io.enq.ready,
         Mux(
-          mainbandSel === MainbandSel.ucie,
-          txAQ.io.enq.ready,
-          txTlFifo.io.enq.ready
+          selMbTl,
+          txTlFifo.io.enq.ready,
+          Mux(selSbTl, sbTl.io.tx.ready, false.B)
         )
       )
 
@@ -1032,13 +1049,13 @@ class UcieTL(
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
       txTlFifo.io.deq_reset := phy.io.clkRst.txDivRst
-      txTlFifo.io.deq.ready := regs.module.io.mainbandSel === MainbandSel.tl
+      txTlFifo.io.deq.ready := selMbTl
 
       val rxTlFifo =
         Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
       val validFramer = Module(new ValidFramer(params.numLanes))
       rxTlFifo.io.enq.bits := phy.io.rx
-      rxTlFifo.io.enq.valid := mainbandSel === MainbandSel.tl
+      rxTlFifo.io.enq.valid := selMbTl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
       rxTlFifo.io.deq <> validFramer.io.phy
@@ -1050,21 +1067,21 @@ class UcieTL(
       rxDBuffer.io.enq.valid := false.B
 
       // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path, crossing
-      // ucieClk -> childClock. Muxed with the tl-path ValidFramer output by mainbandSel.
+      // ucieClk -> childClock. Muxed with the tl-path ValidFramer output by mode.
       val rxAQ = Module(
         new AsyncQueue(
           chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandRx.bits),
           params.queueParams
         )
       )
-      rxAQ.io.enq.valid := ucieDigital.io.chipFacingIo.mainbandRx.valid && (mainbandSel === MainbandSel.ucie)
+      rxAQ.io.enq.valid := ucieDigital.io.chipFacingIo.mainbandRx.valid && selUcie
       rxAQ.io.enq.bits := ucieDigital.io.chipFacingIo.mainbandRx.bits
-      ucieDigital.io.chipFacingIo.mainbandRx.ready := rxAQ.io.enq.ready && (mainbandSel === MainbandSel.ucie)
+      ucieDigital.io.chipFacingIo.mainbandRx.ready := rxAQ.io.enq.ready && selUcie
       rxAQ.io.enq_clock := phy.io.clkRst.ucieClk
       rxAQ.io.enq_reset := phy.io.clkRst.ucieRst
       rxAQ.io.deq_clock := childClock
       rxAQ.io.deq_reset := childReset
-      rxAQ.io.deq.ready := mainbandSel === MainbandSel.ucie
+      rxAQ.io.deq.ready := selUcie
 
       // Sideband RX: like the mainband's ValidFramer, frames are taken as they
       // arrive. Credit flow keeps room in the A/D buffers for every frame the
@@ -1075,7 +1092,7 @@ class UcieTL(
         selSbTl,
         sbTl.io.rx.bits,
         Mux(
-          mainbandSel === MainbandSel.ucie,
+          selUcie,
           rxAQ.io.deq.bits.data,
           validFramer.io.digital.bits.asUInt
         )
@@ -1083,11 +1100,7 @@ class UcieTL(
       val framedValid = Mux(
         selSbTl,
         sbTl.io.rx.valid,
-        Mux(
-          mainbandSel === MainbandSel.ucie,
-          rxAQ.io.deq.valid,
-          validFramer.io.digital.valid
-        )
+        Mux(selUcie, rxAQ.io.deq.valid, validFramer.io.digital.valid)
       )
 
       val tlBits = framedBits(framedBits.getWidth - 1, 1)
@@ -1136,9 +1149,10 @@ class UcieTL(
       txContClocks.clkn := "haaaaaaaa".U
       txContClocks.track := "h55555555".U
 
-      // tl mode drives from txTlFifo; phytest and ucie both drive from txTestFifo.
+      // A mainband in tl mode drives from txTlFifo; otherwise PhyTest and ucie
+      // both drive from txTestFifo.
       phy.io.tx := Mux(
-        mainbandSel === MainbandSel.tl,
+        selMbTl,
         Mux(
           txTlFifo.io.deq.valid,
           txContClocks,
