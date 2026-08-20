@@ -127,6 +127,12 @@ class SbIO extends Bundle {
   val rxData = Output(Bool())
 }
 
+/** Clocks the PHY brings out for observation. */
+class PhyDebugIO extends Bundle {
+  val pllClk = Output(Bool())
+  val fwdClk = Output(Bool())
+}
+
 class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
   val txData = Output(Vec(numLanes, Bool()))
   val txValid = Output(Bool())

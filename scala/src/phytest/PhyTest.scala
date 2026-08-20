@@ -1,10 +1,27 @@
-package edu.berkeley.cs.uciedigital.phy
+package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.util._
 import chisel3.util.random._
 
+import edu.berkeley.cs.uciedigital.phy._
 import edu.berkeley.cs.uciedigital.phy.macros._
+
+/** What a band carries while PhyTest is the selected controller. The mainband
+  * and the sideband have their own copy, so either can carry TileLink while the
+  * other stays under test control.
+  */
+object BandMode extends ChiselEnum {
+
+  /** PhyTest drives the band itself. On the mainband, `TxTestMode` picks
+    * between the manual buffer and the LFSR; on the sideband, packets are
+    * staged one at a time through `SidebandTestRegsIO`.
+    */
+  val manual = Value(0.U(1.W))
+
+  /** TileLink frames drive the band, and PhyTest keeps off it entirely. */
+  val tl = Value(1.U(1.W))
+}
 
 object DataMode extends ChiselEnum {
   // Send/receive finite number of bits.
@@ -64,6 +81,14 @@ class PhyTestRegsIO(
   /** The test setup being targeted. */
   val testTarget = Input(TestTarget())
   val divResetb = Input(AsyncReset())
+
+  /** What drives the mainband. In `tl` the mainband TX/RX FSMs below are held
+    * in reset and PhyTest stops driving the lanes.
+    */
+  val mainbandMode = Input(BandMode())
+
+  /** What drives the sideband. In `tl` the sideband tester is held in reset. */
+  val sidebandMode = Input(BandMode())
 
   // TX CONTROL
   // =====================
@@ -175,11 +200,7 @@ class PhyTestRegsIO(
   val sb = new SidebandTestRegsIO
 }
 
-class PhyDebugIO extends Bundle {
-  val pllClk = Output(Bool())
-  val fwdClk = Output(Bool())
-}
-
+/** Debug bumps the tester owns, alongside the PHY's own debug outputs. */
 class DebugBumpsIO extends Bundle {
   val phy = new PhyDebugIO
   val txData = Output(Bool())
@@ -281,10 +302,18 @@ class PhyTest(
   io.regs.txDebugPacketsEnqueued := 0.U
   io.bumps := DontCare
 
+  // The two bands are independent: either can carry TileLink while the other
+  // stays under test control.
+  val mbManual = io.regs.mainbandMode === BandMode.manual
+  val sbManual = io.regs.sidebandMode === BandMode.manual
+
   // Sideband tester: owns the sideband bumps end to end, independent of the
-  // mainband TX/RX FSMs below.
+  // mainband TX/RX FSMs below. Disabled while TileLink owns the sideband, so it
+  // neither drives the bumps nor assembles the TL frames it sees into nonsense
+  // packets.
   val sbTest = Module(new SidebandTest)
   sbTest.io.regs <> io.regs.sb
+  sbTest.io.en := sbManual
   io.sb <> sbTest.io.sb
 
   // General computations
@@ -292,7 +321,7 @@ class PhyTest(
   val maxSramPackets = 1.U << (bufferDepthPerLane - 5).U;
 
   // TX registers
-  val txReset = io.regs.txFsmRst || reset.asBool
+  val txReset = io.regs.txFsmRst || !mbManual || reset.asBool
   val txState = withReset(txReset) { RegInit(TxTestState.idle) }
   val txPacketsEnqueued = withReset(txReset) { RegInit(0.U(bitCounterWidth.W)) }
   val inputBufferAddrReg = withReset(txReset) {
@@ -319,7 +348,7 @@ class PhyTest(
   )
 
   // RX registers
-  val rxReset = io.regs.rxFsmRst || reset.asBool
+  val rxReset = io.regs.rxFsmRst || !mbManual || reset.asBool
   val rxPacketsReceived = withReset(rxReset) {
     RegInit(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
   }
@@ -489,8 +518,9 @@ class PhyTest(
   }
   io.tx.bits.valid := 0.U
   io.tx.bits.track := 0.U
-  // Needs to always be true to send clock and track even when data isn't valid.
-  io.tx.valid := true.B
+  // Needs to be true whenever PhyTest owns the mainband, so that clock and
+  // track keep going out even when data isn't valid.
+  io.tx.valid := mbManual
 
   io.tx.bits.clkp := io.regs.txClkP
   io.tx.bits.clkn := io.regs.txClkN

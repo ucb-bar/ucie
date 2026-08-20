@@ -52,23 +52,24 @@ jobs:
       # run here: each `simulate` call builds its own Verilator model, which is
       # far too slow for per-PR CI. Run them locally with `./mill test`.
       - name: Compile
+        id: compile
         if: ${{ !cancelled() }}
         run: |
           ./mill test.compile
 
       # Elaboration-only suites: these run firtool but never start a simulator.
       - name: Elaborate RTL and check register codegen
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           ./mill test.testOnly \
             edu.berkeley.cs.uciedigital.phy.PhySpec \
-            edu.berkeley.cs.uciedigital.phy.PhyTestSpec \
+            edu.berkeley.cs.uciedigital.phytest.PhyTestSpec \
             edu.berkeley.cs.uciedigital.tilelink.CodegenSpec
 
       # Every other test in TileLinkSpec drives a simulator, so select the one
       # generator test by name rather than running the suite.
       - name: Elaborate UcieTL
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           ./mill test.testOnly edu.berkeley.cs.uciedigital.tilelink.TileLinkSpec \
             -- -z "generate valid SystemVerilog"

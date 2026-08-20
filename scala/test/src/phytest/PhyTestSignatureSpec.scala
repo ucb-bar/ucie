@@ -1,9 +1,11 @@
-package edu.berkeley.cs.uciedigital.phy
+package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
+
+import edu.berkeley.cs.uciedigital.phy.Phy
 
 // One received packet: `Phy.SerdesRatio` bits per data lane, plus the valid and
 // track lanes. The loopback lane is not wired up yet and always reads zero.
