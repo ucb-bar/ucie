@@ -191,10 +191,8 @@ xrun \\
         val defaultModels = Seq(
           "ucie_clk_dist_network.sv",
           "ucie_clk_div4.v",
-          "ucie_clk_gate.sv",
           "clocking_tile.v",
           "clock_receiver.v",
-          "s2d.v",
           "IO_ESD.v",
           "ucie_esd_routable.v",
           "ucie_rst_sync.v"
