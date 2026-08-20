@@ -18,6 +18,9 @@
       - pl_trdy is deasserted for the duration of a multi-beat transfer
 
     RX (lanes -> RDI):
+      - Consumes only beats whose valid lane carries the framing pattern; a beat
+        with an all-zero valid lane is an idle beat that carries just the clock,
+        which is what a partner holding its forwarded clock up sends between words
       - Accumulates incoming beats into a register; presents pl_data and
         asserts pl_valid only when the final beat has been received
  */
@@ -209,7 +212,14 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   val rxBeatCtr = RegInit(0.U(beatCtrW.W))
   val rxDataAccum = Reg(Vec(nBytes, UInt(8.W)))
   val rxLastBeat = rxBeatCtr === (numRxBeats - 1.U)
-  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready
+  // The partner keeps its forwarded clock running, so beats arrive back to back
+  // and the valid lane is what separates data from idle: the framing pattern
+  // marks a data beat, an all-zero valid lane is an idle beat that carries only
+  // the clock, and anything else is a framing error.
+  val rxValidBits = io.mbLanes.rx.bits.valid
+  val rxDataBeat = rxValidBits === validFrame
+  val rxIdleBeat = rxValidBits === 0.U
+  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready && rxDataBeat
 
   when(rxAccepting) {
     rxBeatCtr := Mux(rxLastBeat, 0.U, rxBeatCtr + 1.U)
@@ -259,8 +269,7 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   io.rdi.rx.plData := currentRxData.asUInt
 
   // Valid-framing error detection
-  val rxValidBits = rxBundle.valid
-  val currentFramingError = io.mbLanes.rx.valid && (rxValidBits =/= validFrame)
+  val currentFramingError = io.mbLanes.rx.valid && !rxDataBeat && !rxIdleBeat
   val stickyError = RegInit(false.B)
   when(currentFramingError) {
     stickyError := true.B

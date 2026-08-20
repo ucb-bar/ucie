@@ -311,6 +311,9 @@ class LogicalPhy(
 
   val isActive = ltsm.io.ltState === LTState.sACTIVE
   val txTrainingLfsrActive = patternWriter.io.txLfsrCtrl.valid
+  // TX hands the PHY a beat every cycle in ACTIVE, idle beats included, so the
+  // scrambler steps once per transmitted beat -- matching the partner's
+  // descrambler, which steps once per received beat.
   val txRuntimeIncrement =
     io.analog.mainband.tx.valid && io.analog.mainband.tx.ready && isActive
   val scramblerIncrement = Mux(
@@ -456,11 +459,26 @@ class LogicalPhy(
   rxClkCalTxBits.clkN := Mux(ltsm.io.rxClkCalSendFwClkPattern, fwClkNBits, 0.U)
   rxClkCalTxBits.trk := Mux(ltsm.io.rxClkCalSendTrkPattern, fwClkPBits, 0.U)
 
+  // The forwarded clock only leaves the die while beats keep reaching the PHY
+  // serializer, and the partner clocks its receive path off it, so the TX path
+  // hands the PHY a beat every cycle the way PhyTest keeps the mainband clocked.
+  // A beat with nothing to send carries the clock and track patterns with the
+  // data and valid lanes held at zero, so the partner sees an idle beat instead
+  // of a stopped clock.
+  val idleTxBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
+  idleTxBits.data.foreach(_ := 0.U)
+  idleTxBits.valid := 0.U
+  idleTxBits.clkP := fwClkPBits
+  idleTxBits.clkN := fwClkNBits
+  idleTxBits.trk := fwClkPBits
+
   // Lane reversal
   val selectedTxBits = Wire(
     new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
   )
-  selectedTxBits := 0.U.asTypeOf(chiselTypeOf(selectedTxBits))
+  selectedTxBits := idleTxBits
   val reversedSelectedTxBits = Wire(chiselTypeOf(selectedTxBits))
   reversedSelectedTxBits := selectedTxBits
   for (lane <- 0 until afeParams.mbLanes) {
@@ -475,17 +493,25 @@ class LogicalPhy(
       afeParams.mbSerializerRatio
     )
   )
-  io.analog.mainband.tx.valid := false.B
+  // A beat is offered every cycle; the state below picks the payload, not
+  // whether anything goes out. RX clock calibration is the one case that still
+  // gates the clock lanes, and it does that inside its own payload.
+  io.analog.mainband.tx.valid := true.B
 
   when(isActive) {
-    selectedTxBits := scrambledTxBits
-    io.analog.mainband.tx.valid := mainbandLaneController.io.mbLanes.tx.valid
+    selectedTxBits := Mux(
+      mainbandLaneController.io.mbLanes.tx.valid,
+      scrambledTxBits,
+      idleTxBits
+    )
   }.elsewhen(rxClkCalOverride) {
     selectedTxBits := rxClkCalTxBits
-    io.analog.mainband.tx.valid := true.B
   }.elsewhen(patternWriterSelectedForTx) {
-    selectedTxBits := patternWriter.io.mbTxLaneIo.bits
-    io.analog.mainband.tx.valid := patternWriter.io.mbTxLaneIo.valid
+    selectedTxBits := Mux(
+      patternWriter.io.mbTxLaneIo.valid,
+      patternWriter.io.mbTxLaneIo.bits,
+      idleTxBits
+    )
   }
 
   io.analog.mainband.tx.bits := Mux(
