@@ -34,7 +34,7 @@ class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
   // The width the TileLink-over-sideband path runs at: wide, and not a power of
   // two, so an off-by-one in the bit counter shows up as a corrupted packet.
   val frameBits = UcieTL.frameBits(UcieTLParams().creditBits)
-  val queueDepth = 2
+  val queueDepth = UcieTLParams().sbRxQueueDepth
 
   // A packet takes `frameBits` gated cycles, plus the crossing back into the
   // digital domain.

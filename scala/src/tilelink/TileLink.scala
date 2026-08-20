@@ -63,7 +63,9 @@ case class UcieTLParams(
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000,
-    sbRxQueueDepth: Int = 2
+    // Frames the sideband TL receiver can hold before the digital domain has
+    // to drain them. Must be a power of two.
+    sbRxQueueDepth: Int = 4
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
