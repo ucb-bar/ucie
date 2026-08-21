@@ -8,6 +8,7 @@ class VendorToPhy extends Bundle {
   val forceLinkActive = Bool()
   val stageSkip = UInt(15.W)
   val singleStep = Bool()
+  val tsOverrideEnable = Bool()
 }
 
 class PhyToVendor extends Bundle {

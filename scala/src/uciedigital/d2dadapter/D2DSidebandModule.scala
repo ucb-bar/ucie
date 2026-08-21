@@ -24,6 +24,7 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams)
     extends Module {
   val io = IO(new Bundle {
     val sb = new D2DSidebandModuleIO()
+    val regs = new AdapterSidebandStatusIO()
     val rdi = new Bundle {
       val plCfg = Input(UInt(fdiParams.ncWidth.W))
       val plCfgVld = Input(Bool())
@@ -88,11 +89,40 @@ class D2DSidebandModule(val fdiParams: FdiParams, val sbParams: SidebandParams)
   sidebandChannel.io.layer.in.valid := sbTxValid
   io.sb.rdy := sbTxValid && sidebandChannel.io.layer.in.ready
 
+  io.regs.parityErr := sidebandChannel.io.layer.status.sbParityErr
+  io.regs.rxQueuesFull := sidebandChannel.io.layer.status.rxPriorityQueuesFull
+  io.regs.invalidRoute := sidebandChannel.io.layer.status.invalidRouteUpper ||
+    sidebandChannel.io.layer.status.invalidRouteCurr ||
+    sidebandChannel.io.layer.status.invalidRouteLower
+
   // sideband channel -> D2D/link-management
   sidebandChannel.io.layer.out.ready := true.B
   io.sb.rcv := SideBandMessage.NOP
 
+  io.regs.errMsgFatal := false.B
+  io.regs.errMsgNonFatal := false.B
+  io.regs.errMsgCorrectable := false.B
+  io.regs.advCapAdapter.valid := false.B
+  io.regs.advCapAdapter.bits := sidebandChannel.io.layer.out.bits(127, 64)
+
   when(sidebandChannel.io.layer.out.valid) {
+    io.regs.errMsgFatal := SBMsgCompare(
+      sidebandChannel.io.layer.out.bits,
+      SBM.ERRMSG_FATAL
+    )
+    io.regs.errMsgNonFatal := SBMsgCompare(
+      sidebandChannel.io.layer.out.bits,
+      SBM.ERRMSG_NONFATAL
+    )
+    io.regs.errMsgCorrectable := SBMsgCompare(
+      sidebandChannel.io.layer.out.bits,
+      SBM.ERRMSG_CORRECTABLE
+    )
+    io.regs.advCapAdapter.valid := SBMsgCompare(
+      sidebandChannel.io.layer.out.bits,
+      SBM.ADVCAP_ADAPTER
+    )
+
     when(
       SBMsgCompare(
         sidebandChannel.io.layer.out.bits,

@@ -17,7 +17,11 @@ import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
 import edu.berkeley.cs.uciedigital.phytest._
-import edu.berkeley.cs.uciedigital.top.{UcieDigitalTop, UcieDigitalTopParams}
+import edu.berkeley.cs.uciedigital.top.{
+  UcieDigitalTop,
+  UcieDigitalTopParams,
+  UcieRegBridgeCtrlIO
+}
 import edu.berkeley.cs.uciedigital.regs.{
   UcieRegBlock,
   UcieRegBlockIO,
@@ -150,8 +154,10 @@ class UcieTLRegsIO(
     bufferDepthPerLane: Int = 11,
     numLanes: Int = 16,
     bitCounterWidth: Int = 64,
-    addrWidth: Int = 64 // Magic number, but this is hardcoded in A packet
+    addrWidth: Int = 64,
+    retryW: Int = 10
 ) extends Bundle {
+  val ucieCtrl = Flipped(new UcieRegBridgeCtrlIO(retryW))
   val test = Flipped(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
   )
@@ -161,15 +167,14 @@ class UcieTLRegsIO(
   val sidebandMode = Output(BandMode())
   val creditFlowEnable = Output(Bool())
   val lastSeenTLReq = Input(UInt(addrWidth.W))
-  // Sticky: the sideband TL receiver dropped a frame because the crossing into
-  // the digital domain was full.
   val sbTlRxOverflow = Input(Bool())
 }
 
 class UcieTLRegs(
     params: UcieTLParams,
     beatBytes: Int,
-    ucieRegParams: UcieRegParams
+    ucieRegParams: UcieRegParams,
+    ucieRetryW: Int = 10
 )(implicit
     p: Parameters
 ) extends ClockSinkDomain(ClockSinkParameters()) {
@@ -209,7 +214,8 @@ class UcieTLRegs(
       new UcieTLRegsIO(
         params.bufferDepthPerLane,
         params.numLanes,
-        params.bitCounterWidth
+        params.bitCounterWidth,
+        retryW = ucieRetryW
       )
     )
 
@@ -218,6 +224,15 @@ class UcieTLRegs(
     val regmap = withClockAndReset(clock, reset) {
       // TODO: Remove and add necessary registers
       io.test := DontCare
+
+      // pwrGood defaults set so the link can train without sw intervention
+      // linkReset only clears the non-sticky register state.
+      val ucieLinkReset = RegInit(false.B)
+      val uciePwrGood = RegInit(true.B)
+      val ucieRetryTrainingAmt = RegInit(0.U(ucieRetryW.W))
+      io.ucieCtrl.linkReset := ucieLinkReset
+      io.ucieCtrl.pwrGood := uciePwrGood
+      io.ucieCtrl.retryTrainingAmt := ucieRetryTrainingAmt
       // MMIO registers.
       val testTarget = RegInit(TestTarget.mainband)
       val divResetb = RegInit(false.B.asAsyncReset)
@@ -597,7 +612,10 @@ class UcieTLRegs(
         RegField.w(1, sbRxPop, RegFieldDesc("sbRxPop", "")),
         toRegFieldR(applyShift(io.test.sb.rxOverflow), "sbRxOverflow"),
         RegField.w(1, sbRxRst, RegFieldDesc("sbRxRst", "")),
-        toRegFieldR(sbTlRxOverflow, "sbTlRxOverflow")
+        toRegFieldR(sbTlRxOverflow, "sbTlRxOverflow"),
+        toRegFieldRw(ucieLinkReset, "ucieLinkReset"),
+        toRegFieldRw(uciePwrGood, "uciePwrGood"),
+        toRegFieldRw(ucieRetryTrainingAmt, "ucieRetryTrainingAmt")
       )
 
       mmioRegs.zipWithIndex.map({
@@ -693,13 +711,18 @@ class UcieTL(
       includeRegNode = false,
       includeInterruptNode = false
     )
+  val ucieDigitalParams =
+    UcieDigitalTopParams.default().copy(regs = ucieRegParams)
   val ucieDigitalLazy: UcieDigitalTop =
-    LazyModule(
-      new UcieDigitalTop(
-        UcieDigitalTopParams.default().copy(regs = ucieRegParams)
-      )
+    LazyModule(new UcieDigitalTop(ucieDigitalParams))
+  val regs = LazyModule(
+    new UcieTLRegs(
+      params,
+      beatBytes,
+      ucieRegParams,
+      ucieDigitalParams.logPhy.retryW
     )
-  val regs = LazyModule(new UcieTLRegs(params, beatBytes, ucieRegParams))
+  )
 
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
@@ -808,6 +831,7 @@ class UcieTL(
         ucieDigitalLazy.module
       }
     ucieDigital.io.regBlockIo.foreach { rb => regs.module.ucieBlockIo <> rb }
+    ucieDigital.io.ctrl <> regs.module.io.ucieCtrl
     // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
     val digiTxAsTxIo = Wire(new TxIO(params.numLanes))

@@ -10,6 +10,7 @@ class D2DAdapterIO(val fdiParams: FdiParams, val rdiParams: RdiParams)
     extends Bundle {
   val fdi = Flipped(new Fdi(fdiParams))
   val rdi = Flipped(new Rdi(rdiParams))
+  val regs = new AdapterRegIO()
 }
 
 class D2DAdapter(
@@ -45,10 +46,11 @@ class D2DAdapter(
   io.fdi.plLnkCfg := io.rdi.plLnkCfg
   io.fdi.plStateSts := fdiPlStateSts
   io.fdi.plInbandPres := linkManager.io.fdi_pl_inband_pres
-  io.fdi.plNfError := io.rdi.plNfError
   io.fdi.plTrainError := io.rdi.plTrainError
-  io.fdi.plError := io.rdi.plError
-  io.fdi.plCError := io.rdi.plCError
+  // NOTE: Protocol-layer error reporting is gated by the DVSEC Error Notification Control enables.
+  io.fdi.plNfError := io.rdi.plNfError && io.regs.nonFatalProtoReport
+  io.fdi.plError := io.rdi.plError && io.regs.fatalProtoReport
+  io.fdi.plCError := io.rdi.plCError && io.regs.corrProtoReport
   io.fdi.plPhyInRecenter := io.rdi.plPhyInRecenter
   io.fdi.plProtocol := FDIProtocol.streamingNoManagementTransport
   io.fdi.plProtocolFlitFmt := FDIFlitFormat.rawFormat
@@ -75,6 +77,11 @@ class D2DAdapter(
   io.rdi.lpStateReq := linkManager.io.rdi_lp_state_req
   linkManager.io.rdi_pl_state_sts := io.rdi.plStateSts
   linkManager.io.rdi_pl_inband_pres := io.rdi.plInbandPres
+
+  // Register block status.
+  io.regs.linkState := linkManager.io.link_state
+  io.regs.paramExchSuccess := linkManager.io.param_exch_success
+  io.regs.sideband <> d2dSideband.io.regs
 
   // Sideband.
   d2dSideband.io.sb.snt := linkManager.io.sb_snd

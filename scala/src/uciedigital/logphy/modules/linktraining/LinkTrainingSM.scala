@@ -29,11 +29,12 @@ class LinkTrainingSM(
     val maxErrorThresholdPerLane = Input(UInt(16.W))
     // val trainingBypass    = Input(Bool())      TODO: Need to add bypassing
     // val selectStateBypass = Input(LTState())   TODO: Need to add bypassing
-    val changeInRuntimeLinkCtrlRegsDetected = Input(
-      Bool()
-    ) // TODO: Detected by DVSEC in LogPHY, DVSEC regs not fully implemented
-    val runtimeLinkCtrlBusyBit = Input(Bool()) // TODO: Implement DVSEC
-    val runtimeRequestForRepair = Input(Bool()) // TODO: Implemnt DVSEC
+    val changeInRuntimeLinkCtrlRegsDetected = Input(Bool())
+    val runtimeLinkCtrlBusyBit = Input(Bool())
+    val runtimeRequestForRepair = Input(Bool())
+    val swRetrainRequest = Input(Bool())
+    // When set, linkTrainingParameters replaces the per-substate defaults MBInit/MBTrain supply.
+    val linkOpParamOverride = Input(Bool())
 
     // ========================================================================
     // OUT
@@ -46,6 +47,10 @@ class LinkTrainingSM(
     val doLaneReversal = Output(Bool())
     val localTxFunctionalLanes = Output(UInt(3.W))
     val remoteTxFunctionalLanes = Output(UInt(3.W))
+    val txLaneMask = Output(UInt(16.W))
+    val rxLaneMask = Output(UInt(16.W))
+    val widthDegraded = Output(Bool())
+    val remoteRequestingTrainError = Output(Bool())
     val negotiatedPhyParamSettings = Valid(new PHYParamExchangeIO())
     val rxClkCalSendFwClkPattern = Output(Bool())
     val rxClkCalSendTrkPattern = Output(Bool())
@@ -255,6 +260,16 @@ class LinkTrainingSM(
   // TODO: Need to implement DVSEC registers and add the correct link up/down logic for this
   val swTriggerTraining = Wire(Bool())
   swTriggerTraining := io.swStartLinkTraining
+
+  // SW triggered retrain, latched until PHYRETRAIN is entered so a held request retrains once
+  val swRetrainReq = RegInit(false.B)
+  when(
+    currentState === LTState.sPHYRETRAIN || currentState === LTState.sRESET
+  ) {
+    swRetrainReq := false.B
+  }.elsewhen(io.swRetrainRequest) {
+    swRetrainReq := true.B
+  }
 
   val triggerTraining = Wire(Bool())
   triggerTraining := swTriggerTraining || rdiTriggerTraining || remoteTriggerTraining
@@ -886,6 +901,10 @@ class LinkTrainingSM(
   val txLaneMask = decodeLaneMap(localTxFunctionalLanes)
   val rxLaneMask = decodeLaneMap(remoteTxFunctionalLanes)
 
+  io.txLaneMask := txLaneMask
+  io.rxLaneMask := rxLaneMask
+  io.widthDegraded := localTxFunctionalLanes =/= "b011".U(3.W)
+
   val mbLaneCtrlIo = Wire(new MainbandLaneCtrlIO(afeParams))
 
   mbLaneCtrlIo.txDataEn.foreach(_ := false.B)
@@ -1141,6 +1160,8 @@ class LinkTrainingSM(
 
   val responderFinished = !trainErrorResponder.io.remoteRequestingTrainError ||
     trainErrorResponder.io.done
+
+  io.remoteRequestingTrainError := trainErrorResponder.io.remoteRequestingTrainError
 
   val transitionToReset = Wire(Bool())
   transitionToReset := io.sbCtrlIo.allPacketsSent
@@ -1471,7 +1492,7 @@ class LinkTrainingSM(
 
       when(transitionToTrainError) {
         nextState := LTState.sTRAINERROR
-      }.elsewhen(io.rdi.plStateSts === RDIState.retrain) {
+      }.elsewhen(io.rdi.plStateSts === RDIState.retrain || swRetrainReq) {
         nextState := LTState.sPHYRETRAIN
       }
       // }.elsewhen() {
@@ -1521,5 +1542,12 @@ class LinkTrainingSM(
       // TODO: Need to implement power management state logic
       nextState := LTState.sTRAINERROR
     }
+  }
+
+  when(io.linkOpParamOverride) {
+    txPtReqIntf.linkTrainingParameters := io.linkTrainingParameters
+    txEwReqIntf.linkTrainingParameters := io.linkTrainingParameters
+    rxPtReqIntf.linkTrainingParameters := io.linkTrainingParameters
+    rxEwReqIntf.linkTrainingParameters := io.linkTrainingParameters
   }
 }

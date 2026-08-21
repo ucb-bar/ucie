@@ -26,6 +26,8 @@ class RegsToLink extends Bundle {
   val targetSpeed = UInt(4.W)
   val startTraining = Bool()
   val retrain = Bool()
+  val startTrainingPending = Bool()
+  val retrainPending = Bool()
   val corrProtoReport = Bool()
   val nonFatalProtoReport = Bool()
   val fatalProtoReport = Bool()

@@ -23,12 +23,15 @@ class LogicalPhySidebandStatusIO extends Bundle {
   val sbFirstFaultHeader = Output(UInt(64.W))
 }
 
-class LogicalPhyCtrlIO(retryW: Int) extends Bundle {
+class LogicalPhyCtrlIO(retryW: Int, afeParams: AfeParams) extends Bundle {
   val pwrGood = Input(Bool())
   val retryTrainingAmt = Input(UInt(retryW.W))
   val localPhyParamSettings = Flipped(Valid(new PHYParamExchangeIO()))
   val linkTrainingParameters = new LinkOperationParameters()
   val swStartLinkTraining = Input(Bool())
+  val swRetrainRequest = Input(Bool())
+  val linkOpParamOverride = Input(Bool())
+  val clockPhaseSelect = Input(UInt(afeParams.clockPhaseSelBitWidth.W))
   val maxErrorThresholdPerLane = Input(UInt(16.W))
   val changeInRuntimeLinkCtrlRegsDetected = Input(Bool())
   val runtimeLinkCtrlBusyBit = Input(Bool())
@@ -39,7 +42,15 @@ class LogicalPhyStatusIO extends Bundle {
   val ltState = Output(LTState())
   val currentState = Output(LTSMState())
   val trainingTimedout = Output(Bool())
+  val fatalTrainingError = Output(Bool())
   val negotiatedPhyParamSettings = Valid(new PHYParamExchangeIO())
+  val linkWidth = Output(LinkWidth())
+  val freqSel = Output(SpeedMode())
+  val doLaneReversal = Output(Bool())
+  val widthDegraded = Output(Bool())
+  val txLaneMask = Output(UInt(16.W))
+  val rxLaneMask = Output(UInt(16.W))
+  val remoteRequestingTrainError = Output(Bool())
   val sideband = new LogicalPhySidebandStatusIO()
 }
 
@@ -65,7 +76,7 @@ class LogicalPhy(
   // Current integration target is Standard Package operation in Streaming RAW mode only.
   val io = IO(new Bundle {
     val rdi = new Rdi(rdiParams)
-    val ctrl = new LogicalPhyCtrlIO(retryW)
+    val ctrl = new LogicalPhyCtrlIO(retryW, afeParams)
     val status = new LogicalPhyStatusIO()
     val analog = new LogicalPhyAnalogIO(afeParams, sbParams)
   })
@@ -103,6 +114,8 @@ class LogicalPhy(
   ltsm.io.localPhyParamSettings <> io.ctrl.localPhyParamSettings
   ltsm.io.linkTrainingParameters <> io.ctrl.linkTrainingParameters
   ltsm.io.swStartLinkTraining := io.ctrl.swStartLinkTraining
+  ltsm.io.swRetrainRequest := io.ctrl.swRetrainRequest
+  ltsm.io.linkOpParamOverride := io.ctrl.linkOpParamOverride
   ltsm.io.maxErrorThresholdPerLane := io.ctrl.maxErrorThresholdPerLane
   ltsm.io.changeInRuntimeLinkCtrlRegsDetected := io.ctrl.changeInRuntimeLinkCtrlRegsDetected
   ltsm.io.runtimeLinkCtrlBusyBit := io.ctrl.runtimeLinkCtrlBusyBit
@@ -111,7 +124,14 @@ class LogicalPhy(
   io.status.ltState := ltsm.io.ltState
   io.status.currentState := ltsm.io.currentState
   io.status.trainingTimedout := ltsm.io.trainingTimedout
+  io.status.fatalTrainingError := ltsm.io.fatalTrainingError
   io.status.negotiatedPhyParamSettings := ltsm.io.negotiatedPhyParamSettings
+  io.status.freqSel := ltsm.io.phyCtrlIo.freqSel
+  io.status.doLaneReversal := ltsm.io.doLaneReversal
+  io.status.widthDegraded := ltsm.io.widthDegraded
+  io.status.txLaneMask := ltsm.io.txLaneMask
+  io.status.rxLaneMask := ltsm.io.rxLaneMask
+  io.status.remoteRequestingTrainError := ltsm.io.remoteRequestingTrainError
 
   phyLaneTrainer.io.phyTrainIo <> ltsm.io.phyTrainIo
 
@@ -292,7 +312,7 @@ class LogicalPhy(
   phyControlTranslator.io.fromDigital.sbCtrlIo.rxDataEn := ltsm.io.sbCtrlIo.rxEn
   phyControlTranslator.io.fromDigital.sbCtrlIo.rxClkEn := ltsm.io.sbCtrlIo.rxEn
   phyControlTranslator.io.fromDigital.freqSel := ltsm.io.phyCtrlIo.freqSel
-  phyControlTranslator.io.fromDigital.clockPhaseSelect := 0.U
+  phyControlTranslator.io.fromDigital.clockPhaseSelect := io.ctrl.clockPhaseSelect
   phyControlTranslator.io.fromDigital.doElectricalIdleTx := ltsm.io.phyCtrlIo.doElectricalIdleTx
   phyControlTranslator.io.fromDigital.doElectricalIdleRx := ltsm.io.phyCtrlIo.doElectricalIdleRx
   phyControlTranslator.io.fromPhy := io.analog.status
@@ -523,6 +543,7 @@ class LogicalPhy(
       linkWidth := Mux(negotiatedBy8, LinkWidth.x8, LinkWidth.x16)
     }
   }
+  io.status.linkWidth := linkWidth
 
   // TODO: Allow plTrdy during the LinkError pl_stallreq/lp_stallack handshake
   // after checking the exact condition in the RDI handshake and signals section.
