@@ -83,3 +83,8 @@ Contributions can be submitted by opening a pull request against the main branch
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you shall be licensed under the BSD 3-Clause license, without any additional terms or conditions.
 
+Before opening a pull request, run the following from the `scala/` folder:
+
+```bash
+./mill mill.scalalib.scalafmt/reformatAll
+```
