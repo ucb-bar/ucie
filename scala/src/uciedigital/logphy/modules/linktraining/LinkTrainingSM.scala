@@ -263,7 +263,9 @@ class LinkTrainingSM(
 
   // SW triggered retrain, latched until PHYRETRAIN is entered so a held request retrains once
   val swRetrainReq = RegInit(false.B)
-  when(currentState === LTState.sPHYRETRAIN || currentState === LTState.sRESET) {
+  when(
+    currentState === LTState.sPHYRETRAIN || currentState === LTState.sRESET
+  ) {
     swRetrainReq := false.B
   }.elsewhen(io.swRetrainRequest) {
     swRetrainReq := true.B

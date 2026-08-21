@@ -226,7 +226,7 @@ class UcieTLRegs(
       io.test := DontCare
 
       // pwrGood defaults set so the link can train without sw intervention
-      //linkReset only clears the non-sticky register state.
+      // linkReset only clears the non-sticky register state.
       val ucieLinkReset = RegInit(false.B)
       val uciePwrGood = RegInit(true.B)
       val ucieRetryTrainingAmt = RegInit(0.U(ucieRetryW.W))

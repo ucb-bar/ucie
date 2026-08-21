@@ -227,7 +227,9 @@ class UcieRegBridge(
 
     phyToRegs.errLog1Set(m)(0) := io.phyStatus.trainingTimedout && isM0
     phyToRegs.errLog1Set(m)(1) := sb.sbDeserializerTimedoutSeen && isM0
-    phyToRegs.errLog1Set(m)(2) := io.phyStatus.remoteRequestingTrainError && isM0
+    phyToRegs.errLog1Set(m)(
+      2
+    ) := io.phyStatus.remoteRequestingTrainError && isM0
     phyToRegs.errLog1Set(m)(3) :=
       (io.phyStatus.fatalTrainingError || sbInternalError) && isM0
 
