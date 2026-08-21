@@ -79,11 +79,18 @@ class PhyVendorRegBlock(
       "vendor_single_step",
       "TRAIN_OVERRIDE_CTRL Single-step mode (halt SM at each state boundary)"
     )
+    val tsOverride = f.RW(
+      1,
+      0,
+      "vendor_ts_override_en",
+      "TRAIN_SEQ_CTRL Training Setup 1-4 override enable (SM defaults apply when 0)"
+    )
 
     vOut.debugUnlock := unlock
     vOut.forceLinkActive := forceActive.pending && unlock
     vOut.stageSkip := Mux(unlock, stageSkip.reg, 0.U)
     vOut.singleStep := singleStep.reg.asBool && unlock
+    vOut.tsOverrideEnable := tsOverride.reg.asBool && unlock
 
     Seq(
       0x10 -> Seq(
@@ -96,7 +103,10 @@ class PhyVendorRegBlock(
         singleStep.field,
         f.RsvdP(15, "train_override_ctrl_rsvd_31_17")
       ),
-      0x18 -> Seq(f.RsvdP(32, "train_seq_ctrl_rsvd"))
+      0x18 -> Seq(
+        tsOverride.field,
+        f.RsvdP(31, "train_seq_ctrl_rsvd_31_1")
+      )
     )
   }
 

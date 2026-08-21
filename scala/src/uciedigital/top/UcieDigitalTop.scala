@@ -42,6 +42,7 @@ class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
     if (!params.regs.includeRegNode)
       Some(Flipped(new UcieRegBlockIO(params.regs)))
     else None
+  val ctrl = new UcieRegBridgeCtrlIO(params.logPhy.retryW)
 }
 
 class UcieDigitalTop(
@@ -49,6 +50,11 @@ class UcieDigitalTop(
 )(implicit p: Parameters)
     extends LazyModule {
   private val validatedParams = params.validate()
+  require(
+    validatedParams.regs.includeRegNode ||
+      !validatedParams.regs.includeInterruptNode,
+    "includeInterruptNode without includeRegNode builds a register map that no bus can reach"
+  )
   override lazy val desiredName = "UcieDigitalTop"
 
   // With no node the map is spliced into an outer TLRegisterNode; expose the allocation so it can size it.
@@ -114,54 +120,33 @@ class UcieDigitalTop(
     io.phyFacingIo.mainbandLink <> logicalPhy.io.analog.mainband
     io.phyFacingIo.sidebandLink <> logicalPhy.io.analog.sidebandLink
 
-    // TODO: pending connection -- status to regs. Layer ctrl/status + PHY macro ctrl/status + the
-    // register-block bundles are not yet cross-wired, working on bug fixes; tie off inputs, keep outputs (dontTouch) so nothing is pruned.
-    protocolLayer.io.ctrl := DontCare
-    logicalPhy.io.ctrl := DontCare
-    logicalPhy.io.analog.status := DontCare // PHY->logphy status
-    dontTouch(protocolLayer.io.status)
-    dontTouch(logicalPhy.io.status)
-    dontTouch(logicalPhy.io.analog.ctrl) // logphy->PHY control
-
-    regs.foreach { r =>
-      r.module.io.linkReset := false.B
-      r.module.io.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
-      r.module.io.phyToRegs := 0.U.asTypeOf(
-        new PhyToRegs(validatedParams.regs.numModules)
+    val regBridge = Module(
+      new UcieRegBridge(
+        params = validatedParams.regs,
+        afeParams = validatedParams.logPhy.afe,
+        retryW = validatedParams.logPhy.retryW
       )
-      r.module.io.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
-      r.module.io.mailboxSideband.req.ready := true.B
-      r.module.io.mailboxSideband.resp.valid := false.B
-      r.module.io.mailboxSideband.resp.bits := 0.U.asTypeOf(new MailboxSbResp)
-      r.module.io.phyToVendor.foreach(_ := 0.U.asTypeOf(new PhyToVendor))
-      r.module.io.d2dToVendor.foreach(_ := DontCare)
-      dontTouch(r.module.io.regsToAdapter)
-      dontTouch(r.module.io.regsToPhy)
-      dontTouch(r.module.io.regsToLink)
-      dontTouch(r.module.io.mailboxSideband.req)
-      r.module.io.vendorToPhy.foreach(dontTouch(_))
+    )
+    regBridge.io.ctrl <> io.ctrl
+    regBridge.io.phyCtrl <> logicalPhy.io.ctrl
+    regBridge.io.phyStatus <> logicalPhy.io.status
+    regBridge.io.protoCtrl <> protocolLayer.io.ctrl
+    regBridge.io.protoStatus <> protocolLayer.io.status
+    regBridge.io.adapter <> d2dAdapter.io.regs
+
+    // The internal register block and the external splice port are mutually exclusive.
+    regs match {
+      case Some(r) => UcieRegBridge.attach(r.module.io, regBridge.io.regs)
+      case None =>
+        io.regBlockIo.foreach(UcieRegBridge.attach(_, regBridge.io.regs))
+    }
+    regs.foreach { r =>
       r.module.io.linkEventIrq.foreach(dontTouch(_))
       r.module.io.linkErrorIrq.foreach(dontTouch(_))
     }
 
-    // External reg block: drive our side so the integrator only needs a single <>.
-    io.regBlockIo.foreach { rb =>
-      rb.linkReset := false.B
-      rb.adapterToRegs := 0.U.asTypeOf(new AdapterToRegs)
-      rb.phyToRegs := 0.U.asTypeOf(
-        new PhyToRegs(validatedParams.regs.numModules)
-      )
-      rb.linkToRegs := 0.U.asTypeOf(new LinkToRegs)
-      rb.mailboxSideband.req.ready := true.B
-      rb.mailboxSideband.resp.valid := false.B
-      rb.mailboxSideband.resp.bits := 0.U.asTypeOf(new MailboxSbResp)
-      rb.phyToVendor.foreach(_ := 0.U.asTypeOf(new PhyToVendor))
-      rb.d2dToVendor.foreach(_ := DontCare)
-      dontTouch(rb.regsToAdapter)
-      dontTouch(rb.regsToPhy)
-      dontTouch(rb.regsToLink)
-      dontTouch(rb.mailboxSideband.req)
-      rb.vendorToPhy.foreach(dontTouch(_))
-    }
+    // TODO: PHY macro control/status is owned by the analog register file, not the UCIe block.
+    logicalPhy.io.analog.status := DontCare
+    dontTouch(logicalPhy.io.analog.ctrl)
   }
 }

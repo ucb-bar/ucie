@@ -25,6 +25,9 @@ class AdapterSMIO(val fdiParams: FdiParams, val rdiParams: RdiParams)
 
   val linkmgmt_stallreq = Output(Bool())
   val linkmgmt_stalldone = Input(Bool())
+
+  val link_state = Output(RDIState())
+  val param_exch_success = Output(Bool())
 }
 
 /** Unified adapter state machine that folds the legacy link-management,
@@ -78,6 +81,8 @@ class AdapterSM(
   io.fdi_pl_rx_active_req := fdiPlRxActiveReqReg
   io.fdi_pl_inband_pres := fdiPlInbandPresReg
   io.linkmgmt_stallreq := linkMgmtStallReqReg
+  io.link_state := linkStateReg
+  io.param_exch_success := paramExchSbMsgSntFlag && paramExchSbMsgRcvFlag
 
   // Common state-change helpers
   val linkErrorPhySts = io.rdi_pl_state_sts === RDIState.linkError

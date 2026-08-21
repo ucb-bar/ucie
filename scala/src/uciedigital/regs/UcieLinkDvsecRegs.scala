@@ -216,6 +216,8 @@ class UcieLinkDvsecRegs(
   linkOut.targetSpeed := targetSpeed.reg
   linkOut.startTraining := startTrain.fire
   linkOut.retrain := retrain.fire
+  linkOut.startTrainingPending := startTrain.pending
+  linkOut.retrainPending := retrain.pending
 
   private val statusChanged = f.RW1C(
     1,
