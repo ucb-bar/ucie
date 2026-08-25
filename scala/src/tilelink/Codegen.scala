@@ -26,7 +26,7 @@ import edu.berkeley.cs.uciedigital.phytest.{
   DataMode,
   TxTestState
 }
-import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -238,7 +238,7 @@ object Codegen {
 
   // Standalone drivers (sideband, debug clocks), which are a different cell
   // from the driver inside a TX tile.
-  val enableDriverCtl: BigInt = (new DriverCtlIO)
+  val enableDriverCtl: BigInt = (new PadDriverCtlIO)
     .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
     .litValue
 

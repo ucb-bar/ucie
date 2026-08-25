@@ -298,14 +298,14 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   io.debug := DontCare
 
   // Set up sideband
-  val sbTxClk = Module(new TxDriver)
+  val sbTxClk = Module(new PadDriver)
   sbTxClk.io.din := io.sb.txClk.asBool
   io.top.sbTxClk := sbTxClk.io.dout.asClock
   sbTxClk.io.ctl.pu_ctl := 63.U
   sbTxClk.io.ctl.pd_ctl := 63.U
   sbTxClk.io.ctl.en := true.B
   sbTxClk.io.ctl.en_b := false.B
-  val sbTxData = Module(new TxDriver)
+  val sbTxData = Module(new PadDriver)
   sbTxData.io.din := io.sb.txData
   io.top.sbTxData := sbTxData.io.dout
   sbTxData.io.ctl.pu_ctl := 63.U

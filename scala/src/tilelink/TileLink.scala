@@ -36,7 +36,7 @@ import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
-import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
@@ -329,7 +329,7 @@ class UcieTLRegs(
       // UCIe common.
       // Test PLL P/N, UCIe PLL P/N, RX CLK P/N
       val commonDriverctl = RegInit(VecInit(Seq.fill(6)({
-        val w = Wire(new DriverCtlIO)
+        val w = Wire(new PadDriverCtlIO)
         w.pu_ctl := 0.U
         w.pd_ctl := 0.U
         w.en := false.B

@@ -181,7 +181,7 @@ class PhyTestRegsIO(
 
   // DEBUG CIRCUITRY CONTROL
   // ===========================
-  val driverctl = Input(Vec(6, new DriverCtlIO))
+  val driverctl = Input(Vec(6, new PadDriverCtlIO))
   val txctl = Input(new TxLaneDigitalCtlIO)
   val txDebugTestMode = Input(TxTestMode())
   val txDebugDataMode = Input(DataMode())
@@ -876,7 +876,7 @@ class PhyTest(
   //   (rxClkNBuf3.io.vout, io.bumps.rxClkDivided, "rxClkDivDriver")
   // ).zipWithIndex
   // for (((input, output, name), i) <- drivers) {
-  //   val driver = Module(new TxDriver(sim)).suggestName(name)
+  //   val driver = Module(new PadDriver(sim)).suggestName(name)
   //   driver.io.din := input
   //   output := driver.io.dout
   //   // TODO: set up control signals

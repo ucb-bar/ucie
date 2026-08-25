@@ -35,14 +35,22 @@
 `define DES_IN_DELAY 10.0
 
 // DRIVER
-// Number of driver pull-up and pull-down control bits
-`define DRIVER_CTL_BITS 5
-// Number of driver segments
-`define DRIVER_SEGMENTS 32
-// Resistance of single driver segment (Ohms)
-`define DRIVER_R_SEGMENT 864
-// Off resistance of driver (Ohms)
+// Off resistance of a driver segment (Ohms), shared by every driver model
 `define DRIVER_R_OFF_SEGMENT 1000000
+
+// PAD DRIVER
+// Nominal pad driver output impedance (Ohms)
+`define PAD_DRIVER_R_OUT 50.0
+// Number of pad driver segments, and how many of them are code controlled.
+// The rest are always on, so the reachable range is
+// `PAD_DRIVER_SEGMENTS` - `PAD_DRIVER_CTL_BITS` to `PAD_DRIVER_SEGMENTS`.
+`define PAD_DRIVER_SEGMENTS 32
+`define PAD_DRIVER_CTL_BITS 5
+// Segment count at which the driver hits `PAD_DRIVER_R_OUT`, picked near the
+// middle of that range so calibration has codes on both sides of nominal.
+`define PAD_DRIVER_NOMINAL_SEGMENTS 30
+// Resistance of a single pad driver segment (Ohms)
+`define PAD_DRIVER_R_SEGMENT (`PAD_DRIVER_NOMINAL_SEGMENTS * `PAD_DRIVER_R_OUT)
 
 // CLOCK_PATH
 // Clock period

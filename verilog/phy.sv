@@ -1,5 +1,5 @@
 interface phy_intf;
-    txdriver_tile_intf sb_txdata(), sb_txclk();
+    pad_driver_tile_intf sb_txdata(), sb_txclk();
     txdata_tile_intf txdata[`LANES]();
     txdata_tile_intf txclkp(), txclkn(), txval(), txtrk();
 
@@ -26,8 +26,8 @@ module phy(
 //     .Dctrl_value(intf.pll_Dctrl_value)
 // );
 
-txdriver_tile sb_txdata_drv(.intf(intf.sb_txdata));
-txdriver_tile sb_txclk_drv(.intf(intf.sb_txclk));
+pad_driver_tile sb_txdata_drv(.intf(intf.sb_txdata));
+pad_driver_tile sb_txclk_drv(.intf(intf.sb_txclk));
 wire [`LANES-1:0] txclk_sed;
 
 clocking_distribution_model #(
@@ -152,14 +152,14 @@ module phy_tb;
     assign intf.sb_txdata.vdd = vdd;
     assign intf.sb_txdata.vss = vss;
     assign intf.sb_txdata.pu_ctl = 0;
-    assign intf.sb_txdata.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txdata.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
     assign intf.sb_txdata.en = 1;
     assign intf.sb_txdata.enb = 0;
 
     assign intf.sb_txclk.vdd = vdd;
     assign intf.sb_txclk.vss = vss;
     assign intf.sb_txclk.pu_ctl = 0;
-    assign intf.sb_txclk.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txclk.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
     assign intf.sb_txclk.en = 1;
     assign intf.sb_txclk.enb = 0;
 

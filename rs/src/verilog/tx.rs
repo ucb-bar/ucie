@@ -25,9 +25,9 @@ mod tests {
     const SRC_FILES: &[&str] = &[DCDL_SRC, TX_SV_SRC, TX_VAMS_SRC, PRIMITIVES_SV_SRC];
 
     #[test]
-    fn ser21() -> Result<()> {
-        let work_dir = out_dir("ser21");
-        simulate(SRC_FILES, "ser21_tb", &work_dir)?;
+    fn tx_ser21() -> Result<()> {
+        let work_dir = out_dir("tx_ser21");
+        simulate(SRC_FILES, "tx_ser21_tb", &work_dir)?;
         Ok(())
     }
 
@@ -39,9 +39,9 @@ mod tests {
     }
 
     #[test]
-    fn driver_data() -> Result<()> {
-        let work_dir = out_dir("driver_data");
-        simulate(SRC_FILES, "driver_data_tb", &work_dir)?;
+    fn pad_driver_data() -> Result<()> {
+        let work_dir = out_dir("pad_driver_data");
+        simulate(SRC_FILES, "pad_driver_data_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -52,9 +52,9 @@ mod tests {
     }
 
     #[test]
-    fn driver_impedance() -> Result<()> {
-        let work_dir = out_dir("driver_impedance");
-        simulate(SRC_FILES, "driver_impedance_tb", &work_dir)?;
+    fn pad_driver_impedance() -> Result<()> {
+        let work_dir = out_dir("pad_driver_impedance");
+        simulate(SRC_FILES, "pad_driver_impedance_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -65,9 +65,9 @@ mod tests {
     }
 
     #[test]
-    fn tx_driver_data() -> Result<()> {
-        let work_dir = out_dir("tx_driver_data");
-        simulate(SRC_FILES, "tx_driver_data_tb", &work_dir)?;
+    fn tx_tile_driver_data() -> Result<()> {
+        let work_dir = out_dir("tx_tile_driver_data");
+        simulate(SRC_FILES, "tx_tile_driver_data_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -78,9 +78,9 @@ mod tests {
     }
 
     #[test]
-    fn tx_driver_impedance() -> Result<()> {
-        let work_dir = out_dir("tx_driver_impedance");
-        simulate(SRC_FILES, "tx_driver_impedance_tb", &work_dir)?;
+    fn tx_tile_driver_impedance() -> Result<()> {
+        let work_dir = out_dir("tx_tile_driver_impedance");
+        simulate(SRC_FILES, "tx_tile_driver_impedance_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),

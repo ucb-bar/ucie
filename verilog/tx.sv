@@ -37,7 +37,7 @@ module tx_lane (
 
 endmodule
 
-module tx_driver (
+module pad_driver (
    input din,
    output dout,
    input en,
@@ -207,7 +207,7 @@ module tx_driver (
     pd_ctlb_38,
     pd_ctlb_39
   };
-  driver drv (
+  pad_driver_cell drv (
       .din(din),
       .pu_ctl(pu_ctl),
       .pd_ctlb(pd_ctlb),
@@ -280,18 +280,18 @@ module txdata_tile (
 
 endmodule
 
-interface txdriver_tile_intf;
+interface pad_driver_tile_intf;
     logic din;
-    logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    logic [`PAD_DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
     logic en, enb;
     wire dout;
     wire vdd, vss;
 endinterface
 
-module txdriver_tile (
-    txdriver_tile_intf intf
+module pad_driver_tile (
+    pad_driver_tile_intf intf
 );
-    driver drv (
+    pad_driver_cell drv (
         .din(intf.din),
         .pu_ctl(intf.pu_ctl),
         .pd_ctlb(intf.pd_ctlb),
@@ -314,7 +314,11 @@ module dcdl_simple(
 endmodule
 
 
-module ser21 (
+// Prefixed to keep it out of the way of the digital sideband's `ser21` cell
+// (`scala/resources/vsrc/ser21.v`), which is a different serializer with a
+// different port list. Both end up in the same elaboration when a design
+// emitted from Chisel is simulated against these models.
+module tx_ser21 (
     input logic [1:0] din,
     input logic clk,
     output logic dout
@@ -357,7 +361,7 @@ module tree_ser #(
 );
     generate
         if (STAGES == 1) begin
-            ser21 ser (
+            tx_ser21 ser (
                 .clk(clk[0]),
                 .din(din),
                 .dout(dout)
@@ -394,7 +398,7 @@ module tree_ser #(
                 .dout(din_int[1])
             );
 
-            ser21 ser (
+            tx_ser21 ser (
                 .clk(clk[0]),
                 .din(din_int),
                 .dout(dout)
@@ -488,6 +492,6 @@ module ser_tb;
 
 endmodule
 
-module ser21_tb;
+module tx_ser21_tb;
     ser_tb #(.STAGES(1)) inner ();
 endmodule

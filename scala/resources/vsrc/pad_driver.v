@@ -1,4 +1,4 @@
-module tx_driver (
+module pad_driver (
    input din,
    output dout,
    input en,
