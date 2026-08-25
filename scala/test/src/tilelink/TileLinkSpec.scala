@@ -30,7 +30,6 @@ import java.nio.file.Paths
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.diplomacy.IdRange
 import freechips.rocketchip.diplomacy.AddressSet
-import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
 import chisel3.stage.DesignAnnotation
 
 abstract class TestDriver extends ExtModule {

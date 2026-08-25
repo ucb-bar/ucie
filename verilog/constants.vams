@@ -61,6 +61,20 @@
 // TX
 // TX nominal output impedance (Ohms)
 `define TX_R_OUT 30.0
+// Number of segments in a TX tile's output driver (`ENP`/`ENN`)
+`define TX_DRIVER_SEGMENTS 9
+// Resistance of a single output driver segment (Ohms). Sized so that nominal
+// `TX_R_OUT` lands one code short of the strongest setting, which leaves the
+// impedance calibration codes on both sides of nominal.
+`define TX_DRIVER_R_SEGMENT ((`TX_DRIVER_SEGMENTS - 1) * `TX_R_OUT)
+// Number of segments in the capacitive-peaking equalizer branch
+// (`ENP_EQ`/`ENN_EQ`)
+`define TX_DRIVER_EQ_SEGMENTS 4
+// The equalizer branch is assumed to be built from the same unit segment as
+// the main driver, so at full code it reaches half of nominal drive.
+`define TX_DRIVER_EQ_R_SEGMENT `TX_DRIVER_R_SEGMENT
+// Number of taps in the delay line on a TX tile's high speed clock (`Dctrl`)
+`define TX_DCDL_TAPS 32
 
 // RX
 // RX nominal input impedance (Ohms)

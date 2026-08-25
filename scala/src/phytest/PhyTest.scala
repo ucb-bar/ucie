@@ -193,7 +193,6 @@ class PhyTestRegsIO(
   val txDebugData = Input(Vec(16, UInt(64.W)))
   val txDebugState = Output(TxTestState())
   val txDebugPacketsEnqueued = Output(UInt(bitCounterWidth.W))
-  val txDebugDllCode = Output(UInt(5.W))
 
   // SIDEBAND CONTROL
   // ===========================
@@ -298,7 +297,6 @@ class PhyTest(
 
   // TODO: Add debug RTL and custom sideband control
   io.regs.txDebugState := TxTestState.idle
-  io.regs.txDebugDllCode := 0.U
   io.regs.txDebugPacketsEnqueued := 0.U
   io.bumps := DontCare
 

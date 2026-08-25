@@ -36,7 +36,7 @@ import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
-import edu.berkeley.cs.uciedigital.phy.macros.DriverCtlIO
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, TxLaneCtlIO}
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
@@ -296,19 +296,9 @@ class UcieTLRegs(
       )
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
-        w.dll_reset := true.B
-        w.driver.pu_ctl := 0.U
-        w.driver.pd_ctl := 0.U
-        w.driver.en := false.B
-        w.driver.en_b := true.B
-        w.skew.dll_en := false.B
-        w.skew.ocl := false.B
-        w.skew.delay := 0.U
-        w.skew.mux_en := "b00000011".U
-        w.skew.band_ctrl := "b01".U
-        w.skew.mix_en := 0.U
-        w.skew.nen_out := 20.U
-        w.skew.pen_out := 22.U
+        // Every driver segment off out of reset, so a lane stays quiet until
+        // software brings it up.
+        w.tile := TxLaneCtlIO.off
         for (i <- 0 until 32) {
           w.shuffler(i) := i.U(5.W)
         }
@@ -348,19 +338,9 @@ class UcieTLRegs(
       })))
       val commonTxctl = RegInit({
         val w = Wire(new TxLaneDigitalCtlIO)
-        w.dll_reset := true.B
-        w.driver.pu_ctl := 0.U
-        w.driver.pd_ctl := 0.U
-        w.driver.en := false.B
-        w.driver.en_b := true.B
-        w.skew.dll_en := false.B
-        w.skew.ocl := false.B
-        w.skew.delay := 0.U
-        w.skew.mux_en := "b00000011".U
-        w.skew.band_ctrl := "b01".U
-        w.skew.mix_en := 0.U
-        w.skew.nen_out := 20.U
-        w.skew.pen_out := 22.U
+        // Every driver segment off out of reset, so a lane stays quiet until
+        // software brings it up.
+        w.tile := TxLaneCtlIO.off
         for (i <- 0 until 32) {
           w.shuffler(i) := i.U(5.W)
         }
@@ -545,18 +525,12 @@ class UcieTLRegs(
         toRegFieldRw(clkGateEn, "clkGateEn")
       ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
-          toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
-          toRegFieldRw(txctl(i).driver, s"txctl_${i}_driver"),
-          toRegFieldRw(txctl(i).skew, s"txctl_${i}_skew")
+          toRegFieldRw(txctl(i).tile, s"txctl_${i}_tile")
         ) ++ (0 until 32).map((j: Int) =>
           toRegFieldRw(txctl(i).shuffler(j), s"txctl_${i}_shuffler_$j")
         ) ++ Seq(
           toRegFieldRw(txctl(i).sample_negedge, s"txctl_${i}_sampleNegedge"),
-          toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay"),
-          toRegFieldR(
-            applyShift(io.phy.dllCode(i)),
-            s"txctl_${i}_dllCode"
-          )
+          toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay")
         )
       }) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
         Seq(
@@ -589,9 +563,7 @@ class UcieTLRegs(
       }) ++ (0 until commonDriverctl.length).map((i: Int) => {
         toRegFieldRw(commonDriverctl(i), s"commonDriverctl_${i}")
       }) ++ Seq(
-        toRegFieldRw(commonTxctl.dll_reset, s"commonTxctlDllReset"),
-        toRegFieldRw(commonTxctl.driver, s"commonTxctlDriver"),
-        toRegFieldRw(commonTxctl.skew, s"commonTxctlSkew")
+        toRegFieldRw(commonTxctl.tile, s"commonTxctlTile")
       ) ++ (0 until 32).map((j: Int) =>
         toRegFieldRw(commonTxctl.shuffler(j), s"commonTxctlShuffler_$j")
       ) ++ Seq(

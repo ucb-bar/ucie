@@ -26,7 +26,7 @@ import edu.berkeley.cs.uciedigital.phytest.{
   DataMode,
   TxTestState
 }
-import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, SkewCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{DriverCtlIO, TxLaneCtlIO}
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -236,22 +236,15 @@ object Codegen {
   val defaultValid: BigInt = BigInt(0x0f0f0f0fL)
   val defaultTrack: BigInt = BigInt(0x55555555L)
 
+  // Standalone drivers (sideband, debug clocks), which are a different cell
+  // from the driver inside a TX tile.
   val enableDriverCtl: BigInt = (new DriverCtlIO)
     .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
     .litValue
 
-  val defaultSkewCtl: BigInt = (new SkewCtlIO)
-    .Lit(
-      _.dll_en -> true.B,
-      _.ocl -> false.B,
-      _.delay -> 31.U,
-      _.mux_en -> (3 << 6).U,
-      _.band_ctrl -> 1.U,
-      _.mix_en -> 16.U,
-      _.nen_out -> 20.U,
-      _.pen_out -> 22.U
-    )
-    .litValue
+  // TX tile at full driver strength with the equalizer branch off and no added
+  // clock delay, which is enough to get a lane transmitting during bring-up.
+  val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
 
   val ucieParams: UcieTLParams = UcieTLParams()
 
@@ -291,9 +284,7 @@ object Codegen {
     val reqs = scala.collection.mutable.Buffer[TLRequestDescriptor]()
 
     for (lane <- 0 until ucieParams.numLanes + 4) {
-      reqs += write(s"txctl_${lane}_dllReset", 0)
-      reqs += write(s"txctl_${lane}_driver", enableDriverCtl)
-      reqs += write(s"txctl_${lane}_skew", defaultSkewCtl)
+      reqs += write(s"txctl_${lane}_tile", enableTxCtl)
       reqs += write(s"rxctl_${lane}_zen", 1)
       reqs += write(s"rxctl_${lane}_zctl", 0)
     }
@@ -303,15 +294,13 @@ object Codegen {
     reqs += write("txTrack", defaultTrack)
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
-    reqs += write("commonTxctlDllReset", 0)
     reqs += write("divResetb", 1)
 
     for (i <- 0 until 6) {
       reqs += write(s"commonDriverctl_$i", enableDriverCtl)
     }
 
-    reqs += write("commonTxctlDriver", enableDriverCtl)
-    reqs += write("commonTxctlSkew", defaultSkewCtl)
+    reqs += write("commonTxctlTile", enableTxCtl)
 
     reqs += write("txFsmRst", 1)
     reqs += write("rxFsmRst", 1)
@@ -576,7 +565,7 @@ class Codegen(f: Formatter) {
         ("defaultValid", Codegen.defaultValid),
         ("defaultTrack", Codegen.defaultTrack),
         ("enableDriverCtl", Codegen.enableDriverCtl),
-        ("defaultSkewCtl", Codegen.defaultSkewCtl)
+        ("enableTxCtl", Codegen.enableTxCtl)
       )
     ) {
       sb.append(
@@ -683,9 +672,7 @@ class Codegen(f: Formatter) {
       val loopBody = new StringBuilder
       for (
         case (ofs, value) <- Seq(
-          ("DllReset", f.formatLong(0)),
-          ("Driver", f.formatConstantRef("enableDriverCtl")),
-          ("Skew", f.formatConstantRef("defaultSkewCtl"))
+          ("Tile", f.formatConstantRef("enableTxCtl"))
         )
       ) {
         loopBody.append(
@@ -726,9 +713,6 @@ class Codegen(f: Formatter) {
     body.append(
       formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
     )
-    body.append(
-      formatWriteNamedReg("commonTxctlDllReset", f.formatLong(0))
-    )
     // TODO: Gate clock before de-asserting reset.
     body.append(
       formatWriteNamedReg("divResetb", f.formatLong(1))
@@ -746,17 +730,7 @@ class Codegen(f: Formatter) {
       body.append(f.formatForLoop("i", 6, loopBody.toString))
     }
     body.append(
-      formatWriteNamedReg(
-        "commonTxctlDriver",
-        f.formatConstantRef("enableDriverCtl")
-      )
-    )
-
-    body.append(
-      formatWriteNamedReg(
-        "commonTxctlSkew",
-        f.formatConstantRef("defaultSkewCtl")
-      )
+      formatWriteNamedReg("commonTxctlTile", f.formatConstantRef("enableTxCtl"))
     )
     body.append(f.formatFnCall("reset_fsms"))
     // Leave both bands under PhyTest; each test selects what it needs.

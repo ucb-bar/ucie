@@ -8,7 +8,8 @@ import edu.berkeley.cs.uciedigital.phy.macros._
 import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 object Phy {
-  val SerdesRatio = 32
+  // Bits per lane per divided clock cycle, set by the TX tile's serializer.
+  val SerdesRatio = TxLane.SerdesRatio
 
   // Lanes that can be selected to carry the valid signal: the `numLanes` data
   // lanes, the dedicated valid lane, and the track lane. The forwarded clock
@@ -196,9 +197,8 @@ class Shuffler(width: Int) extends RawModule {
 }
 
 class TxLaneDigitalCtlIO extends Bundle {
-  val dll_reset = Bool()
-  val driver = new DriverCtlIO
-  val skew = new SkewCtlIO
+  // Control that goes straight out to the analog tile's pins.
+  val tile = new TxLaneCtlIO
   val shuffler = Vec(32, UInt(5.W))
   val sample_negedge = Bool()
   val delay = UInt(7.W)
@@ -221,7 +221,6 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // TX CONTROL
   // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
   val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
-  val dllCode = Output(Vec(numLanes + 4, UInt(5.W)))
   // Clocking tile control: phase code and frequency setting.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
@@ -369,9 +368,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
     val txLane = Module(new TxLane);
     txLane.suggestName(laneName);
-    txLane.io.dll_reset := io.regs.txctl(lane).dll_reset
-    txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
-    txLane.io.ser_resetb := io.clkRst.divResetb
+    // The tile's divider reset is active high, `divResetb` active low.
+    txLane.io.rst := (!io.clkRst.divResetb.asBool).asAsyncReset
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
     if (lane < numLanes) {
@@ -385,9 +383,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     } else {
       io.top.txTrack := txLane.io.dout
     }
-    txLane.io.ctl.driver := io.regs.txctl(lane).driver
-    txLane.io.ctl.skew := io.regs.txctl(lane).skew
-    io.regs.dllCode(lane) := txLane.io.dll_code
+    txLane.io.ctl := io.regs.txctl(lane).tile
   }
 
   // RX Lanes
@@ -457,13 +453,15 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // )
   // val loopbackShuffler = Module(new Shuffler32)
   // val txLoopbackLane = Module(new TxLane)
+  // The tile no longer brings out a divided clock, so the loopback FIFO's
+  // dequeue side has to run off the global TX divided clock.
   // val txDivRstSync = Module(new RstSync)
   // txDivRstSync.io.rstbAsync := !reset.asBool
-  // txDivRstSync.io.clk := txLoopbackLane.io.divclk
+  // txDivRstSync.io.clk := io.clkRst.txDivClk
   // txLoopbackFifo.io.enq <> io.test.tx_loopback
   // txLoopbackFifo.io.enq_clock := clock
   // txLoopbackFifo.io.enq_reset := reset
-  // txLoopbackFifo.io.deq_clock := txLoopbackLane.io.divclk.asClock
+  // txLoopbackFifo.io.deq_clock := io.clkRst.txDivClk
   // txLoopbackFifo.io.deq_reset := !txDivRstSync.io.rstbSync.asBool
   // txLoopbackFifo.io.deq.ready := true.B
 
@@ -474,17 +472,12 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // }
   // loopbackShuffler.io.permutation := io.txctl(numLanes + 4).shuffler
 
-  // txLoopbackLane.io.dll_reset := io.txctl(numLanes + 4).dll_reset
-  // txLoopbackLane.io.dll_resetb := !io.txctl(numLanes + 4).dll_reset
-  // txLoopbackLane.io.ser_resetb := !reset.asBool
-  // txLoopbackLane.io.clkp := txclkbuf0.io.voutp
-  // txLoopbackLane.io.clkn := txclkbuf0.io.voutn
+  // txLoopbackLane.io.rst := (!io.clkRst.divResetb.asBool).asAsyncReset
+  // txLoopbackLane.io.clk := txclkbuf0.io.vout
   // txLoopbackLane.io.din := loopbackShuffler.io.dout.asTypeOf(
   //   txLoopbackLane.io.din
   // )
-  // txLoopbackLane.io.ctl.driver := io.txctl(numLanes + 4).driver
-  // txLoopbackLane.io.ctl.skew := io.txctl(numLanes + 4).skew
-  // io.dllCode(numLanes + 4) := txLoopbackLane.io.dll_code
+  // txLoopbackLane.io.ctl := io.txctl(numLanes + 4).tile
 
   // val rxLoopbackLane = Module(new RxDataLane)
   // val rxLoopbackClkBuf = Module(new DiffBuffer)

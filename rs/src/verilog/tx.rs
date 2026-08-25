@@ -63,4 +63,30 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn tx_driver_data() -> Result<()> {
+        let work_dir = out_dir("tx_driver_data");
+        simulate(SRC_FILES, "tx_driver_data_tb", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tx_driver_impedance() -> Result<()> {
+        let work_dir = out_dir("tx_driver_impedance");
+        simulate(SRC_FILES, "tx_driver_impedance_tb", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
 }

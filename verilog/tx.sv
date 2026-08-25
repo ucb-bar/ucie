@@ -1,350 +1,36 @@
 `timescale 1ps/100fs
 
+// Shim matching the `tx_lane` blackbox in `phy/macros/Tx.scala`, so a design
+// emitted from Chisel can be simulated against the tile model below. The port
+// widths are fixed here rather than taken from `constants.vams` because they
+// have to track `TxLane` on the Chisel side.
+//
+// VDDQ, VDD, and VSS are pins on the tile; this shim ties them off so the
+// digital-only flow does not have to route supplies.
 module tx_lane (
-  input dll_reset,
-  input dll_resetb,
-  input ser_resetb,
-  input clkp,
-  input clkn,
-  input din_0,
-  input din_1,
-  input din_2,
-  input din_3,
-  input din_4,
-  input din_5,
-  input din_6,
-  input din_7,
-  input din_8,
-  input din_9,
-  input din_10,
-  input din_11,
-  input din_12,
-  input din_13,
-  input din_14,
-  input din_15,
-  input din_16,
-  input din_17,
-  input din_18,
-  input din_19,
-  input din_20,
-  input din_21,
-  input din_22,
-  input din_23,
-  input din_24,
-  input din_25,
-  input din_26,
-  input din_27,
-  input din_28,
-  input din_29,
-  input din_30,
-  input din_31,
-  output dout,
-  output divclk,
-  input pu_ctl_0,
-  input pu_ctl_1,
-  input pu_ctl_2,
-  input pu_ctl_3,
-  input pu_ctl_4,
-  input pu_ctl_5,
-  input pu_ctl_6,
-  input pu_ctl_7,
-  input pu_ctl_8,
-  input pu_ctl_9,
-  input pu_ctl_10,
-  input pu_ctl_11,
-  input pu_ctl_12,
-  input pu_ctl_13,
-  input pu_ctl_14,
-  input pu_ctl_15,
-  input pu_ctl_16,
-  input pu_ctl_17,
-  input pu_ctl_18,
-  input pu_ctl_19,
-  input pu_ctl_20,
-  input pu_ctl_21,
-  input pu_ctl_22,
-  input pu_ctl_23,
-  input pu_ctl_24,
-  input pu_ctl_25,
-  input pu_ctl_26,
-  input pu_ctl_27,
-  input pu_ctl_28,
-  input pu_ctl_29,
-  input pu_ctl_30,
-  input pu_ctl_31,
-  input pu_ctl_32,
-  input pu_ctl_33,
-  input pu_ctl_34,
-  input pu_ctl_35,
-  input pu_ctl_36,
-  input pu_ctl_37,
-  input pu_ctl_38,
-  input pu_ctl_39,
-  input pd_ctlb_0,
-  input pd_ctlb_1,
-  input pd_ctlb_2,
-  input pd_ctlb_3,
-  input pd_ctlb_4,
-  input pd_ctlb_5,
-  input pd_ctlb_6,
-  input pd_ctlb_7,
-  input pd_ctlb_8,
-  input pd_ctlb_9,
-  input pd_ctlb_10,
-  input pd_ctlb_11,
-  input pd_ctlb_12,
-  input pd_ctlb_13,
-  input pd_ctlb_14,
-  input pd_ctlb_15,
-  input pd_ctlb_16,
-  input pd_ctlb_17,
-  input pd_ctlb_18,
-  input pd_ctlb_19,
-  input pd_ctlb_20,
-  input pd_ctlb_21,
-  input pd_ctlb_22,
-  input pd_ctlb_23,
-  input pd_ctlb_24,
-  input pd_ctlb_25,
-  input pd_ctlb_26,
-  input pd_ctlb_27,
-  input pd_ctlb_28,
-  input pd_ctlb_29,
-  input pd_ctlb_30,
-  input pd_ctlb_31,
-  input pd_ctlb_32,
-  input pd_ctlb_33,
-  input pd_ctlb_34,
-  input pd_ctlb_35,
-  input pd_ctlb_36,
-  input pd_ctlb_37,
-  input pd_ctlb_38,
-  input pd_ctlb_39,
-  input driver_en,
-  input driver_en_b,
-  input dll_en,
-  input ocl,
-  input delay_0,
-  input delay_1,
-  input delay_2,
-  input delay_3,
-  input delay_4,
-  input delayb_0,
-  input delayb_1,
-  input delayb_2,
-  input delayb_3,
-  input delayb_4,
-  input mux_en_0,
-  input mux_en_1,
-  input mux_en_2,
-  input mux_en_3,
-  input mux_en_4,
-  input mux_en_5,
-  input mux_en_6,
-  input mux_en_7,
-  input mux_enb_0,
-  input mux_enb_1,
-  input mux_enb_2,
-  input mux_enb_3,
-  input mux_enb_4,
-  input mux_enb_5,
-  input mux_enb_6,
-  input mux_enb_7,
-  input band_ctrl_0,
-  input band_ctrl_1,
-  input band_ctrlb_0,
-  input band_ctrlb_1,
-  input mix_en_0,
-  input mix_en_1,
-  input mix_en_2,
-  input mix_en_3,
-  input mix_en_4,
-  input mix_en_5,
-  input mix_en_6,
-  input mix_en_7,
-  input mix_en_8,
-  input mix_en_9,
-  input mix_en_10,
-  input mix_en_11,
-  input mix_en_12,
-  input mix_en_13,
-  input mix_en_14,
-  input mix_en_15,
-  input mix_enb_0,
-  input mix_enb_1,
-  input mix_enb_2,
-  input mix_enb_3,
-  input mix_enb_4,
-  input mix_enb_5,
-  input mix_enb_6,
-  input mix_enb_7,
-  input mix_enb_8,
-  input mix_enb_9,
-  input mix_enb_10,
-  input mix_enb_11,
-  input mix_enb_12,
-  input mix_enb_13,
-  input mix_enb_14,
-  input mix_enb_15,
-  input nen_out_0,
-  input nen_out_1,
-  input nen_out_2,
-  input nen_out_3,
-  input nen_out_4,
-  input nen_outb_0,
-  input nen_outb_1,
-  input nen_outb_2,
-  input nen_outb_3,
-  input nen_outb_4,
-  input pen_out_0,
-  input pen_out_1,
-  input pen_out_2,
-  input pen_out_3,
-  input pen_out_4,
-  input pen_outb_0,
-  input pen_outb_1,
-  input pen_outb_2,
-  input pen_outb_3,
-  input pen_outb_4,
-  output dll_code_0,
-  output dll_code_1,
-  output dll_code_2,
-  output dll_code_3,
-  output dll_code_4
+  input [31:0] DataIN,
+  input CK,
+  input [31:0] Dctrl,
+  input [8:0] ENP,
+  input [8:0] ENN,
+  input [3:0] ENP_EQ,
+  input [3:0] ENN_EQ,
+  input RST_async,
+  output D2D_TX
 );
-  wire [31:0] din;
-  assign din = {
-    din_31,
-    din_30, 
-    din_29,
-    din_28,
-    din_27,
-    din_26, 
-    din_25,
-    din_24,
-    din_23,
-    din_22, 
-    din_21,
-    din_20,
-    din_19,
-    din_18, 
-    din_17,
-    din_16,
-    din_15,
-    din_14, 
-    din_13,
-    din_12,
-    din_11,
-    din_10, 
-    din_9,
-    din_8,
-    din_7,
-    din_6, 
-    din_5,
-    din_4,
-    din_3,
-    din_2, 
-    din_1,
-    din_0
-  };
-  wire [39:0] pu_ctl = {
-    pu_ctl_0,
-    pu_ctl_1,
-    pu_ctl_2,
-    pu_ctl_3,
-    pu_ctl_4,
-    pu_ctl_5,
-    pu_ctl_6,
-    pu_ctl_7,
-    pu_ctl_8,
-    pu_ctl_9,
-    pu_ctl_10,
-    pu_ctl_11,
-    pu_ctl_12,
-    pu_ctl_13,
-    pu_ctl_14,
-    pu_ctl_15,
-    pu_ctl_16,
-    pu_ctl_17,
-    pu_ctl_18,
-    pu_ctl_19,
-    pu_ctl_20,
-    pu_ctl_21,
-    pu_ctl_22,
-    pu_ctl_23,
-    pu_ctl_24,
-    pu_ctl_25,
-    pu_ctl_26,
-    pu_ctl_27,
-    pu_ctl_28,
-    pu_ctl_29,
-    pu_ctl_30,
-    pu_ctl_31,
-    pu_ctl_32,
-    pu_ctl_33,
-    pu_ctl_34,
-    pu_ctl_35,
-    pu_ctl_36,
-    pu_ctl_37,
-    pu_ctl_38,
-    pu_ctl_39
-  };
-  wire [39:0] pd_ctlb = {
-    pd_ctlb_0,
-    pd_ctlb_1,
-    pd_ctlb_2,
-    pd_ctlb_3,
-    pd_ctlb_4,
-    pd_ctlb_5,
-    pd_ctlb_6,
-    pd_ctlb_7,
-    pd_ctlb_8,
-    pd_ctlb_9,
-    pd_ctlb_10,
-    pd_ctlb_11,
-    pd_ctlb_12,
-    pd_ctlb_13,
-    pd_ctlb_14,
-    pd_ctlb_15,
-    pd_ctlb_16,
-    pd_ctlb_17,
-    pd_ctlb_18,
-    pd_ctlb_19,
-    pd_ctlb_20,
-    pd_ctlb_21,
-    pd_ctlb_22,
-    pd_ctlb_23,
-    pd_ctlb_24,
-    pd_ctlb_25,
-    pd_ctlb_26,
-    pd_ctlb_27,
-    pd_ctlb_28,
-    pd_ctlb_29,
-    pd_ctlb_30,
-    pd_ctlb_31,
-    pd_ctlb_32,
-    pd_ctlb_33,
-    pd_ctlb_34,
-    pd_ctlb_35,
-    pd_ctlb_36,
-    pd_ctlb_37,
-    pd_ctlb_38,
-    pd_ctlb_39
-  };
-
   txdata_tile_intf intf();
-  assign intf.din = din;
-  assign intf.clkp = clkp;
-  assign intf.clkn = clkn;
-  assign intf.rstb = ser_resetb;
-  assign intf.pu_ctl = pu_ctl;
-  assign intf.pd_ctlb = pd_ctlb;
-  assign intf.driver_en = driver_en;
-  assign intf.driver_enb = driver_en_b;
-  assign intf.dl_ctrl = 7'b0;
+  assign intf.DataIN = DataIN;
+  assign intf.CK = CK;
+  assign intf.Dctrl = Dctrl;
+  assign intf.ENP = ENP;
+  assign intf.ENN = ENN;
+  assign intf.ENP_EQ = ENP_EQ;
+  assign intf.ENN_EQ = ENN_EQ;
+  assign intf.RST_async = RST_async;
+  assign intf.vddq = 1'b1;
   assign intf.vdd = 1'b1;
   assign intf.vss = 1'b0;
-  assign dout = intf.dout;
+  assign D2D_TX = intf.D2D_TX;
   txdata_tile tile(
     .intf(intf)
   );
@@ -534,22 +220,32 @@ module tx_driver (
 endmodule
 
 interface txdata_tile_intf;
-    logic [2**`SERDES_STAGES-1:0] din;
-    logic clkp, clkn;
-    logic rstb;
-    wire dout;
-    logic [`DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
-    logic driver_en, driver_enb;
-    logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl;
-    wire vdd, vss;
+    logic [2**`SERDES_STAGES-1:0] DataIN;
+    // The tile takes a single-ended high speed clock and makes its own
+    // complement internally.
+    logic CK;
+    // Asynchronous reset for the tile's clock dividers, active high.
+    logic RST_async;
+    wire D2D_TX;
+    logic [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN;
+    logic [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ;
+    logic [`TX_DCDL_TAPS-1:0] Dctrl;
+    // VDDQ supplies the output driver, VDD the pre-driver and digital logic.
+    wire vddq, vdd, vss;
 endinterface
 
 module txdata_tile (
     txdata_tile_intf intf
 );
 
+    // `Dctrl` is thermometer coded, so the delay follows the number of taps
+    // enabled rather than the value of the bus.
     logic clkin;
-    dcdl_simple dl(.clk_in(intf.clkp), .dl_ctrl(intf.dl_ctrl), .clk_out(clkin));
+    dcdl_simple dl(
+        .clk_in(intf.CK),
+        .dl_ctrl(`DCDL_CTRL_BITWIDTH'($countones(intf.Dctrl))),
+        .clk_out(clkin)
+    );
 
     // TODO: ensure serializer samples async queue correctly
     // for different delay line codes.
@@ -560,25 +256,25 @@ module txdata_tile (
             clkdiv clkdiv (
                 .clkin(clkin),
                 .clkout(serclk[`SERDES_STAGES-1:1]),
-                .rstb(intf.rstb)
+                .rstb(~intf.RST_async)
             );
         end
     endgenerate
     wire serdout;
     tree_ser ser(
-        .din(intf.din),
+        .din(intf.DataIN),
         .clk(serclk),
         .dout(serdout)
     );
 
-    driver drv (
+    tx_tile_driver drv (
         .din(serdout),
-        .pu_ctl(intf.pu_ctl),
-        .pd_ctlb(intf.pd_ctlb),
-        .en(intf.driver_en),
-        .enb(intf.driver_enb),
-        .dout(intf.dout),
-        .vdd(intf.vdd),
+        .ENP(intf.ENP),
+        .ENN(intf.ENN),
+        .ENP_EQ(intf.ENP_EQ),
+        .ENN_EQ(intf.ENN_EQ),
+        .dout(intf.D2D_TX),
+        .vddq(intf.vddq),
         .vss(intf.vss)
     );
 

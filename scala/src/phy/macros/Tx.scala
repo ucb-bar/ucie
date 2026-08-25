@@ -2,7 +2,11 @@ package edu.berkeley.cs.uciedigital.phy.macros
 
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.BundleLiterals._
 
+/** Impedance control for a standalone [[TxDriver]], which is a separate cell
+  * from the driver inside a [[TxLane]] and keeps its own control encoding.
+  */
 class DriverCtlIO extends Bundle {
   val pu_ctl = UInt(6.W)
   val pd_ctl = UInt(6.W)
@@ -10,485 +14,152 @@ class DriverCtlIO extends Bundle {
   val en_b = Bool()
 }
 
-// DLL + PI + DCC control IO.
-class SkewCtlIO extends Bundle {
-  val dll_en = Bool()
-  val ocl = Bool()
-  val delay = Bits(5.W)
-  val mux_en = Bits(8.W)
-  val band_ctrl = Bits(2.W)
-  val mix_en = UInt(5.W)
-  val nen_out = UInt(5.W)
-  val pen_out = UInt(5.W)
+object TxLane {
+
+  /** Bits of parallel data (`DataIN`) the tile consumes per divided clock
+    * cycle. The serializer is 16:1 and double data rate, so the tile emits two
+    * bits per `CK` period.
+    */
+  val SerdesRatio = 32
+
+  /** Segments in the output driver (`ENP`/`ENN`). */
+  val DriverSegments = 9
+
+  /** Segments in the capacitive-peaking equalizer branch (`ENP_EQ`/`ENN_EQ`).
+    */
+  val EqSegments = 4
+
+  /** Taps in the delay line on the high speed clock (`Dctrl`). */
+  val DelayTaps = 32
+
+  /** Thermometer code with the low `count` of `segments` segments enabled, on a
+    * rail where a one enables a segment (`ENN`, `ENN_EQ`, `Dctrl`).
+    */
+  def thermometer(count: Int, segments: Int): BigInt = {
+    require(
+      count >= 0 && count <= segments,
+      s"count $count out of range for $segments segments"
+    )
+    (BigInt(1) << count) - 1
+  }
+
+  /** Thermometer code with the low `count` of `segments` segments enabled, on a
+    * rail where a zero enables a segment (`ENP`, `ENP_EQ`).
+    */
+  def thermometerB(count: Int, segments: Int): BigInt =
+    ((BigInt(1) << segments) - 1) ^ thermometer(count, segments)
 }
 
+/** Control pins of a [[TxLane]], driven straight through to the tile.
+  *
+  * These are the codes as the pins carry them: thermometer coded, and each with
+  * its own polarity. Software writes what it wants the tile to see, so any
+  * pattern the tile accepts is reachable, including ones no binary code could
+  * express.
+  *
+  * Use [[TxLane.thermometer]] and [[TxLane.thermometerB]] to build a code from
+  * a segment count rather than open coding the polarity.
+  */
 class TxLaneCtlIO extends Bundle {
-  val driver = new DriverCtlIO
-  val skew = new SkewCtlIO
+
+  /** Pull-up driver impedance. A one turns its segment off. */
+  val ENP = UInt(TxLane.DriverSegments.W)
+
+  /** Pull-down driver impedance. A one turns its segment on. */
+  val ENN = UInt(TxLane.DriverSegments.W)
+
+  /** Pull-up impedance of the equalizer branch. A one turns its segment off. */
+  val ENP_EQ = UInt(TxLane.EqSegments.W)
+
+  /** Pull-down impedance of the equalizer branch. A one turns its segment on.
+    */
+  val ENN_EQ = UInt(TxLane.EqSegments.W)
+
+  /** Delay taps on the high speed clock. A one enables its tap. */
+  val Dctrl = UInt(TxLane.DelayTaps.W)
+}
+
+object TxLaneCtlIO {
+
+  /** Every driver segment off and no added clock delay, which is what a lane
+    * resets to so that it stays quiet until software brings it up.
+    */
+  def off: TxLaneCtlIO = codes(driver = 0, eq = 0, delay = 0)
+
+  /** Every main driver segment on, equalizer branch off, no added clock delay.
+    */
+  def full: TxLaneCtlIO =
+    codes(driver = TxLane.DriverSegments, eq = 0, delay = 0)
+
+  /** Control with `driver` main segments, `eq` equalizer segments, and `delay`
+    * clock taps enabled, with each rail's polarity applied.
+    */
+  def codes(driver: Int, eq: Int, delay: Int): TxLaneCtlIO =
+    (new TxLaneCtlIO).Lit(
+      _.ENP -> TxLane.thermometerB(driver, TxLane.DriverSegments).U,
+      _.ENN -> TxLane.thermometer(driver, TxLane.DriverSegments).U,
+      _.ENP_EQ -> TxLane.thermometerB(eq, TxLane.EqSegments).U,
+      _.ENN_EQ -> TxLane.thermometer(eq, TxLane.EqSegments).U,
+      _.Dctrl -> TxLane.thermometer(delay, TxLane.DelayTaps).U
+    )
 }
 
 class TxLaneIO extends Bundle {
-  val dll_reset = Input(Bool())
-  val dll_resetb = Input(Bool())
-  val ser_resetb = Input(AsyncReset())
+
+  /** Asynchronous reset for the tile's clock dividers (`RST_async`). High holds
+    * the divided clocks at zero; low lets them run.
+    */
+  val rst = Input(AsyncReset())
+
+  /** High speed clock (`CK`). The tile makes its own complement internally. */
   val clk = Input(Clock())
-  val din = Input(Bits(32.W))
+  val din = Input(Bits(TxLane.SerdesRatio.W))
+
+  /** Tile output to the die-to-die channel (`D2D_TX`). */
   val dout = Output(Bool())
-  val divclk = Output(Clock())
-  val dll_code = Output(UInt(5.W))
   val ctl = Input(new TxLaneCtlIO)
 }
 
+/** One UCIe TX tile: a 16:1 double data rate serializer, a delay line on the
+  * high speed clock, and the N-over-N output driver with its capacitive peaking
+  * equalizer branch.
+  *
+  * Control reaches the tile's pins unchanged, so what the register file holds
+  * is what the driver sees.
+  */
 class TxLane(implicit includeDefaultModels: Boolean = false) extends RawModule {
   val io = IO(new TxLaneIO)
 
   val verilogBlackBox = Module(new VerilogTxLane)
-  verilogBlackBox.io.dll_reset := io.dll_reset
-  verilogBlackBox.io.dll_resetb := io.dll_resetb
-  verilogBlackBox.io.ser_resetb := io.ser_resetb
-  verilogBlackBox.io.clk := io.clk
+  verilogBlackBox.io.RST_async := io.rst
+  verilogBlackBox.io.CK := io.clk
+  verilogBlackBox.io.DataIN := io.din
+  io.dout := verilogBlackBox.io.D2D_TX
 
-  verilogBlackBox.io.din_0 := io.din(0)
-  verilogBlackBox.io.din_1 := io.din(1)
-  verilogBlackBox.io.din_2 := io.din(2)
-  verilogBlackBox.io.din_3 := io.din(3)
-  verilogBlackBox.io.din_4 := io.din(4)
-  verilogBlackBox.io.din_5 := io.din(5)
-  verilogBlackBox.io.din_6 := io.din(6)
-  verilogBlackBox.io.din_7 := io.din(7)
-  verilogBlackBox.io.din_8 := io.din(8)
-  verilogBlackBox.io.din_9 := io.din(9)
-  verilogBlackBox.io.din_10 := io.din(10)
-  verilogBlackBox.io.din_11 := io.din(11)
-  verilogBlackBox.io.din_12 := io.din(12)
-  verilogBlackBox.io.din_13 := io.din(13)
-  verilogBlackBox.io.din_14 := io.din(14)
-  verilogBlackBox.io.din_15 := io.din(15)
-  verilogBlackBox.io.din_16 := io.din(16)
-  verilogBlackBox.io.din_17 := io.din(17)
-  verilogBlackBox.io.din_18 := io.din(18)
-  verilogBlackBox.io.din_19 := io.din(19)
-  verilogBlackBox.io.din_20 := io.din(20)
-  verilogBlackBox.io.din_21 := io.din(21)
-  verilogBlackBox.io.din_22 := io.din(22)
-  verilogBlackBox.io.din_23 := io.din(23)
-  verilogBlackBox.io.din_24 := io.din(24)
-  verilogBlackBox.io.din_25 := io.din(25)
-  verilogBlackBox.io.din_26 := io.din(26)
-  verilogBlackBox.io.din_27 := io.din(27)
-  verilogBlackBox.io.din_28 := io.din(28)
-  verilogBlackBox.io.din_29 := io.din(29)
-  verilogBlackBox.io.din_30 := io.din(30)
-  verilogBlackBox.io.din_31 := io.din(31)
-
-  io.dout := verilogBlackBox.io.dout
-  io.divclk := verilogBlackBox.io.divclk
-
-  val puCtlTherm = Wire(UInt(64.W))
-  puCtlTherm := (1.U << io.ctl.driver.pu_ctl) - 1.U
-  val pdCtlbTherm = Wire(UInt(64.W))
-  pdCtlbTherm := ~((1.U << io.ctl.driver.pd_ctl) - 1.U)
-  verilogBlackBox.io.pu_ctl_0 := puCtlTherm(0)
-  verilogBlackBox.io.pu_ctl_1 := puCtlTherm(1)
-  verilogBlackBox.io.pu_ctl_2 := puCtlTherm(2)
-  verilogBlackBox.io.pu_ctl_3 := puCtlTherm(3)
-  verilogBlackBox.io.pu_ctl_4 := puCtlTherm(4)
-  verilogBlackBox.io.pu_ctl_5 := puCtlTherm(5)
-  verilogBlackBox.io.pu_ctl_6 := puCtlTherm(6)
-  verilogBlackBox.io.pu_ctl_7 := puCtlTherm(7)
-  verilogBlackBox.io.pu_ctl_8 := puCtlTherm(8)
-  verilogBlackBox.io.pu_ctl_9 := puCtlTherm(9)
-  verilogBlackBox.io.pu_ctl_10 := puCtlTherm(10)
-  verilogBlackBox.io.pu_ctl_11 := puCtlTherm(11)
-  verilogBlackBox.io.pu_ctl_12 := puCtlTherm(12)
-  verilogBlackBox.io.pu_ctl_13 := puCtlTherm(13)
-  verilogBlackBox.io.pu_ctl_14 := puCtlTherm(14)
-  verilogBlackBox.io.pu_ctl_15 := puCtlTherm(15)
-  verilogBlackBox.io.pu_ctl_16 := puCtlTherm(16)
-  verilogBlackBox.io.pu_ctl_17 := puCtlTherm(17)
-  verilogBlackBox.io.pu_ctl_18 := puCtlTherm(18)
-  verilogBlackBox.io.pu_ctl_19 := puCtlTherm(19)
-  verilogBlackBox.io.pu_ctl_20 := puCtlTherm(20)
-  verilogBlackBox.io.pu_ctl_21 := puCtlTherm(21)
-  verilogBlackBox.io.pu_ctl_22 := puCtlTherm(22)
-  verilogBlackBox.io.pu_ctl_23 := puCtlTherm(23)
-  verilogBlackBox.io.pu_ctl_24 := puCtlTherm(24)
-  verilogBlackBox.io.pu_ctl_25 := puCtlTherm(25)
-  verilogBlackBox.io.pu_ctl_26 := puCtlTherm(26)
-  verilogBlackBox.io.pu_ctl_27 := puCtlTherm(27)
-  verilogBlackBox.io.pu_ctl_28 := puCtlTherm(28)
-  verilogBlackBox.io.pu_ctl_29 := puCtlTherm(29)
-  verilogBlackBox.io.pu_ctl_30 := puCtlTherm(30)
-  verilogBlackBox.io.pu_ctl_31 := puCtlTherm(31)
-  verilogBlackBox.io.pu_ctl_32 := puCtlTherm(32)
-  verilogBlackBox.io.pu_ctl_33 := puCtlTherm(33)
-  verilogBlackBox.io.pu_ctl_34 := puCtlTherm(34)
-  verilogBlackBox.io.pu_ctl_35 := puCtlTherm(35)
-  verilogBlackBox.io.pu_ctl_36 := puCtlTherm(36)
-  verilogBlackBox.io.pu_ctl_37 := puCtlTherm(37)
-  verilogBlackBox.io.pu_ctl_38 := puCtlTherm(38)
-  verilogBlackBox.io.pu_ctl_39 := puCtlTherm(39)
-  verilogBlackBox.io.pd_ctlb_0 := pdCtlbTherm(0)
-  verilogBlackBox.io.pd_ctlb_1 := pdCtlbTherm(1)
-  verilogBlackBox.io.pd_ctlb_2 := pdCtlbTherm(2)
-  verilogBlackBox.io.pd_ctlb_3 := pdCtlbTherm(3)
-  verilogBlackBox.io.pd_ctlb_4 := pdCtlbTherm(4)
-  verilogBlackBox.io.pd_ctlb_5 := pdCtlbTherm(5)
-  verilogBlackBox.io.pd_ctlb_6 := pdCtlbTherm(6)
-  verilogBlackBox.io.pd_ctlb_7 := pdCtlbTherm(7)
-  verilogBlackBox.io.pd_ctlb_8 := pdCtlbTherm(8)
-  verilogBlackBox.io.pd_ctlb_9 := pdCtlbTherm(9)
-  verilogBlackBox.io.pd_ctlb_10 := pdCtlbTherm(10)
-  verilogBlackBox.io.pd_ctlb_11 := pdCtlbTherm(11)
-  verilogBlackBox.io.pd_ctlb_12 := pdCtlbTherm(12)
-  verilogBlackBox.io.pd_ctlb_13 := pdCtlbTherm(13)
-  verilogBlackBox.io.pd_ctlb_14 := pdCtlbTherm(14)
-  verilogBlackBox.io.pd_ctlb_15 := pdCtlbTherm(15)
-  verilogBlackBox.io.pd_ctlb_16 := pdCtlbTherm(16)
-  verilogBlackBox.io.pd_ctlb_17 := pdCtlbTherm(17)
-  verilogBlackBox.io.pd_ctlb_18 := pdCtlbTherm(18)
-  verilogBlackBox.io.pd_ctlb_19 := pdCtlbTherm(19)
-  verilogBlackBox.io.pd_ctlb_20 := pdCtlbTherm(20)
-  verilogBlackBox.io.pd_ctlb_21 := pdCtlbTherm(21)
-  verilogBlackBox.io.pd_ctlb_22 := pdCtlbTherm(22)
-  verilogBlackBox.io.pd_ctlb_23 := pdCtlbTherm(23)
-  verilogBlackBox.io.pd_ctlb_24 := pdCtlbTherm(24)
-  verilogBlackBox.io.pd_ctlb_25 := pdCtlbTherm(25)
-  verilogBlackBox.io.pd_ctlb_26 := pdCtlbTherm(26)
-  verilogBlackBox.io.pd_ctlb_27 := pdCtlbTherm(27)
-  verilogBlackBox.io.pd_ctlb_28 := pdCtlbTherm(28)
-  verilogBlackBox.io.pd_ctlb_29 := pdCtlbTherm(29)
-  verilogBlackBox.io.pd_ctlb_30 := pdCtlbTherm(30)
-  verilogBlackBox.io.pd_ctlb_31 := pdCtlbTherm(31)
-  verilogBlackBox.io.pd_ctlb_32 := pdCtlbTherm(32)
-  verilogBlackBox.io.pd_ctlb_33 := pdCtlbTherm(33)
-  verilogBlackBox.io.pd_ctlb_34 := pdCtlbTherm(34)
-  verilogBlackBox.io.pd_ctlb_35 := pdCtlbTherm(35)
-  verilogBlackBox.io.pd_ctlb_36 := pdCtlbTherm(36)
-  verilogBlackBox.io.pd_ctlb_37 := pdCtlbTherm(37)
-  verilogBlackBox.io.pd_ctlb_38 := pdCtlbTherm(38)
-  verilogBlackBox.io.pd_ctlb_39 := pdCtlbTherm(39)
-
-  verilogBlackBox.io.driver_en := io.ctl.driver.en
-  verilogBlackBox.io.driver_en_b := io.ctl.driver.en_b
-
-  verilogBlackBox.io.dll_en := io.ctl.skew.dll_en
-  verilogBlackBox.io.ocl := io.ctl.skew.ocl
-  verilogBlackBox.io.delay_0 := io.ctl.skew.delay(0)
-  verilogBlackBox.io.delay_1 := io.ctl.skew.delay(1)
-  verilogBlackBox.io.delay_2 := io.ctl.skew.delay(2)
-  verilogBlackBox.io.delay_3 := io.ctl.skew.delay(3)
-  verilogBlackBox.io.delay_4 := io.ctl.skew.delay(4)
-  verilogBlackBox.io.delayb_0 := !io.ctl.skew.delay(0)
-  verilogBlackBox.io.delayb_1 := !io.ctl.skew.delay(1)
-  verilogBlackBox.io.delayb_2 := !io.ctl.skew.delay(2)
-  verilogBlackBox.io.delayb_3 := !io.ctl.skew.delay(3)
-  verilogBlackBox.io.delayb_4 := !io.ctl.skew.delay(4)
-
-  verilogBlackBox.io.mux_en_0 := io.ctl.skew.mux_en(0)
-  verilogBlackBox.io.mux_en_1 := io.ctl.skew.mux_en(1)
-  verilogBlackBox.io.mux_en_2 := io.ctl.skew.mux_en(2)
-  verilogBlackBox.io.mux_en_3 := io.ctl.skew.mux_en(3)
-  verilogBlackBox.io.mux_en_4 := io.ctl.skew.mux_en(4)
-  verilogBlackBox.io.mux_en_5 := io.ctl.skew.mux_en(5)
-  verilogBlackBox.io.mux_en_6 := io.ctl.skew.mux_en(6)
-  verilogBlackBox.io.mux_en_7 := io.ctl.skew.mux_en(7)
-  verilogBlackBox.io.mux_enb_0 := !io.ctl.skew.mux_en(0)
-  verilogBlackBox.io.mux_enb_1 := !io.ctl.skew.mux_en(1)
-  verilogBlackBox.io.mux_enb_2 := !io.ctl.skew.mux_en(2)
-  verilogBlackBox.io.mux_enb_3 := !io.ctl.skew.mux_en(3)
-  verilogBlackBox.io.mux_enb_4 := !io.ctl.skew.mux_en(4)
-  verilogBlackBox.io.mux_enb_5 := !io.ctl.skew.mux_en(5)
-  verilogBlackBox.io.mux_enb_6 := !io.ctl.skew.mux_en(6)
-  verilogBlackBox.io.mux_enb_7 := !io.ctl.skew.mux_en(7)
-
-  verilogBlackBox.io.band_ctrl_0 := io.ctl.skew.band_ctrl(0)
-  verilogBlackBox.io.band_ctrl_1 := io.ctl.skew.band_ctrl(1)
-  verilogBlackBox.io.band_ctrlb_0 := !io.ctl.skew.band_ctrl(0)
-  verilogBlackBox.io.band_ctrlb_1 := !io.ctl.skew.band_ctrl(1)
-
-  val mixEnTherm = Wire(UInt(32.W))
-  mixEnTherm := (1.U << io.ctl.skew.mix_en) - 1.U
-  val mixEnbTherm = Wire(UInt(32.W))
-  mixEnbTherm := ~mixEnTherm
-  verilogBlackBox.io.mix_en_0 := mixEnTherm(0)
-  verilogBlackBox.io.mix_en_1 := mixEnTherm(1)
-  verilogBlackBox.io.mix_en_2 := mixEnTherm(2)
-  verilogBlackBox.io.mix_en_3 := mixEnTherm(3)
-  verilogBlackBox.io.mix_en_4 := mixEnTherm(4)
-  verilogBlackBox.io.mix_en_5 := mixEnTherm(5)
-  verilogBlackBox.io.mix_en_6 := mixEnTherm(6)
-  verilogBlackBox.io.mix_en_7 := mixEnTherm(7)
-  verilogBlackBox.io.mix_en_8 := mixEnTherm(8)
-  verilogBlackBox.io.mix_en_9 := mixEnTherm(9)
-  verilogBlackBox.io.mix_en_10 := mixEnTherm(10)
-  verilogBlackBox.io.mix_en_11 := mixEnTherm(11)
-  verilogBlackBox.io.mix_en_12 := mixEnTherm(12)
-  verilogBlackBox.io.mix_en_13 := mixEnTherm(13)
-  verilogBlackBox.io.mix_en_14 := mixEnTherm(14)
-  verilogBlackBox.io.mix_en_15 := mixEnTherm(15)
-
-  verilogBlackBox.io.mix_enb_0 := mixEnbTherm(0)
-  verilogBlackBox.io.mix_enb_1 := mixEnbTherm(1)
-  verilogBlackBox.io.mix_enb_2 := mixEnbTherm(2)
-  verilogBlackBox.io.mix_enb_3 := mixEnbTherm(3)
-  verilogBlackBox.io.mix_enb_4 := mixEnbTherm(4)
-  verilogBlackBox.io.mix_enb_5 := mixEnbTherm(5)
-  verilogBlackBox.io.mix_enb_6 := mixEnbTherm(6)
-  verilogBlackBox.io.mix_enb_7 := mixEnbTherm(7)
-  verilogBlackBox.io.mix_enb_8 := mixEnbTherm(8)
-  verilogBlackBox.io.mix_enb_9 := mixEnbTherm(9)
-  verilogBlackBox.io.mix_enb_10 := mixEnbTherm(10)
-  verilogBlackBox.io.mix_enb_11 := mixEnbTherm(11)
-  verilogBlackBox.io.mix_enb_12 := mixEnbTherm(12)
-  verilogBlackBox.io.mix_enb_13 := mixEnbTherm(13)
-  verilogBlackBox.io.mix_enb_14 := mixEnbTherm(14)
-  verilogBlackBox.io.mix_enb_15 := mixEnbTherm(15)
-
-  verilogBlackBox.io.nen_out_0 := io.ctl.skew.nen_out(0)
-  verilogBlackBox.io.nen_out_1 := io.ctl.skew.nen_out(1)
-  verilogBlackBox.io.nen_out_2 := io.ctl.skew.nen_out(2)
-  verilogBlackBox.io.nen_out_3 := io.ctl.skew.nen_out(3)
-  verilogBlackBox.io.nen_out_4 := io.ctl.skew.nen_out(4)
-  verilogBlackBox.io.nen_outb_0 := !io.ctl.skew.nen_out(0)
-  verilogBlackBox.io.nen_outb_1 := !io.ctl.skew.nen_out(1)
-  verilogBlackBox.io.nen_outb_2 := !io.ctl.skew.nen_out(2)
-  verilogBlackBox.io.nen_outb_3 := !io.ctl.skew.nen_out(3)
-  verilogBlackBox.io.nen_outb_4 := !io.ctl.skew.nen_out(4)
-
-  verilogBlackBox.io.pen_out_0 := io.ctl.skew.pen_out(0)
-  verilogBlackBox.io.pen_out_1 := io.ctl.skew.pen_out(1)
-  verilogBlackBox.io.pen_out_2 := io.ctl.skew.pen_out(2)
-  verilogBlackBox.io.pen_out_3 := io.ctl.skew.pen_out(3)
-  verilogBlackBox.io.pen_out_4 := io.ctl.skew.pen_out(4)
-  verilogBlackBox.io.pen_outb_0 := !io.ctl.skew.pen_out(0)
-  verilogBlackBox.io.pen_outb_1 := !io.ctl.skew.pen_out(1)
-  verilogBlackBox.io.pen_outb_2 := !io.ctl.skew.pen_out(2)
-  verilogBlackBox.io.pen_outb_3 := !io.ctl.skew.pen_out(3)
-  verilogBlackBox.io.pen_outb_4 := !io.ctl.skew.pen_out(4)
-
-  io.dll_code := Cat(
-    verilogBlackBox.io.dll_code_4,
-    verilogBlackBox.io.dll_code_3,
-    verilogBlackBox.io.dll_code_2,
-    verilogBlackBox.io.dll_code_1,
-    verilogBlackBox.io.dll_code_0
-  )
+  verilogBlackBox.io.ENP := io.ctl.ENP
+  verilogBlackBox.io.ENN := io.ctl.ENN
+  verilogBlackBox.io.ENP_EQ := io.ctl.ENP_EQ
+  verilogBlackBox.io.ENN_EQ := io.ctl.ENN_EQ
+  verilogBlackBox.io.Dctrl := io.ctl.Dctrl
 }
 
+/** Port names match the tile's pins verbatim. VDDQ (output driver), VDD
+  * (pre-driver and digital logic), and VSS are pins on the tile but are omitted
+  * here; they are connected by the physical flow.
+  */
 class VerilogTxLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
-    val dll_reset = Input(Bool())
-    val dll_resetb = Input(Bool())
-    val ser_resetb = Input(AsyncReset())
-    val clk = Input(Clock())
-    val din_0 = Input(Bool())
-    val din_1 = Input(Bool())
-    val din_2 = Input(Bool())
-    val din_3 = Input(Bool())
-    val din_4 = Input(Bool())
-    val din_5 = Input(Bool())
-    val din_6 = Input(Bool())
-    val din_7 = Input(Bool())
-    val din_8 = Input(Bool())
-    val din_9 = Input(Bool())
-    val din_10 = Input(Bool())
-    val din_11 = Input(Bool())
-    val din_12 = Input(Bool())
-    val din_13 = Input(Bool())
-    val din_14 = Input(Bool())
-    val din_15 = Input(Bool())
-    val din_16 = Input(Bool())
-    val din_17 = Input(Bool())
-    val din_18 = Input(Bool())
-    val din_19 = Input(Bool())
-    val din_20 = Input(Bool())
-    val din_21 = Input(Bool())
-    val din_22 = Input(Bool())
-    val din_23 = Input(Bool())
-    val din_24 = Input(Bool())
-    val din_25 = Input(Bool())
-    val din_26 = Input(Bool())
-    val din_27 = Input(Bool())
-    val din_28 = Input(Bool())
-    val din_29 = Input(Bool())
-    val din_30 = Input(Bool())
-    val din_31 = Input(Bool())
-    val dout = Output(Bool())
-    val divclk = Output(Clock())
-    val pu_ctl_0 = Input(Bool())
-    val pu_ctl_1 = Input(Bool())
-    val pu_ctl_2 = Input(Bool())
-    val pu_ctl_3 = Input(Bool())
-    val pu_ctl_4 = Input(Bool())
-    val pu_ctl_5 = Input(Bool())
-    val pu_ctl_6 = Input(Bool())
-    val pu_ctl_7 = Input(Bool())
-    val pu_ctl_8 = Input(Bool())
-    val pu_ctl_9 = Input(Bool())
-    val pu_ctl_10 = Input(Bool())
-    val pu_ctl_11 = Input(Bool())
-    val pu_ctl_12 = Input(Bool())
-    val pu_ctl_13 = Input(Bool())
-    val pu_ctl_14 = Input(Bool())
-    val pu_ctl_15 = Input(Bool())
-    val pu_ctl_16 = Input(Bool())
-    val pu_ctl_17 = Input(Bool())
-    val pu_ctl_18 = Input(Bool())
-    val pu_ctl_19 = Input(Bool())
-    val pu_ctl_20 = Input(Bool())
-    val pu_ctl_21 = Input(Bool())
-    val pu_ctl_22 = Input(Bool())
-    val pu_ctl_23 = Input(Bool())
-    val pu_ctl_24 = Input(Bool())
-    val pu_ctl_25 = Input(Bool())
-    val pu_ctl_26 = Input(Bool())
-    val pu_ctl_27 = Input(Bool())
-    val pu_ctl_28 = Input(Bool())
-    val pu_ctl_29 = Input(Bool())
-    val pu_ctl_30 = Input(Bool())
-    val pu_ctl_31 = Input(Bool())
-    val pu_ctl_32 = Input(Bool())
-    val pu_ctl_33 = Input(Bool())
-    val pu_ctl_34 = Input(Bool())
-    val pu_ctl_35 = Input(Bool())
-    val pu_ctl_36 = Input(Bool())
-    val pu_ctl_37 = Input(Bool())
-    val pu_ctl_38 = Input(Bool())
-    val pu_ctl_39 = Input(Bool())
-    val pd_ctlb_0 = Input(Bool())
-    val pd_ctlb_1 = Input(Bool())
-    val pd_ctlb_2 = Input(Bool())
-    val pd_ctlb_3 = Input(Bool())
-    val pd_ctlb_4 = Input(Bool())
-    val pd_ctlb_5 = Input(Bool())
-    val pd_ctlb_6 = Input(Bool())
-    val pd_ctlb_7 = Input(Bool())
-    val pd_ctlb_8 = Input(Bool())
-    val pd_ctlb_9 = Input(Bool())
-    val pd_ctlb_10 = Input(Bool())
-    val pd_ctlb_11 = Input(Bool())
-    val pd_ctlb_12 = Input(Bool())
-    val pd_ctlb_13 = Input(Bool())
-    val pd_ctlb_14 = Input(Bool())
-    val pd_ctlb_15 = Input(Bool())
-    val pd_ctlb_16 = Input(Bool())
-    val pd_ctlb_17 = Input(Bool())
-    val pd_ctlb_18 = Input(Bool())
-    val pd_ctlb_19 = Input(Bool())
-    val pd_ctlb_20 = Input(Bool())
-    val pd_ctlb_21 = Input(Bool())
-    val pd_ctlb_22 = Input(Bool())
-    val pd_ctlb_23 = Input(Bool())
-    val pd_ctlb_24 = Input(Bool())
-    val pd_ctlb_25 = Input(Bool())
-    val pd_ctlb_26 = Input(Bool())
-    val pd_ctlb_27 = Input(Bool())
-    val pd_ctlb_28 = Input(Bool())
-    val pd_ctlb_29 = Input(Bool())
-    val pd_ctlb_30 = Input(Bool())
-    val pd_ctlb_31 = Input(Bool())
-    val pd_ctlb_32 = Input(Bool())
-    val pd_ctlb_33 = Input(Bool())
-    val pd_ctlb_34 = Input(Bool())
-    val pd_ctlb_35 = Input(Bool())
-    val pd_ctlb_36 = Input(Bool())
-    val pd_ctlb_37 = Input(Bool())
-    val pd_ctlb_38 = Input(Bool())
-    val pd_ctlb_39 = Input(Bool())
-    val driver_en = Input(Bool())
-    val driver_en_b = Input(Bool())
-    val dll_en = Input(Bool())
-    val ocl = Input(Bool())
-    val delay_0 = Input(Bool())
-    val delay_1 = Input(Bool())
-    val delay_2 = Input(Bool())
-    val delay_3 = Input(Bool())
-    val delay_4 = Input(Bool())
-    val delayb_0 = Input(Bool())
-    val delayb_1 = Input(Bool())
-    val delayb_2 = Input(Bool())
-    val delayb_3 = Input(Bool())
-    val delayb_4 = Input(Bool())
-    val mux_en_0 = Input(Bool())
-    val mux_en_1 = Input(Bool())
-    val mux_en_2 = Input(Bool())
-    val mux_en_3 = Input(Bool())
-    val mux_en_4 = Input(Bool())
-    val mux_en_5 = Input(Bool())
-    val mux_en_6 = Input(Bool())
-    val mux_en_7 = Input(Bool())
-    val mux_enb_0 = Input(Bool())
-    val mux_enb_1 = Input(Bool())
-    val mux_enb_2 = Input(Bool())
-    val mux_enb_3 = Input(Bool())
-    val mux_enb_4 = Input(Bool())
-    val mux_enb_5 = Input(Bool())
-    val mux_enb_6 = Input(Bool())
-    val mux_enb_7 = Input(Bool())
-    val band_ctrl_0 = Input(Bool())
-    val band_ctrl_1 = Input(Bool())
-    val band_ctrlb_0 = Input(Bool())
-    val band_ctrlb_1 = Input(Bool())
-    val mix_en_0 = Input(Bool())
-    val mix_en_1 = Input(Bool())
-    val mix_en_2 = Input(Bool())
-    val mix_en_3 = Input(Bool())
-    val mix_en_4 = Input(Bool())
-    val mix_en_5 = Input(Bool())
-    val mix_en_6 = Input(Bool())
-    val mix_en_7 = Input(Bool())
-    val mix_en_8 = Input(Bool())
-    val mix_en_9 = Input(Bool())
-    val mix_en_10 = Input(Bool())
-    val mix_en_11 = Input(Bool())
-    val mix_en_12 = Input(Bool())
-    val mix_en_13 = Input(Bool())
-    val mix_en_14 = Input(Bool())
-    val mix_en_15 = Input(Bool())
-    val mix_enb_0 = Input(Bool())
-    val mix_enb_1 = Input(Bool())
-    val mix_enb_2 = Input(Bool())
-    val mix_enb_3 = Input(Bool())
-    val mix_enb_4 = Input(Bool())
-    val mix_enb_5 = Input(Bool())
-    val mix_enb_6 = Input(Bool())
-    val mix_enb_7 = Input(Bool())
-    val mix_enb_8 = Input(Bool())
-    val mix_enb_9 = Input(Bool())
-    val mix_enb_10 = Input(Bool())
-    val mix_enb_11 = Input(Bool())
-    val mix_enb_12 = Input(Bool())
-    val mix_enb_13 = Input(Bool())
-    val mix_enb_14 = Input(Bool())
-    val mix_enb_15 = Input(Bool())
-    val nen_out_0 = Input(Bool())
-    val nen_out_1 = Input(Bool())
-    val nen_out_2 = Input(Bool())
-    val nen_out_3 = Input(Bool())
-    val nen_out_4 = Input(Bool())
-    val nen_outb_0 = Input(Bool())
-    val nen_outb_1 = Input(Bool())
-    val nen_outb_2 = Input(Bool())
-    val nen_outb_3 = Input(Bool())
-    val nen_outb_4 = Input(Bool())
-    val pen_out_0 = Input(Bool())
-    val pen_out_1 = Input(Bool())
-    val pen_out_2 = Input(Bool())
-    val pen_out_3 = Input(Bool())
-    val pen_out_4 = Input(Bool())
-    val pen_outb_0 = Input(Bool())
-    val pen_outb_1 = Input(Bool())
-    val pen_outb_2 = Input(Bool())
-    val pen_outb_3 = Input(Bool())
-    val pen_outb_4 = Input(Bool())
-    val dll_code_0 = Output(Bool())
-    val dll_code_1 = Output(Bool())
-    val dll_code_2 = Output(Bool())
-    val dll_code_3 = Output(Bool())
-    val dll_code_4 = Output(Bool())
+    val DataIN = Input(Bits(TxLane.SerdesRatio.W))
+    val CK = Input(Clock())
+    val Dctrl = Input(Bits(TxLane.DelayTaps.W))
+    val ENP = Input(Bits(TxLane.DriverSegments.W))
+    val ENN = Input(Bits(TxLane.DriverSegments.W))
+    val ENP_EQ = Input(Bits(TxLane.EqSegments.W))
+    val ENN_EQ = Input(Bits(TxLane.EqSegments.W))
+    val RST_async = Input(AsyncReset())
+    val D2D_TX = Output(Bool())
   })
 
   override val desiredName = "tx_lane"
