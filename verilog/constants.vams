@@ -1,0 +1,79 @@
+// General
+// Supply voltage (V)
+`define VDD 0.75
+// Min period (ps)
+`define MIN_PERIOD 125
+// Rise/fall time (ps)
+`define T_RISE_FALL_DEFAULT 5
+// Number of lanes
+`define LANES 16
+// Pi
+`define M_PI 3.14159265358979323846
+
+// PRIMITIVES
+// Clock-to-q and data-to-q delays of FFs and latches (ps)
+`define T_CLKQ_DQ_DEFAULT 5.0
+// Setup time of FFs and latches (ps)
+`define T_SETUP_DEFAULT 5.0
+// Hold time of FFs and latches (ps)
+`define T_HOLD_DEFAULT 2.0
+// Combinational delay of mux (ps)
+`define MUX_DELAY_DEFAULT 5.0
+// RDAC select bits
+`define RDAC_SEL_BITS 8
+// Inverter threshold voltage (V)
+`define INV_VTH_DEFAULT (`VDD / 2)
+// Inverter gain
+`define INV_GAIN_DEFAULT 1000
+
+// SERDES
+// Number of stages for serializers/deserializers
+`define SERDES_STAGES 5
+// Number of stages for clock dividers
+`define CLKDIV_STAGES (`SERDES_STAGES - 1)
+// Deserializer input delay (ps)
+`define DES_IN_DELAY 10.0
+
+// DRIVER
+// Number of driver pull-up and pull-down control bits
+`define DRIVER_CTL_BITS 5
+// Number of driver segments
+`define DRIVER_SEGMENTS 32
+// Resistance of single driver segment (Ohms)
+`define DRIVER_R_SEGMENT 864
+// Off resistance of driver (Ohms)
+`define DRIVER_R_OFF_SEGMENT 1000000
+
+// CLOCK_PATH
+// Clock period
+`define CLK_PERIOD 125e-12
+// Digitally-controlled delay line bit width
+`define DCDL_CTRL_BITWIDTH 8
+// Digitally-controlled delay line delay offset (ps)
+`define DCDL_DELAY_OFS 10.0
+// Digitally-controlled delay line delay sep (ps)
+`define DCDL_DELAY_STEP 10.0
+// Clock distribution mean delay
+`define CLK_DIST_DELAY_MU 200e-12
+// Clock distribution std deviation
+`define CLK_DIST_DELAY_SIGMA 0.5e-12
+
+// TX
+// TX nominal output impedance (Ohms)
+`define TX_R_OUT 30.0
+
+// RX
+// RX nominal input impedance (Ohms)
+`define RX_R_IN 50.0
+// RX voltage transfer function
+`define RX_VTF (`RX_R_IN / (`RX_R_IN + `TX_R_OUT))
+// High voltage for received data (V)
+`define RX_V_HIGH (`VDD * `RX_VTF)
+// Number of termination control bits
+`define TERMINATION_CTL_BITS 5
+// Number of termination segments
+`define TERMINATION_SEGMENTS 32
+// Resistance of single termination segment (Ohms)
+`define TERMINATION_R_SEGMENT 1599
+// Off resistance of termination (Ohms)
+`define TERMINATION_R_OFF_SEGMENT 1000000

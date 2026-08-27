@@ -1,0 +1,14 @@
+// ****************************************************************
+// AMS simulation control file for xrun netlist based flow
+// ****************************************************************
+simulator lang=spectre 
+
+global 0 vdd!
+
+amsd {
+    ie vsup=0.75 tr=20p tf=20p rout=0
+}
+
+
+// to enable noise, do noisefmax=64G noiseseed=32
+tran tran stop=200u method=gear2only maxstep=10n annotate=status

@@ -1,3 +1,6 @@
+# Created by https://www.toptal.com/developers/gitignore/api/scala,macos,linux,windows
+# Edit at https://www.toptal.com/developers/gitignore?templates=scala,macos,linux,windows
+
 ### Linux ###
 *~
 
@@ -46,6 +49,13 @@ Temporary Items
 # iCloud generated files
 *.icloud
 
+### Scala ###
+*.class
+*.log
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+
 ### Windows ###
 # Windows thumbnail cache files
 Thumbs.db
@@ -72,13 +82,13 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-target/
-xrun.history
-xrun.log
-
-out/
+# End of https://www.toptal.com/developers/gitignore/api/scala,macos,linux,windows
 .metals/
-.vscode/
-
-chippy/
-generatedVerilog/
+.bsp/
+build/
+target/
+project/metals.sbt
+project/project/
+test_run_dir/
+out/
+.scala-build/

@@ -1,0 +1,86 @@
+// ============================================================================
+// Clock Distribution Testbench - Verilog-AMS
+// ============================================================================
+//
+// Description:
+//   Testbench for 1-to-16 Clock Distribution Network behavioral model.
+//   Tests clock distribution with static delay mismatch and phase noise.
+//
+// Expected Behavior:
+//   - Single input clock distributed to 16 parallel lanes
+//   - Each lane has unique static delay (Gaussian distribution)
+//   - All lanes share common phase noise (correlated jitter)
+//   - Mean delay: 198ps, Std deviation: 541fs
+//
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module clock_distribution_tb;
+
+// ============================================================================
+// Parameters
+// ============================================================================
+parameter real vdd_supply = 0.75;
+parameter real sim_time = 10e-9;      // 10ns
+parameter real clk_freq = 8e9;        // 8 GHz
+parameter real clk_period = 1.0 / clk_freq;  // 125ps
+
+// ============================================================================
+// Signals
+// ============================================================================
+electrical clk_in;              // Single input clock (8GHz)
+electrical [15:0] clk_out;      // 16 parallel output clocks
+
+// Clock generation variables
+integer clk_state;
+real next_clk_edge;
+
+// ============================================================================
+// Input Clock Source (Single-Ended Square Wave)
+// ============================================================================
+analog begin
+    @(initial_step) begin
+        clk_state = 0;  // Start LOW
+        next_clk_edge = clk_period / 2.0;  // First edge at half period
+    end
+    @(timer(next_clk_edge)) begin
+        clk_state = !clk_state;
+        next_clk_edge = next_clk_edge + clk_period / 2.0;
+    end
+    // Square wave: 0V to VDD with 5ps rise/fall time
+    V(clk_in) <+ transition(clk_state ? vdd_supply : 0.0, 0, 5p);
+end
+
+// ============================================================================
+// Device Under Test: Clock Distribution Network
+// ============================================================================
+clocking_distribution_model dut (
+    .clk_in(clk_in),
+    .clk_out(clk_out)
+);
+
+// ============================================================================
+// Load Capacitors (for realistic loading on each lane)
+// ============================================================================
+analog begin
+    I(clk_out[0])  <+ ddt(10e-15 * V(clk_out[0]));
+    I(clk_out[1])  <+ ddt(10e-15 * V(clk_out[1]));
+    I(clk_out[2])  <+ ddt(10e-15 * V(clk_out[2]));
+    I(clk_out[3])  <+ ddt(10e-15 * V(clk_out[3]));
+    I(clk_out[4])  <+ ddt(10e-15 * V(clk_out[4]));
+    I(clk_out[5])  <+ ddt(10e-15 * V(clk_out[5]));
+    I(clk_out[6])  <+ ddt(10e-15 * V(clk_out[6]));
+    I(clk_out[7])  <+ ddt(10e-15 * V(clk_out[7]));
+    I(clk_out[8])  <+ ddt(10e-15 * V(clk_out[8]));
+    I(clk_out[9])  <+ ddt(10e-15 * V(clk_out[9]));
+    I(clk_out[10]) <+ ddt(10e-15 * V(clk_out[10]));
+    I(clk_out[11]) <+ ddt(10e-15 * V(clk_out[11]));
+    I(clk_out[12]) <+ ddt(10e-15 * V(clk_out[12]));
+    I(clk_out[13]) <+ ddt(10e-15 * V(clk_out[13]));
+    I(clk_out[14]) <+ ddt(10e-15 * V(clk_out[14]));
+    I(clk_out[15]) <+ ddt(10e-15 * V(clk_out[15]));
+end
+
+endmodule

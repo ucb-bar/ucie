@@ -1,0 +1,299 @@
+module tx_lane (
+  input dll_reset,
+  input dll_resetb,
+  input ser_resetb,
+  input clk,
+  input din_0,
+  input din_1,
+  input din_2,
+  input din_3,
+  input din_4,
+  input din_5,
+  input din_6,
+  input din_7,
+  input din_8,
+  input din_9,
+  input din_10,
+  input din_11,
+  input din_12,
+  input din_13,
+  input din_14,
+  input din_15,
+  input din_16,
+  input din_17,
+  input din_18,
+  input din_19,
+  input din_20,
+  input din_21,
+  input din_22,
+  input din_23,
+  input din_24,
+  input din_25,
+  input din_26,
+  input din_27,
+  input din_28,
+  input din_29,
+  input din_30,
+  input din_31,
+  output dout,
+  output divclk,
+  input pu_ctl_0,
+  input pu_ctl_1,
+  input pu_ctl_2,
+  input pu_ctl_3,
+  input pu_ctl_4,
+  input pu_ctl_5,
+  input pu_ctl_6,
+  input pu_ctl_7,
+  input pu_ctl_8,
+  input pu_ctl_9,
+  input pu_ctl_10,
+  input pu_ctl_11,
+  input pu_ctl_12,
+  input pu_ctl_13,
+  input pu_ctl_14,
+  input pu_ctl_15,
+  input pu_ctl_16,
+  input pu_ctl_17,
+  input pu_ctl_18,
+  input pu_ctl_19,
+  input pu_ctl_20,
+  input pu_ctl_21,
+  input pu_ctl_22,
+  input pu_ctl_23,
+  input pu_ctl_24,
+  input pu_ctl_25,
+  input pu_ctl_26,
+  input pu_ctl_27,
+  input pu_ctl_28,
+  input pu_ctl_29,
+  input pu_ctl_30,
+  input pu_ctl_31,
+  input pu_ctl_32,
+  input pu_ctl_33,
+  input pu_ctl_34,
+  input pu_ctl_35,
+  input pu_ctl_36,
+  input pu_ctl_37,
+  input pu_ctl_38,
+  input pu_ctl_39,
+  input pd_ctlb_0,
+  input pd_ctlb_1,
+  input pd_ctlb_2,
+  input pd_ctlb_3,
+  input pd_ctlb_4,
+  input pd_ctlb_5,
+  input pd_ctlb_6,
+  input pd_ctlb_7,
+  input pd_ctlb_8,
+  input pd_ctlb_9,
+  input pd_ctlb_10,
+  input pd_ctlb_11,
+  input pd_ctlb_12,
+  input pd_ctlb_13,
+  input pd_ctlb_14,
+  input pd_ctlb_15,
+  input pd_ctlb_16,
+  input pd_ctlb_17,
+  input pd_ctlb_18,
+  input pd_ctlb_19,
+  input pd_ctlb_20,
+  input pd_ctlb_21,
+  input pd_ctlb_22,
+  input pd_ctlb_23,
+  input pd_ctlb_24,
+  input pd_ctlb_25,
+  input pd_ctlb_26,
+  input pd_ctlb_27,
+  input pd_ctlb_28,
+  input pd_ctlb_29,
+  input pd_ctlb_30,
+  input pd_ctlb_31,
+  input pd_ctlb_32,
+  input pd_ctlb_33,
+  input pd_ctlb_34,
+  input pd_ctlb_35,
+  input pd_ctlb_36,
+  input pd_ctlb_37,
+  input pd_ctlb_38,
+  input pd_ctlb_39,
+  input driver_en,
+  input driver_en_b,
+  input dll_en,
+  input ocl,
+  input delay_0,
+  input delay_1,
+  input delay_2,
+  input delay_3,
+  input delay_4,
+  input delayb_0,
+  input delayb_1,
+  input delayb_2,
+  input delayb_3,
+  input delayb_4,
+  input mux_en_0,
+  input mux_en_1,
+  input mux_en_2,
+  input mux_en_3,
+  input mux_en_4,
+  input mux_en_5,
+  input mux_en_6,
+  input mux_en_7,
+  input mux_enb_0,
+  input mux_enb_1,
+  input mux_enb_2,
+  input mux_enb_3,
+  input mux_enb_4,
+  input mux_enb_5,
+  input mux_enb_6,
+  input mux_enb_7,
+  input band_ctrl_0,
+  input band_ctrl_1,
+  input band_ctrlb_0,
+  input band_ctrlb_1,
+  input mix_en_0,
+  input mix_en_1,
+  input mix_en_2,
+  input mix_en_3,
+  input mix_en_4,
+  input mix_en_5,
+  input mix_en_6,
+  input mix_en_7,
+  input mix_en_8,
+  input mix_en_9,
+  input mix_en_10,
+  input mix_en_11,
+  input mix_en_12,
+  input mix_en_13,
+  input mix_en_14,
+  input mix_en_15,
+  input mix_enb_0,
+  input mix_enb_1,
+  input mix_enb_2,
+  input mix_enb_3,
+  input mix_enb_4,
+  input mix_enb_5,
+  input mix_enb_6,
+  input mix_enb_7,
+  input mix_enb_8,
+  input mix_enb_9,
+  input mix_enb_10,
+  input mix_enb_11,
+  input mix_enb_12,
+  input mix_enb_13,
+  input mix_enb_14,
+  input mix_enb_15,
+  input nen_out_0,
+  input nen_out_1,
+  input nen_out_2,
+  input nen_out_3,
+  input nen_out_4,
+  input nen_outb_0,
+  input nen_outb_1,
+  input nen_outb_2,
+  input nen_outb_3,
+  input nen_outb_4,
+  input pen_out_0,
+  input pen_out_1,
+  input pen_out_2,
+  input pen_out_3,
+  input pen_out_4,
+  input pen_outb_0,
+  input pen_outb_1,
+  input pen_outb_2,
+  input pen_outb_3,
+  input pen_outb_4,
+  output dll_code_0,
+  output dll_code_1,
+  output dll_code_2,
+  output dll_code_3,
+  output dll_code_4
+);
+  // The tile needs the clock running for WAKE_CYCLES cycles after reset before
+  // its analog front end settles; until then it drives nothing.
+  //
+  // A clock that stops and restarts would in reality have to wake again. That
+  // is not modelled here -- the VAMS models are where behaviour at that level
+  // belongs.
+  parameter integer WAKE_CYCLES = 8;
+  // The tile serializes with an adjacent-pairing binary tree (ser32to1), so
+  // the bit sent in UI t is din[bitrev5(t)], not din[t]:
+  //
+  //   D0 D16 D8 D24 D4 D20 D12 D28 D2 D18 D10 D26 D6 D22 D14 D30
+  //   D1 D17 D9 D25 D5 D21 D13 D29 D3 D19 D11 D27 D7 D23 D15 D31
+  //
+  // Loading the shift register in that permuted order reproduces the tree's
+  // wire order while keeping this a plain shift register: the same word rate
+  // (one word per divclk, 32 UI DDR), just the tree's bit order.
+  reg [2:0] ctr;
+  reg divClock;
+  reg [31:0] shiftReg;
+  reg [7:0] wakeCtr;
+  wire awake = (wakeCtr >= WAKE_CYCLES);
+  always @(negedge ser_resetb) begin
+    divClock <= 1'b0;
+    ctr <= 3'b1;
+    shiftReg <= 32'b0;
+    wakeCtr <= 8'b0;
+  end
+  always @(posedge clk) begin
+    if (ser_resetb) begin
+      if (!awake) wakeCtr <= wakeCtr + 1'b1;
+      ctr <= ctr + 1'b1;
+      shiftReg <= shiftReg >> 1'b1;
+      if (ctr == 3'b0) begin
+        if (~divClock) begin
+          shiftReg <= {
+            din_31,
+            din_15,
+            din_23,
+            din_7,
+            din_27,
+            din_11,
+            din_19,
+            din_3,
+            din_29,
+            din_13,
+            din_21,
+            din_5,
+            din_25,
+            din_9,
+            din_17,
+            din_1,
+            din_30,
+            din_14,
+            din_22,
+            din_6,
+            din_26,
+            din_10,
+            din_18,
+            din_2,
+            din_28,
+            din_12,
+            din_20,
+            din_4,
+            din_24,
+            din_8,
+            din_16,
+            din_0
+          };
+        end        
+        divClock <= ~divClock;
+      end
+    end
+  end
+  // Second half of the DDR serializer: the tile takes a single-ended clock
+  // and makes its own complement internally, so the falling edge here is
+  // what the second serializer phase used to key off.
+  always @(negedge clk) begin
+    shiftReg <= shiftReg >> 1'b1;
+  end
+  assign divclk = divClock;
+  assign dout = (dll_reset || !dll_resetb || !awake) ? 1'b0 : shiftReg[0];
+  assign dll_code_0 = 1'b0;
+  assign dll_code_1 = 1'b0;
+  assign dll_code_2 = 1'b0;
+  assign dll_code_3 = 1'b0;
+  assign dll_code_4 = 1'b0;
+
+endmodule

@@ -1,0 +1,78 @@
+package build
+
+import mill._
+import scalalib._
+import publish._
+
+trait UcieModule extends ScalaModule {
+  def scalaVersion = "2.13.18"
+  def chiselVersion = "7.9.0"
+
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.chipsalliance:::chisel-plugin:${chiselVersion}"
+  )
+}
+
+object `package` extends UcieModule, PublishModule {
+  def publishVersion = "0.0.1"
+  def artifactName = "ucie"
+
+  def moduleDeps = Seq(testchipip)
+
+  def mvnDeps = Seq(
+    mvn"org.chipsalliance::chisel:${chiselVersion}",
+    mvn"io.github.ucb-substrate::chippy:0.1.1",
+    mvn"io.github.ucb-substrate::diplomacy:0.1.1",
+    mvn"io.github.ucb-substrate::cde:0.1.1",
+    mvn"io.github.ucb-substrate::rocketchip:0.1.1",
+  )
+
+  def pomSettings = PomSettings(
+    description = "An open-source UCIe implementation",
+    organization = "edu.berkeley.cs",
+    url = "https://github.com/ucb-bar/ucie",
+    licenses = Seq(License.MIT),
+    versionControl = VersionControl.github("ucb-bar", "ucie"),
+    developers = Seq(
+      Developer("rohanku", "Rohan Kumar", "https://github.com/rohanku"),
+      Developer("rahulk29", "Rahul Kumar", "https://github.com/rahulk29")
+    )
+  )
+
+  // Vendored from the `chiplet-router` branch of https://github.com/ucb-bar/testchipip, which
+  // carries the chiplet link support (`testchipip.soc.ChipletLink*`) that published testchipip
+  // releases do not.
+  object testchipip extends UcieModule, PublishModule {
+    def publishVersion = "0.1.1-chiplet-router"
+
+    def sources = Task.Sources("src/main/scala")
+    def resources = Task.Sources("src/main/resources")
+
+    def pomSettings = PomSettings(
+      description = "Test chip IP, vendored for chiplet link support",
+      organization = "edu.berkeley.cs",
+      url = "https://github.com/ucb-bar/testchipip",
+      licenses = Seq(License.`BSD-3-Clause`),
+      versionControl = VersionControl.github("ucb-bar", "testchipip"),
+      developers = Seq()
+    )
+
+    def mvnDeps = Seq(
+      mvn"org.chipsalliance::chisel:${chiselVersion}",
+      mvn"io.github.ucb-substrate::cde:0.1.1",
+      mvn"io.github.ucb-substrate::rocketchip:0.1.1",
+      mvn"io.github.ucb-substrate::rocketchip-blocks:0.1.1",
+    )
+  }
+
+  object test extends ScalaTests, TestModule.ScalaTest {
+    def mvnDeps = Seq(
+      mvn"org.scalatest::scalatest:3.2.19",
+    )
+    def testParallelism = false
+    // Chisel's FIRRTL converter recurses once per command, so elaborating
+    // UcieTL overflows the default JVM stack.
+    def forkArgs = Seq("-Xss64m")
+  }
+}
+
