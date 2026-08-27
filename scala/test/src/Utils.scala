@@ -1,0 +1,241 @@
+package edu.berkeley.cs.uciedigital
+
+import os.Path
+import java.nio.file.Paths
+import svsim.verilator.Backend.CompilationSettings
+import org.chipsalliance.cde.config.Parameters
+import chisel3.RawModule
+import circt.stage.ChiselStage
+import edu.berkeley.cs.uciedigital.tilelink.SimTop
+
+object Utils {
+  val root = Path(
+    Paths.get(sys.env("MILL_TEST_RESOURCE_DIR")).toAbsolutePath
+  ) / os.up / os.up
+  val buildRoot = root / "build"
+  val verilogSrcDir = root / os.up / "verilog"
+  val defaultVsrcDir = root / "resources" / "vsrc"
+  val constants = verilogSrcDir / "constants.vams"
+  val xceliumDir = root / os.up / "xcelium"
+  val controlFile = xceliumDir / "amscf.scs"
+  val probeFile = xceliumDir / "probe.tcl"
+
+  // The analog behavioral models trip Verilator lint warnings -- the serializer
+  // model drives its shift register and divided clock from more than one always
+  // block, for one -- and warnings are fatal by default.
+  val quietVerilatorSettings =
+    CompilationSettings.default.withDisableFatalExitOnWarnings(true)
+
+  val verilatorSettings =
+    CompilationSettings.default
+      .withDisableFatalExitOnWarnings(true)
+      .withTiming(Some(CompilationSettings.Timing.TimingEnabled))
+      .withTraceStyle(
+        Some(
+          svsim.verilator.Backend.CompilationSettings
+            .TraceStyle(
+              svsim.verilator.Backend.CompilationSettings.TraceKind.Vcd,
+              traceUnderscore = true,
+              maxArraySize = Some(2048),
+              maxWidth = Some(2048),
+              traceDepth = Some(2048)
+            )
+        )
+      )
+
+  def writeSourceFilesList(path: Path, sourceFiles: Seq[Path]) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(path, sourceFiles.map(_.toString).mkString("\n"))
+  }
+
+  def writeVerilatorSimScript(
+      path: Path,
+      topModule: String,
+      sourceFilesList: Path,
+      incDirs: Seq[Path] = Seq.empty
+  ) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(
+      path,
+      s"""#!/bin/bash
+set -ex -o pipefail
+verilator \\
+  --cc \\
+  --exe \\
+  --build \\
+  --main \\
+  -o ../simulation \\
+  -j 0 \\
+  --top-module ${topModule} \\
+  --Mdir verilated-sources \\
+  --assert \\
+  --trace \\
+  --timing \\
+  --max-num-width 1048576 \\${incDirs
+          .map(dir => s"\n  +incdir+$dir \\")
+          .mkString("")}
+  --vpi \\
+  +define+layer$$Verification$$Assert$$Temporal \\
+  +define+layer$$Verification$$Assume$$Temporal \\
+  +define+layer$$Verification$$Cover$$Temporal \\
+  -Wno-fatal \\
+  -CFLAGS "$${CXXFLAGS:- } -std=c++17" \\
+  -LDFLAGS "$${LDFLAGS:- }" \\
+  -F ${sourceFilesList.toString} > >(tee -a verilator.out) 2> >(tee -a verilator.err >&2)
+./simulation > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
+"""
+    )
+    path.toIO.setExecutable(true)
+  }
+
+  def writeVcsSimScript(
+      path: Path,
+      topModule: String,
+      sourceFilesList: Path,
+      incDirs: Seq[Path] = Seq.empty
+  ) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(
+      path,
+      s"""#!/bin/bash
+set -ex -o pipefail
+vcs \\
+  -full64 -j16 -fgp \\
+  -CFLAGS "$$CXXFLAGS -std=c++17" \\
+  -LDFLAGS "$$LDFLAGS" \\
+  -notice -line +lint=all,noVCDE,noONGS,noUI -error=PCWM-L -error=noZMMCM \\
+  -timescale=1ps/100fs -quiet -q +rad +vcs+lic+wait +vc+list \\
+  -f ${sourceFilesList.toString} -sverilog +systemverilogext+.sv+.svi+.svh+.svt -assert svaext +libext+.sv +v2k +verilog2001ext+.v95+.vt+.vp +libext+.v \\
+  -debug_access+all -kdb -lca \\
+  -top $topModule \\${incDirs.map(dir => s"\n  +incdir+$dir \\").mkString("")}
+  +define+layer$$Verification$$Assert$$Temporal \\
+  +define+layer$$Verification$$Assume$$Temporal \\
+  +define+layer$$Verification$$Cover$$Temporal \\
+  +define+VCS +define+FSDB +define+RANDOMIZE_MEM_INIT +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_GARBAGE_ASSIGN +define+RANDOMIZE_INVALID_ASSIGN \\
+  -o simulation -Mdir=vcs-sources > >(tee -a vcs.out) 2> >(tee -a vcs.err >&2)
+./simulation +fsdbfile=waveform.fsdb > >(tee -a simulation.out) 2> >(tee -a simulation.err >&2)
+"""
+    )
+    path.toIO.setExecutable(true)
+  }
+
+  def writeXrunSimScript(
+      path: Path,
+      topModule: String,
+      sourceFilesList: Path,
+      incDirs: Seq[Path] = Seq.empty
+  ) = {
+    os.makeDir.all(path / os.up)
+    os.write.over(
+      path,
+      s"""#!/bin/bash
+set -ex -o pipefail
+xrun \\
+  -allowredefinition \\
+  -dmsaoi \\
+  -sv_ms \\
+  -timescale 1ps/100fs \\
+  -spectre_args "+preset=mx +mt=32 -ahdllint=warn" \\
+  -access +rwc \\
+  -top $topModule \\
+  -input ${probeFile.toString} \\${incDirs
+          .map(dir => s"\n  -incdir $dir \\")
+          .mkString("")}
+  -define layer$$Verification$$Assert$$Temporal \\
+  -define layer$$Verification$$Assume$$Temporal \\
+  -define layer$$Verification$$Cover$$Temporal \\
+  -define RANDOMIZE_MEM_INIT -define RANDOMIZE_REG_INIT -define RANDOMIZE_GARBAGE_ASSIGN -define RANDOMIZE_INVALID_ASSIGN \\
+  -f ${sourceFilesList.toString} \\
+  > >(tee -a xrun.out) 2> >(tee -a xrun.err >&2)
+"""
+    )
+    path.toIO.setExecutable(true)
+  }
+
+  /** Finds source files within a given source directory with the given file
+    * extensions.
+    */
+  def getSourceFiles(
+      sourceDir: Path,
+      fileExtensions: Seq[String] = Seq(".v", ".sv", ".cc", ".vams")
+  ): Seq[Path] = {
+    os
+      .walk(sourceDir)
+      .filter(os.isFile)
+      .filter(path => fileExtensions.exists(ext => path.last.endsWith(ext)))
+  }
+
+  def simulate[T <: RawModule](
+      dut: => T,
+      writeSimScript: (Path, String, Path, Seq[Path]) => Unit,
+      workDir: Path,
+      includeVamsModels: Boolean = false
+  )(implicit p: Parameters) = {
+    val sourceDir = workDir / "src"
+    os.remove.all(sourceDir)
+    os.makeDir.all(sourceDir)
+    val simDir = workDir / "sim"
+    var topModule: String = "SimTop"
+    ChiselStage.emitSystemVerilogFile(
+      {
+        val d = dut
+        topModule = d.getClass.getSimpleName
+        d
+      },
+      args = Array(
+        "--target-dir",
+        sourceDir.toString
+      )
+    )
+    val sourceFiles = getSourceFiles(sourceDir) ++ {
+      if (includeVamsModels) {
+        val xceliumHome = Path(sys.env("XCELIUM_HOME"))
+        val disciplines =
+          xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
+        val constants =
+          xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
+        val defaultModels = Seq(
+          "ucie_clk_dist_network.sv",
+          "ucie_clk_div4.v",
+          "clkmux.v",
+          "clocking_tile.v",
+          "clock_receiver.v",
+          "IO_ESD.v",
+          "ucie_esd_routable.v",
+          "ucie_rst_sync.v"
+        )
+        Seq(
+          disciplines,
+          constants,
+          controlFile,
+          Utils.constants
+        ) ++ getSourceFiles(verilogSrcDir) ++
+          defaultModels.map(module => defaultVsrcDir / module)
+      } else { Seq.empty }
+    }
+
+    val sourceFilesList = simDir / "sourceFiles.F"
+    val simScript = simDir / "simulate.sh"
+
+    writeSourceFilesList(sourceFilesList, sourceFiles)
+
+    writeSimScript(
+      simScript,
+      topModule,
+      sourceFilesList,
+      os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir) ++ {
+        if (includeVamsModels) {
+          Seq(
+            verilogSrcDir
+          )
+        } else { Seq.empty }
+      }
+    )
+
+    os.proc(
+      "/bin/bash",
+      simScript
+    ).call(stdout = os.Inherit, stderr = os.Inherit, cwd = simDir)
+  }
+
+}

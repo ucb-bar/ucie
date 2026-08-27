@@ -1,0 +1,2046 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" version="1.1" viewBox="0 0 1800 1500">
+  <!-- Generator: Adobe Illustrator 29.1.0, SVG Export Plug-In . SVG Version: 2.1.0 Build 142)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #999;
+      }
+
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6, .st7, .st8, .st9, .st10, .st11, .st12, .st13, .st14, .st15, .st16, .st17, .st18, .st19, .st20, .st21, .st22, .st23, .st24, .st25, .st26, .st27, .st28, .st29, .st30, .st31, .st32, .st33, .st34, .st35 {
+        stroke-width: 2px;
+      }
+
+      .st0, .st1, .st2, .st4, .st7, .st8, .st15, .st16, .st18, .st19, .st21, .st23, .st24, .st25, .st26, .st27, .st29, .st31, .st32, .st33, .st34 {
+        stroke-linejoin: round;
+      }
+
+      .st0, .st2, .st3, .st5, .st6, .st7, .st9, .st10, .st11, .st12, .st13, .st14, .st15, .st17, .st19, .st20, .st22, .st24, .st36, .st28, .st30, .st31 {
+        stroke: #000;
+      }
+
+      .st37, .st38, .st39, .st40, .st41, .st42, .st43, .st44, .st45, .st35 {
+        isolation: isolate;
+      }
+
+      .st37, .st39, .st43 {
+        font-family: DejaVuSansMonoPowerline, 'DejaVu Sans Mono for Powerline';
+      }
+
+      .st37, .st44 {
+        font-size: 26.7px;
+      }
+
+      .st1, .st3, .st4, .st5, .st6, .st7, .st9, .st10, .st13, .st14, .st19, .st20, .st22, .st23, .st25, .st26, .st36, .st28, .st30, .st33, .st34, .st35 {
+        fill: none;
+      }
+
+      .st1, .st4, .st6, .st7, .st8, .st12, .st14, .st16, .st17, .st18, .st21, .st22, .st23, .st25, .st26, .st27, .st29, .st30, .st32, .st33, .st34 {
+        stroke-linecap: round;
+      }
+
+      .st1, .st21 {
+        stroke: #00ff1f;
+      }
+
+      .st2, .st10, .st11, .st13, .st19, .st20, .st36, .st28 {
+        stroke-linecap: square;
+      }
+
+      .st38 {
+        fill: #06f;
+      }
+
+      .st38, .st40, .st42, .st44, .st45, .st35 {
+        font-family: FreeSerif, FreeSerif;
+      }
+
+      .st38, .st45, .st35 {
+        font-size: 38.7px;
+      }
+
+      .st46 {
+        fill: #231f20;
+      }
+
+      .st39, .st42 {
+        font-size: 13.3px;
+      }
+
+      .st4, .st18 {
+        stroke: #5df;
+      }
+
+      .st5, .st13, .st22 {
+        stroke-miterlimit: 8;
+      }
+
+      .st6, .st9, .st12, .st17, .st20 {
+        stroke-linejoin: bevel;
+      }
+
+      .st8 {
+        stroke: red;
+      }
+
+      .st8, .st24 {
+        fill: red;
+      }
+
+      .st40 {
+        font-size: 14px;
+      }
+
+      .st10, .st14, .st17 {
+        stroke-dasharray: 3.5 7;
+      }
+
+      .st15 {
+        fill: #59f;
+      }
+
+      .st16 {
+        fill: #fc0;
+      }
+
+      .st16, .st23 {
+        stroke: #fc0;
+      }
+
+      .st18 {
+        fill: #5df;
+      }
+
+      .st21 {
+        fill: #00ff1f;
+      }
+
+      .st25 {
+        stroke: #ff0101;
+      }
+
+      .st26, .st27 {
+        stroke: #ac9393;
+      }
+
+      .st27 {
+        fill: #ac9393;
+      }
+
+      .st47 {
+        fill: #221f1f;
+      }
+
+      .st43 {
+        font-size: 8.7px;
+      }
+
+      .st29 {
+        fill: #916f6f;
+      }
+
+      .st29, .st34 {
+        stroke: #916f6f;
+      }
+
+      .st31 {
+        fill: #fff;
+      }
+
+      .st32 {
+        fill: #b380ff;
+      }
+
+      .st32, .st33 {
+        stroke: #b380ff;
+      }
+
+      .st45 {
+        fill: #37c837;
+      }
+
+      .st35 {
+        stroke: #0b1728;
+      }
+    </style>
+  </defs>
+  <sodipodi:namedview id="base" bordercolor="#666666" borderopacity="1.0" inkscape:current-layer="layer1" inkscape:cx="1542.9488" inkscape:cy="656.30969" inkscape:document-units="px" inkscape:lockguides="true" inkscape:object-nodes="true" inkscape:object-paths="true" inkscape:pageopacity="0.0" inkscape:pageshadow="2" inkscape:snap-bbox="false" inkscape:snap-center="false" inkscape:snap-global="true" inkscape:snap-grids="true" inkscape:snap-midpoints="false" inkscape:snap-object-midpoints="false" inkscape:snap-others="true" inkscape:snap-smooth-nodes="true" inkscape:snap-text-baseline="true" inkscape:window-height="946" inkscape:window-maximized="1" inkscape:window-width="1280" inkscape:window-x="0" inkscape:window-y="29" inkscape:zoom="2.5511111" pagecolor="#ffffff" showgrid="true" showguides="true" units="px"/>
+  <g id="g6082">
+    <rect id="rect6064" class="st26" x="1169" y="450" width="434" height="126"/>
+    <rect id="rect6066" class="st27" x="1169" y="450" width="343" height="21"/>
+    <g id="text6070" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(1176 471)"><tspan x="0" y="0">Semiconductor devices</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g4365">
+    <rect id="rect4347" class="st23" x="798" y="303" width="336" height="273"/>
+    <rect id="rect4349" class="st16" x="798" y="303" width="336" height="21"/>
+    <g id="text4353" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(805 324)"><tspan x="0" y="0">Mechanical switches</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3794">
+    <rect id="rect3488" class="st33" x="14" y="359" width="749" height="294"/>
+    <rect id="rect3490" class="st32" x="14" y="359" width="301" height="21"/>
+    <g id="text3494" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(21 380)"><tspan x="0" y="0">Basic logic blocks</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3955">
+    <rect id="rect3839" class="st34" x="1015" y="1066" width="623" height="238"/>
+    <rect id="rect3841" class="st29" x="1015" y="1066" width="189" height="21"/>
+    <g id="text3845" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(1022 1087)"><tspan x="0" y="0">Transistors</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g2999">
+    <rect id="rect2981" class="st4" x="798" y="604" width="910" height="434"/>
+    <rect id="rect2983" class="st18" x="805" y="604" width="357" height="21"/>
+    <g id="text2987" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(805 625)"><tspan x="0" y="0">Diodes (semiconductor)</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1474">
+    <rect id="rect1452" class="st23" x="546" y="1066" width="434" height="336"/>
+    <rect id="rect1454" class="st16" x="546" y="1066" width="287" height="21"/>
+    <g id="text1460" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(553 1087)"><tspan x="0" y="0">Transformers</tspan></text>
+      </g>
+    </g>
+  </g>
+  <rect id="rect2067" class="st21" x="14" y="681" width="315" height="21"/>
+  <g id="g6275">
+    <rect id="rect2065" class="st1" x="14" y="681" width="749" height="357"/>
+    <g id="text2073" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(21 702)"><tspan x="0" y="0">Sources, connectors</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="text34" class="st41">
+    <g class="st41">
+      <text class="st39" transform="translate(14 1493)"><tspan x="0" y="0">ElCompLib</tspan></text>
+    </g>
+  </g>
+  <g id="text38" class="st41">
+    <g class="st41">
+      <text class="st39" transform="translate(112 1493)"><tspan x="0" y="0">Copyright © 2007 Filip Dominec and contributors; Donated to the Public Domain</tspan></text>
+    </g>
+  </g>
+  <path id="path40" class="st7" d="M7,1479h728" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <g id="text44" class="st41">
+    <g class="st41">
+      <text class="st39" transform="translate(14 1430)"><tspan x="0" y="0" xml:space="preserve">Major grid:              7px</tspan></text>
+    </g>
+    <g class="st41">
+      <text class="st39" transform="translate(14 1444)"><tspan x="0" y="0" xml:space="preserve">Font: DejaVu Sans Mono  10pt  20pt</tspan></text>
+    </g>
+    <g class="st41">
+      <text class="st39" transform="translate(14 1458)"><tspan x="0" y="0" xml:space="preserve">      Line spacing:     14px  28px</tspan></text>
+    </g>
+    <g class="st41">
+      <text class="st39" transform="translate(14 1472)"><tspan x="0" y="0" xml:space="preserve">Wire thickness:        3.5px</tspan></text>
+    </g>
+  </g>
+  <path id="path52" class="st7" d="M7,1416h287v56" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  <g id="g1087">
+    <path id="path5036" class="st30" d="M42,1178h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5038" class="st30" d="M91,1178h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect5044" class="st19" x="56" y="1171" width="35" height="14"/>
+  </g>
+  <path id="path3970" class="st6" d="M182,1178h-10.5l-3.5-7-7,14-7-14-7,14-7-14-7,14-3.5-7h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+  <g id="g1092">
+    <path id="path918" class="st30" d="M196,1178h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path920" class="st30" d="M245,1178h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect922" class="st2" x="210" y="1171" width="35" height="14"/>
+  </g>
+  <g id="g1058">
+    <path id="path934" class="st30" d="M42,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path936" class="st30" d="M91,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect938" class="st19" x="56" y="1213" width="35" height="14"/>
+    <circle id="path956" cx="49" cy="1220" r="4.4"/>
+    <path id="path982" class="st28" d="M84,1234l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1004" d="M80.5,1236.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g1263">
+    <path id="path1006" class="st6" d="M182,1220h-10.5l-3.5-7-7,14-7-14-7,14-7-14-7,14-3.5-7h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+    <circle id="circle1008" cx="126" cy="1220" r="4.4" transform="translate(-1097.5 1305.3) rotate(-88.1)"/>
+    <path id="path1010" class="st28" d="M161,1234l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1012" d="M157.5,1236.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g1100">
+    <path id="path1014" class="st30" d="M196,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1016" class="st30" d="M245,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1018" class="st2" x="210" y="1213" width="35" height="14"/>
+    <circle id="circle1022" cx="203" cy="1220" r="4.4"/>
+    <path id="path1024" class="st28" d="M238,1234l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1026" d="M234.5,1236.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g1162">
+    <path id="path1028" class="st30" d="M42,1262h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1030" class="st30" d="M91,1262h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1032" class="st19" x="56" y="1255" width="35" height="14"/>
+    <circle id="circle1036" cx="49" cy="1262" r="4.4"/>
+    <path id="path1038" class="st28" d="M84,1276l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1042" class="st7" d="M80.5,1278.6l7-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1253">
+    <path id="path1044" class="st6" d="M119,1262h10.5l3.5,7,7-14,7,14,7-14,7,14,7-14,3.5,7h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+    <circle id="circle1054" cx="126" cy="1262" r="4.4" transform="translate(-1139.5 1345.9) rotate(-88.1)"/>
+    <path id="path1056" class="st28" d="M161,1276l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1058" class="st7" d="M157.5,1278.6l7-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1136">
+    <path id="path1046" class="st30" d="M196,1262h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1048" class="st30" d="M245,1262h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1050" class="st2" x="210" y="1255" width="35" height="14"/>
+    <circle id="circle1060" cx="203" cy="1262" r="4.4"/>
+    <path id="path1062" class="st28" d="M238,1276l-21-28h-14v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1064" class="st7" d="M234.5,1278.6l7-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1193">
+    <path id="path1138" class="st30" d="M42,1304h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1140" class="st30" d="M91,1304h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1142" class="st19" x="56" y="1297" width="35" height="14"/>
+    <path id="path1152" class="st30" d="M84,1290l-21,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1154" class="st7" d="M80.5,1287.4l7,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1630">
+    <path id="path1164" class="st6" d="M119,1304h10.5l3.5,7,7-14,7,14,7-14,7,14,7-14,3.5,7h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+    <path id="path1180" class="st30" d="M161,1290l-21,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1182" class="st7" d="M157.5,1287.4l7,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1205">
+    <path id="path1166" class="st30" d="M196,1304h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1168" class="st30" d="M245,1304h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1170" class="st2" x="210" y="1297" width="35" height="14"/>
+    <path id="path1184" class="st30" d="M238,1290l-21,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1186" class="st7" d="M234.5,1287.4l7,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1270">
+    <path id="path1207" class="st30" d="M42,1360h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1209" class="st30" d="M98,1360h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1211" class="st19" x="56" y="1353" width="42" height="14"/>
+    <path id="path1215" class="st7" d="M77,1349.5v-17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1217" class="st7" d="M70,1342.5l7,7,7-7" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g1299">
+    <path id="path1222" class="st6" d="M126,1360h10.5l3.5,7,7-14,7,14,7-14,7,14,7-14,7,14,3.5-7h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccccccccc"/>
+    <path id="path1233" class="st7" d="M161,1349.5v-17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1235" class="st7" d="M154,1342.5l7,7,7-7" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <path id="path4203" class="st7" d="M371,1178h-14c0-16.4-14-16.4-14,0,0-16.4-14-16.3-14,0,0-16.5-14-16.5-14,0,0-16.3-14-16.4-14,0,0-16.4-13.9-16.4-13.9,0h-14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+  <g id="g1304">
+    <path id="path1283" class="st7" d="M315,1360h-14c0-16.4-14-16.4-14,0,0-16.4-14-16.3-14,0,0-16.5-14-16.5-14,0,0-16.3-14-16.4-14,0,0-16.4-13.9-16.4-13.9,0h-14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1288" class="st7" d="M266,1342.5v-17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1290" class="st7" d="M259,1335.5l7,7,7-7" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g1417">
+    <path id="path1306" class="st30" d="M273,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1308" class="st30" d="M322,1220h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1310" class="st19" x="287" y="1213" width="35" height="14"/>
+    <path id="path1322" d="M290.5,1205.1l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1332" class="st19" d="M294,1202.5l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1334" d="M302.8,1201.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1336" class="st19" d="M306.2,1199l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1439">
+    <path id="path1338" class="st6" d="M413,1220h-10.5l-3.5-7-7,14-7-14-7,14-7-14-7,14-3.5-7h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+    <path id="path1340" d="M367.5,1205.1l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1342" class="st19" d="M371,1202.5l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1344" d="M379.8,1201.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1346" class="st19" d="M383.2,1199l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1457">
+    <path id="path1351" class="st30" d="M280,1290h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1353" class="st30" d="M343,1290h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect1355" class="st19" x="301" y="1283" width="42" height="14"/>
+    <circle id="path1359" class="st19" cx="322" cy="1290" r="28"/>
+    <path id="path1384" d="M283.5,1269.9l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1386" class="st19" d="M287,1267.2l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1388" d="M288.8,1257.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1390" class="st19" d="M292.2,1255l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1447">
+    <circle id="circle1398" class="st19" cx="420" cy="1290" r="28"/>
+    <path id="path1400" d="M381.5,1269.9l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1402" class="st19" d="M385,1267.2l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1404" d="M386.8,1257.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1406" class="st19" d="M390.2,1255l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1408" class="st6" d="M462,1290h-21l-3.5-7-7,14-7-14-7,14-7-14-7,14-3.5-7h-21" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+  </g>
+  <g id="g1579">
+    <path id="path2791" class="st30" d="M357,1332v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2793" class="st30" d="M357,1353v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2795" class="st28" d="M371,1346h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2797" class="st28" d="M371,1353h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1566">
+    <path id="path2742" class="st30" d="M406,1332v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2744" class="st30" d="M406,1353v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2746" class="st28" d="M420,1346h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2748" class="st19" d="M420,1356.5c-1.8-2.2-3.5-3.5-7-3.5h-14c-3.5,0-5.2,1.3-7,3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cssc"/>
+    <path id="path2752" class="st3" d="M423.5,1335.5h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2754" class="st3" d="M418.2,1340.7v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1251">
+    <path id="path1509" class="st30" d="M455,1332v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1511" class="st30" d="M455,1360v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1515" class="st28" d="M469,1360h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="g1523">
+      <path id="path1519" class="st5" d="M472.5,1335.5h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1521" class="st5" d="M467.3,1340.8v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <rect id="rect1535" class="st30" x="441" y="1346" width="28" height="7"/>
+  </g>
+  <g id="g1616">
+    <g id="g1589">
+      <path id="path1581" class="st30" d="M448,1192v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1583" class="st30" d="M448,1213v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1585" class="st28" d="M462,1206h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1587" class="st28" d="M462,1213h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1594" class="st30" d="M462,1199l-28,21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1596" class="st7" d="M464.6,1202.5l-5.2-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1635">
+    <path id="path1618" class="st7" d="M490,1178h-14c0-16.4-14-16.4-14,0,0-16.4-14-16.3-14,0,0-16.5-14-16.5-14,0,0-16.3-14-16.4-14,0,0-16.4-13.9-16.4-13.9,0h-14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1623" class="st30" d="M455,1157l-21,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1625" class="st7" d="M451.5,1154.4l7,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1646">
+    <path id="path1637" class="st7" d="M371,1136h-14c0-16.4-14-16.4-14,0,0-16.4-14-16.3-14,0,0-16.5-14-16.5-14,0,0-16.3-14-16.4-14,0,0-16.4-13.9-16.4-13.9,0h-14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1639" class="st30" d="M287,1115h70" inkscape:connector-curvature="0"/>
+    <path id="path1641" class="st30" d="M287,1108h70" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1668">
+    <path id="path1648" class="st7" d="M490,1136h-14c0-16.4-14-16.4-14,0,0-16.4-14-16.3-14,0,0-16.5-14-16.5-14,0,0-16.3-14-16.4-14,0,0-16.4-13.9-16.4-13.9,0h-14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1650" class="st30" d="M455,1101l-31.5,42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1652" class="st7" d="M451.5,1098.4l7,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1659" class="st30" d="M406,1115h70" inkscape:connector-curvature="0"/>
+    <path id="path1661" class="st30" d="M406,1108h70" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g184">
+    <g id="g1676">
+      <path id="path1670" class="st30" d="M42,1136h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1672" class="st30" d="M91,1136h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <rect id="rect1674" class="st19" x="56" y="1129" width="35" height="14"/>
+    </g>
+    <path id="path1686" class="st28" d="M84,1122l-21,28h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g188">
+    <path id="path1678" class="st6" d="M182,1136h-10.5l-3.5-7-7,14-7-14-7,14-7-14-7,14-3.5-7h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccc"/>
+    <path id="path177" class="st28" d="M161,1122l-21,28h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g1032">
+    <rect id="rect190" class="st25" x="14" y="1066" width="504" height="336"/>
+    <rect id="rect1023" class="st8" x="14" y="1066" width="287" height="21"/>
+    <g id="text1007" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(21 1087)"><tspan x="0" y="0">Linear components</tspan></text>
+      </g>
+    </g>
+  </g>
+  <path id="path1034" class="st7" d="M42,1003h28" inkscape:connector-curvature="0"/>
+  <circle id="circle1050" cx="91" cy="1003" r="4.4"/>
+  <g id="g1080">
+    <path id="path7873" class="st30" d="M70,947h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="path1076" class="st7" cx="49" cy="947" r="5.2"/>
+  </g>
+  <g id="g2699">
+    <path id="path3216" class="st13" d="M91,940h28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3218" class="st22" d="M105,940v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g2396">
+    <path id="path3980" class="st28" d="M182,940h-42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3984" class="st30" d="M161,926v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3994" class="st28" d="M175,947h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3996" class="st28" d="M168,954h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1137">
+    <path id="path1128" class="st7" d="M112,1003h7c0-3.9,3.1-7,7-7s7,3.1,7,7h7" inkscape:connector-curvature="0" sodipodi:nodetypes="ccscc"/>
+    <path id="path1132" class="st7" d="M126,989v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1143">
+    <path id="path1139" class="st7" d="M168,1017v-7c-3.9,0-7-3.1-7-7s3.1-7,7-7v-7" inkscape:connector-curvature="0" sodipodi:nodetypes="ccscc"/>
+    <path id="path1141" class="st7" d="M154,1003h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1169">
+    <g id="g1149">
+      <path id="path1147" class="st7" d="M203,989v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1151" class="st7" d="M217,989v21" inkscape:connector-curvature="0"/>
+    <path id="path1162" class="st7" d="M189,1003h7c0-3.9,3.1-7,7-7h14c3.9,0,7,3.1,7,7h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+  </g>
+  <g id="g1179">
+    <g id="g1173">
+      <path id="path1171" class="st7" d="M245,1003h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1175" class="st7" d="M245,989h21" inkscape:connector-curvature="0"/>
+    <path id="path1177" class="st7" d="M259,1017v-7c-3.9,0-7-3.1-7-7v-14c0-3.9,3.1-7,7-7v-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+  </g>
+  <g id="g1187">
+    <path id="path1181" class="st7" d="M217,940v-14" inkscape:connector-curvature="0"/>
+    <path id="path1183" class="st6" d="M196,940h42l-21,21-21-21Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1200">
+    <path id="path1189" class="st6" d="M56,877v14" inkscape:connector-curvature="0"/>
+    <path id="path1191" class="st6" d="M56,891l-7,14" inkscape:connector-curvature="0"/>
+    <path id="path1195" class="st6" d="M63,905l7-14h-28l-7,14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1206">
+    <path id="path1202" class="st7" d="M161,870v14" inkscape:connector-curvature="0"/>
+    <path id="path1204" class="st6" d="M140,870h42l-21-21-21,21Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1212">
+    <path id="path1208" class="st13" d="M91,870h28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1210" class="st22" d="M105,870v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <path id="path1214" class="st7" d="M217,870v14" inkscape:connector-curvature="0"/>
+  <path id="path1216" class="st12" d="M196,870h42l-21-21-21,21Z" inkscape:connector-curvature="0"/>
+  <g id="g1486">
+    <path id="path1223" class="st30" d="M273,884v-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1225" class="st7" cx="273" cy="863" r="5.2"/>
+    <path id="path1238" class="st3" d="M294,857.8h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1240" class="st3" d="M288.8,863v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1298">
+    <path id="path1262" class="st30" d="M273,926v15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1264" class="st7" cx="273" cy="947" r="5.2"/>
+    <path id="path1266" class="st3" d="M294,952.3h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1351">
+    <path id="path1300" class="st30" d="M322,884v-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1302" class="st7" cx="322" cy="863" r="5.2"/>
+    <g id="text1317" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(310 849)"><tspan x="0" y="0">+5V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1435">
+    <path id="path1364" class="st30" d="M322,926v15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1366" class="st7" cx="322" cy="947" r="5.2"/>
+    <g id="text1377" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(310 968)"><tspan x="0" y="0">-5V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1421">
+    <path id="path1385" class="st30" d="M364,884v-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1387" class="st7" cx="364" cy="863" r="5.2"/>
+    <g id="text1401" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(356.5 849)"><tspan x="0" y="0">V</tspan></text>
+      </g>
+    </g>
+    <g id="text1405" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(364 852.5)"><tspan x="0" y="0">CC</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1443">
+    <g id="text1409" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(356.5 968)"><tspan x="0" y="0">V</tspan></text>
+      </g>
+    </g>
+    <g id="text1413" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(364 971.5)"><tspan x="0" y="0">EE</tspan></text>
+      </g>
+    </g>
+    <path id="path1427" class="st30" d="M364,926v15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1429" class="st7" cx="364" cy="947" r="5.2"/>
+  </g>
+  <g id="g1848">
+    <path id="path1315" class="st28" d="M455,863h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1317" class="st28" d="M441,870h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2220" class="st30" d="M427,849v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2222" class="st30" d="M427,870v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1478" class="st3" d="M451.5,849h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1480" class="st3" d="M446.2,854.3v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1498" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(439.2 898)"><tspan x="0" y="0">5V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1558">
+    <path id="path1510" class="st28" d="M448,982v-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1512" class="st28" d="M441,968v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1514" class="st30" d="M462,954h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1516" class="st30" d="M441,954h-35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1518" class="st3" d="M462,980.2v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1520" class="st3" d="M456.8,975h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1524" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(401.9 989)"><tspan x="0" y="0">5V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1642">
+    <path id="path1560" class="st28" d="M567,856h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1562" class="st28" d="M553,863h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1564" class="st30" d="M539,842v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1568" class="st3" d="M563.5,842h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1570" class="st3" d="M558.2,847.3v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1574" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(574 884)"><tspan x="0" y="0">60V</tspan></text>
+      </g>
+    </g>
+    <path id="path1586" class="st28" d="M567,870h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1588" class="st28" d="M553,877h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1590" class="st28" d="M567,884h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1592" class="st28" d="M553,891h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1595" class="st12" d="M539,891v14" inkscape:connector-curvature="0"/>
+    <path id="path1624" class="st12" d="M539,877v7" inkscape:connector-curvature="0"/>
+    <path id="path1626" class="st12" d="M539,863v7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1699">
+    <path id="path1644" class="st28" d="M553,982v-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1646" class="st28" d="M546,968v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1649" class="st30" d="M567,954h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1653" class="st3" d="M567,980.2v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1655" class="st3" d="M561.8,975h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1659" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(511.4 1010)"><tspan x="0" y="0">60V</tspan></text>
+      </g>
+    </g>
+    <path id="path1671" class="st28" d="M539,982v-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1673" class="st28" d="M532,968v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1675" class="st28" d="M523.2,982v-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1677" class="st28" d="M516.2,968v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1679" class="st12" d="M504,954h12.2" inkscape:connector-curvature="0"/>
+    <path id="path1681" class="st12" d="M523.2,954h8.8" inkscape:connector-curvature="0"/>
+    <path id="path1683" class="st12" d="M539,954h7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1762">
+    <path id="path1701" class="st28" d="M665,926h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1703" class="st28" d="M651,933h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1705" class="st30" d="M637,912v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1707" class="st3" d="M661.5,912h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1709" class="st3" d="M656.2,917.3v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1713" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(672 961)"><tspan x="0" y="0">120V</tspan></text>
+      </g>
+    </g>
+    <path id="path1715" class="st28" d="M665,940h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1717" class="st28" d="M651,947h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1719" class="st28" d="M665,982h-56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1721" class="st28" d="M651,989h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1723" class="st12" d="M637,989v14" inkscape:connector-curvature="0"/>
+    <path id="path1725" class="st12" d="M637,975v7" inkscape:connector-curvature="0"/>
+    <path id="path1727" class="st12" d="M637,933v7" inkscape:connector-curvature="0"/>
+    <path id="path1745" class="st17" d="M637,975v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g2769">
+    <circle id="circle1800" class="st19" cx="56" cy="765" r="28"/>
+    <path id="path1820" class="st30" d="M56,793v14" inkscape:connector-curvature="0"/>
+    <path id="path1822" class="st30" d="M56,737v-14" inkscape:connector-curvature="0"/>
+    <path id="path1836" class="st3" d="M61.2,747.5h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1838" class="st3" d="M56,752.8v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1852" class="st3" d="M61.2,782.5h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <g id="text1856" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(91 758)"><tspan x="0" y="0">5V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g6465">
+    <circle id="circle1868" class="st19" cx="175" cy="765" r="28"/>
+    <path id="path1870" class="st30" d="M175,793v14" inkscape:connector-curvature="0"/>
+    <path id="path1872" class="st30" d="M175,737v-14" inkscape:connector-curvature="0"/>
+    <g id="text1882" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(210 758)"><tspan x="0" y="0">50V</tspan></text>
+      </g>
+    </g>
+    <path id="path1901" class="st30" d="M161,765c0-3.9,3.1-7,7-7s7,3.1,7,7,3.1,7,7,7,7-3.1,7-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+  </g>
+  <g id="g1951">
+    <circle id="circle1914" class="st19" cx="308" cy="765" r="28"/>
+    <path id="path1916" class="st30" d="M308,793v14" inkscape:connector-curvature="0"/>
+    <path id="path1918" class="st30" d="M308,737v-14" inkscape:connector-curvature="0"/>
+    <g id="text1928" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(343 758)"><tspan x="0" y="0">100mA</tspan></text>
+      </g>
+    </g>
+    <path id="path1940" class="st3" d="M308,786v-33.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1942" d="M308,744l-5.2,10.5h10.5l-5.2-10.5h0Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2033">
+    <path id="path2003" class="st30" d="M462,793v14" inkscape:connector-curvature="0"/>
+    <path id="path2005" class="st30" d="M462,737v-14" inkscape:connector-curvature="0"/>
+    <g id="text2009" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(483 758)"><tspan x="0" y="0">100mA</tspan></text>
+      </g>
+    </g>
+    <path id="path2011" class="st3" d="M462,784.3v-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2013" d="M462,747.5l-5.2,10.5h10.5l-5.2-10.5h0Z" inkscape:connector-curvature="0"/>
+    <path id="path2024" class="st6" d="M462,737l-21,28,21,28,21-28-21-28Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2053">
+    <g id="g2041">
+      <path id="path2037" class="st30" d="M637,772h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle2039" class="st7" cx="616" cy="772" r="5.2"/>
+    </g>
+    <path id="path2043" class="st20" d="M630.8,786.8c-3.8,3.8-9.1,6.2-14.8,6.2s-11-2.4-14.8-6.2-6.2-9.1-6.2-14.8,2.4-11,6.2-14.8,9.1-6.2,14.8-6.2,11,2.4,14.8,6.2" inkscape:connector-curvature="0" sodipodi:nodetypes="csssssc"/>
+    <path id="path2046" class="st6" d="M616,793v14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2100">
+    <path id="path2055" class="st20" d="M693,828v-91" inkscape:connector-curvature="0"/>
+    <path id="path2059" class="st20" d="M679,723l14,14,14-14" inkscape:connector-curvature="0"/>
+    <g id="text2092" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(661.9 744)"><tspan x="0" y="0">ANT</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g1229">
+    <path id="path375" class="st7" d="M574,1115h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path377" class="st20" d="M609,1129v70" inkscape:connector-curvature="0"/>
+    <path id="path1187" class="st7" d="M644,1115h-14v14c-16.4,0-16.4,13.9,0,13.9-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14-16.4,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="path1205" cx="591.5" cy="1104.5" r="3.5"/>
+    <circle id="circle1207" cx="626.5" cy="1104.5" r="3.5"/>
+  </g>
+  <g id="g1236">
+    <path id="path1211" class="st7" d="M574,1262.1h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1213" class="st20" d="M609,1276.1v70" inkscape:connector-curvature="0"/>
+    <path id="path1218" class="st7" d="M644,1262.1h-14v14c-16.4,0-16.4,13.9,0,13.9-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14-16.4,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="circle1220" cx="591.5" cy="1251.6" r="3.5"/>
+    <circle id="circle1222" cx="626.5" cy="1370.6" r="3.5"/>
+  </g>
+  <g id="g1334">
+    <path id="path1239" class="st7" d="M665,1115h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1241" class="st20" d="M700,1129v70" inkscape:connector-curvature="0"/>
+    <path id="path1243" class="st7" d="M735,1129h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="path1258" cx="682.5" cy="1104.5" r="3.5"/>
+    <circle id="path1263" cx="717.5" cy="1118.5" r="3.5"/>
+  </g>
+  <g id="g1302">
+    <path id="path1273" class="st7" d="M665,1262h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1275" class="st20" d="M700,1276v70" inkscape:connector-curvature="0"/>
+    <path id="path1277" class="st7" d="M735,1276h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="circle1279" cx="682.5" cy="1251.5" r="3.5"/>
+    <circle id="path1295" cx="717.5" cy="1356.5" r="3.5"/>
+  </g>
+  <g id="g1349">
+    <path id="path1304" class="st7" d="M756,1122h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1307" class="st20" d="M791,1129v84" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1311" cx="773.5" cy="1111.5" r="3.5"/>
+    <circle id="circle1313" cx="808.5" cy="1104.5" r="3.5"/>
+    <path id="path1327" class="st7" d="M826,1115h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14-16.4,0-16.3,14.1,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccccccccc"/>
+    <path id="path1341" class="st6" d="M812,1171h14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1378">
+    <path id="path1352" class="st7" d="M756,1255h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1354" class="st20" d="M791,1262v84" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1356" cx="773.5" cy="1244.5" r="3.5"/>
+    <circle id="circle1358" cx="808.5" cy="1370.5" r="3.5"/>
+    <path id="path1360" class="st7" d="M826,1248h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14-16.4,0-16.3,14.1,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccccccccc"/>
+    <path id="path1362" class="st6" d="M812,1304h14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1423">
+    <path id="path1395" class="st7" d="M847,1136h14v14c16.4,0,16.4,13.9,0,13.9,16.4,0,16.3,14,0,14,16.5,0,16.5,14,0,14,16.3,0,16.4,14,0,14,16.4,0,16.4,14,0,14v14h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path1397" class="st20" d="M882,1122.1v125.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1399" class="st7" d="M917,1108h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="circle1401" cx="864.5" cy="1125.5" r="3.5"/>
+    <circle id="circle1403" cx="892.5" cy="1104.5" r="3.5"/>
+    <path id="path1412" class="st7" d="M917,1192h-14v14c-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.3,0-16.4,14,0,14v14h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <circle id="circle1414" cx="892.5" cy="1188.5" r="3.5"/>
+  </g>
+  <g id="g1440">
+    <path id="path1425" class="st7" d="M875,1283v14c-16.4,0-16.4,14,0,14-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.4,0-16.4,13.9,0,13.9v14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccccc"/>
+    <path id="path1428" class="st6" d="M875,1325h14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1450">
+    <path id="path1430" class="st7" d="M952,1283v14c-16.4,0-16.4,14,0,14-16.4,0-16.3,14,0,14-16.5,0-16.5,14,0,14-16.4,0-16.4,13.9,0,13.9v14.1" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccccc"/>
+    <path id="path1432" class="st6" d="M952,1325h14" inkscape:connector-curvature="0"/>
+    <path id="path1442" class="st6" d="M931,1283v84" inkscape:connector-curvature="0"/>
+    <path id="path1444" class="st6" d="M924,1283v84" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1564">
+    <path id="path2518" class="st30" d="M812,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2520" class="st30" d="M861,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2522" class="st11" d="M861,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2524" class="st28" d="M861,653v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1570">
+    <path id="path1500" class="st30" d="M1484,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1502" class="st30" d="M1533,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1504" class="st11" d="M1533,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2624" class="st28" d="M1536.5,652.8c-10.6-10.6,3.5,39-7.1,28.3" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1581">
+    <path id="path1526" class="st30" d="M896,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1528" class="st30" d="M945,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1530" class="st11" d="M945,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1540" class="st28" d="M950.2,686.3l-5.2-5.2v-28l-5.2-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g1607">
+    <path id="path1584" class="st30" d="M980,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1589" class="st30" d="M1029,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1591" class="st11" d="M1029,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1601" class="st28" d="M1018.5,681v3.5h10.5v-35h10.5v3.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1634">
+    <path id="path1609" class="st30" d="M1064,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1611" class="st30" d="M1113,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1613" class="st11" d="M1113,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1615" class="st28" d="M1113,653v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1627" class="st28" d="M1120,653v28" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1660">
+    <path id="path1636" class="st30" d="M1148,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1638" class="st30" d="M1197,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1640" class="st11" d="M1197,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1654" class="st28" d="M1197,651.3v33.2h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1682">
+    <path id="path1662" class="st30" d="M1232,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1664" class="st30" d="M1281,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1666" class="st11" d="M1281,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1676" class="st28" d="M1270.5,649.5h10.5v35h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1722">
+    <g id="g1693">
+      <path id="path1684" class="st30" d="M1316,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1687" class="st30" d="M1365,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1689" class="st11" d="M1365,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+      <path id="path1691" class="st28" d="M1365,653v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1697" d="M1347.5,632.9l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1699" class="st19" d="M1351,635.5l-5.2,7" inkscape:connector-curvature="0"/>
+    <path id="path1702" d="M1359.8,636.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1704" class="st19" d="M1363.2,639l-5.2,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1763">
+    <g id="g1732">
+      <path id="path1724" class="st30" d="M1400,667h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1726" class="st30" d="M1449,667h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1728" class="st11" d="M1449,667l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+      <path id="path1730" class="st28" d="M1449,653v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1734" d="M1417.5,645.1l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1736" class="st19" d="M1421,642.5l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1738" d="M1429.8,641.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1740" class="st19" d="M1433.2,639l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1992">
+    <path id="path1775" class="st30" d="M1484,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1777" class="st30" d="M1533,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1779" class="st28" d="M1533,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1781" class="st28" d="M1536.5,729.8c-10.6-10.6,3.5,39-7.1,28.3" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1939">
+    <path id="path1785" class="st30" d="M896,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1787" class="st30" d="M945,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1789" class="st28" d="M945,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1791" class="st28" d="M950.2,763.3l-5.2-5.2v-28l-5.2-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g1945">
+    <path id="path1795" class="st30" d="M980,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1797" class="st30" d="M1029,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1799" class="st28" d="M1029,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1801" class="st28" d="M1018.5,758v3.5h10.5v-35h10.5v3.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1952">
+    <path id="path1805" class="st30" d="M1064,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1807" class="st30" d="M1113,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1809" class="st28" d="M1113,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1811" class="st28" d="M1113,730v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1813" class="st28" d="M1120,730v28" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1958">
+    <path id="path1817" class="st30" d="M1148,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1819" class="st30" d="M1197,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1821" class="st28" d="M1197,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1823" class="st28" d="M1197,728.3v33.2h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1964">
+    <path id="path1827" class="st30" d="M1232,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1829" class="st30" d="M1281,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1831" class="st28" d="M1281,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1833" class="st28" d="M1270.5,726.5h10.5v35h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1975">
+    <g id="g1845">
+      <path id="path1837" class="st30" d="M1316,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1839" class="st30" d="M1365,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1841" class="st28" d="M1365,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+      <path id="path1843" class="st28" d="M1365,730v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1847" d="M1347.5,709.9l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1849" class="st19" d="M1351,712.5l-5.2,7" inkscape:connector-curvature="0"/>
+    <path id="path1851" d="M1359.8,713.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1853" class="st19" d="M1363.2,716l-5.2,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1986">
+    <g id="g1865">
+      <path id="path1857" class="st30" d="M1400,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1859" class="st30" d="M1449,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path1861" class="st28" d="M1449,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+      <path id="path1863" class="st28" d="M1449,730v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    </g>
+    <path id="path1867" d="M1417.5,722.1l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1869" class="st19" d="M1421,719.5l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path1871" d="M1429.8,718.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1873" class="st19" d="M1433.2,716l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2013">
+    <path id="path1996" class="st30" d="M1582,667h56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2000" class="st28" d="M1624,653v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2008" class="st28" d="M1624,667l-28-14v28" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2188">
+    <path id="path2015" class="st30" d="M840,786v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2017" class="st30" d="M840,835v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2019" class="st11" d="M840,835l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2021" class="st28" d="M854,835h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2025" d="M862.8,790.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2027" class="st19" d="M866.2,793l-5.2,7" inkscape:connector-curvature="0"/>
+    <path id="path2029" d="M866.2,804.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2031" class="st19" d="M869.8,807l-5.2,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2198">
+    <path id="path2064" class="st30" d="M840,870v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2066" class="st30" d="M840,919v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2068" class="st28" d="M840,919l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2070" class="st28" d="M854,919h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2076" d="M862.8,874.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2078" class="st19" d="M866.2,877l-5.2,7" inkscape:connector-curvature="0"/>
+    <path id="path2080" d="M866.2,888.4l7,5.2,1.8-9.6-8.8,4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2082" class="st19" d="M869.8,891l-5.2,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2279">
+    <path id="path2200" class="st30" d="M931,786v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2202" class="st30" d="M931,835v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2204" class="st11" d="M931,835l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2206" class="st28" d="M945,835h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2208" d="M901.2,809.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2210" class="st19" d="M904.8,807l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path2212" d="M904.8,795.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2214" class="st19" d="M908.2,793l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2269">
+    <path id="path2218" class="st30" d="M931,870v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2221" class="st30" d="M931,919v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2223" class="st28" d="M931,919l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2225" class="st28" d="M945,919h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2253" d="M901.2,893.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2255" class="st19" d="M904.8,891l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path2257" d="M904.8,879.6l7-5.2,1.8,9.6-8.8-4.4h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2259" class="st19" d="M908.2,877l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2315">
+    <path id="path2291" class="st30" d="M994,849v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2293" class="st30" d="M994,800v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2295" class="st11" d="M994,800l14,28h-28l14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2297" class="st28" d="M1013.2,794.8l-5.2,5.2h-28l-5.2,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <g id="text2303" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(1015 821)"><tspan x="0" y="0">5.6V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g2343">
+    <path id="path2317" class="st30" d="M994,933v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2319" class="st30" d="M994,884v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2321" class="st28" d="M994,884l14,28h-28l14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2323" class="st28" d="M1013.2,878.8l-5.2,5.2h-28l-5.2,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <g id="text2327" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(1015 905)"><tspan x="0" y="0">5.6V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g2397">
+    <path id="path2349" d="M1116.5,849l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2351" class="st28" d="M1167.2,847.3h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2359" d="M1151.5,821l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2361" class="st28" d="M1167.2,822.8h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2373" class="st30" d="M1134,821v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2375" class="st30" d="M1134,849v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g2425">
+    <path id="path2399" class="st20" d="M1116.5,945.3l-12.2-24.5h24.5l-12.2,24.5h-.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2401" class="st28" d="M1167.2,945.3h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2403" class="st20" d="M1151.5,920.8l-12.2,24.5h24.5l-12.2-24.5h-.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2405" class="st28" d="M1167.2,920.8h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2407" class="st30" d="M1134,919v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2409" class="st30" d="M1134,947v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g2488">
+    <path id="path2427" d="M1200.5,849l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2429" class="st28" d="M1251.2,847.3h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2431" d="M1235.5,821l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2433" class="st28" d="M1251.2,822.8h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2435" class="st30" d="M1218,821v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2437" class="st30" d="M1218,849v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2441" class="st6" d="M1237.2,849l10.5,14h12.2" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2503">
+    <path id="path2458" class="st20" d="M1200.5,945.3l-12.2-24.5h24.5l-12.2,24.5h-.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2460" class="st28" d="M1251.2,945.3h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2462" class="st20" d="M1235.5,920.8l-12.2,24.5h24.5l-12.2-24.5h-.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2464" class="st28" d="M1251.2,920.8h-66.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2466" class="st30" d="M1218,919v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2468" class="st30" d="M1218,947v14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2479" class="st6" d="M1237.2,947l10.5,14h12.2" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2540">
+    <path id="path2519" class="st30" d="M1309,786v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2521" class="st30" d="M1309,835v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2523" class="st11" d="M1309,835l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2525" class="st28" d="M1323,835h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2533" class="st6" d="M1309,835l-10.5,14h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2564">
+    <path id="path2542" class="st30" d="M1309,898v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2544" class="st30" d="M1309,947v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2546" class="st28" d="M1309,947l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2548" class="st28" d="M1323,947h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2550" class="st6" d="M1309,947l-10.5,14h-10.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2589">
+    <path id="path2566" class="st30" d="M1365,786v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2570" class="st11" d="M1365,835l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2572" class="st28" d="M1379,835h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2580" class="st11" d="M1365,835l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2582" class="st6" d="M1365,863v21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2615">
+    <path id="path2591" class="st30" d="M1421,786v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2593" class="st11" d="M1421,835l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2597" class="st11" d="M1421,835l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2599" class="st6" d="M1421,863v21" inkscape:connector-curvature="0"/>
+    <path id="path2608" class="st6" d="M1442,828l-7,7h-28l-7,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2656">
+    <path id="path2617" class="st30" d="M1365,898v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2619" class="st28" d="M1365,947l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2621" class="st28" d="M1379,947h-28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2623" class="st28" d="M1365,947l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2625" class="st6" d="M1365,975v21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2662">
+    <path id="path2629" class="st30" d="M1421,898v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2631" class="st28" d="M1421,947l-14-28h28l-14,28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2633" class="st28" d="M1421,947l-14,28h28l-14-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2635" class="st6" d="M1421,975v21" inkscape:connector-curvature="0"/>
+  </g>
+  <path id="path2637" class="st6" d="M1442,940l-7,7h-28l-7,7" inkscape:connector-curvature="0"/>
+  <g id="g2710">
+    <path id="path2678" class="st30" d="M826,982h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2680" class="st30" d="M896,982h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle2684" class="st19" cx="868" cy="982" r="28"/>
+    <path id="path2704" class="st20" d="M896,954v56" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2864">
+    <rect id="rect2818" class="st28" x="1485.8" y="906.8" width="80.5" height="80.5"/>
+    <path id="path2820" class="st30" d="M1485.8,919h-15.8" inkscape:connector-curvature="0"/>
+    <path id="path2822" class="st30" d="M1470,975h15.8" inkscape:connector-curvature="0"/>
+    <path id="path2824" class="st30" d="M1566.2,975h15.8" inkscape:connector-curvature="0"/>
+    <path id="path2826" class="st30" d="M1566.2,919h15.8" inkscape:connector-curvature="0"/>
+    <path id="path2832" class="st3" d="M1561,975h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2834" class="st30" d="M1491,919c0-1.9,1.6-3.5,3.5-3.5s3.5,1.6,3.5,3.5,1.6,3.5,3.5,3.5,3.5-1.6,3.5-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+    <path id="path2854" class="st30" d="M1487.5,985.5l77-77" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2979">
+    <path id="path2866" class="st30" d="M1603,835h14" inkscape:connector-curvature="0"/>
+    <path id="path2868" class="st30" d="M1645,807v-14" inkscape:connector-curvature="0"/>
+    <path id="path2870" class="st30" d="M1673,835h14" inkscape:connector-curvature="0"/>
+    <path id="path2872" class="st30" d="M1645,863v14" inkscape:connector-curvature="0"/>
+    <path id="path2876" class="st30" d="M1626.6,844.6l-9.6-9.6,9.6-9.6" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path2878" class="st30" d="M1634.5,817.5l10.5-10.5,9.6,9.6" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path2880" class="st30" d="M1662.5,824.5l10.5,10.5-10.5,10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path2882" class="st30" d="M1654.6,853.4l-9.6,9.6-10.5-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path2892" class="st30" d="M1624,821l7,7,3.5-10.5-10.5,3.5Z" inkscape:connector-curvature="0"/>
+    <path id="path2894" class="st28" d="M1631,814l7,7" inkscape:connector-curvature="0"/>
+    <path id="path2896" class="st30" d="M1624,849l7-7,3.5,10.5-10.5-3.5Z" inkscape:connector-curvature="0"/>
+    <path id="path2898" class="st28" d="M1631,856l7-7" inkscape:connector-curvature="0"/>
+    <path id="path2900" class="st30" d="M1659,856l-7-7,10.5-3.5-3.5,10.5Z" inkscape:connector-curvature="0"/>
+    <path id="path2902" class="st28" d="M1666,849l-7-7" inkscape:connector-curvature="0"/>
+    <path id="path2908" class="st30" d="M1659,814l-7,7,10.5,3.5-3.5-10.5Z" inkscape:connector-curvature="0"/>
+    <path id="path2910" class="st28" d="M1666,821l-7,7" inkscape:connector-curvature="0"/>
+    <path id="path2932" class="st3" d="M1683.5,821h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2934" class="st3" d="M1678.2,826.3v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2936" class="st3" d="M1617,849h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2938" class="st30" d="M1624,800c0-1.9,1.6-3.5,3.5-3.5s3.5,1.6,3.5,3.5,1.6,3.5,3.5,3.5,3.5-1.6,3.5-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+    <path id="path2940" class="st30" d="M1652,870c0-1.9,1.6-3.5,3.5-3.5s3.5,1.6,3.5,3.5,1.6,3.5,3.5,3.5,3.5-1.6,3.5-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+  </g>
+  <g id="g3019">
+    <path id="path3001" class="st30" d="M812,744h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3003" class="st30" d="M861,744h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3005" class="st28" d="M861,744l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3007" class="st28" d="M861,730v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3319">
+    <circle id="circle3193" class="st19" cx="1078" cy="1150" r="28"/>
+    <path id="path3203" class="st30" d="M1036,1150h35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3205" class="st28" d="M1071,1132.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3207" class="st30" d="M1071,1141.2l21-15.8v-17.5" inkscape:connector-curvature="0"/>
+    <path id="path3209" class="st30" d="M1092,1192v-17.5l-21-15.8" inkscape:connector-curvature="0"/>
+    <path id="path3211" d="M1079.8,1171l5.2-7,4.4,8.8-9.6-1.8Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g3311">
+    <circle id="circle3215" class="st19" cx="1078" cy="1248" r="28"/>
+    <path id="path3217" class="st30" d="M1036,1248h35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3219" class="st28" d="M1071,1230.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3221" class="st30" d="M1071,1239.2l21-15.8v-17.5" inkscape:connector-curvature="0"/>
+    <path id="path3223" class="st30" d="M1092,1290v-17.5l-21-15.8" inkscape:connector-curvature="0"/>
+    <path id="path3225" d="M1083.2,1235.7l-5.2-7-4.4,8.8,9.6-1.8Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g3330">
+    <circle id="circle3227" class="st19" cx="1176" cy="1150" r="28"/>
+    <path id="path3231" class="st28" d="M1169,1132.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3233" class="st30" d="M1169,1141.2l21-15.8v-17.5" inkscape:connector-curvature="0"/>
+    <path id="path3235" class="st30" d="M1190,1192v-17.5l-21-15.8" inkscape:connector-curvature="0"/>
+    <path id="path3237" d="M1177.8,1171l5.2-7,4.4,8.8-9.6-1.8Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3279" d="M1137.5,1131.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3281" class="st19" d="M1141,1129l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path3283" d="M1141,1117.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3285" class="st19" d="M1144.5,1115l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3434">
+    <circle id="circle3239" class="st19" cx="1176" cy="1248" r="28"/>
+    <path id="path3243" class="st28" d="M1169,1230.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3245" class="st30" d="M1169,1239.2l21-15.8v-17.5" inkscape:connector-curvature="0"/>
+    <path id="path3247" class="st30" d="M1190,1290v-17.5l-21-15.8" inkscape:connector-curvature="0"/>
+    <path id="path3249" d="M1181.2,1235.7l-5.2-7-4.4,8.8,9.6-1.8Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3297" d="M1137.5,1229.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3299" class="st19" d="M1141,1227l-5.2-7" inkscape:connector-curvature="0"/>
+    <path id="path3301" d="M1141,1215.6l7-5.2,1.8,9.6-8.8-4.4Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3303" class="st19" d="M1144.5,1213l-5.2-7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3462">
+    <path id="path3378" class="st28" d="M1263.5,1230.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3380" class="st30" d="M1263.5,1234h17.5v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3382" class="st30" d="M1263.5,1262h17.5v21" inkscape:connector-curvature="0"/>
+    <path id="path3384" class="st30" d="M1232,1234h29.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3386" d="M1246,1234l10.5-5.2v10.5l-10.5-5.2h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <circle id="circle3423" class="st19" cx="1267" cy="1248" r="28"/>
+  </g>
+  <g id="g3454">
+    <path id="path3347" class="st28" d="M1263.5,1132.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3363" class="st30" d="M1263.5,1136h17.5v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3365" class="st30" d="M1263.5,1164h17.5v21" inkscape:connector-curvature="0"/>
+    <path id="path3367" class="st30" d="M1232,1164h29.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3369" d="M1260,1164l-10.5-5.2v10.5l10.5-5.2h0Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <circle id="circle3441" class="st19" cx="1267" cy="1150" r="28"/>
+  </g>
+  <g id="g3532">
+    <path id="path3466" class="st30" d="M1351,1136h21v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3468" class="st30" d="M1351,1164h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <circle id="circle3474" class="st19" cx="1358" cy="1150" r="28"/>
+    <path id="path3486" class="st28" d="M1344,1164v-28" inkscape:connector-curvature="0"/>
+    <path id="path3488" class="st30" d="M1344,1164h-21" inkscape:connector-curvature="0"/>
+    <path id="path3490" class="st3" d="M1351,1146.5v7" inkscape:connector-curvature="0"/>
+    <path id="path3494" class="st28" d="M1351,1136v3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3496" class="st28" d="M1351,1164v-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3498" class="st28" d="M1372,1164v-14h-21" inkscape:connector-curvature="0"/>
+    <path id="path3500" d="M1356.2,1150l7-7v14l-7-7Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3869">
+    <path id="path3502" class="st30" d="M1351,1234h21v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3504" class="st30" d="M1351,1262h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <circle id="circle3506" class="st19" cx="1358" cy="1248" r="28"/>
+    <path id="path3508" class="st28" d="M1344,1262v-28" inkscape:connector-curvature="0"/>
+    <path id="path3512" class="st3" d="M1351,1244.5v7" inkscape:connector-curvature="0"/>
+    <path id="path3514" class="st28" d="M1351,1234v3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3516" class="st28" d="M1351,1262v-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3520" d="M1363.2,1248l-7-7v14l7-7Z" inkscape:connector-curvature="0"/>
+    <path id="path3534" class="st28" d="M1351,1248h21v-14" inkscape:connector-curvature="0"/>
+    <path id="path3536" class="st30" d="M1344,1234h-21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3691">
+    <path id="path3550" class="st30" d="M1456,1115v21h-21M1435,1164h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+    <path id="path3556" class="st28" d="M1428,1162.2v-24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3568" d="M1449,1164l-7-7v14l7-7Z" inkscape:connector-curvature="0"/>
+    <path id="path3594" class="st30" d="M1428,1150h-21" inkscape:connector-curvature="0"/>
+    <path id="path3664" class="st28" d="M1433.2,1132.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3697">
+    <path id="path3608" class="st30" d="M1526,1115v21h-21M1505,1164h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+    <path id="path3610" class="st28" d="M1498,1162.2v-24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3614" class="st30" d="M1498,1150h-21" inkscape:connector-curvature="0"/>
+    <path id="path3666" class="st28" d="M1503.2,1132.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3677">
+    <path id="path3582" class="st30" d="M1456,1213v21h-21M1435,1262h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+    <path id="path3586" class="st28" d="M1428,1260.2v-24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3590" d="M1442,1234l7-7v14l-7-7Z" inkscape:connector-curvature="0"/>
+    <path id="path3592" class="st30" d="M1428,1248h-21" inkscape:connector-curvature="0"/>
+    <path id="path3668" class="st28" d="M1433.2,1230.5v35" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3684">
+    <path id="path3618" class="st30" d="M1526,1213v21h-21M1505,1262h21v21" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccc"/>
+    <path id="path3620" class="st28" d="M1498,1260.2v-24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3624" class="st30" d="M1491,1248h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="path3636" class="st30" cx="1494.5" cy="1248" r="3.5"/>
+    <path id="path3670" class="st28" d="M1503.2,1230.5v35" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3807">
+    <path id="path3699" class="st30" d="M1583.8,1136h19.2v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3701" class="st30" d="M1583.8,1164h19.2v21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <circle id="circle3703" class="st19" cx="1589" cy="1150" r="28"/>
+    <path id="path3705" class="st28" d="M1575,1164v-28" inkscape:connector-curvature="0"/>
+    <path id="path3707" class="st30" d="M1575,1164h-21" inkscape:connector-curvature="0"/>
+    <path id="path3713" class="st28" d="M1582,1165.7v-31.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3715" class="st28" d="M1603,1164v-14h-19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3717" d="M1587.2,1150l7-7v14l-7-7Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3887">
+    <path id="path3721" class="st30" d="M1583.8,1234h19.2v-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3723" class="st30" d="M1583.8,1262h19.2v21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <circle id="circle3725" class="st19" cx="1589" cy="1248" r="28"/>
+    <path id="path3727" class="st28" d="M1575,1262v-28" inkscape:connector-curvature="0"/>
+    <path id="path3731" class="st28" d="M1582,1232.2v31.5" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3735" d="M1594.2,1248l-7-7v14l7-7Z" inkscape:connector-curvature="0"/>
+    <path id="path3737" class="st28" d="M1583.8,1248h19.2v-14" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path3739" class="st30" d="M1575,1234h-21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3993">
+    <path id="path4683" class="st30" d="M49,394v28h14c21,0,21-28,0-28h-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path4687" class="st30" d="M80.5,408h10.6" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4695" class="st30" d="M35,401h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4697" class="st30" d="M35,415h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g4025">
+    <path id="path3995" class="st30" d="M49,436v42h14.1c21,0,20.9-42,0-42h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path3997" class="st30" d="M80.6,457h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3999" class="st30" d="M35,443h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4001" class="st30" d="M35,457h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4018" class="st30" d="M35.1,471h14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g4048">
+    <g id="g4037">
+      <path id="path4027" class="st30" d="M49,492v56h14.1c21,0,20.9-56,0-56h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+      <path id="path4029" class="st30" d="M80.6,520h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path4031" class="st30" d="M35,499h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path4033" class="st30" d="M35,513h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path4035" class="st30" d="M35.1,527h14" inkscape:connector-curvature="0"/>
+      <path id="path4039" class="st30" d="M35.1,541h14" inkscape:connector-curvature="0"/>
+    </g>
+  </g>
+  <g id="g1831">
+    <path id="path4050" class="st30" d="M119,394v28h14c21,0,21-28,0-28h-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path4052" class="st30" d="M157.4,408h10.6" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4054" class="st30" d="M105,401h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4056" class="st30" d="M105,415h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="path4110" class="st30" cx="152.2" cy="408" r="3.5"/>
+  </g>
+  <g id="g4131">
+    <path id="path4060" class="st30" d="M119,436v42h14.1c21,0,20.9-42,0-42h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path4062" class="st30" d="M157.5,457h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4064" class="st30" d="M105,443h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4066" class="st30" d="M105,457h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4068" class="st30" d="M105.1,471h14" inkscape:connector-curvature="0"/>
+    <circle id="circle4112" class="st30" cx="152.2" cy="457" r="3.5"/>
+  </g>
+  <path id="path4072" class="st30" d="M119,492v56h14.1c21,0,20.9-56,0-56h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+  <path id="path4074" class="st30" d="M157.5,520h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path4076" class="st30" d="M105,499h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path4078" class="st30" d="M105,513h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path4080" class="st30" d="M105.1,527h14" inkscape:connector-curvature="0"/>
+  <path id="path4082" class="st30" d="M105.1,541h14" inkscape:connector-curvature="0"/>
+  <circle id="circle4114" class="st30" cx="154" cy="520" r="3.5"/>
+  <g id="g4174">
+    <path id="path4685" class="st6" d="M189,394c14.2,7.1,14.2,20.9,0,28,21.3,0,27.9.2,35-14-7.1-14.2-13.7-14-35-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path4689" class="st30" d="M224,408h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4691" class="st30" d="M182,401h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4693" class="st30" d="M182,415h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g893">
+    <path id="path4176" class="st6" d="M189,436c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path4178" class="st30" d="M224,457h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4180" class="st30" d="M182,443h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4182" class="st30" d="M182,457h17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4190" class="st30" d="M182,471h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1728">
+    <path id="path895" class="st6" d="M189,492c14.2,7.1,14.2,48.9,0,56,17.5,0,33.2-10.5,35-28-1.8-17.5-17.5-28-35-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path897" class="st30" d="M224,520h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path899" class="st30" d="M182,499h12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path901" class="st30" d="M182,513h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path912" class="st6" d="M182,527h15.8" inkscape:connector-curvature="0"/>
+    <path id="path1720" class="st6" d="M182,541h12.2" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g1859">
+    <path id="path1768" class="st6" d="M259,394c14.2,7.1,14.2,20.9,0,28,21.3,0,27.9.2,35-14-7.1-14.2-13.7-14-35-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1770" class="st30" d="M301,408h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1772" class="st30" d="M252,401h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1774" class="st30" d="M252,415h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1824" class="st30" cx="297.5" cy="408" r="3.5"/>
+  </g>
+  <g id="g1852">
+    <path id="path1778" class="st6" d="M259,436c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1780" class="st30" d="M301,457h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1782" class="st30" d="M252,443h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1784" class="st30" d="M252,457h17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1786" class="st30" d="M252,471h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1833" class="st30" cx="297.5" cy="457" r="3.5"/>
+  </g>
+  <path id="path1790" class="st6" d="M259,492c14.2,7.1,14.2,48.9,0,56,17.5,0,33.2-10.5,35-28-1.8-17.5-17.5-28-35-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  <path id="path1792" class="st30" d="M301,520h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1794" class="st30" d="M252,499h12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1796" class="st30" d="M252,513h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1798" class="st6" d="M252,527h15.8" inkscape:connector-curvature="0"/>
+  <path id="path1800" class="st6" d="M252,541h12.2" inkscape:connector-curvature="0"/>
+  <circle id="circle1835" class="st30" cx="297.5" cy="520" r="3.5"/>
+  <g id="g1046">
+    <path id="path1862" class="st6" d="M336,394c14.2,7.1,14.2,20.9,0,28,21.3,0,27.9.2,35-14-7.1-14.2-13.7-14-35-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1864" class="st30" d="M371,408h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1866" class="st30" d="M322,401h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1868" class="st30" d="M322,415h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1947" class="st9" d="M328.9,394c14.2,7.1,14.2,20.9,0,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3198">
+    <path id="path1900" class="st6" d="M413,394c14.2,7.1,14.2,20.9,0,28,21.3,0,27.9.2,35-14-7.1-14.2-13.7-14-35-14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1902" class="st30" d="M455,408h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1904" class="st30" d="M399,401h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1906" class="st30" d="M399,415h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1908" class="st30" cx="451.5" cy="408" r="3.5"/>
+    <path id="path1949" class="st9" d="M405.4,394c14.2,7.1,14.2,20.9,0,28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <path id="path1874" class="st6" d="M336,436c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  <path id="path1876" class="st30" d="M371,457h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1878" class="st30" d="M322,443h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1880" class="st30" d="M322,457h24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1882" class="st30" d="M322,471c-1.2,0,16.3,0,21,0" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path1973" class="st9" d="M329,436c14.2,7.1,14.2,34.9,0,42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <g id="g1063">
+    <path id="path1912" class="st6" d="M413,436c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1914" class="st30" d="M455,457h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1917" class="st30" d="M399,443h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1919" class="st30" d="M399,457h24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1921" class="st30" d="M399,471h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1923" class="st30" cx="451.5" cy="457" r="3.5"/>
+    <path id="path960" class="st9" d="M405.4,436c14.2,7.1,14.2,34.9,0,42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1081">
+    <path id="path1886" class="st6" d="M336,492c14.2,7.1,14.2,48.9,0,56,17.5,0,33.2-10.5,35-28-1.8-17.5-17.5-28-35-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1888" class="st30" d="M371,520h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1890" class="st30" d="M322,499h19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1892" class="st30" d="M322,513h22.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1894" class="st6" d="M322,527h22.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1896" class="st6" d="M322,541h19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path972" class="st9" d="M329,492c14,8.8,14,47.3,0,56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g1091">
+    <path id="path1927" class="st6" d="M413,492c14.2,7.1,14.2,48.9,0,56,17.5,0,33.2-10.5,35-28-1.8-17.5-17.5-28-35-28Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path1929" class="st30" d="M455,520h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1931" class="st30" d="M399,499h19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1933" class="st30" d="M399,513h22.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1935" class="st6" d="M399,527h22.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path1937" class="st6" d="M399,541h19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle1939" class="st30" cx="451.5" cy="520" r="3.5"/>
+    <path id="path983" class="st9" d="M406,492c14,8.8,14,47.3,0,56" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g2925">
+    <path id="path2893" class="st30" d="M49,576v42h14.1c21,0,20.9-42,0-42h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path2895" class="st30" d="M80.6,597h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2897" class="st30" d="M35,583h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2899" class="st30" d="M35,597h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2901" class="st30" d="M35.1,611h14" inkscape:connector-curvature="0"/>
+    <path id="path2911" class="st6" d="M35,569h14" inkscape:connector-curvature="0"/>
+    <path id="path2913" class="st6" d="M35,625h14" inkscape:connector-curvature="0"/>
+    <path id="path2915" class="st20" d="M49,562v70" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g2971">
+    <path id="path2927" class="st30" d="M118.9,576v42h14.1c21,0,20.9-42,0-42h-14.1Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccsc"/>
+    <path id="path2929" class="st30" d="M157.5,597h10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2931" class="st30" d="M104.9,583h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2933" class="st30" d="M104.9,597h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2935" class="st30" d="M105,611h14" inkscape:connector-curvature="0"/>
+    <path id="path2937" class="st6" d="M104.9,569h14" inkscape:connector-curvature="0"/>
+    <path id="path2939" class="st6" d="M104.9,625h14" inkscape:connector-curvature="0"/>
+    <path id="path2941" class="st20" d="M118.9,562v70" inkscape:connector-curvature="0"/>
+    <circle id="circle2960" class="st30" cx="152.2" cy="597" r="3.5"/>
+  </g>
+  <g id="g3007">
+    <path id="path2973" class="st6" d="M189,576c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path2975" class="st30" d="M224,597h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2977" class="st30" d="M182,583h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2979" class="st30" d="M182,597h17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2981" class="st30" d="M182,611h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2990" class="st20" d="M189,576v-14" inkscape:connector-curvature="0"/>
+    <path id="path2992" class="st20" d="M189,618v14" inkscape:connector-curvature="0"/>
+    <path id="path2994" class="st6" d="M182,625h7" inkscape:connector-curvature="0"/>
+    <path id="path2996" class="st6" d="M182,569h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3066">
+    <path id="path3009" class="st6" d="M259,576c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3011" class="st30" d="M301,597h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3013" class="st30" d="M252,583h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3015" class="st30" d="M252,597h17.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3017" class="st30" d="M252,611h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3019" class="st20" d="M259,576v-14" inkscape:connector-curvature="0"/>
+    <path id="path3021" class="st20" d="M259,618v14" inkscape:connector-curvature="0"/>
+    <path id="path3023" class="st6" d="M252,625h7" inkscape:connector-curvature="0"/>
+    <path id="path3025" class="st6" d="M252,569h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle3036" class="st30" cx="297.5" cy="597" r="3.5"/>
+  </g>
+  <g id="g3153">
+    <path id="path3068" class="st6" d="M336,576c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3070" class="st30" d="M371,597h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3072" class="st30" d="M322,583h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3074" class="st30" d="M322,597h24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3076" class="st30" d="M323.8,611h19.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3078" class="st20" d="M336,576v-14" inkscape:connector-curvature="0"/>
+    <path id="path3080" class="st20" d="M336,618v14" inkscape:connector-curvature="0"/>
+    <path id="path3082" class="st6" d="M322,625h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3084" class="st6" d="M322,569h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3135" class="st9" d="M326.7,576c14.2,7.1,14.2,34.9,0,42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3166">
+    <path id="path3088" class="st6" d="M413,576c14.2,7.1,14.2,34.9,0,42,21.3,0,27.9-6.8,35-21-7.1-14.2-13.7-21-35-21Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3090" class="st30" d="M455,597h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3092" class="st30" d="M399,583h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3094" class="st30" d="M399,597h24.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3096" class="st30" d="M399,611h21" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3098" class="st20" d="M413,576v-14" inkscape:connector-curvature="0"/>
+    <path id="path3100" class="st20" d="M413,618v14" inkscape:connector-curvature="0"/>
+    <path id="path3102" class="st6" d="M399,625h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3104" class="st6" d="M399,569h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle3106" class="st30" cx="451.5" cy="597" r="3.5"/>
+    <path id="path3141" class="st9" d="M403.7,576c14.2,7.1,14.2,34.9,0,42" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3204">
+    <path id="path3170" class="st30" d="M525,408h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3174" class="st30" d="M476,408h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3182" class="st19" d="M490,394v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+    <circle id="circle3190" class="st30" cx="521.5" cy="408" r="3.5"/>
+  </g>
+  <g id="g3270">
+    <rect id="rect3206" class="st28" x="491.8" y="444.7" width="38.5" height="52.5"/>
+    <g id="text3210" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(496 462.3)"><tspan x="0" y="0">D</tspan></text>
+      </g>
+    </g>
+    <g id="text3214" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(517 462.3)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path3220" class="st30" d="M491.8,457h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path3222" class="st30" d="M530.2,457h8.8" inkscape:connector-curvature="0"/>
+    <path id="path3224" class="st30" d="M483,485h8.8" inkscape:connector-curvature="0"/>
+    <path id="path3226" class="st30" d="M530.2,485h8.8" inkscape:connector-curvature="0"/>
+    <g id="text3230" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(496 490.3)"><tspan x="0" y="0">E</tspan></text>
+      </g>
+    </g>
+    <g id="text3234" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(517 490.3)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path3238" class="st36" d="M518,478h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3396">
+    <rect id="rect3272" class="st28" x="491.8" y="514.7" width="38.5" height="52.5"/>
+    <g id="text3276" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(496 532.3)"><tspan x="0" y="0">D</tspan></text>
+      </g>
+    </g>
+    <g id="text3280" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(517 532.3)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path3282" class="st30" d="M491.8,527h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path3284" class="st30" d="M530.2,527h8.8" inkscape:connector-curvature="0"/>
+    <path id="path3286" class="st30" d="M483,555h8.8" inkscape:connector-curvature="0"/>
+    <path id="path3288" class="st30" d="M530.2,555h8.8" inkscape:connector-curvature="0"/>
+    <g id="text3296" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(517 560.3)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path3298" class="st36" d="M518,548h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3381" class="st28" d="M491.8,548l12.1,7-12.1,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3486">
+    <g id="g3466">
+      <g id="g3447">
+        <rect id="rect3319" class="st28" x="491.8" y="584.8" width="38.5" height="52.5"/>
+        <g id="text3323" class="st41">
+          <g class="st41">
+            <text class="st40" transform="translate(496 602.3)"><tspan x="0" y="0">J</tspan></text>
+          </g>
+        </g>
+        <g id="text3327" class="st41">
+          <g class="st41">
+            <text class="st40" transform="translate(517 602.3)"><tspan x="0" y="0">Q</tspan></text>
+          </g>
+        </g>
+        <path id="path3329" class="st30" d="M491.8,597h-8.8" inkscape:connector-curvature="0"/>
+        <path id="path3331" class="st30" d="M530.2,597h8.8" inkscape:connector-curvature="0"/>
+        <path id="path3333" class="st30" d="M483,625h8.8" inkscape:connector-curvature="0"/>
+        <path id="path3335" class="st30" d="M530.2,625h8.8" inkscape:connector-curvature="0"/>
+        <g id="text3339" class="st41">
+          <g class="st41">
+            <text class="st40" transform="translate(496 630.3)"><tspan x="0" y="0">K</tspan></text>
+          </g>
+        </g>
+        <g id="text3343" class="st41">
+          <g class="st41">
+            <text class="st40" transform="translate(517 630.3)"><tspan x="0" y="0">Q</tspan></text>
+          </g>
+        </g>
+        <path id="path3345" class="st36" d="M518,618h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+        <path id="path3398" class="st30" d="M483,611h8.8" inkscape:connector-curvature="0"/>
+        <path id="path3429" class="st30" d="M491.8,604l12.1,7-12.1,7" inkscape:connector-curvature="0"/>
+      </g>
+    </g>
+  </g>
+  <g id="g3627">
+    <rect id="rect3502" class="st28" x="582.8" y="388.7" width="38.5" height="66.5"/>
+    <g id="text3506" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(588 416.8)"><tspan x="0" y="0">A</tspan></text>
+      </g>
+    </g>
+    <g id="text3510" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(608 427.3)"><tspan x="0" y="0">Y</tspan></text>
+      </g>
+    </g>
+    <path id="path3513" class="st30" d="M582.8,408h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path3515" class="st30" d="M621.2,422h8.8" inkscape:connector-curvature="0"/>
+    <path id="path3517" class="st30" d="M574,436h8.8" inkscape:connector-curvature="0"/>
+    <g id="text3523" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(588 436)"><tspan x="0" y="0">B</tspan></text>
+      </g>
+    </g>
+    <path id="path3591" class="st30" d="M609,388.7v-8.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3593" class="st30" d="M609,455.2v8.8" inkscape:connector-curvature="0"/>
+    <g id="text3597" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(596.8 401)"><tspan x="0" y="0">C</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st43" transform="translate(604.8 403.7)"><tspan x="0" y="0">IN</tspan></text>
+      </g>
+    </g>
+    <g id="text3605" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(595 450)"><tspan x="0" y="0">C</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st43" transform="translate(603 452.7)"><tspan x="0" y="0">OUT</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3718">
+    <g id="text3633" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(682.3 401)"><tspan x="0" y="0">A</tspan></text>
+      </g>
+    </g>
+    <g id="text3637" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(696 423.8)"><tspan x="0" y="0">Y</tspan></text>
+      </g>
+    </g>
+    <g id="text3647" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(710 401)"><tspan x="0" y="0">B</tspan></text>
+      </g>
+    </g>
+    <rect id="rect3629" class="st28" x="666.8" y="388.7" width="66.5" height="38.5"/>
+    <path id="path3639" class="st30" d="M714,388.7v-8.8" inkscape:connector-curvature="0"/>
+    <path id="path3641" class="st30" d="M700,427.2v8.8" inkscape:connector-curvature="0"/>
+    <path id="path3643" class="st30" d="M686,380v8.8" inkscape:connector-curvature="0"/>
+    <path id="path3649" class="st30" d="M733.2,415h8.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3651" class="st30" d="M666.8,415h-8.8" inkscape:connector-curvature="0"/>
+    <g id="text3657" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(668.5 415)"><tspan x="0" y="0">C</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st43" transform="translate(676.5 417.7)"><tspan x="0" y="0">IN</tspan></text>
+      </g>
+    </g>
+    <g id="text3663" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(707.8 415)"><tspan x="0" y="0">C</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st43" transform="translate(715.8 417.7)"><tspan x="0" y="0">OUT</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3736">
+    <path id="path3720" class="st30" d="M588,499v56l7,7-7,7v56l42-42v-42l-42-42Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccc"/>
+    <path id="path3722" class="st30" d="M630,562h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3724" class="st30" d="M588,527h-14" inkscape:connector-curvature="0"/>
+    <path id="path3726" class="st30" d="M588,597h-14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3747">
+    <path id="path3738" class="st30" d="M672,520v-35l14-14h7" inkscape:connector-curvature="0"/>
+    <path id="path3740" class="st30" d="M693,485h-7l-14,14" inkscape:connector-curvature="0"/>
+    <path id="path3742" class="st30" d="M693,499h-7l-14,14" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3763">
+    <path id="path3751" class="st30" d="M672,534v28" inkscape:connector-curvature="0"/>
+    <path id="path3753" class="st28" d="M658,544.5l28,7" inkscape:connector-curvature="0"/>
+    <g id="text3757" class="st41">
+      <g class="st41">
+        <text class="st42" transform="translate(686 548)"><tspan x="0" y="0">4</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3788">
+    <g id="g3781">
+      <path id="path3765" class="st30" d="M658,597h28" inkscape:connector-curvature="0"/>
+      <path id="path3767" class="st28" d="M668.5,583l7,28" inkscape:connector-curvature="0"/>
+    </g>
+    <g id="text3771" class="st41">
+      <g class="st41">
+        <text class="st42" transform="translate(672 584.8)"><tspan x="0" y="0">4</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3847">
+    <g id="g3800">
+      <path id="path3796" class="st30" d="M896,359h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3798" class="st7" cx="875" cy="359" r="5.2"/>
+    </g>
+    <g id="g3806">
+      <path id="path3802" class="st30" d="M819,359h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3804" class="st7" cx="840" cy="359" r="5.2"/>
+    </g>
+    <path id="path3824" class="st30" d="M847,355.5l24.5-12.3" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3894">
+    <g id="g3830">
+      <path id="path3826" class="st30" d="M896,394h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3828" class="st7" cx="875" cy="394" r="5.2"/>
+    </g>
+    <g id="g3836">
+      <path id="path3832" class="st30" d="M819,394h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3834" class="st7" cx="840" cy="394" r="5.2"/>
+    </g>
+    <path id="path3838" class="st30" d="M847,390.5l28-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g3959">
+    <g id="g3906">
+      <path id="path3902" class="st30" d="M896,436h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3904" class="st7" cx="875" cy="436" r="5.2"/>
+    </g>
+    <g id="g3912">
+      <path id="path3908" class="st30" d="M896,464h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3910" class="st7" cx="875" cy="464" r="5.2"/>
+    </g>
+    <path id="path3929" class="st30" d="M819,450h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle3931" class="st7" cx="840" cy="450" r="5.2"/>
+    <path id="path3935" class="st30" d="M847,450l28-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g4001">
+    <g id="g3965">
+      <path id="path3961" class="st30" d="M896,499h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3963" class="st7" cx="875" cy="499" r="5.2"/>
+    </g>
+    <g id="g3971">
+      <path id="path3967" class="st30" d="M896,527h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle3969" class="st7" cx="875" cy="527" r="5.2"/>
+    </g>
+    <path id="path3973" class="st30" d="M819,513h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle3975" class="st7" cx="840" cy="513" r="5.2"/>
+    <path id="path3990" class="st30" d="M847,513h28" inkscape:connector-curvature="0"/>
+  </g>
+  <path id="path4003" class="st30" d="M1001,359h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <circle id="circle4005" class="st7" cx="980" cy="359" r="5.2"/>
+  <path id="path4009" class="st30" d="M924,359h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <circle id="circle4011" class="st7" cx="945" cy="359" r="5.2"/>
+  <path id="path4015" class="st30" d="M952,355.5l24.5-12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <rect id="rect4019" class="st30" x="953.8" y="381.7" width="17.5" height="24.5"/>
+  <path id="path4021" class="st14" d="M962.5,380v-28" inkscape:connector-curvature="0"/>
+  <path id="path4023" class="st30" d="M952.9,394h-14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <path id="path4025" class="st30" d="M972.1,394h14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  <g id="g4132">
+    <rect id="rect4059" class="st30" x="953.7" y="458.7" width="17.5" height="24.5"/>
+    <path id="path4061" class="st14" d="M962.5,457v-28" inkscape:connector-curvature="0"/>
+    <path id="path4063" class="st30" d="M952.9,471h-14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4065" class="st30" d="M972.1,471h14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4069" class="st30" d="M1001,436h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4071" class="st7" cx="980" cy="436" r="5.2"/>
+    <path id="path4075" class="st30" d="M924,436h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4077" class="st7" cx="945" cy="436" r="5.2"/>
+    <path id="path4081" class="st30" d="M952,432.5l28-5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g4201">
+    <path id="path4134" class="st30" d="M1001,513h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4136" class="st7" cx="980" cy="513" r="5.2"/>
+    <path id="path4140" class="st30" d="M924,513h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4142" class="st7" cx="945" cy="513" r="5.2"/>
+    <path id="path4146" class="st30" d="M952,509.5l24.5-12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4150" class="st30" d="M1001,541h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4152" class="st7" cx="980" cy="541" r="5.2"/>
+    <path id="path4156" class="st30" d="M924,541h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4158" class="st7" cx="945" cy="541" r="5.2"/>
+    <path id="path4162" class="st30" d="M952,537.5l24.5-12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4188" class="st14" d="M962.5,506v24.5" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g4270">
+    <path id="path4204" class="st30" d="M1106,359h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4206" class="st7" cx="1085" cy="359" r="5.2"/>
+    <path id="path4208" class="st30" d="M1029,359h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4210" class="st7" cx="1050" cy="359" r="5.2"/>
+    <path id="path4212" class="st30" d="M1057,355.5l24.5-12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4214" class="st30" d="M1106,387h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4216" class="st7" cx="1085" cy="387" r="5.2"/>
+    <path id="path4218" class="st30" d="M1029,387h15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <circle id="circle4220" class="st7" cx="1050" cy="387" r="5.2"/>
+    <path id="path4222" class="st30" d="M1057,383.5l24.5-12.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4224" class="st14" d="M1067.5,352v50.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect4237" class="st30" x="1058.7" y="402.7" width="17.5" height="24.5"/>
+    <path id="path4241" class="st30" d="M1057.9,415h-14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path4243" class="st30" d="M1077.1,415h14.9" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g4345">
+    <g id="g1080-3">
+      <path id="path7873-6" class="st30" d="M1092,464h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="path1076-7" class="st7" cx="1071" cy="464" r="5.2"/>
+    </g>
+    <g id="g4297">
+      <path id="path4293" class="st30" d="M1106,485h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle4295" class="st7" cx="1085" cy="485" r="5.2"/>
+    </g>
+    <g id="g4303">
+      <path id="path4299" class="st30" d="M1106,513h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle4301" class="st7" cx="1085" cy="513" r="5.2"/>
+    </g>
+    <g id="g4309">
+      <path id="path4305" class="st30" d="M1092,534h-15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <circle id="circle4307" class="st7" cx="1071" cy="534" r="5.2"/>
+    </g>
+    <path id="path4311" class="st30" d="M1070.8,488.4l-20.8,10.6h-21" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+    <path id="path4313" d="M1058.9,487.5l5,10.7,13.6-12.8-18.6,2.1h0Z" inkscape:connector-curvature="0"/>
+    <circle id="circle1050-5" cx="1050" cy="499" r="4.4"/>
+  </g>
+  <g id="g5818">
+    <path id="path3170-6" class="st30" d="M1239,506h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3174-7" class="st30" d="M1190,506h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3182-5" class="st19" d="M1204,492v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+    <circle id="circle3190-3" class="st30" cx="1235.5" cy="506" r="3.5"/>
+    <path id="path5785" class="st30" d="M1207.5,509.5h5.2l3.5-5.2h1.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path5787" class="st30" d="M1216.2,504.2h-3.5l-3.5,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g5810">
+    <path id="path5793" class="st30" d="M1231.9,541h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5795" class="st30" d="M1190,541h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5797" class="st19" d="M1204,527v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+    <path id="path5801" class="st30" d="M1207.5,544.5h5.2l3.5-5.2h1.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path5803" class="st30" d="M1216.2,539.2h-3.5l-3.5,5.2" inkscape:connector-curvature="0" sodipodi:nodetypes="ccc"/>
+  </g>
+  <g id="g5872">
+    <path id="path2757" class="st3" d="M1282.8,506h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2759" class="st3" d="M1277.5,511.2v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path2771" class="st3" d="M1282.8,534h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5820" class="st30" d="M1260,506h7" inkscape:connector-curvature="0"/>
+    <path id="path5822" class="st30" d="M1260,534h7" inkscape:connector-curvature="0"/>
+    <path id="path5824" class="st30" d="M1267,492v56l56-28-56-28Z" inkscape:connector-curvature="0"/>
+    <path id="path5826" class="st30" d="M1323,520h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g6031">
+    <path id="path5890" class="st3" d="M1366.8,506h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5892" class="st3" d="M1361.5,511.2v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5894" class="st3" d="M1366.8,534h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5896" class="st30" d="M1344,506h7" inkscape:connector-curvature="0"/>
+    <path id="path5898" class="st30" d="M1344,534h7" inkscape:connector-curvature="0"/>
+    <path id="path5900" class="st30" d="M1351,492v56l56-28-56-28Z" inkscape:connector-curvature="0"/>
+    <path id="path5902" class="st30" d="M1407,520h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5906" class="st30" d="M1379,506v-21" inkscape:connector-curvature="0"/>
+    <path id="path5908" class="st30" d="M1379,534v21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6042">
+    <path id="path5940" class="st3" d="M1450.8,506h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5942" class="st3" d="M1445.5,539.2v-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5944" class="st3" d="M1450.8,534h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5946" class="st30" d="M1428,506h7" inkscape:connector-curvature="0"/>
+    <path id="path5948" class="st30" d="M1428,534h7" inkscape:connector-curvature="0"/>
+    <path id="path5950" class="st30" d="M1435,492v56l56-28-56-28Z" inkscape:connector-curvature="0"/>
+    <path id="path5952" class="st30" d="M1491,520h7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path5954" class="st30" d="M1463,506v-21" inkscape:connector-curvature="0"/>
+    <path id="path5956" class="st30" d="M1463,534v21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6062">
+    <rect id="rect6044" class="st30" x="1520.8" y="507.7" width="52.5" height="24.5"/>
+    <g id="text6048" class="st41">
+      <g class="st41">
+        <text class="st39" transform="translate(1530.9 525.3)"><tspan x="0" y="0">7805</tspan></text>
+      </g>
+    </g>
+    <path id="path6050" class="st30" d="M1573.2,520h8.8" inkscape:connector-curvature="0"/>
+    <path id="path6052" class="st30" d="M1520.8,520h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path6054" class="st30" d="M1547,532.2v8.8" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6118">
+    <path id="path6089" class="st30" d="M1344,387v21M1316,387v21M1316,387c0-7.7,6.3-14,14-14s14,6.3,14,14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccsc"/>
+    <path id="path6092" class="st30" d="M1349.8,380c0-.4-.3-.8-.5-1.2-1.1-2.5-2.6-4.8-4.5-6.7-3.8-3.8-9.1-6.2-14.8-6.2s-11,2.4-14.8,6.2c-1.9,1.9-3.4,4.2-4.5,6.7-.2.4-.3.8-.5,1.2h-22.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccscccc"/>
+    <circle id="path6107" class="st30" cx="1330" cy="366" r="35"/>
+    <path id="path6109" class="st28" d="M1316,345h28" inkscape:connector-curvature="0"/>
+    <path id="path6111" class="st30" d="M1330,345v-28" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6141">
+    <path id="path6120" class="st30" d="M1253,387v21M1225,387v21M1225,387c0-7.7,6.3-14,14-14s14,6.3,14,14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccsc"/>
+    <circle id="circle6124" class="st30" cx="1239" cy="366" r="35"/>
+    <path id="path6126" class="st28" d="M1225,345h28" inkscape:connector-curvature="0"/>
+    <path id="path6128" class="st30" d="M1239,345v-28" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6232">
+    <path id="path6143" class="st30" d="M1442,387v21M1414,387v21M1414,387c0-7.7,6.3-14,14-14s14,6.3,14,14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccsc"/>
+    <path id="path6145" class="st30" d="M1447.8,380c0-.4-.3-.8-.5-1.2-1.1-2.5-2.6-4.8-4.5-6.7-3.8-3.8-9.1-6.2-14.8-6.2s-11,2.4-14.8,6.2c-1.9,1.9-3.4,4.2-4.5,6.7-.2.4-.3.8-.5,1.2h-22.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccscccc"/>
+    <path id="circle6147" class="st30" d="M1428,317c-19.3,0-35,15.7-35,35v14c0,19.3,15.7,35,35,35s35-15.7,35-35v-14c0-19.3-15.7-35-35-35Z" inkscape:connector-curvature="0"/>
+    <path id="path6149" class="st28" d="M1414,338h28" inkscape:connector-curvature="0"/>
+    <path id="path6151" class="st30" d="M1428,338v-28" inkscape:connector-curvature="0"/>
+    <path id="path6155" class="st10" d="M1407,352h42" inkscape:connector-curvature="0"/>
+    <path id="path6157" class="st28" d="M1407,352h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6159" class="st30" d="M1393,352h-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g6245">
+    <path id="path6184" class="st30" d="M1540,387v21M1512,387v21M1512,387c0-7.7,6.3-14,14-14s14,6.3,14,14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccsc"/>
+    <path id="path6186" class="st30" d="M1545.8,380c0-.4-.3-.8-.5-1.2-1.1-2.5-2.6-4.8-4.5-6.7-3.8-3.8-9.1-6.2-14.8-6.2s-11,2.4-14.8,6.2c-1.9,1.9-3.4,4.2-4.5,6.7-.2.4-.3.8-.5,1.2h-22.2" inkscape:connector-curvature="0" sodipodi:nodetypes="cccscccc"/>
+    <path id="path6188" class="st30" d="M1526,303c-19.3,0-35,15.7-35,35v28c0,19.3,15.7,35,35,35s35-15.7,35-35v-28c0-19.3-15.7-35-35-35Z" inkscape:connector-curvature="0" sodipodi:nodetypes="sssssss"/>
+    <path id="path6190" class="st28" d="M1512,324h28" inkscape:connector-curvature="0"/>
+    <path id="path6192" class="st30" d="M1526,324v-28" inkscape:connector-curvature="0"/>
+    <path id="path6194" class="st10" d="M1505,352h42" inkscape:connector-curvature="0"/>
+    <path id="path6196" class="st28" d="M1505,352h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6198" class="st30" d="M1491,352h-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6210" class="st10" d="M1505,338h42" inkscape:connector-curvature="0"/>
+    <path id="path6212" class="st28" d="M1505,338h-14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6214" class="st30" d="M1491,338h-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <path id="path6247" class="st30" d="M196,1136h14v-7h7v14h7v-14h7v14h7v-14h7v7h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cccccccccccccc"/>
+  <g id="g6281">
+    <rect id="rect6254" class="st1" x="1169" y="268" width="434" height="154"/>
+    <rect id="rect6256" class="st21" x="1169" y="275" width="203" height="21"/>
+    <g id="text6260" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(1176 296)"><tspan x="0" y="0">Vacuum tubes</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g6339">
+    <circle id="path6327" class="st30" cx="84" cy="264.5" r="17.5"/>
+    <path id="path6329" class="st30" d="M84,247v-14" inkscape:connector-curvature="0"/>
+    <path id="path6331" class="st30" d="M84,282v14" inkscape:connector-curvature="0"/>
+    <path id="path6333" class="st28" d="M63,240v49" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g id="g6361">
+    <path id="path6343" class="st30" d="M140,247v-14" inkscape:connector-curvature="0"/>
+    <path id="path6345" class="st30" d="M140,282v14" inkscape:connector-curvature="0"/>
+    <path id="path6347" class="st28" d="M154,240v49" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <rect id="rect6355" class="st28" x="127.8" y="248.8" width="24.5" height="31.5"/>
+  </g>
+  <g id="g6383">
+    <path id="path6363" class="st30" d="M196,247v-14" inkscape:connector-curvature="0"/>
+    <path id="path6365" class="st30" d="M196,282v14" inkscape:connector-curvature="0"/>
+    <rect id="rect6369" class="st28" x="183.8" y="248.8" width="24.5" height="31.5"/>
+    <path id="path6377" class="st28" d="M208.2,280.3l15.8,15.8v-63l-15.8,15.8" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+  </g>
+  <g id="g6414">
+    <circle id="path6395" class="st28" cx="322" cy="261" r="42"/>
+    <path id="rect6397" class="st28" d="M266,247v28h16.4c-1.6-4.5-2.4-9.2-2.4-14s.8-9.5,2.5-14h-16.5ZM361.6,247c1.6,4.5,2.4,9.2,2.4,14s-.8,9.5-2.5,14h16.5v-28h-16.4Z" inkscape:connector-curvature="0"/>
+    <path id="path6403" class="st30" d="M266,261h-14" inkscape:connector-curvature="0"/>
+    <path id="path6405" class="st30" d="M378,261h14" inkscape:connector-curvature="0"/>
+    <path id="path6407" class="st9" d="M301,282l7-42,14,21,14-21,7,42" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccc"/>
+  </g>
+  <g id="g6438">
+    <circle id="circle6416" class="st28" cx="504" cy="205" r="42"/>
+    <path id="path6418" class="st28" d="M518,149h-28v16.4c4.5-1.6,9.2-2.4,14-2.4s9.5.8,14,2.5v-16.5ZM518,244.6c-4.5,1.6-9.2,2.4-14,2.4s-9.5-.8-14-2.5v16.5h28v-16.4Z" inkscape:connector-curvature="0"/>
+    <path id="path6420" class="st30" d="M504,149v-14" inkscape:connector-curvature="0"/>
+    <path id="path6422" class="st30" d="M504,261v14" inkscape:connector-curvature="0"/>
+    <path id="path6424" class="st9" d="M483,226l7-42,14,21,14-21,7,42" inkscape:connector-curvature="0" sodipodi:nodetypes="ccccc"/>
+  </g>
+  <g id="g6471">
+    <path id="path6442" class="st3" d="M84,149c-15.5,0-28,12.5-28,28h56c0-15.5-12.5-28-28-28Z" inkscape:connector-curvature="0"/>
+    <path id="path6447" class="st30" d="M70,177v21h-28" inkscape:connector-curvature="0"/>
+    <path id="path6449" class="st30" d="M98,177v21h28" inkscape:connector-curvature="0"/>
+    <path id="path6457" class="st30" d="M70,163c0-3.9,3.1-7,7-7s7,3.1,7,7,3.1,7,7,7,7-3.1,7-7" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+  </g>
+  <g id="g6496">
+    <path id="path6473" class="st3" d="M196,149c-15.5,0-28,12.5-28,28h56c0-15.5-12.5-28-28-28Z" inkscape:connector-curvature="0"/>
+    <path id="path6475" class="st30" d="M182,177v21h-28" inkscape:connector-curvature="0"/>
+    <path id="path6477" class="st30" d="M210,177v21h28" inkscape:connector-curvature="0"/>
+    <path id="path6487" class="st3" d="M185.5,159.5h21" inkscape:connector-curvature="0"/>
+    <path id="path6489" class="st3" d="M185.5,168.3h21" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6620">
+    <circle id="circle6498" class="st19" cx="280" cy="163" r="28"/>
+    <path id="path6500" class="st30" d="M280,191v14" inkscape:connector-curvature="0"/>
+    <path id="path6502" class="st30" d="M280,135v-14" inkscape:connector-curvature="0"/>
+    <g id="text6531" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(270.2 173.5)"><tspan x="0" y="0">V</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g6627">
+    <circle id="circle6533" class="st19" cx="350" cy="163" r="28"/>
+    <path id="path6535" class="st30" d="M350,191v14" inkscape:connector-curvature="0"/>
+    <path id="path6537" class="st30" d="M350,135v-14" inkscape:connector-curvature="0"/>
+    <g id="text6541" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(340.2 173.5)"><tspan x="0" y="0">A</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g6634">
+    <circle id="circle6543" class="st19" cx="420" cy="163" r="28"/>
+    <path id="path6545" class="st30" d="M420,191v14" inkscape:connector-curvature="0"/>
+    <path id="path6547" class="st30" d="M420,135v-14" inkscape:connector-curvature="0"/>
+    <g id="text6551" class="st41">
+      <g class="st41">
+        <text class="st44" transform="translate(410.2 173.5)"><tspan x="0" y="0">G</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g3087">
+    <path id="rect3249" class="st0" d="M567,119.7h59.5c3.2,0,5.8,2.6,5.8,5.8v80.7c0,3.2-2.6,5.8-5.8,5.8h-59.5c-3.2,0-5.8-2.6-5.8-5.8v-80.7c0-3.2,2.6-5.8,5.8-5.8h0Z" inkscape:connector-curvature="0"/>
+    <rect id="rect3253" class="st31" x="568.9" y="126.8" width="56.3" height="44.4" rx="5.8" ry="5.8"/>
+    <path id="path3255" class="st24" d="M614.3,204.8c0,2-1.6,3.5-3.5,3.5s-3.5-1.6-3.5-3.5,1.6-3.5,3.5-3.5h0c2,0,3.5,1.6,3.5,3.5Z" inkscape:connector-curvature="0"/>
+    <path id="path3257" class="st15" d="M628.5,204.8c0,2-1.6,3.5-3.5,3.5s-3.5-1.6-3.5-3.5,1.6-3.5,3.5-3.5h0c2,0,3.5,1.6,3.5,3.5Z" inkscape:connector-curvature="0"/>
+    <g id="text3265" class="st41">
+      <g class="st41">
+        <text class="st38" transform="translate(568.3 204.8) scale(.9 1)"><tspan x="0" y="0">V</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st35" transform="translate(568.3 204.8) scale(.9 1)"><tspan x="0" y="0">V</tspan></text>
+      </g>
+    </g>
+    <path id="path2447" class="st3" d="M600.5,169.6l7.3-27.4" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g3096">
+    <rect id="rect3269" class="st0" x="559.9" y="225" width="71.1" height="92.3" rx="5.8" ry="5.8"/>
+    <rect id="rect3271" class="st31" x="567.6" y="232" width="56.3" height="44.4" rx="5.8" ry="5.8"/>
+    <path id="path3273" class="st24" d="M613.1,310c0,2-1.6,3.5-3.5,3.5s-3.5-1.6-3.5-3.5,1.6-3.5,3.5-3.5h0c2,0,3.5,1.6,3.5,3.5Z" inkscape:connector-curvature="0"/>
+    <path id="path3275" class="st15" d="M627.2,310c0,2-1.6,3.5-3.5,3.5s-3.5-1.6-3.5-3.5,1.6-3.5,3.5-3.5h0c2,0,3.5,1.6,3.5,3.5Z" inkscape:connector-curvature="0"/>
+    <g id="text3277" class="st41">
+      <g class="st41">
+        <text class="st45" transform="translate(567 310) scale(.9 1)"><tspan x="0" y="0">A</tspan></text>
+      </g>
+      <g class="st41">
+        <text class="st35" transform="translate(567 310) scale(.9 1)"><tspan x="0" y="0">A</tspan></text>
+      </g>
+    </g>
+    <path id="path2449" class="st3" d="M602.4,274.6l7.3-27.4" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g6719">
+    <rect id="rect6685" class="st4" x="14" y="86" width="749" height="245"/>
+    <rect id="rect6687" class="st18" x="14" y="86" width="203" height="21"/>
+    <g id="text6691" class="st41">
+      <g class="st41">
+        <text class="st37" transform="translate(21 107)"><tspan x="0" y="0">Other things</tspan></text>
+      </g>
+    </g>
+  </g>
+  <g id="g6798">
+    <rect id="rect6721" class="st28" x="1485.8" y="794.8" width="80.5" height="80.5"/>
+    <path id="path6723" class="st30" d="M1485.8,807h-15.8" inkscape:connector-curvature="0"/>
+    <path id="path6725" class="st30" d="M1470,863h15.8" inkscape:connector-curvature="0"/>
+    <path id="path6727" class="st30" d="M1566.2,863h15.8" inkscape:connector-curvature="0"/>
+    <path id="path6729" class="st30" d="M1566.2,807h15.8" inkscape:connector-curvature="0"/>
+    <path id="path6731" class="st3" d="M1561,863h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6733" class="st30" d="M1491,807c0-1.9,1.6-3.5,3.5-3.5s3.5,1.6,3.5,3.5,1.6,3.5,3.5,3.5,3.5-1.6,3.5-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+    <path id="path6747" class="st30" d="M1491,863c0-1.9,1.6-3.5,3.5-3.5s3.5,1.6,3.5,3.5,1.6,3.5,3.5,3.5,3.5-1.6,3.5-3.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cscsc"/>
+    <path id="path6749" class="st3" d="M1561,807h-10.5" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path6751" class="st3" d="M1555.8,801.8v10.5" inkscape:connector-curvature="0"/>
+    <path id="path3001-6" class="st30" d="M1498,835h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3003-2" class="st30" d="M1540,835h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path3005-9" class="st28" d="M1540,835l-28,14v-28l28,14Z" inkscape:connector-curvature="0" sodipodi:nodetypes="cccc"/>
+    <path id="path3007-1" class="st28" d="M1540,821v28" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+  </g>
+  <g>
+    <rect id="rect32061" data-name="rect3206" class="st28" x="921.7" y="142.1" width="38.5" height="52.5"/>
+    <g id="text32101" data-name="text3210" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(925.9 159.7)"><tspan x="0" y="0">D</tspan></text>
+      </g>
+    </g>
+    <g id="text32141" data-name="text3214" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(946.9 159.7)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path32201" data-name="path3220" class="st30" d="M921.7,154.3h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path32221" data-name="path3222" class="st30" d="M960.1,154.3h8.8" inkscape:connector-curvature="0"/>
+    <path id="path32241" data-name="path3224" class="st30" d="M910.4,182.3h4.3" inkscape:connector-curvature="0"/>
+    <g id="text32301" data-name="text3230" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(925.9 187.7)"><tspan x="0" y="0">E</tspan></text>
+      </g>
+    </g>
+    <circle id="circle19391" data-name="circle1939" class="st30" cx="918.2" cy="182.3" r="3.5"/>
+  </g>
+  <g id="g33961" data-name="g3396">
+    <rect id="rect32721" data-name="rect3272" class="st28" x="994" y="142.1" width="38.5" height="52.5"/>
+    <g id="text32761" data-name="text3276" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(998.2 159.7)"><tspan x="0" y="0">D</tspan></text>
+      </g>
+    </g>
+    <g id="text32801" data-name="text3280" class="st41">
+      <g class="st41">
+        <text class="st40" transform="translate(1019.2 159.7)"><tspan x="0" y="0">Q</tspan></text>
+      </g>
+    </g>
+    <path id="path32821" data-name="path3282" class="st30" d="M994,154.3h-8.8" inkscape:connector-curvature="0"/>
+    <path id="path32841" data-name="path3284" class="st30" d="M1032.4,154.3h8.8" inkscape:connector-curvature="0"/>
+    <path id="path32861" data-name="path3286" class="st30" d="M985.2,182.3h8.8" inkscape:connector-curvature="0"/>
+    <path id="path33811" data-name="path3381" class="st28" d="M994,175.3l12.1,7-12.1,7" inkscape:connector-curvature="0"/>
+  </g>
+  <g id="g32041" data-name="g3204">
+    <path id="path31701" data-name="path3170" class="st30" d="M1204.2,165.1h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path31741" data-name="path3174" class="st30" d="M1162,165.1h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+    <path id="path31821" data-name="path3182" class="st19" d="M1176,151.1v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+  </g>
+  <g>
+    <circle class="st46" cx="1068.3" cy="227.7" r="1.3"/>
+    <circle class="st46" cx="1074.5" cy="227.7" r="1.3"/>
+    <circle class="st46" cx="1080.4" cy="227.7" r="1.3"/>
+  </g>
+  <g>
+    <g id="g32042" data-name="g3204">
+      <path id="path31702" data-name="path3170" class="st30" d="M1324,171.2h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path31742" data-name="path3174" class="st30" d="M1281.9,171.2h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path31822" data-name="path3182" class="st19" d="M1295.9,157.2v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+    </g>
+    <g id="g32043" data-name="g3204">
+      <path id="path31703" data-name="path3170" class="st30" d="M1399,171.2h7.1" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path31743" data-name="path3174" class="st30" d="M1356.9,171.2h14" inkscape:connector-curvature="0" sodipodi:nodetypes="cc"/>
+      <path id="path31823" data-name="path3182" class="st19" d="M1370.9,157.2v28l28-14-28-14Z" inkscape:connector-curvature="0"/>
+    </g>
+    <g>
+      <circle class="st47" cx="1337.9" cy="171.2" r="1.3"/>
+      <circle class="st47" cx="1344.1" cy="171.2" r="1.3"/>
+      <circle class="st47" cx="1350.1" cy="171.2" r="1.3"/>
+    </g>
+  </g>
+</svg>

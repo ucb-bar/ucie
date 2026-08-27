@@ -1,0 +1,51 @@
+// ============================================================================
+// DCDL Testbench - Verilog-AMS
+// ============================================================================
+// Pure Verilog-AMS testbench for DCDL module
+//
+// Purpose: Test digitally controlled delay line with swept delay codes
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module dcdl_tb;
+
+// Parameters
+parameter real CLOCK_FREQUENCY = 8e9;  // 8 GHz
+parameter real CLOCK_PERIOD = 1.0 / CLOCK_FREQUENCY;  // 125ps
+parameter real VDD = 0.75;
+
+// Analog signals
+electrical clk_in, clk_out;
+electrical [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl;
+
+// Control variables
+integer code;
+real sim_time;
+real clock_value;
+
+dcdl dut (
+    .clk_in(clk_in),
+    .dl_ctrl(dl_ctrl),
+    .clk_out(clk_out)
+);
+
+analog begin
+    @(initial_step) begin
+        code = 128;
+        clock_value = 0;
+    end
+    @(timer(0, 0.5*CLOCK_PERIOD)) begin
+        if (clock_value == 0) begin
+            clock_value = VDD;
+        end
+        else begin
+            clock_value = 0;
+        end
+    end
+
+    V(clk_in) <+ transition(clock_value, 0, 20p);
+end
+
+endmodule
