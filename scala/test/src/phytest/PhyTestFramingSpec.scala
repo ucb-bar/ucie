@@ -55,8 +55,8 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
   dut.io.regs.txLfsrSeed := io.lfsrSeed
   dut.io.regs.rxLfsrSeed := io.lfsrSeed
   dut.io.regs.txValid := io.validPattern
-  dut.io.regs.txValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
-  dut.io.regs.rxValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
+  dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
+  dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.rxLfsrValid := io.validPattern
   dut.io.regs.txClkP := 0.U
   dut.io.regs.txClkN := 0.U
@@ -100,10 +100,10 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
 
   // Valid frames the capture, so it is never delayed. Every other pattern lane
   // -- the data lanes and track -- is.
-  for (lane <- 0 to PhyTest.trackLane(numLanes)) {
-    dut.io.rx.bits.lanes(lane) :=
-      (if (lane == PhyTest.validLane(numLanes)) dut.io.tx.bits.lanes(lane)
-       else delayed(dut.io.tx.bits.lanes(lane)))
+  dut.io.rx.bits.valid := dut.io.tx.bits.valid
+  dut.io.rx.bits.track := delayed(dut.io.tx.bits.track)
+  for (lane <- 0 until numLanes) {
+    dut.io.rx.bits.data(lane) := delayed(dut.io.tx.bits.data(lane))
   }
 
   io.bitErrors(PhyTest.NominalFraming) := dut.io.regs.rxBitErrors

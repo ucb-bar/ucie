@@ -50,8 +50,8 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.mainbandMode := BandMode.manual
   dut.io.regs.sidebandMode := BandMode.tl
   dut.io.regs.testTarget := TestTarget.loopback
-  dut.io.regs.txValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
-  dut.io.regs.rxValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
+  dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
+  dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.divResetb := io.divResetb.asAsyncReset
   dut.io.regs.txTestMode := TxTestMode.manual
   dut.io.regs.txDataMode := DataMode.infinite

@@ -17,12 +17,14 @@ import edu.berkeley.cs.uciedigital.phy.macros.clocking._
   * the bump fan-out all index that same way, so lane `i` means one thing
   * everywhere.
   *
-  * The PHY does not repair lanes, and past the bump fan-out it does not know
-  * what any lane carries: every lane is a 32 bit word into a serializer or out
-  * of a deserializer. Which lane is valid, which is track, and which carry a
-  * clock pattern is entirely the controller's business. Moving the valid
-  * waveform onto another lane is likewise a test function and lives in
-  * `PhyTest`.
+  * [[TxIO]] and [[RxIO]] name their lanes, since which lane carries valid,
+  * track, or a forwarded clock matters to the controller above and to the
+  * partner die. Inside, the lane pipeline is uniform -- every lane is a 32 bit
+  * word into a serializer or out of a deserializer -- so the naming is confined
+  * to those bundles and the bump fan-out.
+  *
+  * The PHY does not repair lanes. Moving the valid waveform onto another lane
+  * is a test function and lives in `PhyTest`.
   */
 object Phy {
   val SerdesRatio = 32
@@ -40,9 +42,9 @@ object Phy {
   def validLaneSelWidth(numLanes: Int): Int =
     log2Ceil(validLaneSelCount(numLanes))
 
-  // Select code for the dedicated valid lane, i.e. valid where it normally
-  // goes. This is the reset value of both selects.
-  def dedicatedValidLaneSel(numLanes: Int): Int = numLanes
+  // Default select code, and the reset value of both selects: the dedicated
+  // valid lane, i.e. valid where it normally goes.
+  def defaultValidLaneSel(numLanes: Int): Int = numLanes
 
   // Select code for the track lane. The mainband protocol does not use track,
   // so moving valid there works around a broken valid lane without giving up a
@@ -59,6 +61,24 @@ object Phy {
   def clkPLane(numLanes: Int): Int = numLanes + 2
   def clkNLane(numLanes: Int): Int = numLanes + 3
 
+  // The TX words in lane order, for the uniform lane pipeline inside the PHY.
+  def txLaneWords(tx: TxIO, numLanes: Int): Vec[UInt] = {
+    val lanes = Wire(Vec(numTxLanes(numLanes), Bits(SerdesRatio.W)))
+    for (lane <- 0 until numLanes) {
+      lanes(lane) := tx.data(lane)
+    }
+    lanes(validLane(numLanes)) := tx.valid
+    lanes(trackLane(numLanes)) := tx.track
+    lanes(clkPLane(numLanes)) := tx.clkp
+    lanes(clkNLane(numLanes)) := tx.clkn
+    lanes
+  }
+
+  // The RX words in lane order. Useful wherever a lane index is dynamic, since
+  // a bundle cannot be indexed.
+  def rxLaneWords(rx: RxIO, numLanes: Int): Vec[UInt] =
+    VecInit((0 until numLanes).map(rx.data(_)) ++ Seq(rx.valid, rx.track))
+
   // Instance names for the lane tiles. The PHY does not otherwise care what a
   // lane carries, but the physical flow and every waveform are far easier to
   // read when the tiles are named for their role.
@@ -70,11 +90,13 @@ object Phy {
     else s"${prefix}clkn"
 }
 
-/** One serdes word per TX lane, in lane order. The PHY serializes whatever it
-  * is handed; what each lane means is the controller's business.
-  */
+/** One serdes word per TX lane, declared in lane order. */
 class TxIO(numLanes: Int = 16) extends Bundle {
-  val lanes = Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W))
+  val data = Vec(numLanes, Bits(Phy.SerdesRatio.W))
+  val valid = Bits(Phy.SerdesRatio.W)
+  val track = Bits(Phy.SerdesRatio.W)
+  val clkp = Bits(Phy.SerdesRatio.W)
+  val clkn = Bits(Phy.SerdesRatio.W)
 }
 
 /** One deserialized word per RX lane that carries data, in the same lane order
@@ -82,7 +104,9 @@ class TxIO(numLanes: Int = 16) extends Bundle {
   * they have no entry here.
   */
 class RxIO(numLanes: Int = 16) extends Bundle {
-  val lanes = Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
+  val data = Vec(numLanes, Bits(Phy.SerdesRatio.W))
+  val valid = Bits(Phy.SerdesRatio.W)
+  val track = Bits(Phy.SerdesRatio.W)
 }
 
 class SbIO extends Bundle {
@@ -319,6 +343,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.clk := rxClkDiv.io.clkout_3
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
 
+  val txLaneDin = Phy.txLaneWords(io.tx, numLanes)
+
   // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
   for (lane <- 0 until Phy.numTxLanes(numLanes)) {
     val laneName = Phy.laneName("tx", lane, numLanes)
@@ -327,7 +353,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     // is in terms of the lane's own word.
     val txShuffler = Module(new Shuffler(Phy.SerdesRatio))
     txShuffler.suggestName(s"${laneName}_shuffler")
-    txShuffler.io.din := io.tx.lanes(lane)
+    txShuffler.io.din := txLaneDin(lane)
     txShuffler.io.permutation := io.regs.txctl(lane).shuffler
 
     val txLane = Module(new TxLane);
@@ -412,7 +438,11 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     }
   }
 
-  io.rx.lanes := rxLaneDout
+  for (lane <- 0 until numLanes) {
+    io.rx.data(lane) := rxLaneDout(lane)
+  }
+  io.rx.valid := rxLaneDout(Phy.validLane(numLanes))
+  io.rx.track := rxLaneDout(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
 
 }

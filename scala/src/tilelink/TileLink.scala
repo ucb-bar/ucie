@@ -285,12 +285,12 @@ class UcieTLRegs(
       // dedicated valid lane; see `PhyRegsIO` for the other select codes.
       val txValidLaneSel = RegInit(
         Phy
-          .dedicatedValidLaneSel(params.numLanes)
+          .defaultValidLaneSel(params.numLanes)
           .U(Phy.validLaneSelWidth(params.numLanes).W)
       )
       val rxValidLaneSel = RegInit(
         Phy
-          .dedicatedValidLaneSel(params.numLanes)
+          .defaultValidLaneSel(params.numLanes)
           .U(Phy.validLaneSelWidth(params.numLanes).W)
       )
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
@@ -885,16 +885,12 @@ class UcieTL(
     ucieDigital.io.ctrl <> regs.module.io.ucieCtrl
     // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
-    // The UCIe stack names its lanes; the PHY takes them by index.
     val digiTxAsTxIo = Wire(new TxIO(params.numLanes))
-    for (lane <- 0 until params.numLanes) {
-      digiTxAsTxIo.lanes(lane) := digiToPhyTx.bits.data(lane)
-    }
-    digiTxAsTxIo.lanes(Phy.validLane(params.numLanes)) :=
-      digiToPhyTx.bits.valid
-    digiTxAsTxIo.lanes(Phy.trackLane(params.numLanes)) := digiToPhyTx.bits.trk
-    digiTxAsTxIo.lanes(Phy.clkPLane(params.numLanes)) := digiToPhyTx.bits.clkP
-    digiTxAsTxIo.lanes(Phy.clkNLane(params.numLanes)) := digiToPhyTx.bits.clkN
+    digiTxAsTxIo.data := digiToPhyTx.bits.data
+    digiTxAsTxIo.valid := digiToPhyTx.bits.valid
+    digiTxAsTxIo.track := digiToPhyTx.bits.trk
+    digiTxAsTxIo.clkp := digiToPhyTx.bits.clkP
+    digiTxAsTxIo.clkn := digiToPhyTx.bits.clkN
     txTestFifo.io.enq.valid := Mux(selUcie, digiToPhyTx.valid, test.io.tx.valid)
     txTestFifo.io.enq.bits := Mux(selUcie, digiTxAsTxIo, test.io.tx.bits)
     test.io.tx.ready := txTestFifo.io.enq.ready && !selUcie
@@ -902,13 +898,9 @@ class UcieTL(
 
     // phyFacing RX: rxTestFifo.deq routed to PhyTest or ucieDigital by sel.
     val digiToPhyRx = ucieDigital.io.phyFacingIo.mainbandLink.rx
-    for (lane <- 0 until params.numLanes) {
-      digiToPhyRx.bits.data(lane) := rxTestFifo.io.deq.bits.lanes(lane)
-    }
-    digiToPhyRx.bits.valid :=
-      rxTestFifo.io.deq.bits.lanes(Phy.validLane(params.numLanes))
-    digiToPhyRx.bits.trk :=
-      rxTestFifo.io.deq.bits.lanes(Phy.trackLane(params.numLanes))
+    digiToPhyRx.bits.data := rxTestFifo.io.deq.bits.data
+    digiToPhyRx.bits.valid := rxTestFifo.io.deq.bits.valid
+    digiToPhyRx.bits.trk := rxTestFifo.io.deq.bits.track
     // TODO: RxIO has no clkp/clkn; use the forwarded-clock patterns until sampled clkP/clkN exist.
     // Need them for training and link bringup.
     digiToPhyRx.bits.clkP := "h55555555".U
@@ -1072,24 +1064,18 @@ class UcieTL(
       // Always true to send clock when tl path.
       txTlFifo.io.enq.valid := selMbTl
       val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
-      txTlFifo.io.enq.bits.lanes(Phy.validLane(params.numLanes)) :=
-        Mux(txValid, "h0000ffff".U, 0.U)
-      txTlFifo.io.enq.bits.lanes(Phy.trackLane(params.numLanes)) :=
-        "h55555555".U
-      txTlFifo.io.enq.bits.lanes(Phy.clkPLane(params.numLanes)) :=
-        "h55555555".U
-      txTlFifo.io.enq.bits.lanes(Phy.clkNLane(params.numLanes)) :=
-        "haaaaaaaa".U
+      txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
+      txTlFifo.io.enq.bits.track := "h55555555".U
+      txTlFifo.io.enq.bits.clkp := "h55555555".U
+      txTlFifo.io.enq.bits.clkn := "haaaaaaaa".U
       val txFramedData = Mux(
         clientTl.d.valid,
         Cat(ucieClientTxD.asUInt, 1.U),
         Cat(ucieManagerTxA.asUInt, 0.U)
       )
-      val txFramedLanes =
-        txFramedData.asTypeOf(Vec(params.numLanes, Bits(Phy.SerdesRatio.W)))
-      for (lane <- 0 until params.numLanes) {
-        txTlFifo.io.enq.bits.lanes(lane) := txFramedLanes(lane)
-      }
+      txTlFifo.io.enq.bits.data := txFramedData.asTypeOf(
+        txTlFifo.io.enq.bits.data
+      )
 
       // chipFacing TX: route the same framed data into ucieDigital (ucie mode), crossing
       // childClock -> ucieClk. Only the protocol data crosses (no track/clkp/clkn/valid lanes); deq is ucieClk.
@@ -1246,10 +1232,11 @@ class UcieTL(
       // Data and valid come through the queue; the clock and track lanes are
       // forced to their fixed patterns here regardless of what it carried.
       val txContClocks = Wire(new TxIO(params.numLanes))
-      txContClocks.lanes := txTlFifo.io.deq.bits.lanes
-      txContClocks.lanes(Phy.trackLane(params.numLanes)) := "h55555555".U
-      txContClocks.lanes(Phy.clkPLane(params.numLanes)) := "h55555555".U
-      txContClocks.lanes(Phy.clkNLane(params.numLanes)) := "haaaaaaaa".U
+      txContClocks.data := txTlFifo.io.deq.bits.data
+      txContClocks.valid := txTlFifo.io.deq.bits.valid
+      txContClocks.track := "h55555555".U
+      txContClocks.clkp := "h55555555".U
+      txContClocks.clkn := "haaaaaaaa".U
 
       // A mainband in tl mode drives from txTlFifo; otherwise PhyTest and ucie
       // both drive from txTestFifo.

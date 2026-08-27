@@ -66,8 +66,8 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
   def setup(c: PhyTest): Unit = {
     c.io.regs.testTarget.poke(TestTarget.mainband)
     // Valid where it normally goes, so framing behaves as the model expects.
-    c.io.regs.txValidLaneSel.poke(Phy.dedicatedValidLaneSel(numLanes).U)
-    c.io.regs.rxValidLaneSel.poke(Phy.dedicatedValidLaneSel(numLanes).U)
+    c.io.regs.txValidLaneSel.poke(Phy.defaultValidLaneSel(numLanes).U)
+    c.io.regs.rxValidLaneSel.poke(Phy.defaultValidLaneSel(numLanes).U)
     c.io.regs.rxDataMode.poke(DataMode.infinite)
     c.io.regs.rxFsmRst.poke(false.B)
     c.io.regs.rxPauseCounters.poke(false.B)
@@ -92,10 +92,10 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
     for (p <- packets) {
       assert(p.data.length == numLanes)
       for (lane <- 0 until numLanes) {
-        c.io.rx.bits.lanes(lane).poke(p.data(lane).U)
+        c.io.rx.bits.data(lane).poke(p.data(lane).U)
       }
-      c.io.rx.bits.lanes(PhyTest.validLane(numLanes)).poke(p.valid.U)
-      c.io.rx.bits.lanes(PhyTest.trackLane(numLanes)).poke(p.track.U)
+      c.io.rx.bits.valid.poke(p.valid.U)
+      c.io.rx.bits.track.poke(p.track.U)
       c.io.rx.valid.poke(true.B)
       c.clock.step()
     }

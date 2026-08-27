@@ -135,7 +135,7 @@ class PhyTestRegsIO(
   val txValid = Input(UInt(32.W))
   // Physical lane the valid waveform goes out on, so that a broken dedicated
   // valid lane does not stop a test. Codes `0` to `numLanes - 1` pick a data
-  // lane, `Phy.dedicatedValidLaneSel` (the reset value) the dedicated valid
+  // lane, `Phy.defaultValidLaneSel` (the reset value) the dedicated valid
   // lane, and `Phy.trackValidLaneSel` the track lane. The chosen lane sends
   // valid instead of its own pattern -- nothing is shuffled out of the way, so
   // that lane's data is not transmitted and its error count means nothing while
@@ -799,16 +799,18 @@ class PhyTest(
     }
   }
 
-  for (lane <- 0 until Phy.numTxLanes(numLanes)) {
-    io.tx.bits.lanes(lane) := 0.U
+  for (lane <- 0 until numLanes) {
+    io.tx.bits.data(lane) := 0.U
   }
+  io.tx.bits.valid := 0.U
+  io.tx.bits.track := 0.U
   // Needs to be true whenever PhyTest owns the mainband, so that clock and
   // track keep going out even when data isn't valid.
   io.tx.valid := mbManual
 
   // The forwarded-clock lanes carry a fixed pattern rather than a test one.
-  io.tx.bits.lanes(Phy.clkPLane(numLanes)) := io.regs.txClkP
-  io.tx.bits.lanes(Phy.clkNLane(numLanes)) := io.regs.txClkN
+  io.tx.bits.clkp := io.regs.txClkP
+  io.tx.bits.clkn := io.regs.txClkN
 
   // Unlike `io.tx.valid`, only true when data is valid.
   val tx_valid = Wire(Bool())
@@ -883,12 +885,14 @@ class PhyTest(
             switch(io.regs.testTarget) {
               is(TestTarget.mainband) {
                 // Data, valid, and track all come out of the pattern SRAM
-                // the same way, at their own lane index.
-                for (lane <- 0 to PhyTest.trackLane(numLanes)) {
-                  io.tx.bits.lanes(lane) := inputRdPorts(lane >> 2).asTypeOf(
-                    Vec(4, UInt(32.W))
-                  )(lane % 4)
+                // the same way, each at its own lane index.
+                def sramWord(lane: Int): UInt =
+                  inputRdPorts(lane >> 2).asTypeOf(Vec(4, UInt(32.W)))(lane % 4)
+                for (lane <- 0 until numLanes) {
+                  io.tx.bits.data(lane) := sramWord(lane)
                 }
+                io.tx.bits.valid := sramWord(PhyTest.validLane(numLanes))
+                io.tx.bits.track := sramWord(PhyTest.trackLane(numLanes))
               }
               is(TestTarget.loopback) {
                 txLoopbackEnq.bits := inputRdPorts((numLanes + 2) >> 2)
@@ -901,12 +905,13 @@ class PhyTest(
               is(TestTarget.mainband) {
                 // Every pattern lane takes its own LFSR; valid takes the
                 // framing waveform instead.
-                for (lane <- 0 to PhyTest.trackLane(numLanes)) {
-                  io.tx.bits.lanes(lane) := (
-                    if (lane == PhyTest.validLane(numLanes)) io.regs.txValid
-                    else Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
-                  )
+                def lfsrWord(lane: Int): UInt =
+                  Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
+                for (lane <- 0 until numLanes) {
+                  io.tx.bits.data(lane) := lfsrWord(lane)
                 }
+                io.tx.bits.valid := io.regs.txValid
+                io.tx.bits.track := lfsrWord(PhyTest.trackLane(numLanes))
               }
               is(TestTarget.loopback) {
                 txLoopbackEnq.bits := Reverse(
@@ -949,15 +954,16 @@ class PhyTest(
   // broken dedicated valid lane does not stop a test. The chosen lane sends
   // valid in place of its own pattern; unlike a link that cannot afford to drop
   // a lane, the tester does not shuffle the displaced payload anywhere.
-  val txValidWaveform = io.tx.bits.lanes(Phy.validLane(numLanes))
-  for (lane <- 0 to PhyTest.trackLane(numLanes)) {
-    // The dedicated valid lane already carries the waveform, and driving it
-    // from itself would be a combinational loop.
-    if (lane != PhyTest.validLane(numLanes)) {
-      when(io.regs.txValidLaneSel === lane.U) {
-        io.tx.bits.lanes(lane) := txValidWaveform
-      }
+  // The dedicated valid lane already carries the waveform, so only the other
+  // pattern lanes are overridden -- driving it from itself would be a
+  // combinational loop.
+  for (lane <- 0 until numLanes) {
+    when(io.regs.txValidLaneSel === lane.U) {
+      io.tx.bits.data(lane) := io.tx.bits.valid
     }
+  }
+  when(io.regs.txValidLaneSel === Phy.trackValidLaneSel(numLanes).U) {
+    io.tx.bits.track := io.tx.bits.valid
   }
 
   // RX logic
@@ -965,7 +971,8 @@ class PhyTest(
   io.rx.ready := true.B
   rxLoopbackFifo.io.deq.ready := true.B
   // The lane the RX frames on: recording starts at the first one seen on it.
-  val rxValidLaneWord = io.rx.bits.lanes(io.regs.rxValidLaneSel)
+  val rxValidLaneWord =
+    Phy.rxLaneWords(io.rx.bits, numLanes)(io.regs.rxValidLaneSel)
   // The loopback receiver hands over a word every divided cycle whether or not
   // anything is being sent, so its lane reads zero unless it is the target.
   // That keeps it out of the capture SRAM and the signature during a mainband
@@ -1051,8 +1058,12 @@ class PhyTest(
     when(!recordingStarted && !startRecording) {
       // Store latest data at the beginning of the `runningData` register.
       for (lane <- 0 until numLanes + 3) {
-        if (lane <= PhyTest.trackLane(numLanes)) {
-          runningData(lane) := io.rx.bits.lanes(lane)
+        if (lane < numLanes) {
+          runningData(lane) := io.rx.bits.data(lane)
+        } else if (lane == PhyTest.validLane(numLanes)) {
+          runningData(lane) := io.rx.bits.valid
+        } else if (lane == PhyTest.trackLane(numLanes)) {
+          runningData(lane) := io.rx.bits.track
         } else {
           runningData(lane) := rxLoopbackData
         }
@@ -1080,9 +1091,15 @@ class PhyTest(
         )
       }
       for (lane <- 0 until numLanes + 3) {
-        val rawData =
-          if (lane <= PhyTest.trackLane(numLanes)) io.rx.bits.lanes(lane)
-          else rxLoopbackData
+        val rawData = if (lane < numLanes) {
+          io.rx.bits.data(lane)
+        } else if (lane == PhyTest.validLane(numLanes)) {
+          io.rx.bits.valid
+        } else if (lane == PhyTest.trackLane(numLanes)) {
+          io.rx.bits.track
+        } else {
+          rxLoopbackData
+        }
         val data = Wire(UInt(64.W))
         data := (rawData << rxReceiveOffset) >> startIdx
         val newData = Wire(UInt(64.W))
