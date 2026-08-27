@@ -1121,31 +1121,48 @@ class PhyTest(
         rxLaneWords(lane) := newData(31, 0)
 
         when(shouldProcessPacket) {
-          // Score the packet against the pattern at all three framings so that a
-          // valid bit error at alignment time does not invalidate the run.
-          def scoreAgainstLfsr(lfsrIdx: Int, errIdx: Int): Unit = {
-            rxLfsrs(lfsrIdx).io.increment := true.B
-            val state = rxLfsrs(lfsrIdx).io.out.asUInt
+          // Score the packet against the reference at all three framings so
+          // that a valid bit error at alignment time does not invalidate the
+          // run.
+          // Compares a lane against the framing waveform rather than against
+          // a pattern.
+          def scoreAgainstValid(errIdx: Int): Unit = {
             rxErrorMask(PhyTest.NominalFraming)(errIdx) :=
-              newData(31, 0) ^ refWord(state)
+              newData(31, 0) ^ io.regs.rxLfsrValid
             rxErrorMask(PhyTest.EarlyFraming)(errIdx) :=
-              newData(31, 0) ^ refWordAdvanced(state)
+              newData(31, 0) ^ validRefAdvanced(io.regs.rxLfsrValid)
             rxErrorMask(PhyTest.LateFraming)(errIdx) :=
-              newData(31, 0) ^ refWordDelayed(state)
+              newData(31, 0) ^ validRefDelayed(io.regs.rxLfsrValid)
           }
           if (lane == PhyTest.validLane(numLanes)) {
-            // Valid carries a repeating framing waveform, so it is compared
-            // against the intended one rather than against a pattern.
-            rxErrorMask(PhyTest.NominalFraming)(lane) :=
-              newData(31, 0) ^ io.regs.rxLfsrValid
-            rxErrorMask(PhyTest.EarlyFraming)(lane) :=
-              newData(31, 0) ^ validRefAdvanced(io.regs.rxLfsrValid)
-            rxErrorMask(PhyTest.LateFraming)(lane) :=
-              newData(31, 0) ^ validRefDelayed(io.regs.rxLfsrValid)
+            // The dedicated valid lane always carries the framing waveform,
+            // whether or not the partner also moved it onto another lane.
+            scoreAgainstValid(lane)
           } else {
-            // Data, track, and loopback all carry a pattern and are scored the
-            // same way, each against the LFSR at its own lane index.
-            scoreAgainstLfsr(lane, lane)
+            // Data, track, and loopback carry a pattern and are scored against
+            // the LFSR at their own lane index -- unless the partner moved the
+            // framing waveform onto this lane, in which case it carries that
+            // instead and has to be scored against it. The LFSR still advances
+            // either way, so the references stay in step across lanes and a
+            // lane means the same thing before and after a select change.
+            rxLfsrs(lane).io.increment := true.B
+            val state = rxLfsrs(lane).io.out.asUInt
+            val carriesValid =
+              if (lane <= PhyTest.trackLane(numLanes)) {
+                io.regs.rxValidLaneSel === lane.U
+              } else {
+                false.B
+              }
+            when(carriesValid) {
+              scoreAgainstValid(lane)
+            }.otherwise {
+              rxErrorMask(PhyTest.NominalFraming)(lane) :=
+                newData(31, 0) ^ refWord(state)
+              rxErrorMask(PhyTest.EarlyFraming)(lane) :=
+                newData(31, 0) ^ refWordAdvanced(state)
+              rxErrorMask(PhyTest.LateFraming)(lane) :=
+                newData(31, 0) ^ refWordDelayed(state)
+            }
           }
         }
       }

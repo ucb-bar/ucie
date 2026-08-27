@@ -10,6 +10,7 @@ import org.chipsalliance.diplomacy._
 import org.chipsalliance.cde.config.Parameters
 import freechips.rocketchip.prci._
 import edu.berkeley.cs.uciedigital.tilelink._
+import edu.berkeley.cs.uciedigital.phytest.DebugBumpsIO
 import edu.berkeley.cs.chippy.{
   TLTesterParams,
   TLTester,
@@ -348,6 +349,9 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
       val ucieDigitalBypassClock = Input(Clock())
       val reg = new TLTesterIO(TestHarness.tltParams)
       val mb = new TLTesterIO(TestHarness.tltParams)
+      // Brought out so the observation bumps show up in a waveform rather than
+      // dangling. Nothing in the harness reads them.
+      val debug = new DebugBumpsIO
     })
 
     clockNode.out(0)._1.clock := clock
@@ -355,6 +359,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
 
     io.reg <> tltReg.module.io
     io.mb <> tltMb.module.io
+    io.debug := ucieTL.module.io.debug
 
     // Loopback
     ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData

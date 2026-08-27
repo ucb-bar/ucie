@@ -79,7 +79,10 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   // comes back in the order it went out.
   dut.io.regs.loopbackTxctl.dll_reset := false.B
   for (i <- 0 until Phy.SerdesRatio) {
-    dut.io.regs.loopbackTxctl.shuffler(i) := i.U
+    // The TX tile serializes through a tree; undoing that here puts the word on
+    // the wire in plain bit order, so the sequential RX tile reads it back
+    // unchanged. This is what the register file's reset value does too.
+    dut.io.regs.loopbackTxctl.shuffler(i) := Phy.treeBitOrder(i).U
     dut.io.regs.loopbackRxctl.shuffler(i) := i.U
   }
   dut.io.regs.loopbackRxctl.afeBypassEn := false.B

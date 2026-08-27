@@ -62,6 +62,17 @@ object Phy {
   def rxLaneWords(rx: RxIO, numLanes: Int): Vec[UInt] =
     VecInit((0 until numLanes).map(rx.data(_)) ++ Seq(rx.valid, rx.track))
 
+  // The order the TX tile puts a word on the wire. It serializes through an
+  // adjacent-pairing binary tree, so the bit sent in UI `t` is
+  // `din(treeBitOrder(t))` -- bit reversal of the five index bits, giving
+  // D0 D16 D8 D24 D4 D20 ... rather than D0 D1 D2 D3.
+  //
+  // The RX tile deserializes in time order, so a lane's shuffler has to undo
+  // this for a word to arrive as it was sent. `treeBitOrder` is its own
+  // inverse, so applying it on either side cancels it.
+  def treeBitOrder(t: Int): Int =
+    (0 until 5).map(b => ((t >> b) & 1) << (4 - b)).sum
+
   // Instance names for the lane tiles. The PHY does not otherwise care what a
   // lane carries, but the physical flow and every waveform are far easier to
   // read when the tiles are named for their role.

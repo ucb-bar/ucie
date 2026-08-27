@@ -314,8 +314,12 @@ class UcieTLRegs(
         w.skew.mix_en := 0.U
         w.skew.nen_out := 20.U
         w.skew.pen_out := 22.U
+        // The TX tile serializes through an adjacent-pairing tree, so it sends
+        // `din[bitrev5(t)]` in UI `t`. Pre-applying that same permutation here
+        // cancels it, putting the word on the wire in plain bit order; software
+        // can still program any other mapping.
         for (i <- 0 until 32) {
-          w.shuffler(i) := i.U(5.W)
+          w.shuffler(i) := Phy.treeBitOrder(i).U(5.W)
         }
         w.sample_negedge := false.B
         w.delay := 0.U
@@ -341,10 +345,13 @@ class UcieTLRegs(
         w.delay := 0.U
         w
       })))
-      // UCIe common.
+      // DEBUG CIRCUITRY
+      // Everything below drives the tester's debug hardware rather than the
+      // link: the observation bumps and the TX data debug lane.
+      //
       // Pad drivers for the observation bumps: TX clock, RX clock, RX data,
       // clock mux.
-      val commonDriverctl = RegInit(VecInit(Seq.fill(PhyTest.NumDebugDrivers)({
+      val debugDriverctl = RegInit(VecInit(Seq.fill(PhyTest.NumDebugDrivers)({
         val w = Wire(new DriverCtlIO)
         w.pu_ctl := 0.U
         w.pd_ctl := 0.U
@@ -354,12 +361,12 @@ class UcieTLRegs(
       })))
       // Which clock the clock mux bump watches; see the mux input list in
       // PhyTest for what each index selects.
-      val commonClkMuxSel = RegInit(0.U(io.test.clkMuxSel.getWidth.W))
+      val debugClkMuxSel = RegInit(0.U(io.test.clkMuxSel.getWidth.W))
       // Which RX lane, and which bit of its deserialized word, the RX data bump
       // watches.
-      val commonRxDebugLane = RegInit(0.U(io.test.rxDebugLane.getWidth.W))
-      val commonRxDebugBit = RegInit(0.U(io.test.rxDebugBit.getWidth.W))
-      val commonTxctl = RegInit({
+      val debugRxLane = RegInit(0.U(io.test.rxDebugLane.getWidth.W))
+      val debugRxBit = RegInit(0.U(io.test.rxDebugBit.getWidth.W))
+      val debugTxctl = RegInit({
         val w = Wire(new TxLaneDigitalCtlIO)
         w.dll_reset := true.B
         w.driver.pu_ctl := 0.U
@@ -382,16 +389,16 @@ class UcieTLRegs(
         w
       })
 
-      val commonTxTestMode = RegInit(TxTestMode.manual)
-      val commonTxDataMode = RegInit(DataMode.finite)
-      val commonTxLfsrSeed = RegInit(1.U(64.W))
-      val commonTxFsmRst = Wire(DecoupledIO(UInt(1.W)))
-      val commonTxExecute = Wire(DecoupledIO(UInt(1.W)))
-      commonTxFsmRst.ready := true.B
-      commonTxExecute.ready := true.B
-      val commonTxManualRepeatPeriod = RegInit(0.U(6.W))
-      val commonTxPacketsToSend = RegInit(0.U(params.bitCounterWidth.W))
-      val commonData = RegInit(VecInit(Seq.fill(16)(0.U(64.W))))
+      val debugTxTestMode = RegInit(TxTestMode.manual)
+      val debugTxDataMode = RegInit(DataMode.finite)
+      val debugTxLfsrSeed = RegInit(1.U(64.W))
+      val debugTxFsmRst = Wire(DecoupledIO(UInt(1.W)))
+      val debugTxExecute = Wire(DecoupledIO(UInt(1.W)))
+      debugTxFsmRst.ready := true.B
+      debugTxExecute.ready := true.B
+      val debugTxManualRepeatPeriod = RegInit(0.U(6.W))
+      val debugTxPacketsToSend = RegInit(0.U(params.bitCounterWidth.W))
+      val debugData = RegInit(VecInit(Seq.fill(16)(0.U(64.W))))
 
       // Sideband tester: stages one 64-bit packet each way over the
       // single-bit sideband. See `SidebandTestRegsIO`.
@@ -499,21 +506,21 @@ class UcieTLRegs(
 
       // Debug circuitry: the observation bump drivers and the TX data debug
       // lane, all owned by PhyTest.
-      io.test.driverctl := applyShift(commonDriverctl)
-      io.test.clkMuxSel := applyShift(commonClkMuxSel)
-      io.test.rxDebugLane := applyShift(commonRxDebugLane)
-      io.test.rxDebugBit := applyShift(commonRxDebugBit)
-      io.test.txctl := applyShift(commonTxctl)
-      io.test.txDebugTestMode := applyShift(commonTxTestMode)
-      io.test.txDebugDataMode := applyShift(commonTxDataMode)
-      io.test.txDebugLfsrSeed := applyShift(commonTxLfsrSeed)
-      io.test.txDebugFsmRst := applyShift(commonTxFsmRst.valid)
-      io.test.txDebugExecute := applyShift(commonTxExecute.valid)
+      io.test.driverctl := applyShift(debugDriverctl)
+      io.test.clkMuxSel := applyShift(debugClkMuxSel)
+      io.test.rxDebugLane := applyShift(debugRxLane)
+      io.test.rxDebugBit := applyShift(debugRxBit)
+      io.test.txctl := applyShift(debugTxctl)
+      io.test.txDebugTestMode := applyShift(debugTxTestMode)
+      io.test.txDebugDataMode := applyShift(debugTxDataMode)
+      io.test.txDebugLfsrSeed := applyShift(debugTxLfsrSeed)
+      io.test.txDebugFsmRst := applyShift(debugTxFsmRst.valid)
+      io.test.txDebugExecute := applyShift(debugTxExecute.valid)
       io.test.txDebugManualRepeatPeriod := applyShift(
-        commonTxManualRepeatPeriod
+        debugTxManualRepeatPeriod
       )
-      io.test.txDebugPacketsToSend := applyShift(commonTxPacketsToSend)
-      io.test.txDebugData := applyShift(commonData)
+      io.test.txDebugPacketsToSend := applyShift(debugTxPacketsToSend)
+      io.test.txDebugData := applyShift(debugData)
 
       // String name should always be camel case with an underscore to separate indices.
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
@@ -630,39 +637,39 @@ class UcieTLRegs(
           toRegFieldRw(rxctl(i).delay, s"rxctl_${i}_rxDelay")
         )
       }) ++ Seq(
-        toRegFieldRw(commonTxTestMode, "commonTxTestMode"),
-        toRegFieldRw(commonTxDataMode, "commonTxDataMode"),
-        toRegFieldRw(commonTxLfsrSeed, s"commonTxLfsrSeed"),
-        RegField.w(1, commonTxFsmRst, RegFieldDesc("commonTxFsmRst", "")),
-        RegField.w(1, commonTxExecute, RegFieldDesc("commonTxExecute", "")),
-        toRegFieldRw(commonTxManualRepeatPeriod, "commonTxManualRepeatPeriod"),
-        toRegFieldRw(commonTxPacketsToSend, "commonTxPacketsToSend")
+        toRegFieldRw(debugTxTestMode, "debugTxTestMode"),
+        toRegFieldRw(debugTxDataMode, "debugTxDataMode"),
+        toRegFieldRw(debugTxLfsrSeed, s"debugTxLfsrSeed"),
+        RegField.w(1, debugTxFsmRst, RegFieldDesc("debugTxFsmRst", "")),
+        RegField.w(1, debugTxExecute, RegFieldDesc("debugTxExecute", "")),
+        toRegFieldRw(debugTxManualRepeatPeriod, "debugTxManualRepeatPeriod"),
+        toRegFieldRw(debugTxPacketsToSend, "debugTxPacketsToSend")
       ) ++ (0 until 16).map((i: Int) => {
-        toRegFieldRw(commonData(i), s"commonData_${i}")
-      }) ++ (0 until commonDriverctl.length).map((i: Int) => {
-        toRegFieldRw(commonDriverctl(i), s"commonDriverctl_${i}")
+        toRegFieldRw(debugData(i), s"debugData_${i}")
+      }) ++ (0 until debugDriverctl.length).map((i: Int) => {
+        toRegFieldRw(debugDriverctl(i), s"debugDriverctl_${i}")
       }) ++ Seq(
-        toRegFieldRw(commonTxctl.dll_reset, s"commonTxctlDllReset"),
-        toRegFieldRw(commonTxctl.driver, s"commonTxctlDriver"),
-        toRegFieldRw(commonTxctl.skew, s"commonTxctlSkew")
+        toRegFieldRw(debugTxctl.dll_reset, s"debugTxctlDllReset"),
+        toRegFieldRw(debugTxctl.driver, s"debugTxctlDriver"),
+        toRegFieldRw(debugTxctl.skew, s"debugTxctlSkew")
       ) ++ (0 until 32).map((j: Int) =>
-        toRegFieldRw(commonTxctl.shuffler(j), s"commonTxctlShuffler_$j")
+        toRegFieldRw(debugTxctl.shuffler(j), s"debugTxctlShuffler_$j")
       ) ++ Seq(
         toRegFieldR(
           applyShift(io.test.txDebugDllCode),
-          "commonTxctlDllCode"
+          "debugTxctlDllCode"
         ),
         toRegFieldR(
           applyShift(io.test.txDebugState),
-          "commonTxTestState"
+          "debugTxTestState"
         ),
         toRegFieldR(
           applyShift(io.test.txDebugPacketsEnqueued),
-          "commonTxPacketsSent"
+          "debugTxPacketsSent"
         ),
-        toRegFieldRw(commonClkMuxSel, "commonClkMuxSel"),
-        toRegFieldRw(commonRxDebugLane, "commonRxDebugLane"),
-        toRegFieldRw(commonRxDebugBit, "commonRxDebugBit"),
+        toRegFieldRw(debugClkMuxSel, "debugClkMuxSel"),
+        toRegFieldRw(debugRxLane, "debugRxLane"),
+        toRegFieldRw(debugRxBit, "debugRxBit"),
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(controllerSel, "controllerSel"),
@@ -1249,14 +1256,17 @@ class UcieTL(
       managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
       dontTouch(managerTl.d.bits.opcode)
 
-      // Data and valid come through the queue; the clock and track lanes are
-      // forced to their fixed patterns here regardless of what it carried.
-      val txContClocks = Wire(new TxIO(params.numLanes))
-      txContClocks.data := txTlFifo.io.deq.bits.data
-      txContClocks.valid := txTlFifo.io.deq.bits.valid
-      txContClocks.track := "h55555555".U
-      txContClocks.clkp := "h55555555".U
-      txContClocks.clkn := "haaaaaaaa".U
+      // The word the TL path puts on the lanes. Data and valid come through the
+      // queue; the clock and track lanes are forced to their fixed patterns
+      // here regardless of what it carried. The queue is enqueued
+      // unconditionally while the mainband is in `tl` mode, so these keep going
+      // out through gaps in TL traffic rather than stopping with it.
+      val tlTxWord = Wire(new TxIO(params.numLanes))
+      tlTxWord.data := txTlFifo.io.deq.bits.data
+      tlTxWord.valid := txTlFifo.io.deq.bits.valid
+      tlTxWord.track := "h55555555".U
+      tlTxWord.clkp := "h55555555".U
+      tlTxWord.clkn := "haaaaaaaa".U
 
       // A mainband in tl mode drives from txTlFifo; otherwise PhyTest and ucie
       // both drive from txTestFifo.
@@ -1264,7 +1274,7 @@ class UcieTL(
         selMbTl,
         Mux(
           txTlFifo.io.deq.valid,
-          txContClocks,
+          tlTxWord,
           0.U.asTypeOf(phy.io.tx)
         ),
         Mux(

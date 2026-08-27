@@ -38,8 +38,15 @@ class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   * actually starts. Skewing the framing the other way needs no harness support:
   * a valid pattern whose lowest set bit is 1 makes the RX align one UI late.
   */
-class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
-    extends Module {
+class PhyTestLfsrLoopback(
+    numLanes: Int = 4,
+    dataDelay: Boolean = false,
+    validLaneSel: Int = -1
+) extends Module {
+  // Which lane carries the framing waveform; negative means leave it on the
+  // dedicated valid lane.
+  val validSel =
+    if (validLaneSel >= 0) validLaneSel else Phy.defaultValidLaneSel(numLanes)
   val io = IO(new PhyTestLfsrLoopbackIO(numLanes))
 
   // The tester carries analog macros (the observation bump drivers, the TX data
@@ -55,8 +62,8 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
   dut.io.regs.txLfsrSeed := io.lfsrSeed
   dut.io.regs.rxLfsrSeed := io.lfsrSeed
   dut.io.regs.txValid := io.validPattern
-  dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
-  dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
+  dut.io.regs.txValidLaneSel := validSel.U
+  dut.io.regs.rxValidLaneSel := validSel.U
   dut.io.regs.rxLfsrValid := io.validPattern
   dut.io.regs.txClkP := 0.U
   dut.io.regs.txClkN := 0.U
@@ -134,11 +141,12 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
   // by framing then by lane.
   def counts(
       dataDelay: Boolean,
-      validPattern: BigInt
+      validPattern: BigInt,
+      validLaneSel: Int = -1
   ): (Seq[Seq[BigInt]], BigInt) = {
     var result: Seq[Seq[BigInt]] = Seq.empty
     var received = BigInt(0)
-    simulate(new PhyTestLfsrLoopback(numLanes, dataDelay)) { c =>
+    simulate(new PhyTestLfsrLoopback(numLanes, dataDelay, validLaneSel)) { c =>
       for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
         c.io.lfsrSeed(lane).poke(seed(lane).U)
       }
@@ -198,6 +206,23 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
         withClue(s"lane $lane framing $f of $bits bits: ") {
           assert(errors(f)(lane) > bits / 5)
           assert(errors(f)(lane) < 4 * bits / 5)
+        }
+      }
+    }
+
+    it("should score every lane clean with valid moved onto a data lane") {
+      // `txValidLaneSel` sends the framing waveform on a data lane instead of
+      // the dedicated one, and `rxValidLaneSel` tells the RX where to find it.
+      // The lane it lands on carries the waveform rather than its own pattern,
+      // so it has to be scored against the waveform too -- scoring it against
+      // its LFSR would report about half the bits wrong.
+      val moved = 1
+      val (errors, received) =
+        counts(dataDelay = false, alignedValid, validLaneSel = moved)
+      assert(received >= packets / 2, s"only $received packets received")
+      for (lane <- scoredLanes) {
+        withClue(s"lane $lane with valid moved to lane $moved: ") {
+          assert(errors(PhyTest.NominalFraming)(lane) == 0)
         }
       }
     }

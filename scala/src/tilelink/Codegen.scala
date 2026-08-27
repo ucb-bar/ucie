@@ -303,19 +303,19 @@ object Codegen {
     reqs += write("txClkN", defaultClkN)
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
-    reqs += write("commonTxctlDllReset", 0)
+    reqs += write("debugTxctlDllReset", 0)
     reqs += write("divResetb", 1)
 
     for (i <- 0 until PhyTest.NumDebugDrivers) {
-      reqs += write(s"commonDriverctl_$i", enableDriverCtl)
+      reqs += write(s"debugDriverctl_$i", enableDriverCtl)
     }
 
-    reqs += write("commonTxctlDriver", enableDriverCtl)
-    reqs += write("commonTxctlSkew", defaultSkewCtl)
+    reqs += write("debugTxctlDriver", enableDriverCtl)
+    reqs += write("debugTxctlSkew", defaultSkewCtl)
 
     reqs += write("txRst", 1)
     reqs += write("rxRst", 1)
-    reqs += write("commonTxFsmRst", 1)
+    reqs += write("debugTxFsmRst", 1)
 
     reqs += write("controllerSel", ControllerSel.phytest.litValue)
     reqs += write("mainbandMode", mainbandMode)
@@ -598,7 +598,7 @@ class Codegen(f: Formatter) {
       formatWriteNamedReg("rxRst", f.formatLong(1))
     )
     body.append(
-      formatWriteNamedReg("commonTxFsmRst", f.formatLong(1))
+      formatWriteNamedReg("debugTxFsmRst", f.formatLong(1))
     )
     body.append(
       f.formatUcieAssertEq(
@@ -731,7 +731,7 @@ class Codegen(f: Formatter) {
       formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
     )
     body.append(
-      formatWriteNamedReg("commonTxctlDllReset", f.formatLong(0))
+      formatWriteNamedReg("debugTxctlDllReset", f.formatLong(0))
     )
     // TODO: Gate clock before de-asserting reset.
     body.append(
@@ -743,7 +743,7 @@ class Codegen(f: Formatter) {
       loopBody.append(
         f.formatWriteReg(
           "regDrv",
-          s"${f.formatConstantRef("commonDriverctl")} + 8 * i",
+          s"${f.formatConstantRef("debugDriverctl")} + 8 * i",
           f.formatConstantRef("enableDriverCtl")
         )
       )
@@ -753,14 +753,14 @@ class Codegen(f: Formatter) {
     }
     body.append(
       formatWriteNamedReg(
-        "commonTxctlDriver",
+        "debugTxctlDriver",
         f.formatConstantRef("enableDriverCtl")
       )
     )
 
     body.append(
       formatWriteNamedReg(
-        "commonTxctlSkew",
+        "debugTxctlSkew",
         f.formatConstantRef("defaultSkewCtl")
       )
     )

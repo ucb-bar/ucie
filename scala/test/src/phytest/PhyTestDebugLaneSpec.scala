@@ -17,7 +17,10 @@ import edu.berkeley.cs.uciedigital.phy.Phy
   * The lane clock toggles once per main clock edge, and the serializer is DDR,
   * so exactly one bit leaves the lane per main clock cycle.
   */
-class PhyTestDebugLaneHarness(numLanes: Int = 2) extends Module {
+class PhyTestDebugLaneHarness(
+    numLanes: Int = 2,
+    shuffle: Int => Int = Phy.treeBitOrder
+) extends Module {
   val io = IO(new Bundle {
     val divResetb = Input(Bool())
     val data = Input(Vec(16, UInt(64.W)))
@@ -59,11 +62,12 @@ class PhyTestDebugLaneHarness(numLanes: Int = 2) extends Module {
   dut.io.regs.sb.rxPop := false.B
   dut.io.regs.sb.rxRst := false.B
 
-  // The lane's serializer is only released once `dll_reset` drops, and the
-  // shuffler has to be the identity for the word to go out in order.
+  // The lane's serializer is only released once `dll_reset` drops. The
+  // shuffler defaults to the permutation that cancels the tile's tree order;
+  // passing the identity instead exposes that raw order.
   dut.io.regs.txctl.dll_reset := false.B
   for (i <- 0 until Phy.SerdesRatio) {
-    dut.io.regs.txctl.shuffler(i) := i.U
+    dut.io.regs.txctl.shuffler(i) := shuffle(i).U
   }
 
   dut.io.regs.txDebugTestMode := TxTestMode.manual
@@ -99,13 +103,21 @@ class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {
   // main clock and the serializer divides it by sixteen.
   val divCycle = 2 * 16
 
-  // The serializer shifts out of bit 0 first.
-  def uis(word: BigInt): Seq[Int] =
-    (0 until Phy.SerdesRatio).map(i => ((word >> i) & 1).toInt)
+  // The tile serializes with an adjacent-pairing binary tree, so the bit sent
+  // in UI t is word[bitrev5(t)] -- D0 D16 D8 D24 D4 D20 ... -- rather than
+  // word[t]. This is the one test that sees the wire order directly.
+  // The bit the tile puts in UI `t`, given the shuffler permutation in front of
+  // it. The serializer sends `shuffled(treeBitOrder(t))`, and the shuffler maps
+  // `shuffled(i) = word(shuffle(i))`.
+  def uis(word: BigInt, shuffle: Int => Int): Seq[Int] =
+    (0 until Phy.SerdesRatio)
+      .map(t => ((word >> shuffle(Phy.treeBitOrder(t))) & 1).toInt)
 
   describe("PhyTest TX data debug lane") {
-    it("should serialize the manual pattern onto the debug bump") {
-      simulate(new PhyTestDebugLaneHarness()) { c =>
+    // Drives the debug lane with `words` under the given shuffler permutation
+    // and checks the bump carries the resulting UI sequence.
+    def runAndCheck(shuffle: Int => Int, what: String): Unit =
+      simulate(new PhyTestDebugLaneHarness(shuffle = shuffle)) { c =>
         c.io.divResetb.poke(false.B)
         c.io.repeatPeriod.poke(words.length.U)
         c.io.fsmRst.poke(false.B)
@@ -155,11 +167,11 @@ class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {
           bit
         }
 
-        val expected = words.flatMap(uis)
+        val expected = words.flatMap(uis(_, shuffle))
         assert(
           stream.sliding(expected.length).contains(expected),
-          s"expected the pattern ${expected.mkString} in the transmitted " +
-            s"stream ${stream.mkString}"
+          s"expected the $what pattern ${expected.mkString} in the " +
+            s"transmitted stream ${stream.mkString}"
         )
 
         // The queue drains one word per divided cycle, i.e. one per 32 UIs, so
@@ -169,6 +181,23 @@ class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {
           "the debug FSM should keep enqueuing while the lane drains"
         )
       }
+
+    it("should send din bit 0 first under the default shuffler") {
+      // How the lane ships: the shuffler's reset value cancels the tile's tree
+      // order, so UI `t` carries `din(t)`.
+      assert(
+        (0 until Phy.SerdesRatio)
+          .map(t => Phy.treeBitOrder(Phy.treeBitOrder(t))) == (0 until
+          Phy.SerdesRatio),
+        "the default shuffler should cancel the tile's bit order"
+      )
+      runAndCheck(Phy.treeBitOrder, "bit ordered")
+    }
+
+    it("should send the tile's tree order under an identity shuffler") {
+      // With nothing cancelling it, the adjacent-pairing tree shows through:
+      // D0 D16 D8 D24 D4 D20 ...
+      runAndCheck(identity, "tree ordered")
     }
   }
 }

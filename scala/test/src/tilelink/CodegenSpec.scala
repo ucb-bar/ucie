@@ -150,7 +150,7 @@ class CodegenSpec extends AnyFunSpec {
       assert(result.contains("task reset_fsms()"))
       assert(result.contains("`WRITE_UCIE(regDrv, `TX_RST, 64'h1)"))
       assert(result.contains("`WRITE_UCIE(regDrv, `RX_RST, 64'h1)"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `COMMON_TX_FSM_RST, 64'h1)"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `DEBUG_TX_FSM_RST, 64'h1)"))
       assert(
         result.contains(
           "`EXPECT_UCIE_MSG(regDrv, `TX_TEST_STATE, `TX_TEST_STATE_IDLE"
@@ -177,7 +177,7 @@ class CodegenSpec extends AnyFunSpec {
       assert(result.contains("reg_write64(base + UCIE_TX_RST, 0x1ULL);"))
       assert(result.contains("reg_write64(base + UCIE_RX_RST, 0x1ULL);"))
       assert(
-        result.contains("reg_write64(base + UCIE_COMMON_TX_FSM_RST, 0x1ULL);")
+        result.contains("reg_write64(base + UCIE_DEBUG_TX_FSM_RST, 0x1ULL);")
       )
       assert(
         result.contains(
