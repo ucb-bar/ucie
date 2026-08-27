@@ -5,20 +5,43 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.macros._
 import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
+/** Lane numbering.
+  *
+  * One order, both directions: the `numLanes` data lanes, then valid, then
+  * track, then the two forwarded-clock lanes last. TX has all `numLanes + 4`;
+  * RX has the same numbering but only the first `numLanes + 2` carry a word,
+  * since its clock lanes recover a clock rather than deserializing one.
+  *
+  * [[TxIO]] and [[RxIO]], the per-lane controls in [[PhyRegsIO]], the lane
+  * clocks out of `ClkDistNetwork`, the observation taps in [[PhyDebugIO]], and
+  * the bump fan-out all index that same way, so lane `i` means one thing
+  * everywhere.
+  *
+  * The PHY does not repair lanes, and past the bump fan-out it does not know
+  * what any lane carries: every lane is a 32 bit word into a serializer or out
+  * of a deserializer. Which lane is valid, which is track, and which carry a
+  * clock pattern is entirely the controller's business. Moving the valid
+  * waveform onto another lane is likewise a test function and lives in
+  * `PhyTest`.
+  */
 object Phy {
   val SerdesRatio = 32
 
-  // Lanes that can be selected to carry the valid signal: the `numLanes` data
-  // lanes, the dedicated valid lane, and the track lane. The forwarded clock
-  // lanes are excluded since the RX side has no counterpart for them.
+  // Lanes that can be selected to carry the valid waveform in a test: the
+  // `numLanes` data lanes, the dedicated valid lane, and the track lane. The
+  // forwarded clock lanes are excluded since the RX side has no counterpart for
+  // them. These codes coincide with physical lane indices for the data lanes
+  // and the dedicated valid lane; `trackValidLaneSel` names TX physical lane
+  // `numLanes + 3` and RX physical lane `numLanes + 1`, since only TX has clock
+  // lanes in between.
   def validLaneSelCount(numLanes: Int): Int = numLanes + 2
 
   // Width of a valid lane select field.
   def validLaneSelWidth(numLanes: Int): Int =
     log2Ceil(validLaneSelCount(numLanes))
 
-  // Select code for the dedicated valid lane, i.e. no remapping. This is the
-  // reset value of both selects.
+  // Select code for the dedicated valid lane, i.e. valid where it normally
+  // goes. This is the reset value of both selects.
   def dedicatedValidLaneSel(numLanes: Int): Int = numLanes
 
   // Select code for the track lane. The mainband protocol does not use track,
@@ -26,96 +49,40 @@ object Phy {
   // data lane.
   def trackValidLaneSel(numLanes: Int): Int = numLanes + 1
 
-  // Physical TX lane index carrying the valid signal.
-  //
-  // The TX lane order is data, valid, clk P, clk N, track, so only the track
-  // code needs remapping. Out of range codes fall back to the dedicated valid
-  // lane.
-  def txValidLane(sel: UInt, numLanes: Int): UInt =
-    MuxLookup(sel, dedicatedValidLaneSel(numLanes).U)(
-      (0 to numLanes).map(s => s.U -> s.U) :+
-        (trackValidLaneSel(numLanes).U -> (numLanes + 3).U)
-    )
+  // Lane layout. Data lanes come first, then valid and track, then the two
+  // forwarded-clock lanes. Both directions number the same way; the RX clock
+  // lanes just carry no word.
+  def numTxLanes(numLanes: Int): Int = numLanes + 4
+  def numRxDataLanes(numLanes: Int): Int = numLanes + 2
+  def validLane(numLanes: Int): Int = numLanes
+  def trackLane(numLanes: Int): Int = numLanes + 1
+  def clkPLane(numLanes: Int): Int = numLanes + 2
+  def clkNLane(numLanes: Int): Int = numLanes + 3
 
-  // Physical RX lane index carrying the valid signal.
-  //
-  // The RX lane order is data, valid, track, which already matches the select
-  // codes. Out of range codes fall back to the dedicated valid lane.
-  def rxValidLane(sel: UInt, numLanes: Int): UInt =
-    Mux(
-      sel <= trackValidLaneSel(numLanes).U,
-      sel,
-      dedicatedValidLaneSel(numLanes).U
-    )
-
-  // Applies the valid lane remap, returning what each of the `numLanes + 4` TX
-  // lanes should drive.
-  //
-  // The selected lane and the dedicated valid lane swap roles, so the
-  // dedicated lane drives whatever the selected lane would have driven. Track
-  // is the only spare lane, so selecting it keeps all `numLanes` data lanes;
-  // selecting a data lane instead costs that lane's data. The forwarded clock
-  // lanes are never remapped.
-  def txValidRemap(tx: TxIO, sel: UInt, numLanes: Int): Vec[UInt] = {
-    val validLane = txValidLane(sel, numLanes)
-    val src = Wire(Vec(numLanes + 4, Bits(SerdesRatio.W)))
-    for (lane <- 0 until numLanes) {
-      src(lane) := tx.data(lane)
-    }
-    src(numLanes) := tx.valid
-    src(numLanes + 1) := tx.clkp
-    src(numLanes + 2) := tx.clkn
-    src(numLanes + 3) := tx.track
-    // Payload displaced onto the dedicated valid lane by the remap.
-    val displaced = src(validLane)
-    val din = Wire(Vec(numLanes + 4, Bits(SerdesRatio.W)))
-    for (lane <- 0 until numLanes + 4) {
-      if (lane == numLanes) {
-        din(lane) := Mux(validLane === numLanes.U, tx.valid, displaced)
-      } else if (lane == numLanes + 1 || lane == numLanes + 2) {
-        din(lane) := src(lane)
-      } else {
-        din(lane) := Mux(validLane === lane.U, tx.valid, src(lane))
-      }
-    }
-    din
-  }
-
-  // Undoes the remap the partner die's TX applied, recovering an `RxIO` from
-  // the `numLanes + 2` RX lane outputs: valid comes off the selected lane, and
-  // the selected lane's payload comes off the dedicated valid lane.
-  def rxValidRemap(laneDout: Vec[UInt], sel: UInt, numLanes: Int): RxIO = {
-    val validLane = rxValidLane(sel, numLanes)
-    val rx = Wire(new RxIO(numLanes))
-    rx.valid := laneDout(validLane)
-    for (lane <- 0 until numLanes) {
-      rx.data(lane) := Mux(
-        validLane === lane.U,
-        laneDout(numLanes),
-        laneDout(lane)
-      )
-    }
-    rx.track := Mux(
-      validLane === trackValidLaneSel(numLanes).U,
-      laneDout(numLanes),
-      laneDout(numLanes + 1)
-    )
-    rx
-  }
+  // Instance names for the lane tiles. The PHY does not otherwise care what a
+  // lane carries, but the physical flow and every waveform are far easier to
+  // read when the tiles are named for their role.
+  def laneName(prefix: String, lane: Int, numLanes: Int): String =
+    if (lane < numLanes) s"${prefix}data$lane"
+    else if (lane == validLane(numLanes)) s"${prefix}valid"
+    else if (lane == trackLane(numLanes)) s"${prefix}track"
+    else if (lane == clkPLane(numLanes)) s"${prefix}clkp"
+    else s"${prefix}clkn"
 }
 
+/** One serdes word per TX lane, in lane order. The PHY serializes whatever it
+  * is handed; what each lane means is the controller's business.
+  */
 class TxIO(numLanes: Int = 16) extends Bundle {
-  val data = Vec(numLanes, Bits(Phy.SerdesRatio.W))
-  val valid = Bits(Phy.SerdesRatio.W)
-  val clkp = Bits(Phy.SerdesRatio.W)
-  val clkn = Bits(Phy.SerdesRatio.W)
-  val track = Bits(Phy.SerdesRatio.W)
+  val lanes = Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W))
 }
 
+/** One deserialized word per RX lane that carries data, in the same lane order
+  * as [[TxIO]]. The forwarded-clock lanes recover a clock instead of a word, so
+  * they have no entry here.
+  */
 class RxIO(numLanes: Int = 16) extends Bundle {
-  val data = Vec(numLanes, Bits(Phy.SerdesRatio.W))
-  val valid = Bits(Phy.SerdesRatio.W)
-  val track = Bits(Phy.SerdesRatio.W)
+  val lanes = Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
 }
 
 class SbIO extends Bundle {
@@ -236,8 +203,10 @@ class RxLaneDigitalCtlIO extends Bundle {
 
 class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // TX CONTROL
-  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
+  // Per-tile lane control, one entry per lane in the layout order described on
+  // `Phy`. Each `shuffler` is a bit permutation within its own lane.
   val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
+  // DLL codes read back per physical lane, same order as `txctl`.
   val dllCode = Output(Vec(numLanes + 4, UInt(5.W)))
   // Clocking tile control: phase code and frequency setting.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
@@ -246,20 +215,10 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   val clkGateEn = Input(Bool())
 
   // RX CONTROL
-  // Lane control (`numLanes` data lanes, 1 valid lane, 2 clock lanes, 1 track lane).
+  // Per-tile lane control, indexed exactly like `txctl`. The two
+  // forwarded-clock lanes recover a clock rather than a word, so only their AFE
+  // settings do anything.
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
-
-  // VALID LANE REMAP
-  // Physical lane carrying the valid signal, so that a broken valid lane does
-  // not take the whole link down. Codes 0 to `numLanes - 1` select a data lane,
-  // `Phy.dedicatedValidLaneSel` (the reset value) selects the dedicated valid
-  // lane, and `Phy.trackValidLaneSel` selects the track lane.
-  //
-  // The TX and RX directions travel over different wires and are selected
-  // independently: this die's `txValidLaneSel` must match the partner die's
-  // `rxValidLaneSel`, and vice versa.
-  val txValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
-  val rxValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -360,31 +319,15 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.clk := rxClkDiv.io.clkout_3
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
 
-  // TX valid lane remap. The select is quasi-static configuration, like the
-  // rest of `io.regs`, and is used combinationally in the TX divided clock
-  // domain.
-  val txLaneDin = Phy.txValidRemap(io.tx, io.regs.txValidLaneSel, numLanes)
-
-  // TX lanes
-  for (lane <- 0 until numLanes + 4) {
-    val laneName = if (lane < numLanes) {
-      s"txdata$lane"
-    } else if (lane == numLanes) {
-      "txvalid"
-    } else if (lane == numLanes + 1) {
-      "txclkp"
-    } else if (lane == numLanes + 2) {
-      "txclkn"
-    } else {
-      "txtrack"
-    }
+  // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
+  for (lane <- 0 until Phy.numTxLanes(numLanes)) {
+    val laneName = Phy.laneName("tx", lane, numLanes)
 
     // Bit remap applied immediately before the serializer, so the permutation
-    // is in terms of the physical lane and is unaffected by the valid lane
-    // remap above.
+    // is in terms of the lane's own word.
     val txShuffler = Module(new Shuffler(Phy.SerdesRatio))
     txShuffler.suggestName(s"${laneName}_shuffler")
-    txShuffler.io.din := txLaneDin(lane)
+    txShuffler.io.din := io.tx.lanes(lane)
     txShuffler.io.permutation := io.regs.txctl(lane).shuffler
 
     val txLane = Module(new TxLane);
@@ -394,16 +337,18 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     txLane.io.ser_resetb := io.clkRst.divResetb
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
+    // The bumps are named, so this is the one place the TX side maps a lane
+    // index onto a role.
     if (lane < numLanes) {
       io.top.txData(lane) := txLane.io.dout
-    } else if (lane == numLanes) {
+    } else if (lane == Phy.validLane(numLanes)) {
       io.top.txValid := txLane.io.dout
-    } else if (lane == numLanes + 1) {
-      io.top.txClkP := txLane.io.dout.asClock
-    } else if (lane == numLanes + 2) {
-      io.top.txClkN := txLane.io.dout.asClock
-    } else {
+    } else if (lane == Phy.trackLane(numLanes)) {
       io.top.txTrack := txLane.io.dout
+    } else if (lane == Phy.clkPLane(numLanes)) {
+      io.top.txClkP := txLane.io.dout.asClock
+    } else {
+      io.top.txClkN := txLane.io.dout.asClock
     }
     txLane.io.ctl.driver := io.regs.txctl(lane).driver
     txLane.io.ctl.skew := io.regs.txctl(lane).skew
@@ -415,13 +360,14 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // RX AFE control is on the UCIe digital clock to ensure that it is always toggling,
   // even when forwarded clock is gated.
   //
-  // Lane outputs are collected before the valid lane remap is undone below.
-  val rxLaneDout = Wire(Vec(numLanes + 2, Bits(Phy.SerdesRatio.W)))
+  val rxLaneDout = Wire(
+    Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
+  )
   withClockAndReset(io.clkRst.ucieClk, io.clkRst.ucieRst) {
     // Set up clocking
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
-      RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(numLanes + 1))
+      RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(Phy.clkPLane(numLanes)))
     rxClkP.io.clkin := io.top.rxClkP
     // The forwarded clock arrives as a bump pair, but everything past the
     // clock lanes is single-ended, so the distribution network is driven from
@@ -432,32 +378,29 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
-      RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(numLanes + 2))
+      RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(Phy.clkNLane(numLanes)))
     rxClkN.io.clkin := io.top.rxClkN
 
-    for (lane <- 0 until numLanes + 2) {
-      val laneName = if (lane < numLanes) {
-        s"rxdata$lane"
-      } else if (lane == numLanes) {
-        "rxvalid"
-      } else {
-        "rxtrack"
-      }
+    // Every lane that carries a word is the same: a deserializer, then a bit
+    // shuffle.
+    for (lane <- 0 until Phy.numRxDataLanes(numLanes)) {
+      val laneName = Phy.laneName("rx", lane, numLanes)
 
       val rxLane = Module(new RxDataLane)
       val rxLaneAfeCtl = RxAfeCtl.connect(rxLane.io.ctl, io.regs.rxctl(lane))
       rxLane.suggestName(laneName)
+      // As on TX, the bump fan-out is the one place a lane index becomes a
+      // role.
       if (lane < numLanes) {
         rxLane.io.din := io.top.rxData(lane)
-      } else if (lane == numLanes) {
+      } else if (lane == Phy.validLane(numLanes)) {
         rxLane.io.din := io.top.rxValid
       } else {
         rxLane.io.din := io.top.rxTrack
       }
 
       // Bit remap applied immediately after the deserializer, mirroring the
-      // TX side: the permutation is in terms of the physical lane, before the
-      // valid lane remap is undone below.
+      // TX side.
       val rxShuffler = Module(new Shuffler(Phy.SerdesRatio))
       rxShuffler.suggestName(s"${laneName}_shuffler")
       rxShuffler.io.din := rxLane.io.dout
@@ -469,13 +412,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     }
   }
 
-  // RX valid lane remap, undoing the swap the partner die's TX applied.
-  val rx = Phy.rxValidRemap(rxLaneDout, io.regs.rxValidLaneSel, numLanes)
-  io.rx := rx
-  for (lane <- 0 until numLanes) {
-    io.debug.rxData(lane) := rx.data(lane)
-  }
-  io.debug.rxData(numLanes) := rx.valid
-  io.debug.rxData(numLanes + 1) := rx.track
+  io.rx.lanes := rxLaneDout
+  io.debug.rxData := rxLaneDout
 
 }

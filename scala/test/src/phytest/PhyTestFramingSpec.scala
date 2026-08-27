@@ -12,7 +12,8 @@ import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 
 class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
-  val lfsrSeed = Input(Vec(numLanes + 1, UInt(PhyTest.LfsrWidth.W)))
+  val lfsrSeed =
+    Input(Vec(PhyTest.numTestLanes(numLanes), UInt(PhyTest.LfsrWidth.W)))
   // Sent on the valid lane every packet, and used as the RX's expected waveform.
   val validPattern = Input(UInt(Phy.SerdesRatio.W))
   // Must be pulsed after reset to load the seeds: the LFSRs' seed port only fires
@@ -21,7 +22,12 @@ class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   val fsmRst = Input(Bool())
   val execute = Input(Bool())
   val bitErrors =
-    Output(Vec(PhyTest.NumFramings, Vec(numLanes + 2, UInt(64.W))))
+    Output(
+      Vec(
+        PhyTest.NumFramings,
+        Vec(PhyTest.numTestLanes(numLanes), UInt(64.W))
+      )
+    )
   val packetsReceived = Output(UInt(64.W))
 }
 
@@ -49,8 +55,9 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
   dut.io.regs.txLfsrSeed := io.lfsrSeed
   dut.io.regs.rxLfsrSeed := io.lfsrSeed
   dut.io.regs.txValid := io.validPattern
+  dut.io.regs.txValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
+  dut.io.regs.rxValidLaneSel := Phy.dedicatedValidLaneSel(numLanes).U
   dut.io.regs.rxLfsrValid := io.validPattern
-  dut.io.regs.txTrack := 0.U
   dut.io.regs.txClkP := 0.U
   dut.io.regs.txClkN := 0.U
   dut.io.regs.txExecute := io.execute
@@ -82,21 +89,21 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
 
   dut.io.tx.ready := true.B
   dut.io.rx.valid := dut.io.tx.valid
-  dut.io.rx.bits.valid := dut.io.tx.bits.valid
-  dut.io.rx.bits.track := dut.io.tx.bits.track
-  for (lane <- 0 until numLanes) {
-    val word = dut.io.tx.bits.data(lane)
-    dut.io.rx.bits.data(lane) := (if (!dataDelay) word
-                                  else {
-                                    // Bit 0 is the oldest UI, so delaying by one
-                                    // UI shifts each word up a bit and pulls in
-                                    // the previous word's newest bit.
-                                    val prev = RegNext(word, 0.U)
-                                    Cat(
-                                      word(Phy.SerdesRatio - 2, 0),
-                                      prev(Phy.SerdesRatio - 1)
-                                    )
-                                  })
+  // Bit 0 is the oldest UI, so delaying by one UI shifts each word up a bit
+  // and pulls in the previous word's newest bit.
+  def delayed(word: UInt): UInt =
+    if (!dataDelay) word
+    else {
+      val prev = RegNext(word, 0.U)
+      Cat(word(Phy.SerdesRatio - 2, 0), prev(Phy.SerdesRatio - 1))
+    }
+
+  // Valid frames the capture, so it is never delayed. Every other pattern lane
+  // -- the data lanes and track -- is.
+  for (lane <- 0 to PhyTest.trackLane(numLanes)) {
+    dut.io.rx.bits.lanes(lane) :=
+      (if (lane == PhyTest.validLane(numLanes)) dut.io.tx.bits.lanes(lane)
+       else delayed(dut.io.tx.bits.lanes(lane)))
   }
 
   io.bitErrors(PhyTest.NominalFraming) := dut.io.regs.rxBitErrors
@@ -132,7 +139,7 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
     var result: Seq[Seq[BigInt]] = Seq.empty
     var received = BigInt(0)
     simulate(new PhyTestLfsrLoopback(numLanes, dataDelay)) { c =>
-      for (lane <- 0 until numLanes + 1) {
+      for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
         c.io.lfsrSeed(lane).poke(seed(lane).U)
       }
       c.io.validPattern.poke(validPattern.U)
@@ -149,7 +156,7 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
       c.io.execute.poke(false.B)
       c.clock.step(packets + 4)
       result = (0 until PhyTest.NumFramings).map(f =>
-        (0 until numLanes + 2).map(lane =>
+        (0 until PhyTest.numTestLanes(numLanes)).map(lane =>
           c.io.bitErrors(f)(lane).peek().litValue
         )
       )
@@ -158,9 +165,13 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
     (result, received)
   }
 
-  // Data lanes plus the valid lane. The loopback lane is not wired up yet, so its
-  // counter compares zeros against the pattern and is meaningless.
-  val scoredLanes = 0 to numLanes
+  // Every lane this harness loops back: the data lanes, valid, and track. The
+  // loopback lane is not wired up here, so its counter compares zeros against
+  // the pattern and is meaningless.
+  val scoredLanes = 0 to PhyTest.trackLane(numLanes)
+  // Of those, the ones carrying an LFSR pattern rather than the valid waveform.
+  val patternLanes =
+    scoredLanes.filter(_ != PhyTest.validLane(numLanes))
 
   describe("PhyTest LFSR framing counters") {
     it("should score the nominal framing clean when the RX aligns exactly") {
@@ -181,7 +192,7 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
       // near zero. The valid lane is excluded because its count is set by the
       // shape of the valid waveform, not by chance.
       for (
-        lane <- 0 until numLanes;
+        lane <- patternLanes;
         f <- Seq(PhyTest.EarlyFraming, PhyTest.LateFraming)
       ) {
         withClue(s"lane $lane framing $f of $bits bits: ") {
@@ -209,7 +220,7 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
       // started, so the pattern really began later than the edge indicated.
       val (errors, received) = counts(dataDelay = true, alignedValid)
       assert(received >= packets / 2, s"only $received packets received")
-      for (lane <- 0 until numLanes) {
+      for (lane <- patternLanes) {
         withClue(s"lane $lane: ") {
           // The very first packet compares one pre-pattern bit, which may or may
           // not happen to match.

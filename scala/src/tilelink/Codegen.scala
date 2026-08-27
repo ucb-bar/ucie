@@ -301,7 +301,6 @@ object Codegen {
 
     reqs += write("txClkP", defaultClkP)
     reqs += write("txClkN", defaultClkN)
-    reqs += write("txTrack", defaultTrack)
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
     reqs += write("commonTxctlDllReset", 0)
@@ -724,9 +723,6 @@ class Codegen(f: Formatter) {
     )
     body.append(
       formatWriteNamedReg("txClkN", f.formatConstantRef("defaultClkN"))
-    )
-    body.append(
-      formatWriteNamedReg("txTrack", f.formatConstantRef("defaultTrack"))
     )
     body.append(
       formatWriteNamedReg("txValid", f.formatConstantRef("defaultValid"))

@@ -78,6 +78,18 @@ class PhyTestRegsIO(
     numLanes: Int = 2,
     bitCounterWidth: Int = 64
 ) extends Bundle {
+  // Every lane index here is a PHYSICAL lane, the same one `PhyRegsIO`'s
+  // `txctl`/`rxctl` use, so the lane whose errors are counted here is the lane
+  // whose AFE those registers tune.
+  //
+  // Every per-lane vector -- the pattern and capture SRAMs, the bit error
+  // counters, and the LFSR seeds -- is `PhyTest.numTestLanes` long and ordered
+  // the same way: data `0` to `numLanes - 1`, then valid, track, and loopback.
+  //
+  // Only valid is special. It carries a repeating framing waveform rather than
+  // a pattern, so it is checked against `rxLfsrValid` instead of an LFSR and
+  // its LFSR seed slot goes unused. Track is driven and scored exactly like a
+  // data lane.
   // GENERAL CONTROL
   // =====================
   /** The test setup being targeted. */
@@ -98,8 +110,9 @@ class PhyTestRegsIO(
   val txTestMode = Input(TxTestMode())
   // The data mode of the TX.
   val txDataMode = Input(DataMode())
-  // Seed of the TX LFSR.
-  val txLfsrSeed = Input(Vec(numLanes + 1, UInt((2 * Phy.SerdesRatio).W)))
+  // Seed of the TX LFSR, one per lane. The valid lane's slot is unused.
+  val txLfsrSeed =
+    Input(Vec(PhyTest.numTestLanes(numLanes), UInt((2 * Phy.SerdesRatio).W)))
   // Resets the TX FSM (i.e. resetting the number of bits sent to 0, reseeding the LFSR,
   // and stopping any in-progress transmissions).
   val txFsmRst = Input(Bool())
@@ -120,8 +133,14 @@ class PhyTestRegsIO(
   val txClkN = Input(UInt(32.W))
   // Valid signal.
   val txValid = Input(UInt(32.W))
-  // Track signal.
-  val txTrack = Input(UInt(32.W))
+  // Physical lane the valid waveform goes out on, so that a broken dedicated
+  // valid lane does not stop a test. Codes `0` to `numLanes - 1` pick a data
+  // lane, `Phy.dedicatedValidLaneSel` (the reset value) the dedicated valid
+  // lane, and `Phy.trackValidLaneSel` the track lane. The chosen lane sends
+  // valid instead of its own pattern -- nothing is shuffled out of the way, so
+  // that lane's data is not transmitted and its error count means nothing while
+  // valid sits on it. The dedicated valid lane keeps sending valid regardless.
+  val txValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
   // Data chunk lane group in input buffer. Each lane group consists of 4 adjacent lanes (e.g. 0, 1, 2, 3).
   // Lane numLanes is valid, numLanes + 1 is track, numLanes + 2 is loopback.
   val txDataLaneGroup = Input(UInt(log2Ceil((numLanes + 2) / 4 + 1).W))
@@ -138,10 +157,16 @@ class PhyTestRegsIO(
   // ====================
   // The data mode of the RX.
   val rxDataMode = Input(DataMode())
-  // Seed of the RX LFSR used for detecting bit errors. Should be the same as the TX seed of the transmitting chiplet.
-  val rxLfsrSeed = Input(Vec(numLanes + 1, UInt((2 * Phy.SerdesRatio).W)))
+  // Seed of the RX LFSR used for detecting bit errors, indexed like
+  // `txLfsrSeed`. Should be the same as the TX seed of the transmitting chiplet.
+  val rxLfsrSeed =
+    Input(Vec(PhyTest.numTestLanes(numLanes), UInt((2 * Phy.SerdesRatio).W)))
   // Expected valid signal in LFSR mode.
   val rxLfsrValid = Input(UInt(32.W))
+  // Physical lane the RX watches for the edge that starts recording. Coded like
+  // `txValidLaneSel`, and selected independently of it: this die's
+  // `rxValidLaneSel` has to match whatever the partner die transmits valid on.
+  val rxValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
   // Resets the RX FSM (i.e. resetting the number of bits received and the offset within the output
   // buffer to 0).
   val rxFsmRst = Input(Bool())
@@ -152,9 +177,9 @@ class PhyTestRegsIO(
   val rxPacketsToReceive = Input(UInt(bitCounterWidth.W))
   // The number of bit errors per lane since the last FSM reset, against the pattern
   // as framed by the valid edge the RX latched onto. Only applicable in
-  // `TxTestMode.lsfr`. Extra lanes for valid errors (requires 1111000011110000...)
-  // and loopback.
-  val rxBitErrors = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
+  // `TxTestMode.lsfr`.
+  val rxBitErrors =
+    Output(Vec(PhyTest.numTestLanes(numLanes), UInt(bitCounterWidth.W)))
   // The same counts against the pattern framed one UI earlier than the valid edge
   // indicated, and one UI later. A single bit error on the valid lane in the cycle
   // the RX aligns leaves every later comparison one UI out of step, which pins the
@@ -162,8 +187,10 @@ class PhyTestRegsIO(
   // the real error count. A spuriously set valid bit aligns the RX one UI early, so
   // the pattern really started later (`rxBitErrorsLate`); a dropped valid bit aligns
   // it one UI late, so the pattern really started earlier (`rxBitErrorsEarly`).
-  val rxBitErrorsEarly = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
-  val rxBitErrorsLate = Output(Vec(numLanes + 2, UInt(bitCounterWidth.W)))
+  val rxBitErrorsEarly =
+    Output(Vec(PhyTest.numTestLanes(numLanes), UInt(bitCounterWidth.W)))
+  val rxBitErrorsLate =
+    Output(Vec(PhyTest.numTestLanes(numLanes), UInt(bitCounterWidth.W)))
   // Pause the `rxPacketsReceived`, `rxBitErrors`, and `rxSignature` outputs to read
   // them atomically.
   val rxPauseCounters = Input(Bool())
@@ -175,7 +202,7 @@ class PhyTestRegsIO(
   // read the two under `rxPauseCounters`.
   val rxSignature = Output(UInt(32.W))
   // Data chunk lane in output buffer.
-  val rxDataLane = Input(UInt(log2Ceil(numLanes + 3).W))
+  val rxDataLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
   // Data chunk offset in output buffer.
   val rxDataOffset = Input(UInt((bufferDepthPerLane - 5).W))
   // Data chunk at the given chunk offset for inspect the received data.
@@ -193,7 +220,8 @@ class PhyTestRegsIO(
   val clkMuxSel = Input(UInt(ClkMux.selWidth.W))
   // Which RX lane, and which bit of that lane's deserialized word, the `rxData`
   // bump watches. Lanes are ordered as in `RxIO`: `numLanes` data lanes, then
-  // valid, then track.
+  // valid, then track. The bit is post-shuffler, i.e. in digital word order
+  // rather than the order the deserializer produced.
   val rxDebugLane = Input(UInt(log2Ceil(numLanes + 2).W))
   val rxDebugBit = Input(UInt(log2Ceil(Phy.SerdesRatio).W))
   val txctl = Input(new TxLaneDigitalCtlIO)
@@ -260,6 +288,16 @@ object PhyTest {
 
   /** Width of the TX/RX pattern LFSRs. */
   val LfsrWidth = 2 * Phy.SerdesRatio
+
+  /** Lanes the tester works in, and the one order every per-lane vector in it
+    * uses: the `numLanes` data lanes, then valid, track, and the loopback lane.
+    * Data, valid, and track are the RX physical lanes; loopback is the tester's
+    * own on-chip pair.
+    */
+  def numTestLanes(numLanes: Int): Int = numLanes + 3
+  def validLane(numLanes: Int): Int = numLanes
+  def trackLane(numLanes: Int): Int = numLanes + 1
+  def loopbackLane(numLanes: Int): Int = numLanes + 2
 
   /** Pad drivers the tester owns for the observation bumps, one per bump in
     * `DebugBumpsIO` order except the TX data debug lane, which brings its own.
@@ -570,7 +608,10 @@ class PhyTest(
   val inputBufferAddrReg = withReset(txReset) {
     RegInit(0.U((bufferDepthPerLane - 5).W))
   }
-  val txLfsrs = (0 until numLanes + 1).map((i: Int) => {
+  // One LFSR per lane, indexed like every other per-lane vector. The valid
+  // lane's is never read -- valid carries a framing waveform, not a pattern --
+  // so it optimizes away.
+  val txLfsrs = (0 until PhyTest.numTestLanes(numLanes)).map((i: Int) => {
     val lfsr = Module(
       new FibonacciLFSR(
         PhyTest.LfsrWidth,
@@ -601,7 +642,9 @@ class PhyTest(
   /// One count per framing per lane: numLanes data lanes, 1 valid lane, 1 loopback
   /// lane. See `rxBitErrorsEarly` in `PhyTestRegsIO` for what the framings mean.
   def perFramingPerLane(width: Int) = VecInit(
-    Seq.fill(PhyTest.NumFramings)(VecInit(Seq.fill(numLanes + 2)(0.U(width.W))))
+    Seq.fill(PhyTest.NumFramings)(
+      VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(width.W)))
+    )
   )
   val rxBitErrors = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
   val rxPacketsReceivedOutput = withReset(rxReset) { RegInit(0.U(64.W)) }
@@ -609,7 +652,7 @@ class PhyTest(
     RegInit(perFramingPerLane(Phy.SerdesRatio))
   }
   val rxBitErrorsOutput = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
-  val rxLfsrs = (0 until numLanes + 1).map((i: Int) => {
+  val rxLfsrs = (0 until PhyTest.numTestLanes(numLanes)).map((i: Int) => {
     val lfsr = Module(
       new FibonacciLFSR(
         PhyTest.LfsrWidth,
@@ -756,17 +799,16 @@ class PhyTest(
     }
   }
 
-  for (lane <- 0 until numLanes) {
-    io.tx.bits.data(lane) := 0.U
+  for (lane <- 0 until Phy.numTxLanes(numLanes)) {
+    io.tx.bits.lanes(lane) := 0.U
   }
-  io.tx.bits.valid := 0.U
-  io.tx.bits.track := 0.U
   // Needs to be true whenever PhyTest owns the mainband, so that clock and
   // track keep going out even when data isn't valid.
   io.tx.valid := mbManual
 
-  io.tx.bits.clkp := io.regs.txClkP
-  io.tx.bits.clkn := io.regs.txClkN
+  // The forwarded-clock lanes carry a fixed pattern rather than a test one.
+  io.tx.bits.lanes(Phy.clkPLane(numLanes)) := io.regs.txClkP
+  io.tx.bits.lanes(Phy.clkNLane(numLanes)) := io.regs.txClkN
 
   // Unlike `io.tx.valid`, only true when data is valid.
   val tx_valid = Wire(Bool())
@@ -840,16 +882,13 @@ class PhyTest(
           is(TxTestMode.manual) {
             switch(io.regs.testTarget) {
               is(TestTarget.mainband) {
-                for (lane <- 0 until numLanes) {
-                  io.tx.bits.data(lane) := inputRdPorts(lane >> 2).asTypeOf(
+                // Data, valid, and track all come out of the pattern SRAM
+                // the same way, at their own lane index.
+                for (lane <- 0 to PhyTest.trackLane(numLanes)) {
+                  io.tx.bits.lanes(lane) := inputRdPorts(lane >> 2).asTypeOf(
                     Vec(4, UInt(32.W))
                   )(lane % 4)
                 }
-                io.tx.bits.valid := inputRdPorts(numLanes >> 2).asTypeOf(
-                  Vec(4, UInt(32.W))
-                )(numLanes % 4)
-                io.tx.bits.track := inputRdPorts((numLanes + 1) >> 2)
-                  .asTypeOf(Vec(4, UInt(32.W)))((numLanes + 1) % 4)
               }
               is(TestTarget.loopback) {
                 txLoopbackEnq.bits := inputRdPorts((numLanes + 2) >> 2)
@@ -860,17 +899,18 @@ class PhyTest(
           is(TxTestMode.lfsr) {
             switch(io.regs.testTarget) {
               is(TestTarget.mainband) {
-                for (lane <- 0 until numLanes) {
-                  io.tx.bits.data(lane) := Reverse(
-                    txLfsrs(lane).io.out.asUInt
-                  )(31, 0).asTypeOf(io.tx.bits.data(lane))
+                // Every pattern lane takes its own LFSR; valid takes the
+                // framing waveform instead.
+                for (lane <- 0 to PhyTest.trackLane(numLanes)) {
+                  io.tx.bits.lanes(lane) := (
+                    if (lane == PhyTest.validLane(numLanes)) io.regs.txValid
+                    else Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
+                  )
                 }
-                io.tx.bits.valid := io.regs.txValid
-                io.tx.bits.track := io.regs.txTrack
               }
               is(TestTarget.loopback) {
                 txLoopbackEnq.bits := Reverse(
-                  txLfsrs(numLanes).io.out.asUInt
+                  txLfsrs(PhyTest.loopbackLane(numLanes)).io.out.asUInt
                 )(31, 0)
               }
             }
@@ -888,8 +928,10 @@ class PhyTest(
         )
         inputBufferAddrReg := (inputBufferAddrReg + 1.U) % txManualRepeatPeriod
         when(io.regs.txTestMode === TxTestMode.lfsr) {
-          for (lane <- 0 until numLanes + 1) {
-            txLfsrs(lane).io.increment := true.B
+          for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
+            if (lane != PhyTest.validLane(numLanes)) {
+              txLfsrs(lane).io.increment := true.B
+            }
           }
         }
       }
@@ -903,10 +945,27 @@ class PhyTest(
     is(TxTestState.done) {}
   }
 
+  // Valid goes out on whichever physical lane `txValidLaneSel` names, so a
+  // broken dedicated valid lane does not stop a test. The chosen lane sends
+  // valid in place of its own pattern; unlike a link that cannot afford to drop
+  // a lane, the tester does not shuffle the displaced payload anywhere.
+  val txValidWaveform = io.tx.bits.lanes(Phy.validLane(numLanes))
+  for (lane <- 0 to PhyTest.trackLane(numLanes)) {
+    // The dedicated valid lane already carries the waveform, and driving it
+    // from itself would be a combinational loop.
+    if (lane != PhyTest.validLane(numLanes)) {
+      when(io.regs.txValidLaneSel === lane.U) {
+        io.tx.bits.lanes(lane) := txValidWaveform
+      }
+    }
+  }
+
   // RX logic
 
   io.rx.ready := true.B
   rxLoopbackFifo.io.deq.ready := true.B
+  // The lane the RX frames on: recording starts at the first one seen on it.
+  val rxValidLaneWord = io.rx.bits.lanes(io.regs.rxValidLaneSel)
   // The loopback receiver hands over a word every divided cycle whether or not
   // anything is being sent, so its lane reads zero unless it is the target.
   // That keeps it out of the capture SRAM and the signature during a mainband
@@ -917,7 +976,10 @@ class PhyTest(
     0.U
   )
 
-  for (f <- 0 until PhyTest.NumFramings; i <- 0 until numLanes + 2) {
+  for (
+    f <- 0 until PhyTest.NumFramings;
+    i <- 0 until PhyTest.numTestLanes(numLanes)
+  ) {
     val newRxBitErrors = rxBitErrors(f)(i) +& PopCount(rxErrorMask(f)(i))
     rxBitErrors(f)(i) := Mux(
       newRxBitErrors > maxBitCount,
@@ -949,7 +1011,10 @@ class PhyTest(
     RegInit(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
   }
 
-  for (f <- 0 until PhyTest.NumFramings; i <- 0 until numLanes + 2) {
+  for (
+    f <- 0 until PhyTest.NumFramings;
+    i <- 0 until PhyTest.numTestLanes(numLanes)
+  ) {
     rxErrorMask(f)(i) := 0.U
   }
 
@@ -968,7 +1033,7 @@ class PhyTest(
       shouldStartRecording := false.B
       switch(io.regs.testTarget) {
         is(TestTarget.mainband) {
-          shouldStartRecording := io.rx.bits.valid(i)
+          shouldStartRecording := rxValidLaneWord(i)
         }
         is(TestTarget.loopback) {
           shouldStartRecording := rxLoopbackFifo.io.deq.bits(i)
@@ -986,12 +1051,8 @@ class PhyTest(
     when(!recordingStarted && !startRecording) {
       // Store latest data at the beginning of the `runningData` register.
       for (lane <- 0 until numLanes + 3) {
-        if (lane < numLanes) {
-          runningData(lane) := io.rx.bits.data(lane)
-        } else if (lane == numLanes) {
-          runningData(lane) := io.rx.bits.valid
-        } else if (lane == numLanes + 1) {
-          runningData(lane) := io.rx.bits.track
+        if (lane <= PhyTest.trackLane(numLanes)) {
+          runningData(lane) := io.rx.bits.lanes(lane)
         } else {
           runningData(lane) := rxLoopbackData
         }
@@ -1019,15 +1080,9 @@ class PhyTest(
         )
       }
       for (lane <- 0 until numLanes + 3) {
-        val rawData = if (lane < numLanes) {
-          io.rx.bits.data(lane)
-        } else if (lane == numLanes) {
-          io.rx.bits.valid
-        } else if (lane == numLanes + 1) {
-          io.rx.bits.track
-        } else {
-          rxLoopbackData
-        }
+        val rawData =
+          if (lane <= PhyTest.trackLane(numLanes)) io.rx.bits.lanes(lane)
+          else rxLoopbackData
         val data = Wire(UInt(64.W))
         data := (rawData << rxReceiveOffset) >> startIdx
         val newData = Wire(UInt(64.W))
@@ -1054,21 +1109,19 @@ class PhyTest(
             rxErrorMask(PhyTest.LateFraming)(errIdx) :=
               newData(31, 0) ^ refWordDelayed(state)
           }
-          // Compare data against LFSR and increment LFSR.
-          if (lane < numLanes) {
-            scoreAgainstLfsr(lane, lane)
-          }
-          // Compare valid against intended waveform.
-          if (lane == numLanes) {
+          if (lane == PhyTest.validLane(numLanes)) {
+            // Valid carries a repeating framing waveform, so it is compared
+            // against the intended one rather than against a pattern.
             rxErrorMask(PhyTest.NominalFraming)(lane) :=
               newData(31, 0) ^ io.regs.rxLfsrValid
             rxErrorMask(PhyTest.EarlyFraming)(lane) :=
               newData(31, 0) ^ validRefAdvanced(io.regs.rxLfsrValid)
             rxErrorMask(PhyTest.LateFraming)(lane) :=
               newData(31, 0) ^ validRefDelayed(io.regs.rxLfsrValid)
-          }
-          if (lane == numLanes + 2) {
-            scoreAgainstLfsr(numLanes, numLanes + 1)
+          } else {
+            // Data, track, and loopback all carry a pattern and are scored the
+            // same way, each against the LFSR at its own lane index.
+            scoreAgainstLfsr(lane, lane)
           }
         }
       }

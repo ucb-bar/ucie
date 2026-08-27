@@ -652,9 +652,16 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         ucieClk.step(cycles = 5)
         c.reset.poke(false.B)
         ucieClk.step(cycles = 5)
-        c.io.reg.expect(ucieClk, "h200000".U, 0.U)
-        c.io.reg.write(ucieClk, "h200100".U, "hdeadbeef".U)
-        c.io.reg.expect(ucieClk, "h200100".U, "hdeadbeef".U)
+        // Addresses come from the register map by name, the way the
+        // SystemVerilog drivers use the generated constants. Hardcoded offsets
+        // silently retarget this test at a different register whenever the map
+        // grows.
+        def addr(name: String): BigInt =
+          BigInt(0x200000L) +
+            (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
+        c.io.reg.expect(ucieClk, addr("testTarget").U, 0.U)
+        c.io.reg.write(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
+        c.io.reg.expect(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }

@@ -42,12 +42,9 @@ class ValidFramer(
     val nextData = Wire(
       Vec(numLanes + 1, UInt((2 * Phy.SerdesRatio).W))
     )
-    for (lane <- 0 until numLanes + 1) {
-      if (lane < numLanes) {
-        nextData(lane) := Cat(io.phy.bits.data(lane), runningData(lane))
-      } else {
-        nextData(lane) := Cat(io.phy.bits.valid, runningData(lane))
-      }
+    // Data lanes then valid, which is exactly lanes `0` to `validLane`.
+    for (lane <- 0 to Phy.validLane(numLanes)) {
+      nextData(lane) := Cat(io.phy.bits.lanes(lane), runningData(lane))
       runningData(lane) := nextData(lane)(
         2 * Phy.SerdesRatio - 1,
         Phy.SerdesRatio
@@ -75,7 +72,7 @@ class ValidFramer(
       }
       runningData(
         numLanes
-      ) := (io.phy.bits.valid >> firstOne) << firstOne
+      ) := (io.phy.bits.lanes(Phy.validLane(numLanes)) >> firstOne) << firstOne
     }
   }
 }

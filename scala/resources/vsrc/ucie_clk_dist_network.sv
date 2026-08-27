@@ -9,12 +9,12 @@ module ucie_clk_dist_network(
     output [19:0] txLaneClk,
     output [17:0] rxLaneClk
 );
-    // Lane map for numLanes = 16: 0..15 data, 16 valid, 17 and 18 the two
-    // forwarded-clock lanes, 19 track. The clock lanes run off the quadrature
-    // phase so the transmitted clock is centered in the data eye; everything
-    // else runs off the in-phase clock.
-    localparam integer TXCLKP_LANE = 17;
-    localparam integer TXCLKN_LANE = 18;
+    // Lane map for numLanes = 16: 0..15 data, 16 valid, 17 track, 18 and 19 the
+    // two forwarded-clock lanes. The clock lanes run off the quadrature phase so
+    // the transmitted clock is centered in the data eye; everything else runs
+    // off the in-phase clock.
+    localparam integer TXCLKP_LANE = 18;
+    localparam integer TXCLKN_LANE = 19;
 
     assign txClkDivClk = txClk;
     generate
