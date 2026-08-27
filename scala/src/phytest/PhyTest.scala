@@ -388,8 +388,6 @@ class PhyTest(
   io.txResetb := txSerdesResetb
   io.rxResetb := rxSerdesResetb
 
-  // TODO: Add custom sideband control
-
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
   val mbManual = io.regs.mainbandMode === BandMode.manual
