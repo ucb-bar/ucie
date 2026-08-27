@@ -3,9 +3,11 @@ package edu.berkeley.cs.uciedigital.phytest
 import chisel3._
 import chisel3.util._
 import chisel3.util.random._
+import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 
 import edu.berkeley.cs.uciedigital.phy._
 import edu.berkeley.cs.uciedigital.phy.macros._
+import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 /** What a band carries while PhyTest is the selected controller. The mainband
   * and the sideband have their own copy, so either can carry TileLink while the
@@ -181,7 +183,18 @@ class PhyTestRegsIO(
 
   // DEBUG CIRCUITRY CONTROL
   // ===========================
-  val driverctl = Input(Vec(6, new DriverCtlIO))
+  // Pad driver control for the observation bumps, in `DebugBumpsIO` order:
+  // `txClk`, `rxClk`, `rxData`, `clkMux`. The TX data debug lane brings its own
+  // driver and takes its control from `txctl` instead.
+  val driverctl = Input(Vec(PhyTest.NumDebugDrivers, new DriverCtlIO))
+  // What the `clkMux` bump watches: low selects the sideband forwarded clock,
+  // high the TX global divided clock.
+  val clkMuxSel = Input(Bool())
+  // Which RX lane, and which bit of that lane's deserialized word, the `rxData`
+  // bump watches. Lanes are ordered as in `RxIO`: `numLanes` data lanes, then
+  // valid, then track.
+  val rxDebugLane = Input(UInt(log2Ceil(numLanes + 2).W))
+  val rxDebugBit = Input(UInt(log2Ceil(Phy.SerdesRatio).W))
   val txctl = Input(new TxLaneDigitalCtlIO)
   val txDebugTestMode = Input(TxTestMode())
   val txDebugDataMode = Input(DataMode())
@@ -195,14 +208,29 @@ class PhyTestRegsIO(
   val txDebugPacketsEnqueued = Output(UInt(bitCounterWidth.W))
   val txDebugDllCode = Output(UInt(5.W))
 
+  // LOOPBACK LANE CONTROL
+  // ===========================
+  // The loopback TX lane drives the loopback RX lane on chip, so the pair takes
+  // the same per-lane control as a mainband lane but never reaches a bump.
+  val loopbackTxctl = Input(new TxLaneDigitalCtlIO)
+  val loopbackRxctl = Input(new RxLaneDigitalCtlIO)
+  val loopbackDllCode = Output(UInt(5.W))
+
   // SIDEBAND CONTROL
   // ===========================
   val sb = new SidebandTestRegsIO
 }
 
-/** Debug bumps the tester owns, alongside the PHY's own debug outputs. */
+/** Bumps the tester drives for observation.
+  *
+  * The PHY only fans out the nets being watched; the muxing and the pad drivers
+  * that put them here all live in [[PhyTest]].
+  */
 class DebugBumpsIO extends Bundle {
-  val phy = new PhyDebugIO
+  val txClk = Output(Bool())
+  val rxClk = Output(Bool())
+  val rxData = Output(Bool())
+  val clkMux = Output(Bool())
   val txData = Output(Bool())
 }
 
@@ -218,7 +246,7 @@ class PhyTestIO(
   val tx = new DecoupledIO(new TxIO(numLanes))
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
-  val debug = Flipped(new PhyDebugIO)
+  val debug = Flipped(new PhyDebugIO(numLanes))
   val divResetb = Output(AsyncReset())
 
   // BUMP INTERFACE
@@ -231,6 +259,17 @@ object PhyTest {
 
   /** Width of the TX/RX pattern LFSRs. */
   val LfsrWidth = 2 * Phy.SerdesRatio
+
+  /** Pad drivers the tester owns for the observation bumps, one per bump in
+    * `DebugBumpsIO` order except the TX data debug lane, which brings its own.
+    */
+  val NumDebugDrivers = 4
+
+  /** Packets the TX data debug lane's manual pattern holds. The lane has no
+    * SRAM behind it: the pattern comes straight out of `txDebugData`, which is
+    * sixteen 64-bit registers, i.e. this many `Phy.SerdesRatio` bit packets.
+    */
+  val DebugBufferPackets = 32
 
   /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
     * one).
@@ -289,18 +328,16 @@ class PhyTest(
     bufferDepthPerLane: Int = 10,
     numLanes: Int = 2,
     bitCounterWidth: Int = 64,
-    sim: Boolean = false
-) extends Module
+    sim: Boolean = false,
+    queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32)
+)(implicit includeDefaultModels: Boolean = false)
+    extends Module
     with RequireSyncReset {
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
 
   io.divResetb := io.regs.divResetb
 
-  // TODO: Add debug RTL and custom sideband control
-  io.regs.txDebugState := TxTestState.idle
-  io.regs.txDebugDllCode := 0.U
-  io.regs.txDebugPacketsEnqueued := 0.U
-  io.bumps := DontCare
+  // TODO: Add custom sideband control
 
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
@@ -319,6 +356,209 @@ class PhyTest(
   // General computations
   val maxBitCount = VecInit(Seq.fill(bitCounterWidth)(true.B)).asUInt
   val maxSramPackets = 1.U << (bufferDepthPerLane - 5).U;
+
+  // OBSERVATION BUMPS
+  //
+  // The PHY hands over raw nets and nothing else; picking what to watch and
+  // driving a pad with it happens here, so the PHY carries only link RTL.
+  //
+  // One clock mux lets the `clkMux` bump watch either the sideband forwarded
+  // clock or the TX global divided clock. The `rxData` bump watches any bit of
+  // any RX lane's deserialized word; those words sit in the RX divided clock
+  // domain, but nothing here samples them, so the selects are the only thing
+  // crossing and they are quasi-static configuration.
+  val clkMux = Module(new ClkMux)
+  val clkMuxOut =
+    clkMux.connect(io.debug.sbTxClk, io.debug.txDivClk, io.regs.clkMuxSel)
+  val rxDebugData = io.debug.rxData(io.regs.rxDebugLane)(io.regs.rxDebugBit)
+
+  for (
+    (((name, din), bump), ctl) <- Seq(
+      ("txclk_driver", io.debug.txClk.asBool),
+      ("rxclk_driver", io.debug.rxClk.asBool),
+      ("rxdata_driver", rxDebugData),
+      ("clkmux_driver", clkMuxOut.asBool)
+    ).zip(
+      Seq(io.bumps.txClk, io.bumps.rxClk, io.bumps.rxData, io.bumps.clkMux)
+    ).zip(io.regs.driverctl)
+  ) {
+    val driver = Module(new TxDriver)
+    driver.suggestName(name)
+    driver.io.din := din
+    driver.io.ctl := ctl
+    bump := driver.io.dout
+  }
+
+  // A TX lane that sits outside the PHY's lane clock distribution network: the
+  // async queue onto the lane's own divided clock, the bit shuffler every TX
+  // lane has, and the lane itself. The tester owns two of these -- the TX data
+  // debug lane and the loopback transmitter -- and both run off the same
+  // full-rate TX clock the PHY's own lanes do.
+  //
+  // Returns the enqueue side of the queue, in this module's clock domain, and
+  // the lane.
+  def txTestLane(
+      name: String,
+      ctl: TxLaneDigitalCtlIO
+  ): (DecoupledIO[UInt], TxLane) = {
+    val lane = Module(new TxLane)
+    lane.suggestName(name)
+    lane.io.dll_reset := ctl.dll_reset
+    lane.io.dll_resetb := !ctl.dll_reset
+    lane.io.ser_resetb := io.regs.divResetb
+    lane.io.clk := io.debug.txClk
+    lane.io.ctl.driver := ctl.driver
+    lane.io.ctl.skew := ctl.skew
+
+    val divRstSync = Module(new RstSync)
+    divRstSync.suggestName(s"${name}_div_rst_sync")
+    divRstSync.io.rstbAsync := !reset.asBool
+    divRstSync.io.clk := lane.io.divclk
+
+    val fifo = Module(new AsyncQueue(UInt(Phy.SerdesRatio.W), queueParams))
+    fifo.suggestName(s"${name}_fifo")
+    fifo.io.enq_clock := clock
+    fifo.io.enq_reset := reset
+    fifo.io.deq_clock := lane.io.divclk
+    fifo.io.deq_reset := !divRstSync.io.rstbSync
+    fifo.io.deq.ready := true.B
+
+    val shuffler = Module(new Shuffler(Phy.SerdesRatio))
+    shuffler.suggestName(s"${name}_shuffler")
+    // An empty queue sends zeros rather than repeating the last word.
+    shuffler.io.din := Mux(fifo.io.deq.valid, fifo.io.deq.bits, 0.U)
+    shuffler.io.permutation := ctl.shuffler
+    lane.io.din := shuffler.io.dout
+
+    (fifo.io.enq, lane)
+  }
+
+  // TX DATA DEBUG LANE
+  //
+  // One TX lane on a bump of its own, fed by a cut-down copy of the mainband TX
+  // FSM below: the pattern is either the `txDebugData` registers or an LFSR,
+  // and there is no capture SRAM behind it, so the manual buffer is the
+  // registers themselves.
+  val txDebugRst = io.regs.txDebugFsmRst || reset.asBool
+  val txDebugState = withReset(txDebugRst) { RegInit(TxTestState.idle) }
+  val txDebugPacketsEnqueued = withReset(txDebugRst) {
+    RegInit(0.U(bitCounterWidth.W))
+  }
+  val txDebugAddr = withReset(txDebugRst) {
+    RegInit(0.U(log2Ceil(PhyTest.DebugBufferPackets).W))
+  }
+  val txDebugLfsr = Module(
+    new FibonacciLFSR(
+      PhyTest.LfsrWidth,
+      taps = PhyTest.LfsrTaps,
+      step = Phy.SerdesRatio
+    )
+  )
+  txDebugLfsr.io.seed.bits :=
+    io.regs.txDebugLfsrSeed.asTypeOf(txDebugLfsr.io.seed.bits)
+  txDebugLfsr.io.seed.valid := txDebugRst
+  txDebugLfsr.io.increment := false.B
+
+  // Each 64-bit register holds two packets, low half first.
+  val txDebugWords = VecInit(
+    io.regs.txDebugData.flatMap(word => Seq(word(31, 0), word(63, 32)))
+  )
+  val txDebugRepeatPeriod = Mux(
+    io.regs.txDebugManualRepeatPeriod === 0.U ||
+      io.regs.txDebugManualRepeatPeriod > PhyTest.DebugBufferPackets.U,
+    PhyTest.DebugBufferPackets.U,
+    io.regs.txDebugManualRepeatPeriod
+  )
+
+  val (txDebugEnq, txDebugLane) = txTestLane("txdebug", io.regs.txctl)
+  io.bumps.txData := txDebugLane.io.dout
+  io.regs.txDebugDllCode := txDebugLane.io.dll_code
+  io.regs.txDebugState := txDebugState
+  io.regs.txDebugPacketsEnqueued := txDebugPacketsEnqueued
+
+  val txDebugValid = Wire(Bool())
+  txDebugValid := false.B
+  txDebugEnq.valid := txDebugValid
+  txDebugEnq.bits := Mux(
+    io.regs.txDebugTestMode === TxTestMode.manual,
+    txDebugWords(txDebugAddr),
+    Reverse(txDebugLfsr.io.out.asUInt)(Phy.SerdesRatio - 1, 0)
+  )
+
+  switch(txDebugState) {
+    is(TxTestState.idle) {
+      when(io.regs.txDebugExecute) {
+        txDebugState := TxTestState.run
+      }
+    }
+    is(TxTestState.run) {
+      switch(io.regs.txDebugDataMode) {
+        is(DataMode.finite) {
+          txDebugValid := txDebugPacketsEnqueued < io.regs.txDebugPacketsToSend
+        }
+        is(DataMode.infinite) {
+          txDebugValid := true.B
+        }
+      }
+      when(txDebugValid && txDebugEnq.ready) {
+        txDebugPacketsEnqueued := Mux(
+          txDebugPacketsEnqueued < maxBitCount,
+          txDebugPacketsEnqueued + 1.U,
+          txDebugPacketsEnqueued
+        )
+        txDebugAddr := (txDebugAddr + 1.U) % txDebugRepeatPeriod
+        when(io.regs.txDebugTestMode === TxTestMode.lfsr) {
+          txDebugLfsr.io.increment := true.B
+        }
+      }
+      when(!txDebugValid) {
+        txDebugState := TxTestState.done
+      }
+    }
+    is(TxTestState.done) {}
+  }
+
+  // LOOPBACK LANE
+  //
+  // A TX lane wired straight into an RX lane on chip, so the serializer, the
+  // driver, the AFE, and the deserializer can all be exercised without a
+  // partner die or even a bump. `TestTarget.loopback` points the TX and RX FSMs
+  // below at this pair instead of the mainband, and the loopback lane has its
+  // own slot in the pattern SRAMs and the capture SRAMs.
+  val (txLoopbackEnq, txLoopbackLane) =
+    txTestLane("txloopback", io.regs.loopbackTxctl)
+  io.regs.loopbackDllCode := txLoopbackLane.io.dll_code
+
+  val rxLoopbackLane = Module(new RxDataLane)
+  rxLoopbackLane.suggestName("rxloopback")
+  RxAfeCtl.connect(rxLoopbackLane.io.ctl, io.regs.loopbackRxctl)
+  rxLoopbackLane.io.din := txLoopbackLane.io.dout
+  // Sampled with the clock that shifted the data out, the way a mainband RX
+  // lane is sampled with the clock the partner die's TX forwarded.
+  rxLoopbackLane.io.clk := io.debug.txClk
+  rxLoopbackLane.io.resetb := io.regs.divResetb
+
+  val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
+  rxLoopbackShuffler.suggestName("rxloopback_shuffler")
+  rxLoopbackShuffler.io.din := rxLoopbackLane.io.dout
+  rxLoopbackShuffler.io.permutation := io.regs.loopbackRxctl.shuffler
+
+  val rxLoopbackRstSync = Module(new RstSync)
+  rxLoopbackRstSync.suggestName("rxloopback_div_rst_sync")
+  rxLoopbackRstSync.io.rstbAsync := !reset.asBool
+  rxLoopbackRstSync.io.clk := rxLoopbackLane.io.divclk.asClock
+
+  val rxLoopbackFifo = Module(
+    new AsyncQueue(UInt(Phy.SerdesRatio.W), queueParams)
+  )
+  rxLoopbackFifo.io.enq_clock := rxLoopbackLane.io.divclk.asClock
+  rxLoopbackFifo.io.enq_reset := !rxLoopbackRstSync.io.rstbSync
+  // The deserializer has no valid of its own: it hands over a word every
+  // divided cycle whether or not the TX is sending.
+  rxLoopbackFifo.io.enq.valid := true.B
+  rxLoopbackFifo.io.enq.bits := rxLoopbackShuffler.io.dout
+  rxLoopbackFifo.io.deq_clock := clock
+  rxLoopbackFifo.io.deq_reset := reset
 
   // TX registers
   val txReset = io.regs.txFsmRst || !mbManual || reset.asBool
@@ -529,6 +769,18 @@ class PhyTest(
   val tx_valid = Wire(Bool())
   tx_valid := false.B
 
+  txLoopbackEnq.bits := 0.U
+  // The loopback lane only carries traffic when it is the selected target, so
+  // that a mainband run leaves it quiet.
+  txLoopbackEnq.valid := tx_valid && io.regs.testTarget === TestTarget.loopback
+
+  // Ready of whichever target the TX FSM is driving.
+  val txTargetReady = Mux(
+    io.regs.testTarget === TestTarget.mainband,
+    io.tx.ready,
+    txLoopbackEnq.ready
+  )
+
   // TX logic
   switch(txState) {
     is(TxTestState.idle) {
@@ -550,14 +802,7 @@ class PhyTest(
           // Need to load first chunk ahead of time so that we can constantly send data.
           when(loadedFirstChunk) {
             // Increment address when packet is enqueued.
-            when(
-              Mux(
-                io.regs.testTarget === TestTarget.mainband,
-                io.tx.ready,
-                // TODO: Add loopback
-                false.B // io.tx_loopback.ready
-              )
-            ) {
+            when(txTargetReady) {
               inputBufferAddr := (inputBufferAddrReg + 1.U) % txManualRepeatPeriod
             }.otherwise {
               inputBufferAddr := inputBufferAddrReg % txManualRepeatPeriod
@@ -604,9 +849,8 @@ class PhyTest(
                   .asTypeOf(Vec(4, UInt(32.W)))((numLanes + 1) % 4)
               }
               is(TestTarget.loopback) {
-                // TODO: Add loopback
-                // io.tx_loopback.bits := inputRdPorts((numLanes + 2) >> 2)
-                //   .asTypeOf(Vec(4, UInt(32.W)))((numLanes + 2) % 4)
+                txLoopbackEnq.bits := inputRdPorts((numLanes + 2) >> 2)
+                  .asTypeOf(Vec(4, UInt(32.W)))((numLanes + 2) % 4)
               }
             }
           }
@@ -622,24 +866,16 @@ class PhyTest(
                 io.tx.bits.track := io.regs.txTrack
               }
               is(TestTarget.loopback) {
-                // TODO: Add loopback
-                // io.tx_loopback.bits := Reverse(
-                //   txLfsrs(numLanes).io.out.asUInt
-                // )(31, 0).asTypeOf(io.tx_loopback.bits)
+                txLoopbackEnq.bits := Reverse(
+                  txLfsrs(numLanes).io.out.asUInt
+                )(31, 0)
               }
             }
           }
         }
       }
 
-      when(
-        tx_valid && Mux(
-          io.regs.testTarget === TestTarget.mainband,
-          io.tx.ready,
-          // TODO: Add loopback
-          false.B // io.loopback.ready
-        )
-      ) {
+      when(tx_valid && txTargetReady) {
         txPacketsEnqueued := Mux(
           txPacketsEnqueued < VecInit(
             Seq.fill(txPacketsEnqueued.getWidth)(true.B)
@@ -663,14 +899,20 @@ class PhyTest(
     }
     is(TxTestState.done) {}
   }
-  // TODO: Add loopback
-  // io.tx_loopback.valid := tx_valid
 
   // RX logic
 
   io.rx.ready := true.B
-  // TODO: Add loopback
-  // io.rx_loopback.ready := true.B
+  rxLoopbackFifo.io.deq.ready := true.B
+  // The loopback receiver hands over a word every divided cycle whether or not
+  // anything is being sent, so its lane reads zero unless it is the target.
+  // That keeps it out of the capture SRAM and the signature during a mainband
+  // run, where it would otherwise fold in whatever the idle lane picked up.
+  val rxLoopbackData = Mux(
+    io.regs.testTarget === TestTarget.loopback,
+    rxLoopbackFifo.io.deq.bits,
+    0.U
+  )
 
   for (f <- 0 until PhyTest.NumFramings; i <- 0 until numLanes + 2) {
     val newRxBitErrors = rxBitErrors(f)(i) +& PopCount(rxErrorMask(f)(i))
@@ -713,8 +955,7 @@ class PhyTest(
     Mux(
       io.regs.testTarget === TestTarget.mainband,
       io.rx.ready & io.rx.valid,
-      // TODO: Add loopback
-      false.B // io.rx_loopback.ready & io.rx_loopback.valid
+      rxLoopbackFifo.io.deq.ready & rxLoopbackFifo.io.deq.valid
     )
   ) {
 
@@ -727,8 +968,7 @@ class PhyTest(
           shouldStartRecording := io.rx.bits.valid(i)
         }
         is(TestTarget.loopback) {
-          // TODO: Add loopback
-          // shouldStartRecording := io.rx_loopback.bits(i)
+          shouldStartRecording := rxLoopbackFifo.io.deq.bits(i)
         }
       }
       when(!recordingStarted && shouldStartRecording) {
@@ -750,8 +990,7 @@ class PhyTest(
         } else if (lane == numLanes + 1) {
           runningData(lane) := io.rx.bits.track
         } else {
-          // TODO: Add loopback
-          // runningData(lane) := io.rx_loopback.bits
+          runningData(lane) := rxLoopbackData
         }
       }
     }.otherwise {
@@ -784,8 +1023,7 @@ class PhyTest(
         } else if (lane == numLanes + 1) {
           io.rx.bits.track
         } else {
-          // TODO: Add loopback
-          0.U // io.rx_loopback.bits
+          rxLoopbackData
         }
         val data = Wire(UInt(64.W))
         data := (rawData << rxReceiveOffset) >> startIdx
@@ -834,54 +1072,4 @@ class PhyTest(
     }
   }
 
-  // TODO: Move to PHY
-  // val refclkrx = Module(new DiffClkRx(sim))
-  // refclkrx.io.vip := io.top.refClkP
-  // refclkrx.io.vin := io.top.refClkN
-  // val refclkbuf = Module(new DiffBuffer(sim))
-  // refclkbuf.io.vinp := refclkrx.io.vop
-  // refclkbuf.io.vinn := refclkrx.io.von
-  // io.refClkP := refclkbuf.io.voutp
-  // io.refClkN := refclkbuf.io.voutn
-
-  // val bpclkrx = Module(new DiffClkRx(sim))
-  // bpclkrx.io.vip := io.top.bypassClkP
-  // bpclkrx.io.vin := io.top.bypassClkN
-  // val bpclkbuf = Module(new DiffBuffer(sim))
-  // bpclkbuf.io.vinp := bpclkrx.io.vop
-  // bpclkbuf.io.vinn := bpclkrx.io.von
-  // io.bypassClkP := bpclkbuf.io.voutp
-  // io.bypassClkN := bpclkbuf.io.voutn
-
-  // TODO: Hook up loopback lanes and TX data debug lane.
-  // txLane.io.clkp := uciePllClkBuf1.io.voutp
-  // txLane.io.clkn := uciePllClkBuf1.io.voutn
-
-  // val pllClkNDiv = Module(new ClkDiv4)
-  // pllClkNDiv.io.clk := uciePllClkBuf0.io.voutn
-  // pllClkNDiv.io.resetb := !reset.asBool
-
-  // val drivers = Seq(
-  //   (
-  //     testPllClkPBuf2.io.vout,
-  //     io.bumps.testPllClkP,
-  //     "testPllClkPDriver"
-  //   ),
-  //   (
-  //     testPllClkNBuf2.io.vout,
-  //     io.bumps.testPllClkN,
-  //     "testPllClkNDriver"
-  //   ),
-  //   (uciePllClkBuf0.io.voutp, io.bumps.pllClkP, "pllClkPDriver"),
-  //   (pllClkNDiv.io.clkout_2, io.bumps.pllClkN, "pllClkNDriver"),
-  //   (rxClkPBuf3.io.vout, io.bumps.rxClk, "rxClkDriver"),
-  //   (rxClkNBuf3.io.vout, io.bumps.rxClkDivided, "rxClkDivDriver")
-  // ).zipWithIndex
-  // for (((input, output, name), i) <- drivers) {
-  //   val driver = Module(new TxDriver(sim)).suggestName(name)
-  //   driver.io.din := input
-  //   output := driver.io.dout
-  //   // TODO: set up control signals
-  //   driver.io.ctl := 0.U.asTypeOf(driver.io.ctl)
-  // }
 }

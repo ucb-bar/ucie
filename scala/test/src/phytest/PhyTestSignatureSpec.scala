@@ -1,14 +1,18 @@
 package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
+import chisel3.simulator.HasSimulator
+import chisel3.simulator.HasSimulator.simulators.verilator
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
 
+import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 
 // One received packet: `Phy.SerdesRatio` bits per data lane, plus the valid and
-// track lanes. The loopback lane is not wired up yet and always reads zero.
+// track lanes. The loopback lane reads zero while the mainband is the target,
+// which is the only case this test drives.
 case class RxPacket(data: Seq[BigInt], valid: BigInt, track: BigInt) {
   // Lane order the RX buffers in, which is the order the signature folds them.
   def laneWords: Seq[BigInt] = data ++ Seq(valid, track, BigInt(0))
@@ -17,6 +21,11 @@ case class RxPacket(data: Seq[BigInt], valid: BigInt, track: BigInt) {
 // Feeds packets straight into the RX port, so the signature can be checked
 // against `PhyTest.signatureNext` without involving the TX FSM at all.
 class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
+  // The tester instantiates analog macros, whose behavioral models Verilator
+  // lints at.
+  implicit val sim: HasSimulator =
+    verilator(verilatorSettings = Utils.quietVerilatorSettings)
+
   val numLanes = 4
   val wordMask = (BigInt(1) << Phy.SerdesRatio) - 1
   // Recording latches onto the lowest set bit of the first valid word it sees, so
@@ -108,7 +117,7 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
   describe("PhyTest RX signature") {
     it("should match the software model packet by packet") {
       val packets = (1 to 20).map(packet)
-      simulate(new PhyTest(numLanes = numLanes)) { c =>
+      simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         setup(c)
         resetRx(c)
         // Check after every packet, so a divergence points at the packet that
@@ -129,7 +138,7 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
       // signature has to cover the packets that arrive after it fills up.
       val capacity = 1 << (10 - 5)
       val packets = (1 to capacity + 8).map(packet)
-      simulate(new PhyTest(numLanes = numLanes)) { c =>
+      simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         setup(c)
         assert(run(c, packets) == expected(packets))
         assert(packetsReceived(c) == packets.length)
@@ -139,7 +148,7 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
     it("should hold the signature while the counters are paused") {
       val packets = (1 to 6).map(packet)
       val duringPause = (100 to 105).map(packet)
-      simulate(new PhyTest(numLanes = numLanes)) { c =>
+      simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         setup(c)
         val paused = run(c, packets)
         val pausedCount = packetsReceived(c)
@@ -182,7 +191,7 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
         (s"lane $lane bit $bit", mutated)
       }
 
-      simulate(new PhyTest(numLanes = numLanes)) { c =>
+      simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         setup(c)
         val golden = run(c, packets)
         assert(golden == expected(packets))
@@ -201,7 +210,7 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
       val uniform = (1 to 8).map(seed => uniformPacket(seed))
       val stuckSets = Seq(Set(0), Set(0, 1), Set(0, 1, 2), Set(1, 2))
 
-      simulate(new PhyTest(numLanes = numLanes)) { c =>
+      simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         setup(c)
         val golden = run(c, uniform)
         assert(golden == expected(uniform))

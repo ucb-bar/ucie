@@ -2,10 +2,13 @@ package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import chisel3.util._
+import chisel3.simulator.HasSimulator
+import chisel3.simulator.HasSimulator.simulators.verilator
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
 
+import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 
 class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
@@ -33,7 +36,9 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
     extends Module {
   val io = IO(new PhyTestLfsrLoopbackIO(numLanes))
 
-  val dut = Module(new PhyTest(numLanes = numLanes))
+  // The tester carries analog macros (the observation bump drivers, the TX data
+  // debug lane, and the loopback pair), so this needs their behavioral models.
+  val dut = Module(new PhyTest(numLanes = numLanes)(true))
   dut.io.regs := DontCare
 
   dut.io.regs.testTarget := TestTarget.mainband
@@ -65,8 +70,13 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
   dut.io.regs.sb.txSend := false.B
   dut.io.regs.sb.rxPop := false.B
   dut.io.regs.sb.rxRst := false.B
-  dut.io.debug.pllClk := false.B
-  dut.io.debug.fwdClk := false.B
+  // Only the debug bumps and the tester's own lanes watch these, and this test
+  // exercises neither.
+  dut.io.debug.txClk := false.B.asClock
+  dut.io.debug.rxClk := false.B.asClock
+  dut.io.debug.txDivClk := false.B.asClock
+  dut.io.debug.sbTxClk := false.B.asClock
+  dut.io.debug.rxData := DontCare
   dut.io.sb.rxClk := dut.io.sb.txClk
   dut.io.sb.rxData := dut.io.sb.txData
 
@@ -96,6 +106,11 @@ class PhyTestLfsrLoopback(numLanes: Int = 4, dataDelay: Boolean = false)
 }
 
 class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
+  // The tester instantiates analog macros, whose behavioral models Verilator
+  // lints at.
+  implicit val sim: HasSimulator =
+    verilator(verilatorSettings = Utils.quietVerilatorSettings)
+
   val numLanes = 4
   val packets = 256
   // Distinct per lane so a lane comparing against the wrong LFSR cannot pass.

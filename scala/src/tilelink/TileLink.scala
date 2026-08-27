@@ -337,8 +337,9 @@ class UcieTLRegs(
         w
       })))
       // UCIe common.
-      // Test PLL P/N, UCIe PLL P/N, RX CLK P/N
-      val commonDriverctl = RegInit(VecInit(Seq.fill(6)({
+      // Pad drivers for the observation bumps: TX clock, RX clock, RX data,
+      // clock mux.
+      val commonDriverctl = RegInit(VecInit(Seq.fill(PhyTest.NumDebugDrivers)({
         val w = Wire(new DriverCtlIO)
         w.pu_ctl := 0.U
         w.pd_ctl := 0.U
@@ -346,6 +347,13 @@ class UcieTLRegs(
         w.en_b := true.B
         w
       })))
+      // What the clock mux bump watches: low the sideband forwarded clock, high
+      // the TX global divided clock.
+      val commonClkMuxSel = RegInit(false.B)
+      // Which RX lane, and which bit of its deserialized word, the RX data bump
+      // watches.
+      val commonRxDebugLane = RegInit(0.U(io.test.rxDebugLane.getWidth.W))
+      val commonRxDebugBit = RegInit(0.U(io.test.rxDebugBit.getWidth.W))
       val commonTxctl = RegInit({
         val w = Wire(new TxLaneDigitalCtlIO)
         w.dll_reset := true.B
@@ -464,6 +472,28 @@ class UcieTLRegs(
       io.phy.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
+      // The last lane control slot belongs to the tester's loopback pair, which
+      // lives in PhyTest rather than in the PHY.
+      io.test.loopbackTxctl := applyShift(txctl(params.numLanes + 4))
+      io.test.loopbackRxctl := applyShift(rxctl(params.numLanes + 4))
+
+      // Debug circuitry: the observation bump drivers and the TX data debug
+      // lane, all owned by PhyTest.
+      io.test.driverctl := applyShift(commonDriverctl)
+      io.test.clkMuxSel := applyShift(commonClkMuxSel)
+      io.test.rxDebugLane := applyShift(commonRxDebugLane)
+      io.test.rxDebugBit := applyShift(commonRxDebugBit)
+      io.test.txctl := applyShift(commonTxctl)
+      io.test.txDebugTestMode := applyShift(commonTxTestMode)
+      io.test.txDebugDataMode := applyShift(commonTxDataMode)
+      io.test.txDebugLfsrSeed := applyShift(commonTxLfsrSeed)
+      io.test.txDebugFsmRst := applyShift(commonTxFsmRst.valid)
+      io.test.txDebugExecute := applyShift(commonTxExecute.valid)
+      io.test.txDebugManualRepeatPeriod := applyShift(
+        commonTxManualRepeatPeriod
+      )
+      io.test.txDebugPacketsToSend := applyShift(commonTxPacketsToSend)
+      io.test.txDebugData := applyShift(commonData)
 
       // String name should always be camel case with an underscore to separate indices.
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
@@ -543,7 +573,7 @@ class UcieTLRegs(
         toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
         toRegFieldRw(clkFreqSel, "clkFreqSel"),
         toRegFieldRw(clkGateEn, "clkGateEn")
-      ) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
+      ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
           toRegFieldRw(txctl(i).driver, s"txctl_${i}_driver"),
@@ -554,11 +584,16 @@ class UcieTLRegs(
           toRegFieldRw(txctl(i).sample_negedge, s"txctl_${i}_sampleNegedge"),
           toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay"),
           toRegFieldR(
-            applyShift(io.phy.dllCode(i)),
+            // The last lane is the tester's loopback transmitter, whose DLL
+            // sits in PhyTest rather than in the PHY.
+            applyShift(
+              if (i < params.numLanes + 4) io.phy.dllCode(i)
+              else io.test.loopbackDllCode
+            ),
             s"txctl_${i}_dllCode"
           )
         )
-      }) ++ (0 until params.numLanes + 4).flatMap((i: Int) => {
+      }) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(rxctl(i).zen, s"rxctl_${i}_zen"),
           toRegFieldRw(rxctl(i).zctl, s"rxctl_${i}_zctl"),
@@ -595,6 +630,21 @@ class UcieTLRegs(
       ) ++ (0 until 32).map((j: Int) =>
         toRegFieldRw(commonTxctl.shuffler(j), s"commonTxctlShuffler_$j")
       ) ++ Seq(
+        toRegFieldR(
+          applyShift(io.test.txDebugDllCode),
+          "commonTxctlDllCode"
+        ),
+        toRegFieldR(
+          applyShift(io.test.txDebugState),
+          "commonTxTestState"
+        ),
+        toRegFieldR(
+          applyShift(io.test.txDebugPacketsEnqueued),
+          "commonTxPacketsSent"
+        ),
+        toRegFieldRw(commonClkMuxSel, "commonClkMuxSel"),
+        toRegFieldRw(commonRxDebugLane, "commonRxDebugLane"),
+        toRegFieldRw(commonRxDebugBit, "commonRxDebugBit"),
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(controllerSel, "controllerSel"),
@@ -788,8 +838,9 @@ class UcieTL(
         new PhyTest(
           params.bufferDepthPerLane,
           params.numLanes,
-          params.bitCounterWidth
-        )
+          params.bitCounterWidth,
+          queueParams = params.queueParams
+        )(params.includeDefaultModels)
       )
     }
     io.debug <> test.io.bumps

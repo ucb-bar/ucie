@@ -21,6 +21,7 @@ import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 
 import edu.berkeley.cs.uciedigital.phytest.{
   BandMode,
+  PhyTest,
   TestTarget,
   TxTestMode,
   DataMode,
@@ -306,7 +307,7 @@ object Codegen {
     reqs += write("commonTxctlDllReset", 0)
     reqs += write("divResetb", 1)
 
-    for (i <- 0 until 6) {
+    for (i <- 0 until PhyTest.NumDebugDrivers) {
       reqs += write(s"commonDriverctl_$i", enableDriverCtl)
     }
 
@@ -566,7 +567,7 @@ class Codegen(f: Formatter) {
         ("dataModeFinite", DataMode.finite.litValue),
         ("dataModeInfinite", DataMode.infinite.litValue),
         ("testTargetMainband", TestTarget.mainband.litValue),
-        ("testTargetLoopback", TestTarget.mainband.litValue),
+        ("testTargetLoopback", TestTarget.loopback.litValue),
         ("controllerSelPhytest", ControllerSel.phytest.litValue),
         ("controllerSelUcie", ControllerSel.ucie.litValue),
         ("bandModeManual", BandMode.manual.litValue),
@@ -708,7 +709,14 @@ class Codegen(f: Formatter) {
           )
         )
       }
-      body.append(f.formatForLoop("lane", 21, loopBody.toString))
+      // Every lane the PHY has, plus the tester's loopback transmitter.
+      body.append(
+        f.formatForLoop(
+          "lane",
+          Codegen.ucieParams.numLanes + 5,
+          loopBody.toString
+        )
+      )
     }
 
     body.append(
@@ -743,7 +751,9 @@ class Codegen(f: Formatter) {
           f.formatConstantRef("enableDriverCtl")
         )
       )
-      body.append(f.formatForLoop("i", 6, loopBody.toString))
+      body.append(
+        f.formatForLoop("i", PhyTest.NumDebugDrivers, loopBody.toString)
+      )
     }
     body.append(
       formatWriteNamedReg(

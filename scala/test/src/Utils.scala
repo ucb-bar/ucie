@@ -20,6 +20,12 @@ object Utils {
   val controlFile = xceliumDir / "amscf.scs"
   val probeFile = xceliumDir / "probe.tcl"
 
+  // The analog behavioral models trip Verilator lint warnings -- the serializer
+  // model drives its shift register and divided clock from more than one always
+  // block, for one -- and warnings are fatal by default.
+  val quietVerilatorSettings =
+    CompilationSettings.default.withDisableFatalExitOnWarnings(true)
+
   val verilatorSettings =
     CompilationSettings.default
       .withDisableFatalExitOnWarnings(true)
@@ -191,6 +197,7 @@ xrun \\
         val defaultModels = Seq(
           "ucie_clk_dist_network.sv",
           "ucie_clk_div4.v",
+          "clkmux.v",
           "clocking_tile.v",
           "clock_receiver.v",
           "IO_ESD.v",

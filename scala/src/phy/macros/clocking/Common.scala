@@ -10,6 +10,44 @@ import chisel3.util._
 // Supplies (VDD/VSS) are pins on the IP but are omitted here; they are
 // connected by the physical flow.
 
+class ClkMuxIO extends Bundle {
+  val Vinp = Input(Clock())
+  val Vinn = Input(Clock())
+  val sel = Input(Bool())
+  val selb = Input(Bool())
+  val Vout = Output(Clock())
+}
+
+// Single-ended 2:1 clock mux cell.
+//
+// `sel` and `selb` drive complementary pass gates and must be driven as true
+// complements: `sel` high passes `Vinp`, `selb` high passes `Vinn`, and any
+// other combination either floats or shorts the internal node. The shared
+// output inverter means `Vout` is the inverse of the selected input, which
+// does not matter for the observation-only uses this cell has. Use `connect`
+// rather than driving `sel`/`selb` by hand.
+class ClkMux(implicit includeDefaultModels: Boolean = false)
+    extends BlackBox
+    with HasBlackBoxResource {
+  val io = IO(new ClkMuxIO)
+
+  override val desiredName = "clkmux"
+
+  if (includeDefaultModels) {
+    addResource("/vsrc/clkmux.v")
+  }
+
+  // Passes `in0` when `sel1` is low and `in1` when it is high, returning the
+  // muxed clock.
+  def connect(in0: Clock, in1: Clock, sel1: Bool): Clock = {
+    io.Vinn := in0
+    io.Vinp := in1
+    io.sel := sel1
+    io.selb := !sel1
+    io.Vout
+  }
+}
+
 object ClockingTile {
   val phaseSelWidth = 64
   val freqSelWidth = 3
