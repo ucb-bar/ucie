@@ -10,22 +10,31 @@ import chisel3.util._
 // Supplies (VDD/VSS) are pins on the IP but are omitted here; they are
 // connected by the physical flow.
 
+object ClkMux {
+
+  // Clocks the observation mux can choose between. Each input hangs its own
+  // pass gate off the shared internal node, so widening this loads every
+  // source clock a little more.
+  val numInputs = 16
+
+  def selWidth: Int = log2Ceil(numInputs)
+}
+
 class ClkMuxIO extends Bundle {
-  val Vinp = Input(Clock())
-  val Vinn = Input(Clock())
-  val sel = Input(Bool())
-  val selb = Input(Bool())
+  val Vin = Input(Vec(ClkMux.numInputs, Clock()))
+  val sel = Input(Vec(ClkMux.numInputs, Bool()))
+  val selb = Input(Vec(ClkMux.numInputs, Bool()))
   val Vout = Output(Clock())
 }
 
-// Single-ended 2:1 clock mux cell.
+// Single-ended `ClkMux.numInputs` to 1 clock mux cell.
 //
-// `sel` and `selb` drive complementary pass gates and must be driven as true
-// complements: `sel` high passes `Vinp`, `selb` high passes `Vinn`, and any
-// other combination either floats or shorts the internal node. The shared
-// output inverter means `Vout` is the inverse of the selected input, which
-// does not matter for the observation-only uses this cell has. Use `connect`
-// rather than driving `sel`/`selb` by hand.
+// Every input drives a complementary pass gate onto one shared node, so `sel`
+// has to be one-hot and `selb` its exact complement: any other combination
+// either floats the node or shorts two clocks together. The shared output
+// inverter means `Vout` is the inverse of the selected input, which does not
+// matter for the observation-only uses this cell has. Use `connect` rather
+// than driving `sel`/`selb` by hand.
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
@@ -37,13 +46,20 @@ class ClkMux(implicit includeDefaultModels: Boolean = false)
     addResource("/vsrc/clkmux.v")
   }
 
-  // Passes `in0` when `sel1` is low and `in1` when it is high, returning the
-  // muxed clock.
-  def connect(in0: Clock, in1: Clock, sel1: Bool): Clock = {
-    io.Vinn := in0
-    io.Vinp := in1
-    io.sel := sel1
-    io.selb := !sel1
+  // Passes `ins(sel)`, returning the muxed clock. Inputs past the end of `ins`
+  // are tied off, and the one-hot the cell needs is decoded here so that an out
+  // of range select turns every pass gate off rather than shorting two clocks.
+  def connect(ins: Seq[Clock], sel: UInt): Clock = {
+    require(
+      ins.length <= ClkMux.numInputs,
+      s"${ins.length} clocks does not fit a ${ClkMux.numInputs} input mux"
+    )
+    val oneHot = UIntToOH(sel, ClkMux.numInputs)
+    for (i <- 0 until ClkMux.numInputs) {
+      io.Vin(i) := ins.lift(i).getOrElse(false.B.asClock)
+      io.sel(i) := oneHot(i) && (i < ins.length).B
+      io.selb(i) := !io.sel(i)
+    }
     io.Vout
   }
 }

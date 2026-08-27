@@ -187,9 +187,10 @@ class PhyTestRegsIO(
   // `txClk`, `rxClk`, `rxData`, `clkMux`. The TX data debug lane brings its own
   // driver and takes its control from `txctl` instead.
   val driverctl = Input(Vec(PhyTest.NumDebugDrivers, new DriverCtlIO))
-  // What the `clkMux` bump watches: low selects the sideband forwarded clock,
-  // high the TX global divided clock.
-  val clkMuxSel = Input(Bool())
+  // Which clock the `clkMux` bump watches, as an index into the mux input list
+  // in [[PhyTest]]. Zero selects the sideband forwarded clock and one the TX
+  // global divided clock; the rest are not wired up yet.
+  val clkMuxSel = Input(UInt(ClkMux.selWidth.W))
   // Which RX lane, and which bit of that lane's deserialized word, the `rxData`
   // bump watches. Lanes are ordered as in `RxIO`: `numLanes` data lanes, then
   // valid, then track.
@@ -362,14 +363,16 @@ class PhyTest(
   // The PHY hands over raw nets and nothing else; picking what to watch and
   // driving a pad with it happens here, so the PHY carries only link RTL.
   //
-  // One clock mux lets the `clkMux` bump watch either the sideband forwarded
-  // clock or the TX global divided clock. The `rxData` bump watches any bit of
-  // any RX lane's deserialized word; those words sit in the RX divided clock
-  // domain, but nothing here samples them, so the selects are the only thing
-  // crossing and they are quasi-static configuration.
+  // The `clkMux` bump watches whichever clock `clkMuxSel` indexes out of this
+  // list. The cell takes `ClkMux.numInputs`, so there is room to bring more
+  // clocks out here later; until then the rest of its inputs are tied off and
+  // selecting one leaves every pass gate open. The `rxData` bump watches any
+  // bit of any RX lane's deserialized word; those words sit in the RX divided
+  // clock domain, but nothing here samples them, so the selects are the only
+  // thing crossing and they are quasi-static configuration.
+  val clkMuxIns = Seq(io.debug.sbTxClk, io.debug.txDivClk)
   val clkMux = Module(new ClkMux)
-  val clkMuxOut =
-    clkMux.connect(io.debug.sbTxClk, io.debug.txDivClk, io.regs.clkMuxSel)
+  val clkMuxOut = clkMux.connect(clkMuxIns, io.regs.clkMuxSel)
   val rxDebugData = io.debug.rxData(io.regs.rxDebugLane)(io.regs.rxDebugBit)
 
   for (

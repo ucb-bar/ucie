@@ -347,9 +347,9 @@ class UcieTLRegs(
         w.en_b := true.B
         w
       })))
-      // What the clock mux bump watches: low the sideband forwarded clock, high
-      // the TX global divided clock.
-      val commonClkMuxSel = RegInit(false.B)
+      // Which clock the clock mux bump watches; see the mux input list in
+      // PhyTest for what each index selects.
+      val commonClkMuxSel = RegInit(0.U(io.test.clkMuxSel.getWidth.W))
       // Which RX lane, and which bit of its deserialized word, the RX data bump
       // watches.
       val commonRxDebugLane = RegInit(0.U(io.test.rxDebugLane.getWidth.W))
