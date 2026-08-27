@@ -14,7 +14,7 @@ class CodegenSpec extends AnyFunSpec {
       assert(f.formatBool(false) == "1'b0")
     }
     it("should format constant references") {
-      assert(f.formatConstantRef("txFsmRst") == "`TX_FSM_RST")
+      assert(f.formatConstantRef("txRst") == "`TX_RST")
       assert(f.formatConstantRef("rxPacketsReceived") == "`RX_PACKETS_RECEIVED")
     }
     it("should format defines") {
@@ -79,7 +79,7 @@ class CodegenSpec extends AnyFunSpec {
       assert(f.formatBool(false) == "0")
     }
     it("should format constant references") {
-      assert(f.formatConstantRef("txFsmRst") == "UCIE_TX_FSM_RST")
+      assert(f.formatConstantRef("txRst") == "UCIE_TX_RST")
       assert(
         f.formatConstantRef("rxPacketsReceived") == "UCIE_RX_PACKETS_RECEIVED"
       )
@@ -148,9 +148,9 @@ class CodegenSpec extends AnyFunSpec {
     it("should format reset_fsms as a task") {
       val result = codegen.formatResetFsmsFn()
       assert(result.contains("task reset_fsms()"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `TX_FSM_RST, 64'h1)"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `RX_FSM_RST, 64'h1)"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `COMMON_TX_FSM_RST, 64'h1)"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `TX_RST, 64'h1)"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `RX_RST, 64'h1)"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `DEBUG_TX_FSM_RST, 64'h1)"))
       assert(
         result.contains(
           "`EXPECT_UCIE_MSG(regDrv, `TX_TEST_STATE, `TX_TEST_STATE_IDLE"
@@ -174,10 +174,10 @@ class CodegenSpec extends AnyFunSpec {
     it("should format reset_fsms as a base-relative MMIO function") {
       val result = codegen.formatResetFsmsFn()
       assert(result.contains("static inline void reset_fsms(uintptr_t base)"))
-      assert(result.contains("reg_write64(base + UCIE_TX_FSM_RST, 0x1ULL);"))
-      assert(result.contains("reg_write64(base + UCIE_RX_FSM_RST, 0x1ULL);"))
+      assert(result.contains("reg_write64(base + UCIE_TX_RST, 0x1ULL);"))
+      assert(result.contains("reg_write64(base + UCIE_RX_RST, 0x1ULL);"))
       assert(
-        result.contains("reg_write64(base + UCIE_COMMON_TX_FSM_RST, 0x1ULL);")
+        result.contains("reg_write64(base + UCIE_DEBUG_TX_FSM_RST, 0x1ULL);")
       )
       assert(
         result.contains(

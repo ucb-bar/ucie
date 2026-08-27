@@ -69,23 +69,35 @@ module rx_data_lane (
    input vref_sel_5,
    input vref_sel_6
 );
+  // The tile needs the clock running for WAKE_CYCLES cycles after reset before
+  // its analog front end settles; until then it captures nothing.
+  //
+  // A clock that stops and restarts would in reality have to wake again. That
+  // is not modelled here -- the VAMS models are where behaviour at that level
+  // belongs.
+  parameter integer WAKE_CYCLES = 8;
   reg [2:0] ctr;
   reg divClock;
   reg [31:0] shiftReg;
   reg [31:0] outputReg;
+  reg [7:0] wakeCtr;
+  wire awake = (wakeCtr >= WAKE_CYCLES);
   always @(negedge rstb) begin
     divClock <= 1'b0;
     ctr <= 3'b0;
     shiftReg <= 32'b0;
+    outputReg <= 32'b0;
+    wakeCtr <= 8'b0;
   end
   always @(posedge clk) begin
     if (rstb) begin
+      if (!awake) wakeCtr <= wakeCtr + 1'b1;
       ctr <= ctr + 1'b1;
       shiftReg <= (shiftReg << 1'b1) | din;
       if (ctr == 3'b0) begin
         divClock <= ~divClock;
       end
-      if (ctr == 3'b0 && divClock == 1'b0) begin
+      if (ctr == 3'b0 && divClock == 1'b0 && awake) begin
         outputReg <= shiftReg;
       end
     end
@@ -95,6 +107,12 @@ module rx_data_lane (
         shiftReg <= (shiftReg << 1'b1) | din;
     end
   end
+  // The deserializer captures in time order: the bit received in UI t lands at
+  // dout[t]. The TX tile serializes through a tree and so sends in bit-reversed
+  // order; correcting that mismatch is what the per-lane shuffler is for.
+  // Keeping this sequential is also what lets the digital RX realign on an
+  // arbitrary word boundary, since an offset capture is then a rotation of the
+  // stream rather than a scramble.
   assign dout_0  = outputReg[31];
   assign dout_1  = outputReg[30];
   assign dout_2  = outputReg[29];

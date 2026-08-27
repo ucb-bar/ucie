@@ -10,6 +10,7 @@ import org.chipsalliance.diplomacy._
 import org.chipsalliance.cde.config.Parameters
 import freechips.rocketchip.prci._
 import edu.berkeley.cs.uciedigital.tilelink._
+import edu.berkeley.cs.uciedigital.phytest.DebugBumpsIO
 import edu.berkeley.cs.chippy.{
   TLTesterParams,
   TLTester,
@@ -348,6 +349,9 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
       val ucieDigitalBypassClock = Input(Clock())
       val reg = new TLTesterIO(TestHarness.tltParams)
       val mb = new TLTesterIO(TestHarness.tltParams)
+      // Brought out so the observation bumps show up in a waveform rather than
+      // dangling. Nothing in the harness reads them.
+      val debug = new DebugBumpsIO
     })
 
     clockNode.out(0)._1.clock := clock
@@ -355,6 +359,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
 
     io.reg <> tltReg.module.io
     io.mb <> tltMb.module.io
+    io.debug := ucieTL.module.io.debug
 
     // Loopback
     ucieTL.module.io.phy.rxData := ucieTL.module.io.phy.txData
@@ -568,6 +573,15 @@ manual_simple();
   )
 }
 
+class ManualLoopbackTestDriver extends SVTestDriver {
+  setStimulus(
+    "ManualLoopbackTestDriver",
+    """
+manual_loopback();
+          """.trim
+  )
+}
+
 class TlSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "TlSimpleTestDriver",
@@ -652,9 +666,16 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         ucieClk.step(cycles = 5)
         c.reset.poke(false.B)
         ucieClk.step(cycles = 5)
-        c.io.reg.expect(ucieClk, "h200000".U, 0.U)
-        c.io.reg.write(ucieClk, "h200100".U, "hdeadbeef".U)
-        c.io.reg.expect(ucieClk, "h200100".U, "hdeadbeef".U)
+        // Addresses come from the register map by name, the way the
+        // SystemVerilog drivers use the generated constants. Hardcoded offsets
+        // silently retarget this test at a different register whenever the map
+        // grows.
+        def addr(name: String): BigInt =
+          BigInt(0x200000L) +
+            (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
+        c.io.reg.expect(ucieClk, addr("testTarget").U, 0.U)
+        c.io.reg.write(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
+        c.io.reg.expect(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
         println("[TEST] Success")
       }
     }
@@ -674,6 +695,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ManualSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Verilator"
+      )
+    }
+
+    it("should support loopback lane test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ManualLoopbackTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_loopback_lane_test_using_Verilator"
       )
     }
 
