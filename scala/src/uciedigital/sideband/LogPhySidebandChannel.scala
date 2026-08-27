@@ -79,6 +79,7 @@ class LogPhySidebandChannel(
   )
   val layerInBuffer = Module(new SkidBuffer(sbMsgWidth))
   val layerOutBuffer = Module(new SkidBuffer(sbMsgWidth))
+  val rxIsRaw = io.link.ctrl.rxMode === SBRxTxMode.RAW
 
   // IOs for module
   io.rdi.rxCreditReturn := rdiIntfNode.io.rxCreditReturn
@@ -105,9 +106,31 @@ class LogPhySidebandChannel(
   // IOs for SidebandSwitch
   layerInBuffer.io.in <> io.layer.in
   switch.io.currLayer.from <> layerInBuffer.io.out
-  switch.io.currLayer.to <> layerOutBuffer.io.in
+
+  // A RAW word has no header for the switch to route on, so it bypasses it.
+  switch.io.lowerLayer.from.valid := linkNode.io.rxOut.valid && !rxIsRaw
+  switch.io.lowerLayer.from.bits := linkNode.io.rxOut.bits
+
+  layerOutBuffer.io.in.valid := Mux(
+    rxIsRaw,
+    linkNode.io.rxOut.valid,
+    switch.io.currLayer.to.valid
+  )
+  layerOutBuffer.io.in.bits := Mux(
+    rxIsRaw,
+    linkNode.io.rxOut.bits,
+    switch.io.currLayer.to.bits
+  )
+
+  // ready runs the other way, so it needs its own mux.
+  switch.io.currLayer.to.ready := layerOutBuffer.io.in.ready && !rxIsRaw
+  linkNode.io.rxOut.ready := Mux(
+    rxIsRaw,
+    layerOutBuffer.io.in.ready,
+    switch.io.lowerLayer.from.ready
+  )
   io.layer.out <> layerOutBuffer.io.out
-  switch.io.lowerLayer.from <> linkNode.io.rxOut
+
   switch.io.upperLayer.from <> rdiIntfNode.io.rxOut
 
   // IOs for SidebandLinkNode

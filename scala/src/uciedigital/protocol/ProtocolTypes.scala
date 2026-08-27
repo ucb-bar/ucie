@@ -19,6 +19,9 @@ class ProtocolRawBeat(nBytes: Int) extends Bundle {
 }
 
 class ProtocolLayerCtrlIO extends Bundle {
+
+  /** Software request. The layer decides when to drive FDIStateReq.active. */
+  val requestActive = Input(Bool())
   val requestRetrain = Input(Bool())
   val requestLinkReset = Input(Bool())
   val requestDisable = Input(Bool())

@@ -378,6 +378,7 @@ class LogicalPhy(
     0.U.asTypeOf(chiselTypeOf(io.analog.mainband.rx.bits))
   )
   patternReader.io.mbRxLaneIo := rawRxLaneBits
+  patternReader.io.mbRxValid := io.analog.mainband.rx.valid
 
   val rdiStateSts = rdiController.io.rdi.plStateSts
   val canAcceptLpIrdy = rdiStateSts =/= RDIState.reset

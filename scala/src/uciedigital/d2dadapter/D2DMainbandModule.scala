@@ -138,10 +138,5 @@ class D2DMainbandModule(
     dataBuffRcvReg := io.rdi.plData
   }
 
-  dataBuffRcvFillReg := dataBuffRcvFillReg
-  when(rxBeatAcceptedFromRdi) {
-    dataBuffRcvFillReg := true.B
-  }.elsewhen(!io.state.rxActiveReq) {
-    dataBuffRcvFillReg := false.B
-  }
+  dataBuffRcvFillReg := rxBeatAcceptedFromRdi
 }

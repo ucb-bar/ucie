@@ -382,30 +382,31 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
   currLocalTxFunctionalLanes := io.currLocalTxFunctionalLanes
 
   // Output of faultInLowerLanes and faultInUpperLanes is trusted when linkOpsResultsValid is HIGH
+  // linkOpsResults bits are per-lane PASS flags, so a lane is faulty when its bit is low
   when(io.interpretBy8Lane) {
-    faultInLowerLanes := Cat(
+    faultInLowerLanes := !Cat(
       linkOpsResults(0),
       linkOpsResults(1),
       linkOpsResults(2),
       linkOpsResults(3)
-    ).orR
-    faultInUpperLanes := Cat(
+    ).andR
+    faultInUpperLanes := !Cat(
       linkOpsResults(4),
       linkOpsResults(5),
       linkOpsResults(6),
       linkOpsResults(7)
-    ).orR
+    ).andR
   }.otherwise {
     // Get top (afeParams.mbLanes / 2) lanes
-    faultInLowerLanes := linkOpsResults
+    faultInLowerLanes := !linkOpsResults
       .take(afeParams.mbLanes / 2)
       .map(_.asBool)
-      .reduce(_ || _)
+      .reduce(_ && _)
     // Get bottom (afeParams.mbLanes / 2) lanes
-    faultInUpperLanes := linkOpsResults
+    faultInUpperLanes := !linkOpsResults
       .drop(afeParams.mbLanes / 2)
       .map(_.asBool)
-      .reduce(_ || _)
+      .reduce(_ && _)
   }
 
   isLanes0To15 := currLocalTxFunctionalLanes === "b011".U
@@ -444,25 +445,28 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
   )
 
   newTxFunctionalLanes := "b011".U // Default code all lanes are functional
-  newTxFunctionalLanes := Mux1H(
-    Seq(
-      laneRepairDegradeCondSel(
-        0
-      ) -> "b101".U, // Logical lanes 4-7 are functional
-      laneRepairDegradeCondSel(
-        1
-      ) -> "b100".U, // Logical lanes 0-3 are functional
-      laneRepairDegradeCondSel(
-        2
-      ) -> "b010".U, // Logical lanes 8-15 are functional
-      laneRepairDegradeCondSel(
-        3
-      ) -> "b001".U, // Logical lanes 0-7 are functional
-      laneRepairDegradeCondSel(
-        4
-      ) -> "b000".U // No functional lanes (No degrade possible)
+  // Mux1H returns 0 on a zero-hot select, so only apply it when a degrade is needed
+  when(laneRepairDegradeCondSel.orR) {
+    newTxFunctionalLanes := Mux1H(
+      Seq(
+        laneRepairDegradeCondSel(
+          0
+        ) -> "b101".U, // Logical lanes 4-7 are functional
+        laneRepairDegradeCondSel(
+          1
+        ) -> "b100".U, // Logical lanes 0-3 are functional
+        laneRepairDegradeCondSel(
+          2
+        ) -> "b010".U, // Logical lanes 8-15 are functional
+        laneRepairDegradeCondSel(
+          3
+        ) -> "b001".U, // Logical lanes 0-7 are functional
+        laneRepairDegradeCondSel(
+          4
+        ) -> "b000".U // No functional lanes (No degrade possible)
+      )
     )
-  )
+  }
 
   // There are no lane errors if the lane functionality test in sLINKSPEED matches the functional
   // lanes determined in from the REPAIR tests
@@ -1812,11 +1816,8 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   sbMsgExchanger.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
   sbMsgExchanger.io.sbLaneIo.rx.bits.data := io.sbLaneIo.rx.bits.data
 
-  when(currentState === MBTrainState.sLINKSPEED) { // need to wait on mutiple messages in sLINKSPEED
-    io.sbLaneIo.rx.ready := false.B
-  }.otherwise {
-    io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
-  }
+  // sLINKSPEED substates ack their own messages with a raw compare (last connect wins)
+  io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
 
   // Link operation IOs
   io.txPtTestRespIntfIo.start := false.B
@@ -1987,17 +1988,18 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
       // The correct width if a width degrade has happen will already be set by time
       // Local die is in this state.
       sbMsgExchanger.io.rxRefBitPattern.valid := true.B
-      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_DONE_REQ
+      sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_SPEEDIDLE_DONE_REQ
 
       sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
       sbMsgExchanger.io.req.bits := SBMsgCreate(
-        SBM.MBTRAIN_LINKSPEED_DONE_RESP,
+        SBM.MBTRAIN_SPEEDIDLE_DONE_RESP,
         "PHY",
         "PHY",
         true
       )
       responderRdy := sbMsgExchanger.io.exchDone
-      when(io.requesterRdy && io.responderRdy) {
+      // No substates here, so the sticky rdy bits arrive already set: require exchDone
+      when(io.requesterRdy && io.responderRdy && sbMsgExchanger.io.exchDone) {
         nextState := MBTrainState.sTXSELFCAL
       }
     }
