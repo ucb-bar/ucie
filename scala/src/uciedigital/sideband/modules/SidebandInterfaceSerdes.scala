@@ -77,10 +77,21 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
   // =======================================================================
   block(Verification) {
     block(Verification.Assert) {
+      // Stated as "if the input was accepted within the last `numBeats`
+      // cycles, a beat has to be going out now" rather than the more direct
+      // `in.fire |=> out.valid.repeat(numBeats)`. The two say the same thing,
+      // but the direct form needs a multi-cycle sequence as the consequent of
+      // the implication, and Verilator supports only a boolean one there --
+      // whether the sequence is written as consecutive repetition (`[*n]`) or
+      // spelled out as a `##1` chain. Every Verilator simulation in the repo
+      // fails to compile over it, so the reindexed form is what we assert.
+      val acceptedWithinLastBeats = Seq
+        .iterate[Bool](io.in.fire, numBeats + 1)(prev => RegNext(prev, false.B))
+        .tail
+        .reduce(_ || _)
       AssertProperty(
-        Sequence.BoolSequence(io.in.fire) |=> Sequence
-          .BoolSequence(io.out.valid)
-          .repeat(numBeats),
+        Sequence.BoolSequence(acceptedWithinLastBeats) |->
+          Sequence.BoolSequence(io.out.valid),
         label = Some("SerializerEmitsAllBeatsAfterAccept")
       )
     }

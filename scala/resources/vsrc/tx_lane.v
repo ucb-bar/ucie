@@ -209,52 +209,72 @@ module tx_lane (
   output dll_code_3,
   output dll_code_4
 );
+  // The tile needs the clock running for WAKE_CYCLES cycles after reset before
+  // its analog front end settles; until then it drives nothing.
+  //
+  // A clock that stops and restarts would in reality have to wake again. That
+  // is not modelled here -- the VAMS models are where behaviour at that level
+  // belongs.
+  parameter integer WAKE_CYCLES = 8;
+  // The tile serializes with an adjacent-pairing binary tree (ser32to1), so
+  // the bit sent in UI t is din[bitrev5(t)], not din[t]:
+  //
+  //   D0 D16 D8 D24 D4 D20 D12 D28 D2 D18 D10 D26 D6 D22 D14 D30
+  //   D1 D17 D9 D25 D5 D21 D13 D29 D3 D19 D11 D27 D7 D23 D15 D31
+  //
+  // Loading the shift register in that permuted order reproduces the tree's
+  // wire order while keeping this a plain shift register: the same word rate
+  // (one word per divclk, 32 UI DDR), just the tree's bit order.
   reg [2:0] ctr;
   reg divClock;
   reg [31:0] shiftReg;
+  reg [7:0] wakeCtr;
+  wire awake = (wakeCtr >= WAKE_CYCLES);
   always @(negedge ser_resetb) begin
     divClock <= 1'b0;
     ctr <= 3'b1;
     shiftReg <= 32'b0;
+    wakeCtr <= 8'b0;
   end
   always @(posedge clk) begin
     if (ser_resetb) begin
+      if (!awake) wakeCtr <= wakeCtr + 1'b1;
       ctr <= ctr + 1'b1;
       shiftReg <= shiftReg >> 1'b1;
       if (ctr == 3'b0) begin
         if (~divClock) begin
           shiftReg <= {
             din_31,
-            din_30, 
-            din_29,
-            din_28,
-            din_27,
-            din_26, 
-            din_25,
-            din_24,
-            din_23,
-            din_22, 
-            din_21,
-            din_20,
-            din_19,
-            din_18, 
-            din_17,
-            din_16,
             din_15,
-            din_14, 
-            din_13,
-            din_12,
-            din_11,
-            din_10, 
-            din_9,
-            din_8,
+            din_23,
             din_7,
-            din_6, 
-            din_5,
-            din_4,
+            din_27,
+            din_11,
+            din_19,
             din_3,
-            din_2, 
+            din_29,
+            din_13,
+            din_21,
+            din_5,
+            din_25,
+            din_9,
+            din_17,
             din_1,
+            din_30,
+            din_14,
+            din_22,
+            din_6,
+            din_26,
+            din_10,
+            din_18,
+            din_2,
+            din_28,
+            din_12,
+            din_20,
+            din_4,
+            din_24,
+            din_8,
+            din_16,
             din_0
           };
         end        
@@ -269,7 +289,7 @@ module tx_lane (
     shiftReg <= shiftReg >> 1'b1;
   end
   assign divclk = divClock;
-  assign dout = (dll_reset || !dll_resetb) ? 1'b0 : shiftReg[0];
+  assign dout = (dll_reset || !dll_resetb || !awake) ? 1'b0 : shiftReg[0];
   assign dll_code_0 = 1'b0;
   assign dll_code_1 = 1'b0;
   assign dll_code_2 = 1'b0;
