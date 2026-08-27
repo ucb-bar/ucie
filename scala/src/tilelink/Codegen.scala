@@ -313,8 +313,8 @@ object Codegen {
     reqs += write("commonTxctlDriver", enableDriverCtl)
     reqs += write("commonTxctlSkew", defaultSkewCtl)
 
-    reqs += write("txFsmRst", 1)
-    reqs += write("rxFsmRst", 1)
+    reqs += write("txRst", 1)
+    reqs += write("rxRst", 1)
     reqs += write("commonTxFsmRst", 1)
 
     reqs += write("controllerSel", ControllerSel.phytest.litValue)
@@ -592,10 +592,10 @@ class Codegen(f: Formatter) {
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
     body.append(
-      formatWriteNamedReg("txFsmRst", f.formatLong(1))
+      formatWriteNamedReg("txRst", f.formatLong(1))
     )
     body.append(
-      formatWriteNamedReg("rxFsmRst", f.formatLong(1))
+      formatWriteNamedReg("rxRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("commonTxFsmRst", f.formatLong(1))
@@ -930,6 +930,7 @@ class Codegen(f: Formatter) {
         msg = Some("TX packets sent is not 32 after all data has been sent")
       )
     )
+    val numLanes = Codegen.ucieParams.numLanes
     val readChunkOuterLoop = new StringBuilder
     readChunkOuterLoop.append(
       formatWriteNamedReg(
@@ -953,15 +954,18 @@ class Codegen(f: Formatter) {
       )
     )
     readChunkOuterLoop.append(
-      f.formatForLoop("lane", 16, readChunkInnerLoop.toString)
+      f.formatForLoop("lane", numLanes, readChunkInnerLoop.toString)
     )
+    // Valid and track sit outside the data lane loop but are checked the same
+    // way, so these go on the outer builder -- appending them to the inner one
+    // after its `toString` has been taken drops them from the output entirely.
     readChunkOuterLoop.append(
       formatWriteNamedReg(
         "rxDataLane",
-        f.formatLong(16)
+        f.formatLong(PhyTest.validLane(numLanes))
       )
     )
-    readChunkInnerLoop.append(
+    readChunkOuterLoop.append(
       f.formatUcieAssertEq(
         "regDrv",
         f.formatConstantRef("rxDataChunk"),
@@ -972,10 +976,10 @@ class Codegen(f: Formatter) {
     readChunkOuterLoop.append(
       formatWriteNamedReg(
         "rxDataLane",
-        f.formatLong(17)
+        f.formatLong(PhyTest.trackLane(numLanes))
       )
     )
-    readChunkInnerLoop.append(
+    readChunkOuterLoop.append(
       f.formatUcieAssertEq(
         "regDrv",
         f.formatConstantRef("rxDataChunk"),
@@ -985,6 +989,110 @@ class Codegen(f: Formatter) {
     )
     body.append(f.formatForLoop("ofs", 32, readChunkOuterLoop.toString))
     sb.append(f.formatFn("manual_simple", body.toString))
+    sb.toString
+  }
+
+  /** A manual-mode run over the tester's on-chip loopback lane: the TX lane
+    * feeds the RX lane directly, so this exercises the serializer, driver, AFE,
+    * and deserializer without a partner die or even a bump.
+    *
+    * The RX starts capturing at the first one it sees on the loopback lane,
+    * which is the lowest set bit of the first word sent, since the lane sends
+    * zeros until the pattern starts. `0xdeadbeef` has bit 0 set, so capture
+    * lands exactly on a word boundary and every offset reads the word back
+    * unchanged. A first word whose bit 0 were clear would shift the whole
+    * capture by the position of its lowest set bit instead.
+    */
+  def formatManualLoopbackFn(): String = {
+    val numLanes = Codegen.ucieParams.numLanes
+    val loopbackLane = PhyTest.loopbackLane(numLanes)
+    val packets = 32
+    val sb = new StringBuilder
+    val body = new StringBuilder
+    body.append(f.formatFnCall("setup_ucie"))
+    body.append(
+      formatWriteNamedReg("txPacketsToSend", f.formatLong(packets))
+    )
+
+    // The loopback lane shares its SRAM group with valid and track; only its
+    // own slot in that group carries the pattern.
+    val chunkArgs = (0 until 4).map { slot =>
+      if (slot == loopbackLane % 4) f.formatLong(0xdeadbeefL)
+      else f.formatLong(0)
+    }
+    val writeChunkLoop = new StringBuilder
+    writeChunkLoop.append(
+      f.formatFnCall(
+        "write_tx_data_chunk",
+        args = Seq(f.formatLong(loopbackLane / 4), "ofs") ++ chunkArgs
+      )
+    )
+    body.append(f.formatForLoop("ofs", packets, writeChunkLoop.toString))
+
+    body.append(
+      formatWriteNamedReg(
+        "testTarget",
+        f.formatConstantRef("testTargetLoopback")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeManual"))
+    )
+    body.append(
+      formatWriteNamedReg("txDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    body.append(
+      formatWriteNamedReg("rxDataMode", f.formatConstantRef("dataModeInfinite"))
+    )
+    body.append(formatWriteNamedReg("txManualRepeatPeriod", f.formatLong(0)))
+    body.append(formatWriteNamedReg("txExecute", f.formatLong(1)))
+
+    val whileBody = new StringBuilder
+    whileBody.append(
+      f.formatReadReg(
+        "regDrv",
+        "r",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = true
+      )
+    )
+    whileBody.append(
+      f.formatIfStmt(s"r >= ${f.formatLong(packets)}", f.breakStmt())
+    )
+    body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+    body.append(f.formatPrintStmt("All loopback packets received!"))
+    body.append(
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef("txTestState"),
+        f.formatConstantRef("txTestStateDone"),
+        msg = Some("TX test state is not done after the loopback run")
+      )
+    )
+    body.append(
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef("txPacketsSent"),
+        f.formatLong(packets),
+        msg = Some("TX packets sent is not the whole loopback run")
+      )
+    )
+
+    val readChunkLoop = new StringBuilder
+    readChunkLoop.append(formatWriteNamedReg("rxDataOffset", "ofs"))
+    readChunkLoop.append(
+      formatWriteNamedReg("rxDataLane", f.formatLong(loopbackLane))
+    )
+    readChunkLoop.append(
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef("rxDataChunk"),
+        f.formatLong(0xdeadbeefL),
+        msg = Some("RX loopback chunk does not match expected")
+      )
+    )
+    body.append(f.formatForLoop("ofs", packets, readChunkLoop.toString))
+    sb.append(f.formatFn("manual_loopback", body.toString))
     sb.toString
   }
 
@@ -1130,6 +1238,7 @@ class Codegen(f: Formatter) {
     sb.append(formatSetupUcieFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
+    sb.append(formatManualLoopbackFn())
     sb.append(formatSbManualLoopbackFn())
     sb.append(formatTlSimpleLoopbackFn())
     sb.append(formatTlSidebandLoopbackFn())

@@ -170,6 +170,15 @@ class UcieTLRegsIO(
   val sbTlRxOverflow = Input(Bool())
 }
 
+object UcieTLRegs {
+
+  /** Cycles the `txRst` and `rxRst` strobes are held for after a register
+    * write, counted in the UCIe digital clock the register block and PhyTest
+    * share.
+    */
+  val rstStrobeCycles = 8
+}
+
 class UcieTLRegs(
     params: UcieTLParams,
     beatBytes: Int,
@@ -245,7 +254,7 @@ class UcieTLRegs(
           )
         )
       )
-      val txFsmRst = Wire(DecoupledIO(UInt(1.W)))
+      val txRst = Wire(DecoupledIO(UInt(1.W)))
       val txExecute = Wire(DecoupledIO(UInt(1.W)))
       val txWriteChunk = Wire(DecoupledIO(UInt(1.W)))
       val txManualRepeatPeriod =
@@ -269,7 +278,7 @@ class UcieTLRegs(
         )
       )
       val rxLfsrValid = RegInit(0.U(32.W))
-      val rxFsmRst = Wire(DecoupledIO(UInt(1.W)))
+      val rxRst = Wire(DecoupledIO(UInt(1.W)))
       val rxPacketsToReceive =
         RegInit(0.U(io.test.rxPacketsToReceive.getWidth.W))
       val rxPauseCounters = RegInit(0.U(1.W))
@@ -278,9 +287,6 @@ class UcieTLRegs(
 
       val clkPhaseSel = RegInit(0.U(ClockingTile.phaseSelWidth.W))
       val clkFreqSel = RegInit(0.U(ClockingTile.freqSelWidth.W))
-      // TX clock is enabled out of reset so that existing bring-up sequences
-      // do not have to turn it on explicitly.
-      val clkGateEn = RegInit(true.B)
       // Physical lane carrying the valid signal in each direction. Reset to the
       // dedicated valid lane; see `PhyRegsIO` for the other select codes.
       val txValidLaneSel = RegInit(
@@ -415,10 +421,24 @@ class UcieTLRegs(
       val sbTlRxOverflow =
         RegNext(RegNext(io.sbTlRxOverflow, false.B), false.B)
 
-      txFsmRst.ready := true.B
+      txRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
-      rxFsmRst.ready := true.B
+      rxRst.ready := true.B
+
+      // Holds a one-cycle register write out for `UcieTLRegs.rstStrobeCycles`
+      // cycles. `txRst`/`rxRst` reach the lane serializers and deserializers as
+      // well as the test FSMs, so a single-cycle strobe is uncomfortably short.
+      def stretched(pulse: Bool): Bool = {
+        val remaining =
+          RegInit(0.U(log2Ceil(UcieTLRegs.rstStrobeCycles).W))
+        when(pulse) {
+          remaining := (UcieTLRegs.rstStrobeCycles - 1).U
+        }.elsewhen(remaining =/= 0.U) {
+          remaining := remaining - 1.U
+        }
+        pulse || remaining =/= 0.U
+      }
 
       def applyShift[T <: Data](data: T, cycles: Int = 0): T = {
         if (cycles > 0) {
@@ -444,7 +464,7 @@ class UcieTLRegs(
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
-      io.test.txFsmRst := applyShift(txFsmRst.valid)
+      io.test.txRst := applyShift(stretched(txRst.valid))
       io.test.txExecute := applyShift(txExecute.valid)
       io.test.txManualRepeatPeriod := applyShift(txManualRepeatPeriod)
       io.test.txPacketsToSend := applyShift(txPacketsToSend)
@@ -454,7 +474,7 @@ class UcieTLRegs(
       io.test.rxDataMode := applyShift(rxDataMode)
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
       io.test.rxLfsrValid := applyShift(rxLfsrValid)
-      io.test.rxFsmRst := applyShift(rxFsmRst.valid)
+      io.test.rxRst := applyShift(stretched(rxRst.valid))
       io.test.rxPacketsToReceive := applyShift(rxPacketsToReceive)
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
@@ -465,7 +485,6 @@ class UcieTLRegs(
       io.test.sb.rxRst := applyShift(sbRxRst.valid)
       io.phy.clkPhaseSel := applyShift(clkPhaseSel)
       io.phy.clkFreqSel := applyShift(clkFreqSel)
-      io.phy.clkGateEn := applyShift(clkGateEn)
       // Moving valid onto another lane is a test function, not something the
       // UCIe spec asks the link to do, so these go to PhyTest rather than to
       // the PHY.
@@ -506,7 +525,7 @@ class UcieTLRegs(
       ) ++ (0 until PhyTest.numTestLanes(params.numLanes)).map((i: Int) => {
         toRegFieldRw(txLfsrSeed(i), s"txLfsrSeed_$i")
       }) ++ Seq(
-        RegField.w(1, txFsmRst, RegFieldDesc("txFsmRst", "")),
+        RegField.w(1, txRst, RegFieldDesc("txRst", "")),
         RegField.w(1, txExecute, RegFieldDesc("txExecute", "")),
         RegField.w(1, txWriteChunk, RegFieldDesc("txWriteChunk", "")),
         toRegFieldR(
@@ -553,7 +572,7 @@ class UcieTLRegs(
           s"rxBitErrorsLate_$i"
         )
       }) ++ Seq(
-        RegField.w(1, rxFsmRst, RegFieldDesc("rxFsmRst", "")),
+        RegField.w(1, rxRst, RegFieldDesc("rxRst", "")),
         toRegFieldRw(rxPacketsToReceive, "rxPacketsToReceive"),
         toRegFieldRw(rxPauseCounters, "rxPauseCounters"),
         toRegFieldR(
@@ -571,8 +590,7 @@ class UcieTLRegs(
           "rxDataChunk"
         ),
         toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
-        toRegFieldRw(clkFreqSel, "clkFreqSel"),
-        toRegFieldRw(clkGateEn, "clkGateEn")
+        toRegFieldRw(clkFreqSel, "clkFreqSel")
       ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
@@ -846,6 +864,8 @@ class UcieTL(
     io.debug <> test.io.bumps
     test.io.debug <> phy.io.debug
     phy.io.clkRst.divResetb := test.io.divResetb
+    phy.io.clkRst.txResetb := test.io.txResetb
+    phy.io.clkRst.rxResetb := test.io.rxResetb
     test.io.regs <> regs.module.io.test
 
     // One controller select, plus a per-band mode that only means anything

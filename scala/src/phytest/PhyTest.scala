@@ -115,7 +115,7 @@ class PhyTestRegsIO(
     Input(Vec(PhyTest.numTestLanes(numLanes), UInt((2 * Phy.SerdesRatio).W)))
   // Resets the TX FSM (i.e. resetting the number of bits sent to 0, reseeding the LFSR,
   // and stopping any in-progress transmissions).
-  val txFsmRst = Input(Bool())
+  val txRst = Input(Bool())
   // Starts a transmission starting from the beginning of the input buffer (`TxTestMode.manual`) or from
   // the current state of the LFSR (`TxTestMode.lsfr`). Does not do anything if a transmission is in progress.
   val txExecute = Input(Bool())
@@ -169,7 +169,7 @@ class PhyTestRegsIO(
   val rxValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
   // Resets the RX FSM (i.e. resetting the number of bits received and the offset within the output
   // buffer to 0).
-  val rxFsmRst = Input(Bool())
+  val rxRst = Input(Bool())
   // The number of packets received since the last FSM reset. Only the first 2^bufferDepthPerLane bits received
   // per lane are stored in the output buffer.
   val rxPacketsReceived = Output(UInt(bitCounterWidth.W))
@@ -277,6 +277,8 @@ class PhyTestIO(
   val sb = Flipped(new SbIO)
   val debug = Flipped(new PhyDebugIO(numLanes))
   val divResetb = Output(AsyncReset())
+  val txResetb = Output(AsyncReset())
+  val rxResetb = Output(AsyncReset())
 
   // BUMP INTERFACE
   // ====================
@@ -376,6 +378,16 @@ class PhyTest(
 
   io.divResetb := io.regs.divResetb
 
+  // The lane serdes resets follow the global divider reset, and each direction
+  // can additionally be restarted on its own: `txRst` holds the serializers in
+  // reset and `rxRst` the deserializers, for as long as the strobe lasts.
+  val txSerdesResetb =
+    (io.regs.divResetb.asBool && !io.regs.txRst).asAsyncReset
+  val rxSerdesResetb =
+    (io.regs.divResetb.asBool && !io.regs.rxRst).asAsyncReset
+  io.txResetb := txSerdesResetb
+  io.rxResetb := rxSerdesResetb
+
   // TODO: Add custom sideband control
 
   // The two bands are independent: either can carry TileLink while the other
@@ -446,7 +458,7 @@ class PhyTest(
     lane.suggestName(name)
     lane.io.dll_reset := ctl.dll_reset
     lane.io.dll_resetb := !ctl.dll_reset
-    lane.io.ser_resetb := io.regs.divResetb
+    lane.io.ser_resetb := txSerdesResetb
     lane.io.clk := io.debug.txClk
     lane.io.ctl.driver := ctl.driver
     lane.io.ctl.skew := ctl.skew
@@ -577,7 +589,7 @@ class PhyTest(
   // Sampled with the clock that shifted the data out, the way a mainband RX
   // lane is sampled with the clock the partner die's TX forwarded.
   rxLoopbackLane.io.clk := io.debug.txClk
-  rxLoopbackLane.io.resetb := io.regs.divResetb
+  rxLoopbackLane.io.resetb := rxSerdesResetb
 
   val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
   rxLoopbackShuffler.suggestName("rxloopback_shuffler")
@@ -602,7 +614,7 @@ class PhyTest(
   rxLoopbackFifo.io.deq_reset := reset
 
   // TX registers
-  val txReset = io.regs.txFsmRst || !mbManual || reset.asBool
+  val txReset = io.regs.txRst || !mbManual || reset.asBool
   val txState = withReset(txReset) { RegInit(TxTestState.idle) }
   val txPacketsEnqueued = withReset(txReset) { RegInit(0.U(bitCounterWidth.W)) }
   val inputBufferAddrReg = withReset(txReset) {
@@ -632,7 +644,7 @@ class PhyTest(
   )
 
   // RX registers
-  val rxReset = io.regs.rxFsmRst || !mbManual || reset.asBool
+  val rxReset = io.regs.rxRst || !mbManual || reset.asBool
   val rxPacketsReceived = withReset(rxReset) {
     RegInit(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
   }
@@ -954,9 +966,6 @@ class PhyTest(
   // broken dedicated valid lane does not stop a test. The chosen lane sends
   // valid in place of its own pattern; unlike a link that cannot afford to drop
   // a lane, the tester does not shuffle the displaced payload anywhere.
-  // The dedicated valid lane already carries the waveform, so only the other
-  // pattern lanes are overridden -- driving it from itself would be a
-  // combinational loop.
   for (lane <- 0 until numLanes) {
     when(io.regs.txValidLaneSel === lane.U) {
       io.tx.bits.data(lane) := io.tx.bits.valid

@@ -568,6 +568,15 @@ manual_simple();
   )
 }
 
+class ManualLoopbackTestDriver extends SVTestDriver {
+  setStimulus(
+    "ManualLoopbackTestDriver",
+    """
+manual_loopback();
+          """.trim
+  )
+}
+
 class TlSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "TlSimpleTestDriver",
@@ -681,6 +690,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ManualSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Verilator"
+      )
+    }
+
+    it("should support loopback lane test using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ManualLoopbackTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_loopback_lane_test_using_Verilator"
       )
     }
 

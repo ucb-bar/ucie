@@ -59,8 +59,8 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.txManualRepeatPeriod := io.repeatPeriod
   dut.io.regs.txPacketsToSend := 0.U
   dut.io.regs.rxPacketsToReceive := 0.U
-  dut.io.regs.txFsmRst := io.fsmRst
-  dut.io.regs.rxFsmRst := io.fsmRst
+  dut.io.regs.txRst := io.fsmRst
+  dut.io.regs.rxRst := io.fsmRst
   dut.io.regs.txExecute := io.execute
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.txDataChunkIn.valid := io.writeChunk
@@ -108,8 +108,9 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
   val divCycle = 2 * 16
 
   // Distinct words so that a captured run can only line up with the pattern one
-  // way. Bit 0 of the first word is set, since the RX starts capturing at the
-  // first one it sees.
+  // way. Bit 0 of the first word is set, so the RX -- which starts capturing at
+  // the first one it sees, and sees zeros until the pattern starts -- lands
+  // exactly on a word boundary rather than part way into one.
   val words = Seq(
     BigInt("cafe0001", 16),
     BigInt("deadbeef", 16),
@@ -182,14 +183,11 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
           c.io.rxDataChunk.peek().litValue
         }
 
-        // The RX aligns on the first one it sees, so the capture can start at
-        // any point in the repeating pattern -- but it has to be the pattern.
-        val rotations = words.indices.map(s =>
-          words.indices.map(i => words((i + s) % words.length))
-        )
+        // Bit 0 of the first word is set, so capture starts on that word and
+        // the readback has to match the pattern offset for offset.
         assert(
-          rotations.contains(captured),
-          s"captured ${captured.map(_.toString(16))} is not a rotation of " +
+          captured == words,
+          s"captured ${captured.map(_.toString(16))} does not match " +
             s"${words.map(_.toString(16))}"
         )
       }

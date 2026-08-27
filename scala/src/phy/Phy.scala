@@ -12,16 +12,12 @@ import edu.berkeley.cs.uciedigital.phy.macros.clocking._
   * RX has the same numbering but only the first `numLanes + 2` carry a word,
   * since its clock lanes recover a clock rather than deserializing one.
   *
-  * [[TxIO]] and [[RxIO]], the per-lane controls in [[PhyRegsIO]], the lane
-  * clocks out of `ClkDistNetwork`, the observation taps in [[PhyDebugIO]], and
-  * the bump fan-out all index that same way, so lane `i` means one thing
-  * everywhere.
-  *
-  * [[TxIO]] and [[RxIO]] name their lanes, since which lane carries valid,
-  * track, or a forwarded clock matters to the controller above and to the
-  * partner die. Inside, the lane pipeline is uniform -- every lane is a 32 bit
-  * word into a serializer or out of a deserializer -- so the naming is confined
-  * to those bundles and the bump fan-out.
+  * The per-lane controls in [[PhyRegsIO]], the lane clocks out of
+  * `ClkDistNetwork`, the observation taps in [[PhyDebugIO]], and the bump
+  * fan-out all index that same way, so lane `i` means one thing everywhere.
+  * [[TxIO]] and [[RxIO]] name their lanes instead, since which lane carries
+  * valid, track, or a forwarded clock matters to the controller above and to
+  * the partner die.
   *
   * The PHY does not repair lanes. Moving the valid waveform onto another lane
   * is a test function and lives in `PhyTest`.
@@ -60,19 +56,6 @@ object Phy {
   def trackLane(numLanes: Int): Int = numLanes + 1
   def clkPLane(numLanes: Int): Int = numLanes + 2
   def clkNLane(numLanes: Int): Int = numLanes + 3
-
-  // The TX words in lane order, for the uniform lane pipeline inside the PHY.
-  def txLaneWords(tx: TxIO, numLanes: Int): Vec[UInt] = {
-    val lanes = Wire(Vec(numTxLanes(numLanes), Bits(SerdesRatio.W)))
-    for (lane <- 0 until numLanes) {
-      lanes(lane) := tx.data(lane)
-    }
-    lanes(validLane(numLanes)) := tx.valid
-    lanes(trackLane(numLanes)) := tx.track
-    lanes(clkPLane(numLanes)) := tx.clkp
-    lanes(clkNLane(numLanes)) := tx.clkn
-    lanes
-  }
 
   // The RX words in lane order. Useful wherever a lane index is dynamic, since
   // a bundle cannot be indexed.
@@ -135,10 +118,11 @@ class PhyDebugIO(numLanes: Int = 16) extends Bundle {
   // taken from the tester's own sideband output so that the observed clock is
   // whichever controller currently owns the sideband.
   val sbTxClk = Output(Clock())
-  // Deserialized RX lane words, in the RX divided clock domain: `numLanes`
-  // data lanes, then valid, then track. Tapped after the valid lane remap, so
-  // lane indices match `RxIO` rather than the physical lane order.
-  val rxData = Output(Vec(numLanes + 2, Bits(Phy.SerdesRatio.W)))
+  // Deserialized RX lane words, in the RX divided clock domain, in lane order:
+  // `numLanes` data lanes, then valid, then track.
+  val rxData = Output(
+    Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
+  )
 }
 
 class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
@@ -164,8 +148,14 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
 class PhyClkRstIO extends Bundle {
   // Main digital reset, asynchronous to PHY clocks.
   val reset = Input(Bool())
-  // Asynchronous reset for resetting clock dividers.
+  // Asynchronous reset for the RX clock divider.
   val divResetb = Input(AsyncReset())
+  // Asynchronous resets for the lane serdes, so that a test can restart one
+  // direction without disturbing the other. `txResetb` also holds the TX clock
+  // divider, so the serializers and the divided clock they hand words over on
+  // come back up together rather than at an arbitrary relative phase.
+  val txResetb = Input(AsyncReset())
+  val rxResetb = Input(AsyncReset())
 
   // UCIe digital clock (800 MHz).
   //
@@ -235,8 +225,6 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // Clocking tile control: phase code and frequency setting.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
-  // Low stops the TX clock reaching the TX lanes.
-  val clkGateEn = Input(Bool())
 
   // RX CONTROL
   // Per-tile lane control, indexed exactly like `txctl`. The two
@@ -278,7 +266,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.BypassClk := bypassClkRx.io.Vout
   clkTile.io.PhaseSel := io.regs.clkPhaseSel
   clkTile.io.FreqSel := io.regs.clkFreqSel
-  clkTile.io.ClkGateEn := io.regs.clkGateEn
 
   io.clkRst.ucieClk := clkTile.io.DigitalClk
   val digitalRstSync = Module(new RstSync)
@@ -326,7 +313,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // TX
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
-  txClkDiv.io.resetb := io.clkRst.divResetb
+  txClkDiv.io.resetb := io.clkRst.txResetb
   io.clkRst.txDivClk := (!txClkDiv.io.clkout_3.asBool).asClock
   val txRstSync = Module(new RstSync)
   txRstSync.io.rstbAsync := !io.clkRst.reset
@@ -343,7 +330,15 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.clk := rxClkDiv.io.clkout_3
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
 
-  val txLaneDin = Phy.txLaneWords(io.tx, numLanes)
+  // The TX words in lane order, for the uniform lane pipeline below.
+  val txLaneDin = Wire(Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W)))
+  for (lane <- 0 until numLanes) {
+    txLaneDin(lane) := io.tx.data(lane)
+  }
+  txLaneDin(Phy.validLane(numLanes)) := io.tx.valid
+  txLaneDin(Phy.trackLane(numLanes)) := io.tx.track
+  txLaneDin(Phy.clkPLane(numLanes)) := io.tx.clkp
+  txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
 
   // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
   for (lane <- 0 until Phy.numTxLanes(numLanes)) {
@@ -360,7 +355,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     txLane.suggestName(laneName);
     txLane.io.dll_reset := io.regs.txctl(lane).dll_reset
     txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
-    txLane.io.ser_resetb := io.clkRst.divResetb
+    txLane.io.ser_resetb := io.clkRst.txResetb
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
     // The bumps are named, so this is the one place the TX side maps a lane
@@ -434,7 +429,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
       rxLaneDout(lane) := rxShuffler.io.dout
       rxLane.io.clk := clkDist.io.rxLaneClk(lane)
-      rxLane.io.resetb := io.clkRst.divResetb
+      rxLane.io.resetb := io.clkRst.rxResetb
     }
   }
 
