@@ -93,11 +93,23 @@ class PhyLaneTrainer(afeParams: AfeParams) extends Module {
   // and triggers to LTSM to do the handshake
   // Recieves BER results to check if whether to do another test
   // Registers that hold the correct encoding lives here
+  // RXCLKCAL settle window. Must stay under the deserializer's 512-cycle idle timeout.
+  val rxClkCalDwell = 64
+  val rxClkCalCounter = RegInit(0.U(log2Ceil(rxClkCalDwell + 1).W))
+  when(io.phyTrainIo.mbTrain.rxClkCalStart) {
+    when(rxClkCalCounter =/= rxClkCalDwell.U) {
+      rxClkCalCounter := rxClkCalCounter + 1.U
+    }
+  }.otherwise {
+    rxClkCalCounter := 0.U
+  }
+
   io.phyTrainIo.mbTrain.txSelfCalDone := false.B
-  io.phyTrainIo.mbTrain.rxClkCalDone := false.B
+  io.phyTrainIo.mbTrain.rxClkCalDone := rxClkCalCounter === rxClkCalDwell.U
   io.phyTrainIo.mbTrain.req.start := false.B
   io.phyTrainIo.mbTrain.req.testKind := TrainingTestType.Either
-  io.phyTrainIo.mbTrain.req.complete := false.B
+  // No calibration hardware, so a capable state completes without running a test.
+  io.phyTrainIo.mbTrain.req.complete := true.B
 
   io.phyTrainIo.mbInit.selfCalDone := false.B
 

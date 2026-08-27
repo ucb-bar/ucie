@@ -138,7 +138,7 @@ class SidebandLinkNode(
   val calculatedDP = WireDefault(payloadForDP.xorR)
   val dpError = WireDefault(doDpCalculation && (expectedDP ^ calculatedDP))
 
-  val parityError = cpError || dpError
+  val parityError = (cpError || dpError) && (io.ctrl.rxMode =/= SBRxTxMode.RAW)
   val rxOpcode = io.rxOut.bits(4, 0)
   val rxIsWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === rxOpcode).reduce(_ || _)

@@ -819,25 +819,27 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
           // Calculate the width degrade
           // If no degrade needed, keeps default value (driven by localTxFunctionalLanesReg)
 
-          localFuncLanesWire := Mux1H(
-            Seq(
-              laneRepairDegradeCondSel(
-                0
-              ) -> "b101".U, // Logical lanes 4-7 are functional
-              laneRepairDegradeCondSel(
-                1
-              ) -> "b100".U, // Logical lanes 0-3 are functional
-              laneRepairDegradeCondSel(
-                2
-              ) -> "b010".U, // Logical lanes 8-15 are functional
-              laneRepairDegradeCondSel(
-                3
-              ) -> "b001".U, // Logical lanes 0-7 are functional
-              laneRepairDegradeCondSel(
-                4
-              ) -> "b000".U // No functional lanes (No degrade possible)
+          when(laneRepairDegradeCondSel.orR) {
+            localFuncLanesWire := Mux1H(
+              Seq(
+                laneRepairDegradeCondSel(
+                  0
+                ) -> "b101".U, // Logical lanes 4-7 are functional
+                laneRepairDegradeCondSel(
+                  1
+                ) -> "b100".U, // Logical lanes 0-3 are functional
+                laneRepairDegradeCondSel(
+                  2
+                ) -> "b010".U, // Logical lanes 8-15 are functional
+                laneRepairDegradeCondSel(
+                  3
+                ) -> "b001".U, // Logical lanes 0-7 are functional
+                laneRepairDegradeCondSel(
+                  4
+                ) -> "b000".U // No functional lanes (No degrade possible)
+              )
             )
-          )
+          }
 
           // io.localFunctionalLanes should always have an updated value no matter what
           when(widthChange) {
@@ -850,7 +852,7 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
             "PHY",
             "PHY",
             true,
-            msgInfo = Cat(0.U(12.W), localFuncLanesWire)
+            msgInfo = Cat(0.U(13.W), localFuncLanesWire)
           )
 
           // No need to wait for a response when all lanes have failed. Going into TrainError
@@ -872,6 +874,7 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
           // RX widths)
           when(io.requesterRdy && io.responderRdy) {
             localTxFunctionalLanesReg := localFuncLanesWire
+            requesterRdyStatusReg := false.B
             when(widthChange || io.rxWidthChanged) {
               nextSubstate := MBInitSubstate.s1
             }
@@ -890,7 +893,6 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_END_RESP
-
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
             nextState := MBInitState.sTOMBTRAIN
@@ -1292,7 +1294,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             io.patternReaderIo.req.ready === true.B,
             "PatternReader should be ready here"
           )
-          io.patternReaderIo.req.valid := sbMsgExchanger.io.resp.valid
+
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBINIT_REVERSALMB_CLEAR_ERROR_RESP,
@@ -1302,6 +1304,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           )
 
           when(sbMsgExchanger.io.exchDone && io.patternReaderIo.req.ready) {
+            io.patternReaderIo.req.valid := true.B
             gotLFSRClearReq := false.B
             nextSubstate := MBInitSubstate.s2
           }
@@ -1357,6 +1360,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             "PHY",
             true
           )
+          responderRdy := sbMsgExchanger.io.msgSent
           when(sbMsgExchanger.io.msgSent) {
             nextState := MBInitState.sREPAIRMB
             nextSubstate := MBInitSubstate.s0
@@ -1418,6 +1422,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
           when(io.requesterRdy && io.responderRdy) {
             currRemoteTxFunctionalLanes := newRemoteTxFunctionalLanes
+            responderRdyStatusReg := false.B
             when(widthChange || io.txWidthChanged) {
               nextSubstate := MBInitSubstate.s1
             }
