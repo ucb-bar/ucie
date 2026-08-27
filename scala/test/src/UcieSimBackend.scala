@@ -45,6 +45,10 @@ object UcieSimBackend {
   }
 }
 
+package object d2dadapter {
+  implicit def ucieSimulator: HasSimulator = UcieSimBackend.fromEnv
+}
+
 package object logphy {
   implicit def ucieSimulator: HasSimulator = UcieSimBackend.fromEnv
 }

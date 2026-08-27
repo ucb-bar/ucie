@@ -89,6 +89,10 @@ class AdapterSM(
   val stallHandshakeDone = linkMgmtStallReqReg && io.linkmgmt_stalldone
   val rxDeactive = !io.fdi_lp_rx_active_sts && !fdiPlRxActiveReqReg
   val retrainPhySts = io.rdi_pl_state_sts === RDIState.retrain
+  // Retraining has finished on the Physical Layer and the Protocol Layer wants
+  // the link back: the condition for resuming Active out of the retrain state.
+  val retrainResumeActive = (io.rdi_pl_state_sts === RDIState.active) &&
+    (io.fdi_lp_state_req === RDIStateReq.active)
 
   // Link-init outputs
   val activeEntry = WireDefault(false.B)
@@ -482,9 +486,15 @@ class AdapterSM(
   }.elsewhen(linkStateReg === RDIState.active) {
     when(retrainPhySts) {
       rdiLpStateReqReg := RDIStateReq.retrain
+    }.otherwise {
+      rdiLpStateReqReg := RDIStateReq.active
     }
   }.elsewhen(linkStateReg === RDIState.retrain) {
-    rdiLpStateReqReg := RDIStateReq.nop
+    when(retrainResumeActive) {
+      rdiLpStateReqReg := RDIStateReq.active
+    }.otherwise {
+      rdiLpStateReqReg := RDIStateReq.nop
+    }
   }.elsewhen(linkStateReg === RDIState.linkError) {
     when(
       io.fdi_lp_state_req === RDIStateReq.active &&
@@ -539,6 +549,12 @@ class AdapterSM(
         linkStateReg := RDIState.disabled
       }.elsewhen(linkResetEntry) {
         linkStateReg := RDIState.linkReset
+      }.elsewhen(retrainResumeActive) {
+        // UCIe Figure 10-6 defines Retrain <-> Active as bidirectional: once
+        // the Physical Layer completes retraining and the Protocol Layer is
+        // ready again, the link must resume Active instead of waiting for an
+        // error, disable or link reset to move it out.
+        linkStateReg := RDIState.active
       }
     }
     is(RDIState.linkError) {
