@@ -76,3 +76,27 @@ object MainPatternReader extends App {
     )
   )
 }
+
+object MainMmplByteSwizzle extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new MmplByteSwizzle(MmplParams(numModules = 2)),
+    args = Array("-td", "./generatedVerilog/logphy/"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "--lowering-options=disallowLocalVariables",
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
+  )
+}
+
+object MainMmplLinkSpeedResolver extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new MmplLinkSpeedResolver(MmplParams(numModules = 4)),
+    args = Array("-td", "./generatedVerilog/logphy/"),
+    firtoolOpts = Array(
+      "-O=debug",
+      "--lowering-options=disallowLocalVariables",
+      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
+    )
+  )
+}

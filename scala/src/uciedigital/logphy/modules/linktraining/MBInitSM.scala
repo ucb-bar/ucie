@@ -108,7 +108,16 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
     localNegotiatedSbFeatExt := remoteSbFeatExt & io.localPhySettings.bits.sbFeatExt
     localNegotiatedClockPhase := remoteClockPhase & io.localPhySettings.bits.clockPhase
     localNegotiatedClockMode := io.localPhySettings.bits.clockMode
-    localNegotiatedMaxDataRate := remoteMaxDataRate & io.localPhySettings.bits.maxDataRate
+    // Spec 4.5.3.3.1: "The UCIe Module Partner must compare this value with its
+    // supported maximum data rate and must respond with the maximum common data
+    // rate encoding". The four-bit field is a monotonic ladder (0h: 4 GT/s,
+    // 1h: 8, 2h: 12, 3h: 16, 4h: 24, 5h: 32, 6h: 48, 7h: 64), so the maximum
+    // common rate is the smaller of the two encodings.
+    localNegotiatedMaxDataRate := Mux(
+      remoteMaxDataRate < io.localPhySettings.bits.maxDataRate,
+      remoteMaxDataRate,
+      io.localPhySettings.bits.maxDataRate
+    )
     localNegotiatedParamsValid := true.B
   }
 

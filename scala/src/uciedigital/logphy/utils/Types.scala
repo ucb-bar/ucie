@@ -1,5 +1,6 @@
 package edu.berkeley.cs.uciedigital.logphy
 
+import edu.berkeley.cs.uciedigital.interfaces._
 import chisel3._
 
 class LinkOperationParameters extends Bundle {
@@ -117,3 +118,77 @@ case class AfeParams(
     mbLanes: Int = 16,
     clockPhaseSelBitWidth: Int = 5
 )
+
+/*
+  Package type a multi-module Link is built from. Mirrors regs.UciePackageType,
+  kept local so the LogPHY does not depend on the register block.
+ */
+object MmplPackageType extends Enumeration {
+  val Standard, Advanced = Value
+}
+
+/*
+  Elaboration parameters for the Multi-module PHY Logic (spec 4.7). One MMPL
+  aggregates `numModules` UCIe Modules into a single logical Link that presents
+  one RDI to one Die-to-Die Adapter.
+
+  The RDI is `numModules` times the bytes one Module carries per mainband beat,
+  so each Module keeps a full-width slice and its MainbandLaneController needs
+  no change. On width degrade that controller spends more beats per slice, which
+  throttles pl_trdy on its own.
+ */
+case class MmplParams(
+    numModules: Int = 1,
+    afe: AfeParams = new AfeParams(),
+    packageType: MmplPackageType.Value = MmplPackageType.Standard
+) {
+  require(
+    Set(1, 2, 4).contains(numModules),
+    s"MMPL supports one-, two-, and four-module Links (spec 4.7), got $numModules"
+  )
+  require(
+    afe.mbSerializerRatio % 8 == 0,
+    s"MMPL requires a serializer ratio that is a multiple of 8, got ${afe.mbSerializerRatio}"
+  )
+  // MainbandLaneController.activeLanesForCode reports 16 active Lanes for the
+  // "all functional" code regardless of mbLanes, so an x8 Module would disagree
+  // with the MMPL byte map. Standard Package x16 is the integration target.
+  require(
+    numModules == 1 || afe.mbLanes == 16,
+    s"Multi-module MMPL currently targets Standard Package x16 Modules, got x${afe.mbLanes}"
+  )
+
+  /** Lanes one Module owns at full width. */
+  def lanesPerModule: Int = afe.mbLanes
+
+  /** 8-UI chunks inside one mainband beat. */
+  def chunksPerBeat: Int = afe.mbSerializerRatio / 8
+
+  /** Bytes one Module carries per mainband beat: one byte per Lane per 8 UI. */
+  def bytesPerModule: Int = afe.mbLanes * chunksPerBeat
+
+  /** RDI presented by one Module to the MMPL. */
+  def moduleRdiParams(ncWidth: Int = 32): RdiParams =
+    RdiParams(bytesPerModule, ncWidth)
+
+  /** Aggregate RDI the MMPL presents to the Adapter. */
+  def rdiParams(ncWidth: Int = 32): RdiParams =
+    RdiParams(numModules * bytesPerModule, ncWidth)
+
+  def isMultiModule: Boolean = numModules > 1
+}
+
+/*
+  Resolution the MMPL hands every Module in MBTRAIN.LINKSPEED (spec 4.7.1).
+  Each Module then sends, and expects to receive, the matching response:
+
+    done          -> {MBTRAIN.LINKSPEED done resp}, next state LINKINIT
+    repair        -> {MBTRAIN.LINKSPEED exit to repair resp}, next state REPAIR
+    speedDegrade  -> {MBTRAIN.LINKSPEED exit to speed degrade resp}, SPEEDIDLE
+    disableModule -> {MBTRAIN.LINKSPEED multi-module disable module resp},
+                     next state TRAINERROR and eventually RESET
+    trainError    -> no operational configuration remains
+ */
+object MmplResolution extends ChiselEnum {
+  val none, done, repair, speedDegrade, disableModule, trainError = Value
+}
