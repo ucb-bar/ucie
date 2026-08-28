@@ -48,6 +48,11 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
       val validFramingError = Output(Bool())
       val localTxFunctionalLanes = Input(UInt(3.W))
       val localRxFunctionalLanes = Input(UInt(3.W))
+      // Spec 4.5.3.3.5: when "UCIe-S x8" was negotiated the Module operates in
+      // x8 mode and Table 4-9 is read by 8, so the "all functional" code means
+      // Lanes 0 to 7. The narrower codes name their Lanes explicitly and read
+      // the same either way.
+      val interpretBy8Lane = Input(Bool())
     }
   })
 
@@ -65,12 +70,15 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   require(Seq(64, 128, 256, 512).contains(nBytes), "Not a valid RDI nBytes")
 
   // Lane-map decoder
+  private val by8 = io.ctrl.interpretBy8Lane
+
   def decodeLaneMap(code: UInt): UInt = {
-    val full = MuxLookup(code, "hFFFF".U(16.W))(
+    val allFunctional = Mux(by8, "h00FF".U(16.W), "hFFFF".U(16.W))
+    val full = MuxLookup(code, allFunctional)(
       Seq(
         "b001".U -> "h00FF".U(16.W),
         "b010".U -> "hFF00".U(16.W),
-        "b011".U -> "hFFFF".U(16.W),
+        "b011".U -> allFunctional,
         "b100".U -> "h000F".U(16.W),
         "b101".U -> "h00F0".U(16.W)
       )
@@ -78,15 +86,18 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
     full(nLanes - 1, 0)
   }
 
-  def activeLanesForCode(code: UInt): UInt = MuxLookup(code, 16.U)(
-    Seq(
-      "b001".U -> 8.U,
-      "b010".U -> 8.U,
-      "b011".U -> 16.U,
-      "b100".U -> 4.U,
-      "b101".U -> 4.U
+  def activeLanesForCode(code: UInt): UInt = {
+    val allFunctional = Mux(by8, 8.U, 16.U)
+    MuxLookup(code, allFunctional)(
+      Seq(
+        "b001".U -> 8.U,
+        "b010".U -> 8.U,
+        "b011".U -> allFunctional,
+        "b100".U -> 4.U,
+        "b101".U -> 4.U
+      )
     )
-  )
+  }
 
   def calcBeatsForActive(activeLanes: Int): UInt = {
     require(
@@ -97,16 +108,19 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   }
 
   // Number of RDI-word beats required to drain the nBytes across the active lanes.
-  def beatsForCode(code: UInt): UInt =
-    MuxLookup(code, calcBeatsForActive(nLanes))(
+  def beatsForCode(code: UInt): UInt = {
+    val allFunctional =
+      Mux(by8, calcBeatsForActive(8), calcBeatsForActive(16))
+    MuxLookup(code, allFunctional)(
       Seq(
-        "b011".U -> calcBeatsForActive(16),
+        "b011".U -> allFunctional,
         "b001".U -> calcBeatsForActive(8), // Lane 0-7
         "b010".U -> calcBeatsForActive(8), // Lane 8-15
         "b100".U -> calcBeatsForActive(4), // Lane 0-3
         "b101".U -> calcBeatsForActive(4) // Lane 4-7
       )
     )
+  }
 
   // Lane maps and beat counts
   val txLaneMap = decodeLaneMap(io.ctrl.localTxFunctionalLanes)

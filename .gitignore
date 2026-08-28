@@ -78,6 +78,7 @@ xrun.log
 
 out/
 .metals/
+.bloop/
 .vscode/
 
 chippy/

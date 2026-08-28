@@ -65,6 +65,13 @@ class MmplLoopbackHarness(
     val negotiatedParamsValid = Output(Vec(2, Vec(n, Bool())))
     val remoteModuleId = Output(Vec(2, Vec(n, UInt(2.W))))
     val moduleEnable = Output(Vec(2, Vec(n, Bool())))
+    // Spec 4.7.1: every Module of a multi-module Link must run at the same
+    // width, so a width degrade has to reach the Modules that found no errors
+    // of their own as well.
+    val moduleLinkWidth = Output(Vec(2, Vec(n, LinkWidth())))
+    // What the MMPL last directed the Link to do, for tests that need to see
+    // the resolution rather than only its effect.
+    val mmplResolution = Output(Vec(2, MmplResolution()))
 
     // Aggregate RDI, one per die.
     val plStateSts = Output(Vec(2, RDIState()))
@@ -99,6 +106,9 @@ class MmplLoopbackHarness(
   for (i <- 0 until 2) {
     val dut = duts(i).io
     val peer = duts(1 - i).io
+
+    // Every Module of this harness faces a Module on the other die.
+    dut.mmplCtrl.moduleConnected.foreach(_ := true.B)
 
     for (m <- 0 until n) {
       // Module m of this die faces Module modulePairing(m) of the other.
@@ -182,6 +192,12 @@ class MmplLoopbackHarness(
     dut.rdi.lpData := io.lpData.map(_(i)).getOrElse(0.U)
     dut.rdi.lpValid := io.lpValid.map(_(i)).getOrElse(false.B)
     dut.rdi.lpIrdy := io.lpIrdy.map(_(i)).getOrElse(false.B)
+
+    for (m <- 0 until n) {
+      io.moduleLinkWidth(i)(m) := dut.status(m).linkWidth
+    }
+
+    io.mmplResolution(i) := dut.mmplStatus.linkResolution
 
     io.plStateSts(i) := dut.rdi.plStateSts
     io.plInbandPres(i) := dut.rdi.plInbandPres

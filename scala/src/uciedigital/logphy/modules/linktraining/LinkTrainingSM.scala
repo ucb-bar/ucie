@@ -1009,8 +1009,12 @@ class LinkTrainingSM(
   // Table 4-10/11: Local Encoding Generation
   val busyBit = WireInit(io.runtimeLinkCtrlBusyBit.asUInt)
   val repairNeeded = WireInit(io.runtimeRequestForRepair)
+  // Table 4-10: Busy with a repair needed resolves to REPAIR when repair
+  // resources are available and SPEEDIDLE when the fault is unrepairable. The
+  // outOfSpare* signals are true when there is nothing left to repair with, so
+  // resources are available only when neither direction is exhausted.
   val repairResourcesAvailable = WireInit(
-    outOfSpareTxLanes && outOfSpareRxLanes
+    !outOfSpareTxLanes && !outOfSpareRxLanes
   )
 
   // What this Module alone would ask for. Published to the MMPL so it can form

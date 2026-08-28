@@ -140,11 +140,29 @@ object MmplPackageType extends Enumeration {
 case class MmplParams(
     numModules: Int = 1,
     afe: AfeParams = new AfeParams(),
-    packageType: MmplPackageType.Value = MmplPackageType.Standard
+    packageType: MmplPackageType.Value = MmplPackageType.Standard,
+    /* Mainband beats of skew the receive gather absorbs between Modules.
+       Spec 4.7.1.2 notes Modules of one Link can be staggered, and pl_valid has
+       no backpressure (spec 10.1.4), so a Module running ahead has nowhere to
+       go but this queue. */
+    rxAlignDepth: Int = 8,
+    /* Whole sideband cfg packets the transmit path stages before handing one to
+       a Module. Spec 7.1.4 needs the phases of a packet on consecutive cycles,
+       so a packet is only started once it is fully resident; this also rides
+       out the window where no Module is eligible to transmit yet. */
+    cfgTxDepth: Int = 4
 ) {
   require(
     Set(1, 2, 4).contains(numModules),
     s"MMPL supports one-, two-, and four-module Links (spec 4.7), got $numModules"
+  )
+  require(
+    rxAlignDepth >= 2,
+    s"MMPL receive alignment needs room for at least two beats, got $rxAlignDepth"
+  )
+  require(
+    cfgTxDepth >= 1,
+    s"MMPL sideband cfg transmit needs room for at least one packet, got $cfgTxDepth"
   )
   require(
     afe.mbSerializerRatio % 8 == 0,
@@ -187,8 +205,13 @@ case class MmplParams(
     speedDegrade  -> {MBTRAIN.LINKSPEED exit to speed degrade resp}, SPEEDIDLE
     disableModule -> {MBTRAIN.LINKSPEED multi-module disable module resp},
                      next state TRAINERROR and eventually RESET
+    phyRetrain    -> next state PHYRETRAIN, with no directed response of its
+                     own: spec 4.5.3.4.12 Step 5 says a
+                     {MBTRAIN.LINKSPEED exit to phy retrain req} received on any
+                     Module abandons every outstanding message on all of them
     trainError    -> no operational configuration remains
  */
 object MmplResolution extends ChiselEnum {
-  val none, done, repair, speedDegrade, disableModule, trainError = Value
+  val none, done, repair, speedDegrade, disableModule, phyRetrain,
+      trainError = Value
 }
