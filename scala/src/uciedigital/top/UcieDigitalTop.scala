@@ -146,6 +146,9 @@ class UcieDigitalTop(
     }
 
     // TODO: PHY macro control/status is owned by the analog register file, not the UCIe block.
+    // One Module, so there is no Multi-module PHY Logic above it (spec 4.7).
+    logicalPhy.io.mmplCtrl.tieOffSingleModule()
+
     logicalPhy.io.analog.status.pllLock := true.B
     logicalPhy.io.analog.status.clocksUngatedAndStable := true.B
     dontTouch(logicalPhy.io.analog.ctrl)

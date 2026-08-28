@@ -911,6 +911,20 @@ object SBM {
     "hBA".U(8.W),
     "h1E".U(8.W)
   )
+  /* WARNING: subcode 1Fh is assigned twice in spec Table 7-9. Both
+     {MBTRAIN.RXDESKEW EQ Preset req/resp} below and
+     {MBTRAIN.LINKSPEED exit to phy retrain req/resp} above are B5h/BAh with
+     subcode 1Fh, so SBMsgCompare -- which matches on opcode, MsgCode and
+     MsgSubcode only -- cannot tell them apart. (LINKSPEED otherwise occupies
+     15h to 1Ah and REPAIR 1Bh to 1Eh, so 1Fh reads like the start of the
+     RXDESKEW block and the LINKSPEED message reusing it looks editorial.)
+
+     It is latent today: the EQ preset exchange is not implemented, and the two
+     messages belong to different MBTRAIN substates, which a Module occupies one
+     at a time. Whoever implements RXDESKEW EQ preset must keep that true --
+     arm each pattern only in its own substate -- and should note that spec
+     4.5.3.4.12 Step 5 lets a phy retrain request arrive while a Module is in
+     another substate, since Modules of a multi-module Link can be staggered. */
   def MBTRAIN_RXDESKEW_EQ_PRESENT_REQ = MixedVecInit(
     SBMsgOpcode.MessageWithoutData.asUInt,
     "hB5".U(8.W),
