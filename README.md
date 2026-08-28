@@ -15,8 +15,9 @@ git submodule update --init --recursive
 ## Generating RTL
 
 The top level is `UcieTL`: the analog PHY, the UCIe digital stack (protocol layer, die-to-die
-adapter, and logical PHY), and the register block reachable over TileLink. To generate it, run the
-following from the `scala/` folder:
+adapter, and logical PHY), and the register block reachable over TileLink. The emitted module name
+carries the orientation the block is placed in, so the default parameters emit `UcieTL_NS`. To
+generate it, run the following from the `scala/` folder:
 
 ```bash
 ./mill test.testOnly edu.berkeley.cs.uciedigital.tilelink.TileLinkSpec -- -z "should generate valid SystemVerilog"
