@@ -15,7 +15,10 @@ import chisel3.util._
 class LinkTrainingSM(
     sbParams: SidebandParams,
     afeParams: AfeParams,
-    retryW: Int
+    retryW: Int,
+    // Shortens the spec 8 ms substate residency timeout, and with it the 4 ms
+    // minimum RESET wait, for simulation. Leave as None for the real value.
+    timeoutCyclesOverride: Option[Int] = None
 ) extends Module {
   val io = IO(new Bundle {
     // ========================================================================
@@ -35,6 +38,10 @@ class LinkTrainingSM(
     val swRetrainRequest = Input(Bool())
     // When set, linkTrainingParameters replaces the per-substate defaults MBInit/MBTrain supply.
     val linkOpParamOverride = Input(Bool())
+    // Multi-module PHY Logic directives (spec 4.7). With multiModule low and no
+    // resolution or common retrain encoding driven, the single-module behaviour
+    // is unchanged.
+    val mmplCtrl = Flipped(new MmplModuleCtrlIO())
 
     // ========================================================================
     // OUT
@@ -56,6 +63,11 @@ class LinkTrainingSM(
     val rxClkCalSendTrkPattern = Output(Bool())
     val scramblerReset =
       Output(Bool()) // Same reset for scrambler and descrambler
+    // What this Module sent and received in MBTRAIN.LINKSPEED, for the MMPL to
+    // resolve across the Link (spec 4.5.3.4.12 Step 5c).
+    val linkSpeedReport = Valid(new MmplLinkSpeedReport())
+    // Retrain encoding this Module alone derived (spec Table 4-10).
+    val retrainEncoding = Output(UInt(3.W))
 
     // ========================================================================
     // RDI IO
@@ -117,7 +129,12 @@ class LinkTrainingSM(
   // ==============================================================================================
   // If operating frequency is 800 MHz and timeout at 8ms, timeout cycles is 6,400,000
   // log2ceil(6,400,000) == 23
-  val timeoutCycles = (operatingFreq * timeoutMs).toInt
+  val timeoutCycles =
+    timeoutCyclesOverride.getOrElse((operatingFreq * timeoutMs).toInt)
+  require(
+    timeoutCycles > 1,
+    s"LinkTrainingSM needs a timeout of more than one cycle, got $timeoutCycles"
+  )
   val timeoutWidth = log2Ceil(timeoutCycles)
   val timeoutCounter = RegInit(0.U(timeoutWidth.W))
   val timeoutMaxCycles = timeoutCycles.U
@@ -425,9 +442,14 @@ class LinkTrainingSM(
   }
 
   // The parameters are known from outside (DVSEC, or elaboration) see where they come from
-  mbTrainSM.io.negotiatedMaxDataRate := negotiatedMaxDataRate(2, 0).asTypeOf(
-    SpeedMode()
-  )
+  // The negotiated data rate is a four-bit ladder (0h: 4 GT/s ... 7h: 64 GT/s);
+  // 8h and above are Reserved (spec 4.5.3.3.1). Decode it safely and fall back
+  // to the slowest rate, rather than truncating, which would fold a Reserved
+  // encoding onto a valid one.
+  val (negotiatedSpeedMode, negotiatedSpeedModeValid) =
+    SpeedMode.safe(negotiatedMaxDataRate)
+  mbTrainSM.io.negotiatedMaxDataRate :=
+    Mux(negotiatedSpeedModeValid, negotiatedSpeedMode, SpeedMode.speed4)
   mbTrainSM.io.pllLock := io.phyCtrlIo.pllLock
   mbTrainSM.io.interpretBy8Lane := negotiatedUcieSx8
   mbTrainSM.io.maxErrorThresholdPerLane := io.maxErrorThresholdPerLane
@@ -980,6 +1002,9 @@ class LinkTrainingSM(
 
   // MBTrain IOs
   mbTrainSM.io.phyInRetrain := phyInRetrain
+  mbTrainSM.io.multiModule := io.mmplCtrl.multiModule
+  mbTrainSM.io.mmplResolution := io.mmplCtrl.resolution
+  io.linkSpeedReport := mbTrainSM.io.linkSpeedReport
 
   // Table 4-10/11: Local Encoding Generation
   val busyBit = WireInit(io.runtimeLinkCtrlBusyBit.asUInt)
@@ -988,20 +1013,33 @@ class LinkTrainingSM(
     outOfSpareTxLanes && outOfSpareRxLanes
   )
 
-  val localEncoding = WireInit(
+  // What this Module alone would ask for. Published to the MMPL so it can form
+  // an encoding common to the whole Link; kept separate from `localEncoding`
+  // below so that aggregate can be fed back without a combinational loop.
+  val localEncodingRaw = WireInit(
     RetrainEncoding.TXSELFCAL
   ) // Default for Busy = 0b
 
   when(busyBit === 1.U) {
     when(repairNeeded) {
       when(repairResourcesAvailable) {
-        localEncoding := RetrainEncoding.REPAIR
+        localEncodingRaw := RetrainEncoding.REPAIR
       }.otherwise {
-        localEncoding := RetrainEncoding.SPEEDIDLE
+        localEncodingRaw := RetrainEncoding.SPEEDIDLE
       }
     }.otherwise { // No repair needed
-      localEncoding := RetrainEncoding.TXSELFCAL
+      localEncodingRaw := RetrainEncoding.TXSELFCAL
     }
+  }
+  io.retrainEncoding := localEncodingRaw
+
+  // Spec 4.5.3.7: in a multi-module Link the Retrain encoding, and hence the
+  // Retrain exit resolution, must be the same on every Module, because all
+  // Modules have to stay at one width and speed. The MMPL supplies that
+  // aggregate and it replaces the encoding this Module derived on its own.
+  val localEncoding = WireInit(localEncodingRaw)
+  when(io.mmplCtrl.commonRetrainEncoding.valid) {
+    localEncoding := io.mmplCtrl.commonRetrainEncoding.bits
   }
 
   // Remote's Initial Retrain Encoding Bundle

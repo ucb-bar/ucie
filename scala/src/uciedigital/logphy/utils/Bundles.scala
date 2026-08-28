@@ -121,3 +121,113 @@ class PHYParamExchangeIO extends Bundle {
   val txAdjRuntime = Output(UInt(1.W))
   val moduleId = Output(UInt(2.W))
 }
+
+/*
+  What one Module reports to the MMPL after Step 2 of MBTRAIN.LINKSPEED
+  (spec 4.5.3.4.12 Step 5c). The MMPL resolves across every operational Module
+  and directs each of them to the same next state.
+
+  `priorWidthDegrade` covers a Module that degraded earlier, for example in
+  MBINIT.REPAIRMB: spec 4.7.1.2.1 requires the MMPL to treat that as a Module
+  requesting width degrade even though it sent {MBTRAIN.LINKSPEED done req}.
+ */
+class MmplLinkSpeedReport extends Bundle {
+  val sentDone = Bool()
+  val sentRepair = Bool()
+  val sentSpeedDegrade = Bool()
+  val sentError = Bool()
+  val sentPhyRetrain = Bool()
+
+  val recvdDone = Bool()
+  val recvdRepair = Bool()
+  val recvdSpeedDegrade = Bool()
+  val recvdError = Bool()
+  val recvdPhyRetrain = Bool()
+
+  val priorWidthDegrade = Bool()
+
+  /** This Module wants a width degrade, whichever direction reported it. */
+  def widthDegradeRequested: Bool =
+    sentRepair || recvdRepair || priorWidthDegrade
+
+  /** This Module wants a speed degrade, whichever direction reported it. */
+  def speedDegradeRequested: Bool = sentSpeedDegrade || recvdSpeedDegrade
+
+  /** Neither side found anything wrong with this Module. */
+  def cleanDone: Bool =
+    sentDone && recvdDone && !priorWidthDegrade
+}
+
+/*
+  MMPL to Module direction. `multiModule` selects the LINKSPEED path that waits
+  for a resolution instead of resolving locally, so tying it low leaves the
+  single-module behaviour untouched.
+ */
+class MmplModuleCtrlIO extends Bundle {
+  val multiModule = Output(Bool())
+  val resolution = Valid(MmplResolution())
+  // Spec 4.5.3.7: every Module of a multi-module Link must enter PHYRETRAIN
+  // with the same retrain encoding, because they must stay at one width and
+  // speed.
+  val commonRetrainEncoding = Valid(UInt(3.W))
+
+  /** Drives the directives for a Link with no MMPL above it. */
+  def tieOffSingleModule(): Unit = {
+    multiModule := false.B
+    resolution.valid := false.B
+    resolution.bits := MmplResolution.none
+    commonRetrainEncoding.valid := false.B
+    commonRetrainEncoding.bits := 0.U
+  }
+}
+
+/*
+  A Module that does not own an RDI state machine exposes this so the block above
+  it can host one on its behalf.
+
+  Spec 3.5: "The Adapter data path and RDI data width can be extended for
+  multi-module configurations; however, there is a single RDI state machine for
+  this configuration. The Multi-module PHY Logic creates the abstraction and
+  coordinates between the RDI state and individual modules." The hosted machine
+  needs each Module's view of training, and each Module needs the resulting RDI
+  state back; {LinkMgmt.RDI.*} is a Table 7-8 message, so spec 4.7.1.1 puts it on
+  one Module's sideband rather than on every Module's.
+ */
+class LogicalPhyRdiHostIO(sbParams: SidebandParams) extends Bundle {
+  // What this Module contributes to the hosted state machine.
+  val ltsmState = Output(LTState())
+  val doRdiBringup = Output(Bool())
+  val trainingTimeout = Output(Bool())
+  val validFramingError = Output(Bool())
+  val cfgSidebandActive = Output(Bool())
+  val plPhyInRecenter = Output(Bool())
+  val clocksUngatedAndStable = Output(Bool())
+
+  // What the hosted state machine tells this Module.
+  val plStateSts = Input(RDIState())
+  val doingRdiBringup = Input(Bool())
+
+  // The hosted machine's own sideband messages, carried on this Module's link.
+  // Flipped because the bundle is written from the state machine's point of
+  // view: this Module accepts what it transmits and offers what it received.
+  val sbLaneIo = Flipped(new SidebandLaneIO(sbParams))
+}
+
+/*
+  One Module as seen by the MMPL: the Module's RDI slice, its status, the MMPL's
+  directives back to it, and -- on a multi-module Link -- the hooks the single
+  hosted RDI state machine needs.
+ */
+class MmplModulePort(
+    params: MmplParams,
+    ncWidth: Int,
+    sbParams: SidebandParams
+) extends Bundle {
+  val rdi = Flipped(new Rdi(params.moduleRdiParams(ncWidth)))
+  val status = Flipped(new LogicalPhyStatusIO())
+  val ctrl = new MmplModuleCtrlIO()
+  val rdiHost =
+    Option.when(params.isMultiModule)(
+      Flipped(new LogicalPhyRdiHostIO(sbParams))
+    )
+}
