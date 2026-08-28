@@ -411,30 +411,31 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   when(
     io.txPtTestReqInterfaceIo.start && io.txPtTestReqInterfaceIo.ptTestResults.valid
   ) {
+    // ptTestResults bits are per-lane PASS flags, so a lane is faulty when its bit is low
     when(io.interpretBy8Lane) {
-      faultInLowerLanes := Cat(
+      faultInLowerLanes := !Cat(
         io.txPtTestReqInterfaceIo.ptTestResults.bits(0),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(1),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(2),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(3)
-      ).orR
-      faultInUpperLanes := Cat(
+      ).andR
+      faultInUpperLanes := !Cat(
         io.txPtTestReqInterfaceIo.ptTestResults.bits(4),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(5),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(6),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(7)
-      ).orR
+      ).andR
     }.otherwise {
       // Get top (afeParams.mbLanes / 2) lanes
-      faultInLowerLanes := io.txPtTestReqInterfaceIo.ptTestResults.bits
+      faultInLowerLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
         .take(afeParams.mbLanes / 2)
         .map(_.asBool)
-        .reduce(_ || _)
+        .reduce(_ && _)
       // Get bottom (afeParams.mbLanes / 2) lanes
-      faultInUpperLanes := io.txPtTestReqInterfaceIo.ptTestResults.bits
+      faultInUpperLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
         .drop(afeParams.mbLanes / 2)
         .map(_.asBool)
-        .reduce(_ || _)
+        .reduce(_ && _)
     }
   }
 
