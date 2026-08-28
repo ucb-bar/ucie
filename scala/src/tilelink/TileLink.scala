@@ -52,6 +52,28 @@ import testchipip.soc.{
   ChipletIO
 }
 
+/** Physical orientation of a UCIe instance on the die, named after the axis the
+  * block's bumps run along.
+  *
+  * Two UCIe instances with the same parameters elaborate to the same hardware,
+  * so Chisel puts them in one dedup group (the group is the proposed module
+  * name) and firtool folds them into a single SystemVerilog module. Physical
+  * design needs one module per instance, because the two are placed in
+  * different orientations and hardened separately. The orientation is part of
+  * the module name, which splits the dedup groups and keeps the two hierarchies
+  * apart.
+  */
+sealed abstract class UcieOrientation(val moduleSuffix: String)
+
+object UcieOrientation {
+
+  /** North-south: placed unrotated (R0). */
+  case object NS extends UcieOrientation("_NS")
+
+  /** East-west: placed rotated 90 degrees (R90). */
+  case object EW extends UcieOrientation("_EW")
+}
+
 case class UcieTLParams(
     address: BigInt = 0x200000,
     bufferDepthPerLane: Int = 11,
@@ -69,7 +91,11 @@ case class UcieTLParams(
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
-    sbRxQueueDepth: Int = 4
+    sbRxQueueDepth: Int = 4,
+    // Physical orientation of this instance. It names the module, so two
+    // instances only share a SystemVerilog module if they are placed the same
+    // way round.
+    orientation: UcieOrientation = UcieOrientation.NS
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
@@ -771,7 +797,7 @@ class UcieTL(
 )(implicit
     p: Parameters
 ) extends LazyModule {
-  override lazy val desiredName = "UcieTL"
+  override lazy val desiredName = s"UcieTL${params.orientation.moduleSuffix}"
 
   // Main digital clock node.
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
@@ -1367,6 +1393,11 @@ class UcieChipletLink(
     val id: Int
 )(implicit p: Parameters)
     extends ChipletLinkWrapper {
+  // Follows the UcieTL naming: the wrapper wraps exactly one UcieTL, so it has
+  // to split along with it.
+  override lazy val desiredName =
+    s"UcieChipletLink${params.orientation.moduleSuffix}"
+
   val ucie = LazyModule(
     new UcieTL(
       params,
