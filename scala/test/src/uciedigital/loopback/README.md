@@ -17,7 +17,7 @@ wake path.
 | Testbench | DUT | Driven by | Stages |
 |---|---|---|---|
 | `LogPhyStagedBringupTest` | two `LogicalPhy` | testbench pins | 9 |
-| `MmplStagedBringupTest` | two `MultiModulePhy` | testbench pins | 7 per configuration |
+| `MmplStagedBringupTest` | two `MultiModulePhy` | testbench pins | 10 per configuration |
 | `UcieDigitalStagedBringupTest` | two `ProtocolLayer` + `D2DAdapter` + `LogicalPhy` | testbench pins | 11 |
 | `UcieMmioBringupTest` | two `UcieDigitalTop` | TileLink register writes | 12 |
 
@@ -58,6 +58,24 @@ received, the MMPL resolves, and every module exchanges the response it was
 directed to), stage 6 checks the aggregate `pl_lnk_cfg` is the summed width, and
 stage 7 carries a tagged word across. Stage 7 is the one that fails if the
 transmit byte map ranks by the local module ID instead of the remote one.
+
+Stages 8 and 9 take the two degrade arcs of spec Figure 4-48, using the
+harness's lane error injection -- corrupting a module's receive lane inside
+MBTRAIN.LINKSPEED is the only way to make it report errors on a loopback where
+every lane is perfect.
+
+Stage 8 corrupts one module, which is fewer than half, so the resolution
+disables it along with the other module of its half (spec 5.7.3.4.1 rule 2) and
+the rest carry on. The surviving modules cannot fit the whole aggregate word in
+one 8-UI interval any more, so this is also where the multi-beat datapath of
+Figure 4-46 carries real data.
+
+Stage 9 corrupts a majority, which at 4 GT/s takes the bandwidth comparison down
+the width-degrade arc instead: every module width degrades and none is disabled,
+including the module that found no errors of its own. Stage 10 then carries that
+degraded link the rest of the way, to ACTIVE and through a multi-beat data
+transfer -- the check that the link *settles* rather than ping-ponging between
+LINKSPEED and REPAIR.
 
 Link training residency timeouts are shortened here through
 `timeoutCyclesOverride`. The spec value is 8 ms, 6.4M cycles at 800 MHz with a

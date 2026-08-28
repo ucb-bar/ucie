@@ -259,16 +259,27 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.linkSpeedReport.bits.recvdSpeedDegrade := responder.io.remoteRequestingSpeedDegrade
   io.linkSpeedReport.bits.recvdError := responder.io.remoteErrorInLinkspeed
   io.linkSpeedReport.bits.recvdPhyRetrain := responder.io.remoteExitingToPhyretrain
-  io.linkSpeedReport.bits.priorWidthDegrade :=
-    io.currLocalTxFunctionalLanes =/= "b011".U(3.W)
+  /* The report is only meaningful once both directions have named a next state
+     -- except on the PHY retrain path. Spec 4.5.3.4.12 Step 5 makes an
+     {exit to phy retrain req} received on ANY Module a directive for the whole
+     Link, so the MMPL has to hear about it straight away: this Module is on its
+     way out of LINKSPEED and will never complete the done/error exchange, and
+     its siblings would otherwise wait for a report that never comes until they
+     time out. */
+  private val phyRetrainReported =
+    requester.io.initiatingExitToPhyretrain ||
+      responder.io.remoteExitingToPhyretrain
 
-  // The report is only meaningful once both directions have named a next state.
-  io.linkSpeedReport.valid := io.multiModule &&
-    (requester.io.currentState === MBTrainState.sLINKSPEED) &&
+  private val bothDirectionsNamed =
     (requester.io.initiatingDone || requester.io.initiatingWidthDegrade ||
       requester.io.initiatingSpeedDegrade) &&
-    (responder.io.remoteRequestingDone || responder.io.remoteRequestingRepair ||
-      responder.io.remoteRequestingSpeedDegrade)
+      (responder.io.remoteRequestingDone ||
+        responder.io.remoteRequestingRepair ||
+        responder.io.remoteRequestingSpeedDegrade)
+
+  io.linkSpeedReport.valid := io.multiModule &&
+    (requester.io.currentState === MBTrainState.sLINKSPEED) &&
+    (bothDirectionsNamed || phyRetrainReported)
 }
 
 class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
@@ -577,7 +588,12 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     widthDegradeFromAllToUpperBy8
   )
 
-  newTxFunctionalLanes := "b011".U // Default code all lanes are functional
+  /* No degrade condition means the Lanes this Module is already using all
+     passed, so it stays where it is. Defaulting to "all Lanes functional"
+     instead made an already-degraded Module compare b011 against its own b001
+     below and report lane errors on every pass of LINKSPEED, even on a clean
+     x8 channel -- and MBTRAIN.REPAIR would then widen it back to x16. */
+  newTxFunctionalLanes := currLocalTxFunctionalLanes
   // Mux1H returns 0 on a zero-hot select, so only apply it when a degrade is needed
   when(laneRepairDegradeCondSel.orR) {
     newTxFunctionalLanes := Mux1H(
@@ -618,8 +634,31 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
   // MBTrain.REPAIR registers/wires
   // Only set high once the width by MBTrain.REPAIR is determined, or in-progress with repair
   val applyDegrade = WireInit(false.B)
-  io.txWidthChanged := laneHasErrors && applyDegrade
-  io.newLocalFunctionalLanes := newTxFunctionalLanes
+
+  /* Spec 4.7.1.2.1: when the MMPL resolves LINKSPEED to a width degrade, "width
+     degrade is applied per module following the steps in MBTRAIN.REPAIR for
+     every module in this UCIe Link" -- including the ones that found no errors
+     of their own, for which "the transmitter is permitted to pick either of
+     Lanes 0 to 7 or Lanes 8 to 15". Without this a clean Module would leave
+     REPAIR still at full width while its siblings dropped to half, and a
+     multi-module Link cannot run at mixed widths. Set when the resolution is
+     taken in LINKSPEED and cleared on the way out of REPAIR. */
+  val mmplForceWidthDegrade = RegInit(false.B)
+
+  // Halving from "all functional": Lanes 0 to 7 at x16, Lanes 0 to 3 in x8 mode.
+  val forcedHalfLanes = Mux(io.interpretBy8Lane, "b100".U(3.W), "b001".U(3.W))
+  val repairTxFunctionalLanes = Mux(
+    mmplForceWidthDegrade && !laneRepairDegradeCondSel.orR,
+    Mux(isLanes0To15, forcedHalfLanes, currLocalTxFunctionalLanes),
+    newTxFunctionalLanes
+  )
+
+  io.txWidthChanged :=
+    applyDegrade &&
+      (laneHasErrors ||
+        (mmplForceWidthDegrade &&
+          (repairTxFunctionalLanes =/= currLocalTxFunctionalLanes)))
+  io.newLocalFunctionalLanes := repairTxFunctionalLanes
 
   // IOs
   io.done := false.B
@@ -1781,11 +1820,20 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           io.doElectricalIdleTx := initiatingErrorFlag
 
           // A remote PHY retrain request on any Module of the Link abandons the
-          // resolution (spec 4.5.3.4.12 Step 5).
+          // resolution (spec 4.5.3.4.12 Step 5). This Module's own responder
+          // covers the case where the request landed here; the MMPL relays it
+          // when it landed on a sibling Module instead.
           when(io.remoteExitingToPhyretrain) {
+            nextSubstate := MBTrainSubstate.s7
+          }.elsewhen(
+            io.mmplResolution.valid &&
+              io.mmplResolution.bits === MmplResolution.phyRetrain
+          ) {
             nextSubstate := MBTrainSubstate.s7
           }.elsewhen(io.mmplResolution.valid) {
             mmplResolutionReg := io.mmplResolution.bits
+            mmplForceWidthDegrade :=
+              io.mmplResolution.bits === MmplResolution.repair
             nextSubstate := MBTrainSubstate.s12
           }
         }
@@ -1861,30 +1909,45 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
             "PHY",
             "PHY",
             true,
-            msgInfo = Cat(0.U(12.W), newTxFunctionalLanes)
+            msgInfo = Cat(0.U(13.W), repairTxFunctionalLanes)
           )
           applyDegrade := true.B
 
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_APPLY_DEGRADE_RESP
 
-          when(sbMsgExchanger.io.exchDone) {
+          /* The responder half of this Module gates its own move to s2 on the
+             pair being ready, as every other synchronising substate does, so
+             the requester has to publish its readiness here too. Transitioning
+             on exchDone alone left the responder waiting on a requesterRdy that
+             never came, and REPAIR could not be completed from either side. */
+          requesterRdy := sbMsgExchanger.io.exchDone
+          when(io.requesterRdy && io.responderRdy) {
             nextSubstate := MBTrainSubstate.s2
           }
         }
         is(MBTrainSubstate.s2) { // END
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
-          sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_END_REQ
-
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          /* Spec 4.5.3.4.13 Step 3: "The UCIe Module must send the
+             {MBTRAIN.REPAIR end req} sideband message and wait for a response.
+             The UCIe Module Partner must then respond with the
+             {MBTRAIN.REPAIR end resp}". The requester initiates, as it does in
+             s0 and s1 -- waiting for the end req here instead left both dies
+             listening for a message neither of them ever sent, so REPAIR could
+             never be left and a width degrade could never complete. */
+          sbMsgExchanger.io.req.valid := true.B
           sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBTRAIN_REPAIR_END_RESP,
+            SBM.MBTRAIN_REPAIR_END_REQ,
             "PHY",
             "PHY",
             true
           )
+
+          sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
+          sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_END_RESP
+
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
+            mmplForceWidthDegrade := false.B
             nextSubstate := MBTrainSubstate.s0
             nextState := MBTrainState.sTXSELFCAL
           }
@@ -2816,7 +2879,27 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
         is(MBTrainSubstate.s11) { // MULTI-MODULE - WAIT FOR MMPL RESOLUTION
           io.doElectricalIdleRx := remoteErrorInLinkspeedFlag
 
+          /* Spec 4.5.3.4.12 Step 5: an {exit to phy retrain req} can arrive
+             while this Module is waiting on the MMPL, because the Modules of a
+             Link reach LINKSPEED staggered. Keep matching it here -- a Module
+             parked with no receive pattern armed would leave the request at the
+             head of its sideband queue, blocking the directed response queued
+             behind it. */
+          val phyRetrainReqArrived = io.sbLaneIo.rx.valid && SBMsgCompare(
+            io.sbLaneIo.rx.bits.data,
+            SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ
+          )
+
           when(io.localInitiatingExitToPhyRetrain) {
+            nextSubstate := MBTrainSubstate.s8
+          }.elsewhen(phyRetrainReqArrived) {
+            io.sbLaneIo.rx.ready := true.B
+            nextSubstate := MBTrainSubstate.s6
+          }.elsewhen(
+            io.mmplResolution.valid &&
+              io.mmplResolution.bits === MmplResolution.phyRetrain
+          ) {
+            // A sibling Module took the request; follow it to PHYRETRAIN.
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(io.mmplResolution.valid) {
             mmplResolutionReg := io.mmplResolution.bits

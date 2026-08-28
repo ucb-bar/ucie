@@ -104,7 +104,18 @@ class PhyLaneTrainer(afeParams: AfeParams) extends Module {
     rxClkCalCounter := 0.U
   }
 
-  io.phyTrainIo.mbTrain.txSelfCalDone := false.B
+  /* There is no calibration hardware, so TX self calibration is complete as
+     soon as MBTRAIN.TXSELFCAL asks for it -- the same reasoning as
+     `req.complete` below, and as the RXCLKCAL dwell above, which models a
+     settle window rather than real work.
+
+     Holding this low meant MBTRAIN.TXSELFCAL never sent its
+     {MBTRAIN.TXSELFCAL done req}, so the state could only ever be left by the
+     requester and responder ready bits leaking across the transition into it.
+     That accident carried the first pass through MBTRAIN; it did not carry the
+     second one, which is where a Link that had width degraded in
+     MBTRAIN.REPAIR stalled for good. */
+  io.phyTrainIo.mbTrain.txSelfCalDone := io.phyTrainIo.mbTrain.txSelfCalStart
   io.phyTrainIo.mbTrain.rxClkCalDone := rxClkCalCounter === rxClkCalDwell.U
   io.phyTrainIo.mbTrain.req.start := false.B
   io.phyTrainIo.mbTrain.req.testKind := TrainingTestType.Either

@@ -182,6 +182,59 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
     }
   }
 
+  /** Like sendBothWays, but tolerant of a transfer that takes several beats.
+    *
+    * Once Modules have been disabled the surviving Lanes cannot carry the whole
+    * aggregate word in one 8-UI interval, so the receiver only presents it
+    * after the last beat has been gathered (spec 4.7.1, Figure 4-46).
+    */
+  private def sendBothWaysMultiBeat(
+      h: H,
+      bits: Int,
+      words: Seq[BigInt]
+  ): Unit = {
+    for (die <- 0 until 2) {
+      h.io.lpData.get(die).poke(words(die).U(bits.W))
+      h.io.lpValid.get(die).poke(true.B)
+      h.io.lpIrdy.get(die).poke(true.B)
+    }
+
+    stepUntil(h, rdiFlagCycles, "both dies ready to send")(
+      (0 until 2).forall(h.io.plTrdy(_).peekBoolean())
+    )
+    h.clock.step(1)
+    for (die <- 0 until 2) {
+      h.io.lpValid.get(die).poke(false.B)
+      h.io.lpIrdy.get(die).poke(false.B)
+    }
+
+    // Collect whatever each die presents, however many beats it takes.
+    val got = Array.fill(2)(Option.empty[BigInt])
+    var left = rdiFlagCycles
+    while (left > 0 && got.exists(_.isEmpty)) {
+      for (die <- 0 until 2) {
+        if (got(die).isEmpty && h.io.plValid(die).peekBoolean()) {
+          got(die) = Some(h.io.plData.get(die).peek().litValue)
+        }
+      }
+      h.clock.step(1)
+      left -= 1
+    }
+
+    for (from <- 0 until 2) {
+      val to = 1 - from
+      assert(
+        got(to).isDefined,
+        s"die $to never received the word from die $from"
+      )
+      assert(
+        got(to).get == words(from),
+        f"die $from to die $to corrupted a word: sent ${words(from)}%x, " +
+          f"received ${got(to).get}%x"
+      )
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // The ladder
   // ---------------------------------------------------------------------------
@@ -335,6 +388,7 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           new MmplLoopbackHarness(
             params = params,
             modulePairing = pairing,
+            dataPath = true,
             laneErrorInjection = true,
             timeoutCyclesOverride = Some(trainingTimeout)
           ),
@@ -413,6 +467,174 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
                 s"die $die should report the degraded aggregate width"
               )
             h.io.plTrainError(die).expect(false.B, s"die $die training error")
+          }
+
+          // The surviving Modules cannot carry the whole aggregate word in one
+          // 8-UI interval any more, so this is the multi-beat path of spec
+          // 4.7.1 / Figure 4-46 carrying real data for the first time.
+          for (seq <- 0 until 3) {
+            sendBothWaysMultiBeat(
+              h,
+              rdiWordBits,
+              (0 until 2).map(payload(rdiWordBits, _, seq))
+            )
+          }
+        }
+      }
+
+      it("Stage 9: a majority width degrade reaches every Module") {
+        /* Corrupting a majority of the Modules takes Figure 4-48's other arc:
+           at 4 GT/s the bandwidth comparison cannot favour a speed degrade, so
+           the MMPL resolves `repair` and every Module width degrades, none is
+           disabled.
+
+           What this pins down is that the directive reaches all of them. A
+           Module that found no errors of its own has nothing locally to act on,
+           and spec 4.7.1 does not let a multi-module Link run at mixed widths,
+           so the MMPL's resolution is the only thing that can move it. Getting
+           here also requires MBTRAIN.REPAIR to complete, which it could not
+           before: see the note on the ignored stage below. */
+        val injected =
+          if (numModules > 2) (1 until numModules) else (0 until numModules)
+
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            laneErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          for (m <- injected) h.io.injectLaneError.get(0)(m).poke(true.B)
+          coldStart(h)
+
+          stepWhileFailing(
+            h,
+            mbInitCycles + 2 * mbTrainCycles,
+            "the MMPL resolved a width degrade"
+          ) {
+            (0 until 2).forall(die =>
+              h.io.mmplResolution(die).peek().litValue ==
+                MmplResolution.repair.litValue
+            )
+          }
+
+          // Every Module applies it, including the ones with no errors.
+          stepWhileFailing(
+            h,
+            mbTrainCycles,
+            "every Module applied the width degrade"
+          ) {
+            (0 until 2).forall(die =>
+              (0 until numModules).forall(m =>
+                h.io.moduleLinkWidth(die)(m).peek().litValue ==
+                  LinkWidth.x8.litValue
+              )
+            )
+          }
+
+          // A width degrade keeps every Module; nothing should be disabled.
+          for (die <- 0 until 2; m <- 0 until numModules) {
+            assert(
+              h.io.moduleEnable(die)(m).peekBoolean(),
+              s"die $die module $m was disabled by a width degrade"
+            )
+          }
+
+          // MBTRAIN.REPAIR has to complete for the Link to carry on training.
+          for (m <- injected) h.io.injectLaneError.get(0)(m).poke(false.B)
+          stepWhileFailing(h, mbTrainCycles, "every Module left MBTRAIN.REPAIR") {
+            (0 until 2).forall(die =>
+              (0 until numModules).forall(m =>
+                h.io.ltsmState(die)(m).peek().litValue !=
+                  LTSMState.sMBTRAIN_REPAIR.litValue
+              )
+            )
+          }
+          for (die <- 0 until 2; m <- 0 until numModules) {
+            h.io
+              .moduleLinkWidth(die)(m)
+              .expect(
+                LinkWidth.x8,
+                s"die $die module $m did not hold the degraded width"
+              )
+          }
+        }
+      }
+
+      /* The other half of Stage 9: once the Link has degraded together it must
+         finish training and carry data at the new width. Getting here needed
+         four defects fixed on a path no test had ever driven to completion --
+         the MBTRAIN.REPAIR end handshake, the requester/responder
+         synchronisation in REPAIR s1, a 15-bit msgInfo that made the
+         apply-degrade packet 127 bits, and a TX self-calibration "done" that
+         was tied low so MBTRAIN.TXSELFCAL only ever exited on ready bits
+         leaking across a state transition. */
+      it("Stage 10: the width-degraded Link reaches Active and moves data") {
+        val injected =
+          if (numModules > 2) (1 until numModules) else (0 until numModules)
+        val halvedWidth =
+          if (numModules == 2) LinkWidth.x16 else LinkWidth.x32
+
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            dataPath = true,
+            laneErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          for (m <- injected) h.io.injectLaneError.get(0)(m).poke(true.B)
+          coldStart(h)
+
+          stepWhileFailing(
+            h,
+            mbInitCycles + 2 * mbTrainCycles,
+            "every Module applied the width degrade"
+          ) {
+            (0 until 2).forall(die =>
+              (0 until numModules).forall(m =>
+                h.io.moduleLinkWidth(die)(m).peek().litValue ==
+                  LinkWidth.x8.litValue
+              )
+            )
+          }
+          for (m <- injected) h.io.injectLaneError.get(0)(m).poke(false.B)
+
+          stepWhileFailing(
+            h,
+            3 * mbTrainCycles,
+            "the width-degraded Link reached ACTIVE on every Module"
+          ) {
+            (0 until 2).forall(die =>
+              (0 until numModules).forall(m =>
+                h.io.ltState(die)(m).peek().litValue == LTState.sACTIVE.litValue
+              )
+            )
+          }
+
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepWhileFailing(h, rdiFlagCycles, "the degraded RDI reached Active") {
+            (0 until 2).forall(die =>
+              h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
+            )
+          }
+          for (die <- 0 until 2) {
+            h.io
+              .plLnkCfg(die)
+              .expect(halvedWidth, s"die $die aggregate width after degrade")
+            h.io.plTrainError(die).expect(false.B, s"die $die training error")
+          }
+
+          for (seq <- 0 until 3) {
+            sendBothWaysMultiBeat(
+              h,
+              rdiWordBits,
+              (0 until 2).map(payload(rdiWordBits, _, seq))
+            )
           }
         }
       }
