@@ -23,9 +23,7 @@ class UcieDigitalStagedBringupTest extends AnyFunSpec with ChiselSim {
   private type H = UcieDigitalLoopbackHarness
 
   // The LTSM asserts on substates the link passes through on its way up.
-  private val firtoolOpts = Array(
-    "--disable-layers=Verification,Verification.Assert,Verification.Assume,Verification.Cover"
-  )
+  private val firtoolOpts = Array[String]()
 
   private val resetWait = 3200000
   private val trainCycles = 3000000

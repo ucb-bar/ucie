@@ -26,9 +26,7 @@ import org.scalatest.funspec.AnyFunSpec
 class LogPhyStagedBringupTest extends AnyFunSpec with ChiselSim {
 
   // The LTSM asserts on substates the link passes through on its way up.
-  private val firtoolOpts = Array(
-    "--disable-layers=Verification,Verification.Assert,Verification.Assume,Verification.Cover"
-  )
+  private val firtoolOpts = Array[String]()
 
   // The LTSM holds RESET for half of its 6.4M-cycle substate timeout.
   private val resetWait = 3200000
