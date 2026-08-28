@@ -89,6 +89,28 @@ class MmplByteMapTest extends AnyFunSpec with ChiselSim {
       assert(ranges(16, 2, 32, 0, 1) == Seq((32, 47), (48, 63)))
     }
 
+    it("Reads Table 4-9 by 8 when UCIe-S x8 was negotiated") {
+      /* Spec 4.5.3.3.5 (p.152): a x16 Standard Package Module that negotiated
+         "UCIe-S x8" operates in x8 mode and applies the training steps to the
+         lower-8 data-lane set, so the "all functional" code covers Lanes 0 to 7
+         rather than 0 to 15. LogicalPhy already reports x8 for that code; the
+         byte map has to agree with it or the MMPL lays out twice the bytes its
+         own pl_lnk_cfg claims. The narrower codes name their Lanes explicitly
+         and mean the same in either reading. */
+      assert(laneCount("b011", by8 = false) == 16)
+      assert(laneCount("b011", by8 = true) == 8)
+      for (code <- Seq("b001", "b010", "b100", "b101")) {
+        assert(
+          laneCount(code, by8 = true) == laneCount(code, by8 = false),
+          s"$code should read the same in x8 mode"
+        )
+      }
+
+      // Two x8-mode Modules, 32B RDI: 8 bytes per Module per 8-UI chunk.
+      assert(ranges(8, 2, 16, 0, 0) == Seq((0, 7), (8, 15)))
+      assert(ranges(8, 2, 16, 0, 1) == Seq((16, 23), (24, 31)))
+    }
+
     it("Figure 4-50: four x32 Modules, 256B RDI") {
       assert(
         ranges(32, 4, 64, 0, 0) ==
@@ -191,6 +213,8 @@ class MmplByteMapTest extends AnyFunSpec with ChiselSim {
     // Table 5-27, x2 unstacked: M0 <-> M1.
     2 -> Seq(Seq(0, 1), Seq(1, 0)),
     // Table 5-27, x4 unstacked Standard Die Rotate: M0 <-> M2, M1 <-> M3.
+    // The reversal is not a Table 5-27 pairing; it is extra coverage of the
+    // rank arithmetic, which does not care which permutation it is handed.
     4 -> Seq(Seq(0, 1, 2, 3), Seq(2, 3, 0, 1), Seq(3, 2, 1, 0))
   )
 
@@ -220,6 +244,7 @@ class MmplByteMapTest extends AnyFunSpec with ChiselSim {
             // Loopback, so the two directions run the same configuration.
             c.io.ctrl.txLaneCode.poke(code.U(3.W))
             c.io.ctrl.rxLaneCode.poke(code.U(3.W))
+            c.io.ctrl.by8.poke(false.B)
             c.io.ctrl.numActive.poke(numActive.U)
             for (m <- 0 until numModules) {
               c.io.ctrl.txRank(m).poke(ranks(m).U)
@@ -268,7 +293,122 @@ class MmplByteMapTest extends AnyFunSpec with ChiselSim {
               s"round trip lost data for code=$code numActive=$numActive " +
                 s"ranks=${ranks.mkString(",")}"
             )
+
           }
+        }
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Non-contiguous surviving Module sets
+  // ==========================================================================
+  describe("MmplByteSwizzle with Modules disabled out of the middle") {
+    /* Spec Figure 4-46 is a stacked-to-unstacked Link with M0 and M2 disabled,
+       and spec Table 5-29 makes {M1, M3} a legal survivor set after two failed
+       Module pairs. The permutation sweep above only ever enables a contiguous
+       half, so this is the case it cannot reach. */
+    val numModules = 4
+    val params = MmplParams(numModules = numModules)
+    val bytesPerModule = params.bytesPerModule
+    val totalBytes = numModules * bytesPerModule
+
+    for (enabled <- Seq(Seq(1, 3), Seq(0, 3), Seq(1, 2), Seq(0, 2))) {
+      it(s"round trips with only M${enabled.mkString(" and M")} enabled") {
+        simulate(new MmplByteSwizzle(params)) { c =>
+          val random = new Random(randomSeed)
+          val lpData = BigInt(totalBytes * 8, random)
+          // Rank is position among the enabled Modules in ascending order.
+          val rank = enabled.zipWithIndex.toMap
+
+          c.io.tx.lpData.poke(lpData.U((totalBytes * 8).W))
+          c.io.ctrl.txLaneCode.poke("b011".U(3.W))
+          c.io.ctrl.rxLaneCode.poke("b011".U(3.W))
+          c.io.ctrl.by8.poke(false.B)
+          c.io.ctrl.numActive.poke(enabled.length.U)
+          for (m <- 0 until numModules) {
+            val r = rank.getOrElse(m, 0)
+            c.io.ctrl.txRank(m).poke(r.U)
+            c.io.ctrl.rxRank(m).poke(r.U)
+            c.io.ctrl.enable(m).poke(enabled.contains(m).B)
+          }
+
+          var gathered = BigInt(0)
+          for (beat <- 0 until beatsPerWord(numModules, enabled.length)) {
+            c.io.ctrl.txBeat.poke(beat.U)
+            c.io.ctrl.rxBeat.poke(beat.U)
+            for (m <- 0 until numModules) {
+              val expected =
+                if (enabled.contains(m))
+                  moduleWord(
+                    lpData,
+                    16,
+                    enabled.length,
+                    bytesPerModule,
+                    beat,
+                    rank(m)
+                  )
+                else BigInt(0)
+              c.io.tx
+                .moduleData(m)
+                .expect(
+                  expected.U((bytesPerModule * 8).W),
+                  s"beat=$beat module=$m scatter"
+                )
+              c.io.rx.moduleData(m).poke(expected.U((bytesPerModule * 8).W))
+            }
+            gathered |= c.io.rx.plData.peek().litValue
+          }
+
+          assert(
+            gathered == lpData,
+            s"round trip lost data with enabled=${enabled.mkString(",")}"
+          )
+        }
+      }
+    }
+
+    it("gives the least enabled Module the least significant bytes") {
+      // Spec 4.7.1 / Figure 4-46: "the remaining bytes of RDI are sent over
+      // subsequent 8-UI intervals such that M1 on the remote Link partner
+      // receives the least significant bytes."
+      val enabled = Seq(1, 3)
+      simulate(new MmplByteSwizzle(params)) { c =>
+        // A word whose every byte is its own index makes the mapping readable.
+        val lpData = (0 until totalBytes).foldLeft(BigInt(0)) { (acc, i) =>
+          acc | (BigInt(i & 0xff) << (i * 8))
+        }
+        c.io.tx.lpData.poke(lpData.U((totalBytes * 8).W))
+        c.io.ctrl.txLaneCode.poke("b011".U(3.W))
+        c.io.ctrl.rxLaneCode.poke("b011".U(3.W))
+        c.io.ctrl.by8.poke(false.B)
+        c.io.ctrl.numActive.poke(2.U)
+        for (m <- 0 until numModules) {
+          val r = if (m == 3) 1 else 0
+          c.io.ctrl.txRank(m).poke(r.U)
+          c.io.ctrl.rxRank(m).poke(r.U)
+          c.io.ctrl.enable(m).poke(enabled.contains(m).B)
+        }
+        c.io.ctrl.txBeat.poke(0.U)
+
+        // Beat 0, first 8-UI chunk: M1 (rank 0) takes the Lane-width block at
+        // the bottom of the word, M3 (rank 1) the block above it.
+        val activeLanes = 16
+        val m1 = c.io.tx.moduleData(1).peek().litValue
+        val m3 = c.io.tx.moduleData(3).peek().litValue
+        assert(
+          (m1 & 0xff) == 0,
+          s"M1 should start at RDI byte 0, got ${m1 & 0xff}"
+        )
+        assert(
+          (m3 & 0xff) == activeLanes,
+          s"M3 should start at RDI byte $activeLanes, got ${m3 & 0xff}"
+        )
+        // ...and the disabled Modules carry nothing at all.
+        for (m <- Seq(0, 2)) {
+          c.io.tx
+            .moduleData(m)
+            .expect(0.U, s"disabled module $m must not be given bytes")
         }
       }
     }

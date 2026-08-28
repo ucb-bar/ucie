@@ -69,6 +69,13 @@ class Mmpl(
     val rdi = new Rdi(rdiParams)
     val modules =
       Vec(n, new MmplModulePort(params, rdiParams.ncWidth, sbParams))
+    /* Which Modules are physically wired to a remote Module Partner. Chapter 5
+       permits multi-module Links whose two die have different Module counts
+       (Table 5-28), where some local Modules are marked NC and never train --
+       Figure 4-46 is exactly that case. A Module tied off here is left out of
+       every aggregate, so it cannot hold up bring-up or drag the Link into
+       LinkError on its own training timeout. Defaults to all connected. */
+    val moduleConnected = Input(Vec(n, Bool()))
     val status = new Bundle {
       val moduleEnable = Output(Vec(n, Bool()))
       val linkResolution = Output(MmplResolution())
@@ -81,10 +88,15 @@ class Mmpl(
   // ==========================================================================
   // A Module leaves the set when a resolution disables it (spec 4.7.1) and comes
   // back when the whole Link has fallen to RESET and will retrain from scratch.
-  private val moduleEnable = RegInit(VecInit(Seq.fill(n)(true.B)))
+  // An unconnected Module is never in the set at all.
+  private val moduleEnableReg = RegInit(VecInit(Seq.fill(n)(true.B)))
+  private val moduleEnable = VecInit((0 until n).map { m =>
+    moduleEnableReg(m) && io.moduleConnected(m)
+  })
   private val ltStates = (0 until n).map(io.modules(_).status.ltState)
-  private val linkInReset =
-    ltStates.map(_ === LTState.sRESET).reduce(_ && _)
+  private val linkInReset = (0 until n)
+    .map(m => !io.moduleConnected(m) || ltStates(m) === LTState.sRESET)
+    .reduce(_ && _)
 
   private def overEnabled(pred: Int => Bool): Seq[Bool] =
     (0 until n).map(m => moduleEnable(m) && pred(m))
@@ -95,6 +107,11 @@ class Mmpl(
 
   private val someModuleEnabled = moduleEnable.reduce(_ || _)
   private val numActive = PopCount(moduleEnable)
+
+  // Set by the sideband cfg path below when the MMPL itself has a packet or a
+  // credit in flight on the Adapter's bus; read by the hosted RDI state machine
+  // above it, so it has to be declared before either.
+  private val cfgSidebandBusy = WireDefault(false.B)
 
   /** Reads a per-Module signal from the numerically least operational Module.
     * Every Module of a multi-module Link runs at the same width and speed (spec
@@ -145,7 +162,17 @@ class Mmpl(
   private val rxLaneCode =
     fromLeastEnabled(io.modules(_).status.remoteTxFunctionalLanes)
 
+  // Spec 4.5.3.3.5: "UCIe-S x8" changes what the "all functional" Lane code
+  // means, so the byte map has to read Table 4-9 the same way the per-Module
+  // Lane controller does. Every Module of the Link negotiates the same
+  // parameters (spec 4.7.1.2), so one Module speaks for all of them.
+  private val negotiatedBy8 = fromLeastEnabled { m =>
+    val negotiated = io.modules(m).status.negotiatedPhyParamSettings
+    negotiated.valid && negotiated.bits.ucieSx8.asBool
+  }
+
   swizzle.io.ctrl.numActive := numActive
+  swizzle.io.ctrl.by8 := negotiatedBy8
   swizzle.io.ctrl.txLaneCode := txLaneCode
   swizzle.io.ctrl.rxLaneCode := rxLaneCode
   swizzle.io.ctrl.txRank := txRank
@@ -198,13 +225,32 @@ class Mmpl(
   // ==========================================================================
   // Receive
   // ==========================================================================
-  // Modules can deliver their slice a cycle or two apart, so hold each one until
-  // every enabled Module has a slice for this beat.
+  // Modules can deliver their slice several cycles apart, so hold each one until
+  // every enabled Module has a slice for this beat. Spec 4.7.1.2 warns that
+  // Modules of a Link can be staggered, and pl_valid has no backpressure
+  // (spec 10.1.4), so the depth here is the whole skew budget.
+  private val clearBeatState = WireDefault(false.B)
+
   private val rxSlices = Seq.tabulate(n) { m =>
-    val q = Module(new Queue(UInt(moduleBits.W), 2, pipe = true, flow = true))
+    val q = Module(
+      new Queue(
+        UInt(moduleBits.W),
+        params.rxAlignDepth,
+        pipe = true,
+        flow = true,
+        hasFlush = true
+      )
+    )
     q.suggestName(s"rxSliceQueue_$m")
     q.io.enq.valid := io.modules(m).rdi.plValid && moduleEnable(m)
     q.io.enq.bits := io.modules(m).rdi.plData
+    /* Modules can deliver unequal numbers of beats -- one suppresses pl_valid
+       after a framing error, they leave ACTIVE on different cycles, or one is
+       disabled mid-stream -- and anything left behind would other-wise sit in
+       the queue and re-emerge as a slice from k beats ago, silently offsetting
+       that Module's contribution to every later word. Discard the partial word
+       instead, on the same edge the Module set changes. */
+    q.io.flush.foreach(_ := clearBeatState)
     q
   }
 
@@ -221,19 +267,6 @@ class Mmpl(
   }
   swizzle.io.ctrl.rxBeat := rxBeat
 
-  // A resolution can change the Module count, and with it how many beats an
-  // aggregate word takes. Driven where moduleEnable is written, so a partial
-  // word is dropped on the same edge the count changes and cannot be finished
-  // to a shape it was not built for. Placed after the beat updates above so it
-  // wins over them.
-  private val clearBeatState = WireDefault(false.B)
-  when(clearBeatState) {
-    txBeat := 0.U
-    txHold := false.B
-    rxBeat := 0.U
-    rxAccum := 0.U
-  }
-
   // Beats occupy disjoint aggregate bytes, so accumulating is an OR.
   private val rxGathered =
     swizzle.io.rx.plData | Mux(rxBeat === 0.U, 0.U, rxAccum)
@@ -246,6 +279,19 @@ class Mmpl(
       rxBeat := rxBeat + 1.U
       rxAccum := rxGathered
     }
+  }
+
+  /* A resolution can change the Module count, and with it how many beats an
+     aggregate word takes, so a word part-way through cannot be finished to a
+     shape it was not built for. Driven where moduleEnable is written, and
+     placed after every beat update so last-connect semantics really do let it
+     win -- an earlier revision sat above `when(rxFire)` and silently lost the
+     receive half of the race. */
+  when(clearBeatState) {
+    txBeat := 0.U
+    txHold := false.B
+    rxBeat := 0.U
+    rxAccum := 0.U
   }
 
   // ==========================================================================
@@ -280,7 +326,8 @@ class Mmpl(
         someModuleEnabled && allEnabled(m => hosts(m).doRdiBringup)
       ctrl.io.trainingTimeout := anyEnabled(m => hosts(m).trainingTimeout)
       ctrl.io.validFramingError := anyEnabled(m => hosts(m).validFramingError)
-      ctrl.io.cfgSidebandActive := anyEnabled(m => hosts(m).cfgSidebandActive)
+      ctrl.io.cfgSidebandActive :=
+        anyEnabled(m => hosts(m).cfgSidebandActive) || cfgSidebandBusy
       ctrl.io.plPhyInRecenter := anyEnabled(m => hosts(m).plPhyInRecenter)
       ctrl.io.clocksUngatedAndStable :=
         someModuleEnabled && allEnabled(m => hosts(m).clocksUngatedAndStable)
@@ -332,20 +379,29 @@ class Mmpl(
       ctrl.io.sbLaneIo.tx.ready :=
         Mux1H(rdiSbSelect, (0 until n).map(hosts(_).sbLaneIo.tx.ready))
 
-      // "A packet sent on a given Module ID could be received on a different
-      // Module ID on the sideband Receiver", so take the response from whichever
-      // Module it landed on. Only one Module carries these at a time, so a
-      // priority pick is enough and the grant returns ready to that Module only.
-      val rdiRxGrant = PriorityEncoderOH(
+      /* "A packet sent on a given Module ID could be received on a different
+         Module ID on the sideband Receiver", so take the response from
+         whichever Module it landed on.
+
+         The hosted machine can only look at one Module per cycle, and
+         `sbLaneIo.rx.ready` is a claim decode rather than flow control: a
+         LogicalPhy retires anything nobody claimed in the cycle it was offered.
+         So the Modules that lose arbitration must be told to hold their packet
+         rather than left to read a low ready as a rejection -- otherwise a
+         {LinkMgmt.RDI.Req.*} arriving on one Module while a response arrives on
+         another is destroyed, and RDI bring-up waits forever for it. The
+         granted Module still sees the machine's real decode, so a packet the
+         machine does not recognise is still retired as unhandled. */
+      val rdiRxOffered =
         (0 until n).map(m => moduleEnable(m) && hosts(m).sbLaneIo.rx.valid)
-      )
-      ctrl.io.sbLaneIo.rx.valid :=
-        anyEnabled(m => hosts(m).sbLaneIo.rx.valid)
+      val rdiRxGrant = PriorityEncoderOH(rdiRxOffered)
+      ctrl.io.sbLaneIo.rx.valid := rdiRxOffered.reduce(_ || _)
       ctrl.io.sbLaneIo.rx.bits :=
         Mux1H(rdiRxGrant, (0 until n).map(hosts(_).sbLaneIo.rx.bits))
       for (m <- 0 until n) {
         hosts(m).sbLaneIo.rx.ready :=
           ctrl.io.sbLaneIo.rx.ready && rdiRxGrant(m)
+        hosts(m).rxHold := rdiRxOffered(m) && !rdiRxGrant(m)
       }
 
       aggState := ctrl.io.rdi.plStateSts
@@ -409,8 +465,14 @@ class Mmpl(
     mod.lpStallAck := io.rdi.lpStallAck
     mod.lpClkAck := io.rdi.lpClkAck
     mod.lpWakeReq := io.rdi.lpWakeReq
-    mod.lpIrdy := txFeeding && moduleEnable(m)
-    mod.lpValid := txFeeding && moduleEnable(m)
+    /* Every Module must take its slice of the beat on the same cycle. A Module
+       latches whenever its own pl_trdy meets lp_valid and lp_irdy
+       (spec Table 10-1), so offering the beat to a Module that happens to be
+       ready while another is not would have it transmit that slice now and
+       again when the aggregate finally fires -- leaving the Modules' byte
+       streams permanently one beat apart. Gate on the joint fire. */
+    mod.lpIrdy := txFire && moduleEnable(m)
+    mod.lpValid := txFire && moduleEnable(m)
     mod.lpData := swizzle.io.tx.moduleData(m)
   }
 
@@ -430,14 +492,60 @@ class Mmpl(
       math.max(1, sbParams.sbNodeMsgWidth / rdiParams.ncWidth)
     val chunkCtrW = log2Ceil(chunksPerPacket + 1)
 
-    // Transmit on the numerically least Module whose LTSM has moved past
-    // SBINIT, so the remote side has a trained sideband to receive it on.
+    /* Transmit on the numerically least Module whose LTSM has moved past
+       SBINIT, so the remote side has a trained sideband to receive it on.
+
+       That choice moves as Modules train, and spec 7.1.4 requires the phases of
+       one packet to go out on consecutive cycles -- on one Module. lp_cfg has
+       no ready line, so the Adapter cannot be held off either. Stage whole
+       packets here instead: chunks are always accepted, and a packet is only
+       started once it is fully resident and a Module has been picked, after
+       which the pick is registered for the length of the packet. That also
+       covers the window where no Module is eligible at all, which used to drop
+       the Adapter's chunks on the floor along with the credit it spent. */
     val cfgTxEligible = (0 until n).map { m =>
       moduleEnable(m) && (ltStates(m) =/= LTState.sRESET) &&
       (ltStates(m) =/= LTState.sSBINIT)
     }
-    val cfgTxSelect = PriorityEncoderOH(cfgTxEligible)
     val cfgTxAny = cfgTxEligible.reduce(_ || _)
+
+    val txCfg = Module(
+      new Queue(UInt(rdiParams.ncWidth.W), params.cfgTxDepth * chunksPerPacket)
+    )
+    txCfg.suggestName("txCfgQueue")
+    txCfg.io.enq.valid := io.rdi.lpCfgVld
+    txCfg.io.enq.bits := io.rdi.lpCfg
+
+    val txCfgEnqChunks = RegInit(0.U(chunkCtrW.W))
+    val txCfgPackets = RegInit(0.U(log2Ceil(params.cfgTxDepth + 1).W))
+    val txCfgEnqPacketDone =
+      txCfg.io.enq.fire && (txCfgEnqChunks === (chunksPerPacket - 1).U)
+    when(txCfg.io.enq.fire) {
+      txCfgEnqChunks := Mux(txCfgEnqPacketDone, 0.U, txCfgEnqChunks + 1.U)
+    }
+
+    val cfgTxGrantValid = RegInit(false.B)
+    val cfgTxGrant = RegInit(VecInit(Seq.fill(n)(false.B)))
+    val cfgTxChunks = RegInit(0.U(chunkCtrW.W))
+
+    val cfgTxSending = cfgTxGrantValid && txCfg.io.deq.valid
+    val cfgTxPacketDone =
+      cfgTxSending && (cfgTxChunks === (chunksPerPacket - 1).U)
+
+    when(!cfgTxGrantValid) {
+      when(txCfgPackets =/= 0.U && cfgTxAny) {
+        cfgTxGrantValid := true.B
+        cfgTxGrant := VecInit(PriorityEncoderOH(cfgTxEligible))
+        cfgTxChunks := 0.U
+      }
+    }.elsewhen(cfgTxSending) {
+      cfgTxChunks := Mux(cfgTxPacketDone, 0.U, cfgTxChunks + 1.U)
+      when(cfgTxPacketDone) { cfgTxGrantValid := false.B }
+    }
+
+    txCfgPackets := txCfgPackets + txCfgEnqPacketDone.asUInt -
+      cfgTxPacketDone.asUInt
+    txCfg.io.deq.ready := cfgTxSending
 
     // Receive: a packet sent on one Module ID can arrive on a different one, so
     // hold every Module's chunks and forward one whole packet at a time.
@@ -479,8 +587,8 @@ class Mmpl(
 
       rxCfg(m).io.deq.ready := cfgForwarding && (cfgGrant === m.U)
 
-      io.modules(m).rdi.lpCfg := Mux(cfgTxSelect(m), io.rdi.lpCfg, 0.U)
-      io.modules(m).rdi.lpCfgVld := cfgTxSelect(m) && io.rdi.lpCfgVld
+      io.modules(m).rdi.lpCfg := Mux(cfgTxGrant(m), txCfg.io.deq.bits, 0.U)
+      io.modules(m).rdi.lpCfgVld := cfgTxGrant(m) && cfgTxSending
     }
 
     val cfgHasPacket = (0 until n).map(m => rxCfgPackets(m) =/= 0.U)
@@ -498,11 +606,14 @@ class Mmpl(
     io.rdi.plCfg := VecInit(rxCfg.map(_.io.deq.bits))(cfgGrant)
     io.rdi.plCfgVld := cfgForwarding
 
-    // Credits the PHY owes upward come from whichever Module received the
-    // packet, and only the transmitting Module is owed credits back. Track the
-    // order packets were forwarded in so the Adapter's returns land on the right
-    // Module.
-    val cfgCrdOrder = Module(new Queue(UInt(log2Ceil(n).W), 2 * n))
+    /* Credits the PHY owes upward come from whichever Module received the
+       packet, and only the transmitting Module is owed credits back. Track the
+       order packets were forwarded in so the Adapter's returns land on the
+       right Module. The depth is the credit bound, not the Module count: the
+       Adapter advertises maxCrd credits for the one RDI, so that many packets
+       can be outstanding and uncredited at once. */
+    val cfgCrdOrder =
+      Module(new Queue(UInt(log2Ceil(n).W), sbParams.maxCrd))
     cfgCrdOrder.suggestName("cfgCreditOrderQueue")
     cfgCrdOrder.io.enq.valid := cfgPacketDone
     cfgCrdOrder.io.enq.bits := cfgGrant
@@ -512,13 +623,39 @@ class Mmpl(
       io.modules(m).rdi.lpCfgCrd := io.rdi.lpCfgCrd &&
         cfgCrdOrder.io.deq.valid && (cfgCrdOrder.io.deq.bits === m.U)
     }
-    io.rdi.plCfgCrd := anyEnabled(io.modules(_).rdi.plCfgCrd)
+    /* Table 10-1: a 1 on pl_cfg_crd is exactly one credit return, so two
+       Modules returning one on the same cycle cannot be OR'd into one wire
+       without losing the second for good. Queue the surplus and emit one per
+       cycle. Disabled Modules are counted too -- a Module dropped from the Link
+       may still be holding a credit the Adapter is owed. */
+    val cfgCrdPendingW = log2Ceil(n * sbParams.maxCrd + 1)
+    val cfgCrdPending = RegInit(0.U(cfgCrdPendingW.W))
+    val cfgCrdArriving =
+      PopCount((0 until n).map(io.modules(_).rdi.plCfgCrd))
+    val cfgCrdEmit = (cfgCrdPending +& cfgCrdArriving) =/= 0.U
+    cfgCrdPending := cfgCrdPending +& cfgCrdArriving - cfgCrdEmit.asUInt
+    io.rdi.plCfgCrd := cfgCrdEmit
+
+    /* Spec 10.1.3.2 rule 9: the Physical Layer must hold pl_clk_req across
+       pl_cfg transitions, and Table 10-1 puts credit returns under the same
+       rule. A Module's own bus activity no longer covers that, because the
+       staging queues here decouple it from the aggregate bus, so the MMPL adds
+       its own in-flight state to the request. */
+    cfgSidebandBusy :=
+      cfgGrantValid || cfgTxGrantValid || (cfgCrdPending =/= 0.U) ||
+        (txCfgPackets =/= 0.U) ||
+        (0 until n).map(m => rxCfgPackets(m) =/= 0.U).reduce(_ || _)
 
     block(Verification) {
       block(Verification.Assert) {
         assert(
-          !cfgTxAny || PopCount(cfgTxSelect) === 1.U,
+          !cfgTxGrantValid || PopCount(cfgTxGrant) === 1.U,
           "FATAL: MMPL selected more than one Module for the cfg transmit path"
+        )
+        // Spec 7.1.4: the phases of one packet go out on consecutive cycles.
+        assert(
+          !cfgTxGrantValid || cfgTxSending || cfgTxChunks === 0.U,
+          "FATAL: MMPL broke a sideband cfg packet across non-consecutive cycles"
         )
         (0 until n).foreach { m =>
           assert(
@@ -527,12 +664,18 @@ class Mmpl(
           )
         }
         assert(
+          txCfg.io.enq.ready || !txCfg.io.enq.valid,
+          "FATAL: MMPL dropped a sideband cfg chunk from the Adapter"
+        )
+        assert(
           cfgCrdOrder.io.enq.ready || !cfgCrdOrder.io.enq.valid,
           "FATAL: MMPL lost track of which Module owns a sideband cfg credit"
         )
       }
       block(Verification.Cover) {
         cover(cfgGrantValid && cfgGrant =/= 0.U)
+        cover(cfgCrdArriving > 1.U)
+        cover(txCfgPackets =/= 0.U && !cfgTxAny)
       }
     }
   }
@@ -546,6 +689,28 @@ class Mmpl(
     resolver.io.enable(m) := moduleEnable(m)
   }
   resolver.io.currentSpeed := fromLeastEnabled(io.modules(_).status.freqSel)
+
+  /* Spec 4.7.1.2.1: a Module whose "width is already lower from the rest of the
+     operational modules" counts as requesting a width degrade even though it
+     exchanged {MBTRAIN.LINKSPEED done req}, because a multi-module Link needs
+     one common width. The test is relative, so it belongs here rather than in a
+     Module: measuring against full width instead would mean every Module of an
+     already-degraded Link reports a width degrade for ever, and the Link would
+     be sent back to MBTRAIN.REPAIR on every pass rather than proceeding to
+     Step 6. */
+  private val moduleActiveLanes = (0 until n).map { m =>
+    MmplByteMap.activeLanes(
+      io.modules(m).status.localTxFunctionalLanes,
+      negotiatedBy8
+    )
+  }
+  private val widestActiveLanes = (0 until n)
+    .map(m => Mux(moduleEnable(m), moduleActiveLanes(m), 0.U))
+    .reduce((a, b) => Mux(a > b, a, b))
+  for (m <- 0 until n) {
+    resolver.io.narrowerThanPeers(m) :=
+      moduleEnable(m) && (moduleActiveLanes(m) < widestActiveLanes)
+  }
 
   // Latch the resolution before applying it. Dropping a Module changes the
   // resolver's own inputs, so directing and applying have to be separate steps.
@@ -573,7 +738,7 @@ class Mmpl(
       // Hold the directive until every Module has acted on it and left
       // MBTRAIN.LINKSPEED, then shrink the operational set.
       when(!reportsPending) {
-        moduleEnable := directedEnable
+        moduleEnableReg := directedEnable
         clearBeatState := true.B
         resolveState := MmplResolveState.idle
       }
@@ -581,7 +746,7 @@ class Mmpl(
   }
 
   when(linkInReset && resolveState === MmplResolveState.idle) {
-    moduleEnable.foreach(_ := true.B)
+    moduleEnableReg.foreach(_ := true.B)
     clearBeatState := true.B
   }
 
@@ -597,13 +762,27 @@ class Mmpl(
     commonRetrain := RetrainEncoding.REPAIR
   }
 
+  /* The aggregate above tracks live per-Module state -- busy bits and spare
+     exhaustion -- but a Module puts its encoding on the wire in
+     {PHYRETRAIN.retrain start req} and then resolves the remote's reply against
+     it. Modules enter PHYRETRAIN staggered, so letting the value keep moving
+     lets one Module transmit one encoding and resolve with another, and the two
+     die exit PHYRETRAIN to different states. Sample it once, as the first
+     Module enters, and hold it until the last one leaves. */
+  private val anyInPhyRetrain =
+    anyEnabled(m => ltStates(m) === LTState.sPHYRETRAIN)
+  private val commonRetrainHeld = RegInit(RetrainEncoding.TXSELFCAL)
+  when(!anyInPhyRetrain) {
+    commonRetrainHeld := commonRetrain
+  }
+
   for (m <- 0 until n) {
     val ctrl = io.modules(m).ctrl
     ctrl.multiModule := params.isMultiModule.B
     ctrl.resolution.valid := resolveState === MmplResolveState.directing
     ctrl.resolution.bits := directed(m)
     ctrl.commonRetrainEncoding.valid := params.isMultiModule.B
-    ctrl.commonRetrainEncoding.bits := commonRetrain
+    ctrl.commonRetrainEncoding.bits := commonRetrainHeld
   }
 
   io.status.moduleEnable := moduleEnable

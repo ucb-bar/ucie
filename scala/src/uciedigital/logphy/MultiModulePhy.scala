@@ -31,6 +31,15 @@ class MultiModulePhyStatusIO(numModules: Int) extends Bundle {
   val resolutionApplied = Output(Bool())
 }
 
+class MultiModulePhyCtrlIO(numModules: Int) extends Bundle {
+  /* Which Modules are wired to a remote Module Partner. Chapter 5 permits a
+     Link whose two die have different Module counts (Table 5-28), and the local
+     Modules that Table marks NC never train. Tie the corresponding bit low so
+     the MMPL leaves that Module out of every aggregate; leave all bits high for
+     a Link where every Module is connected. */
+  val moduleConnected = Input(Vec(numModules, Bool()))
+}
+
 class MultiModulePhy(
     params: MmplParams = MmplParams(),
     sbParams: SidebandParams = new SidebandParams(),
@@ -55,15 +64,31 @@ class MultiModulePhy(
     val ctrl = Vec(n, new LogicalPhyCtrlIO(retryW, afeParams))
     val status = Vec(n, new LogicalPhyStatusIO())
     val analog = Vec(n, new LogicalPhyAnalogIO(afeParams, sbParams))
+    val mmplCtrl = new MultiModulePhyCtrlIO(n)
     val mmplStatus = new MultiModulePhyStatusIO(n)
   })
+
+  /* Spec 7.1.3.1: "Every Transmitter/Receiver pair has an independent credit
+     loop", and a multi-module Link presents one RDI, so the Adapter advertises
+     one pool of maxCrd credits for all the Modules together. Each Module runs
+     its own sideband node, so the pool has to be split between them -- handing
+     every Module the whole pool would let the Link put numModules x maxCrd
+     packets in flight against an Adapter that provisioned maxCrd. */
+  require(
+    sbParams.maxCrd % n == 0 && sbParams.maxCrd / n >= 1,
+    s"MultiModulePhy splits the RDI sideband credit pool across $n Modules, " +
+      s"so maxCrd (${sbParams.maxCrd}) must be a positive multiple of $n"
+  )
+  private val moduleSbParams =
+    if (params.isMultiModule) sbParams.copy(maxCrd = sbParams.maxCrd / n)
+    else sbParams
 
   val mmpl = Module(new Mmpl(params, rdiParams, sbParams))
   val modules = Seq.tabulate(n) { m =>
     val phy = Module(
       new LogicalPhy(
         afeParams = afeParams,
-        sbParams = sbParams,
+        sbParams = moduleSbParams,
         rdiParams = params.moduleRdiParams(rdiParams.ncWidth),
         retryW = retryW,
         desTimeoutCycles = desTimeoutCycles,
@@ -97,6 +122,8 @@ class MultiModulePhy(
 
     io.status(m) := phy.io.status
   }
+
+  mmpl.io.moduleConnected := io.mmplCtrl.moduleConnected
 
   io.mmplStatus.moduleEnable := mmpl.io.status.moduleEnable
   io.mmplStatus.linkResolution := mmpl.io.status.linkResolution

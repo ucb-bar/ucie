@@ -36,12 +36,18 @@ import chisel3.util._
 object MmplByteMap {
 
   /*
-    Functional-Lane code to active Lane count. Mirrors
+    Functional-Lane code to active Lane count (spec Table 4-9). Mirrors
     MainbandLaneController.activeLanesForCode so the MMPL and the per-Module
     Lane controller agree on how many Lanes carry data.
+
+    Spec 4.5.3.3.5: a x16 Standard Package Module that negotiated "UCIe-S x8"
+    operates in x8 mode and reads Table 4-9 by 8, so the "all functional" code
+    means Lanes 0 to 7 rather than Lanes 0 to 15. The narrower codes already
+    name their Lanes explicitly and mean the same thing in both readings; only
+    b011 changes, which is why `by8` only ever halves that one entry.
    */
   val laneCodes: Seq[(String, Int)] = Seq(
-    "b011" -> 16, // Lanes 0 to 15
+    "b011" -> 16, // Lanes 0 to 15 (Lanes 0 to 7 when reading by 8)
     "b001" -> 8, // Lanes 0 to 7
     "b010" -> 8, // Lanes 8 to 15
     "b100" -> 4, // Lanes 0 to 3
@@ -50,20 +56,41 @@ object MmplByteMap {
 
   val defaultActiveLanes: Int = 16
 
+  /** Active Lane count for a code, as read in x16 or in x8 mode. */
+  def laneCount(code: String, by8: Boolean): Int = {
+    val lanes = laneCodes.toMap.getOrElse(code, defaultActiveLanes)
+    if (by8 && code == "b011") lanes / 2 else lanes
+  }
+
   /** Distinct active Lane counts an implementation with `mbLanes` can reach. */
   def activeLaneOptions(mbLanes: Int): Seq[Int] =
     (defaultActiveLanes +: laneCodes.map(_._2)).distinct
       .filter(_ <= mbLanes)
       .sorted
 
-  def activeLanes(code: UInt): UInt =
-    MuxLookup(code, defaultActiveLanes.U)(
-      laneCodes.map { case (c, lanes) => c.U -> lanes.U }
+  def activeLanes(code: UInt, by8: Bool): UInt =
+    MuxLookup(code, Mux(by8, (defaultActiveLanes / 2).U, defaultActiveLanes.U))(
+      laneCodes.map { case (c, _) =>
+        c.U -> Mux(by8, laneCount(c, true).U, laneCount(c, false).U)
+      }
     )
 
-  def activeLanesShift(code: UInt, rank: UInt): UInt =
-    MuxLookup(code, rank << log2Ceil(defaultActiveLanes))(
-      laneCodes.map { case (c, lanes) => c.U -> (rank << log2Ceil(lanes)) }
+  def activeLanesShift(code: UInt, rank: UInt, by8: Bool): UInt =
+    MuxLookup(
+      code,
+      Mux(
+        by8,
+        rank << log2Ceil(defaultActiveLanes / 2),
+        rank << log2Ceil(defaultActiveLanes)
+      )
+    )(
+      laneCodes.map { case (c, _) =>
+        c.U -> Mux(
+          by8,
+          rank << log2Ceil(laneCount(c, true)),
+          rank << log2Ceil(laneCount(c, false))
+        )
+      }
     )
 
   /** Module counts a Link may operate at: one, two or four (spec 1.2.2). */
@@ -112,13 +139,18 @@ class MmplByteSwizzle(params: MmplParams) extends Module {
 
   // Rank, the active Module count and the beat index are all in 0 to n.
   private val rankW = log2Ceil(n + 1)
-  // Largest byte offset a rank can introduce is (n - 1) * mbLanes.
-  private val shiftBytesW = log2Ceil(n * params.afe.mbLanes)
+  // Largest byte offset a legal rank can introduce is (n - 1) * mbLanes. Sized
+  // one bit wider so an out-of-range rank saturates high instead of wrapping
+  // to zero and aliasing onto rank 0's slice.
+  private val shiftBytesW = log2Ceil(n * params.afe.mbLanes + 1)
 
   val io = IO(new Bundle {
     val ctrl = new Bundle {
       val numActive = Input(UInt(rankW.W))
       val enable = Input(Vec(n, Bool()))
+
+      // Spec 4.5.3.3.5: reads Table 4-9 by 8 when "UCIe-S x8" was negotiated.
+      val by8 = Input(Bool())
 
       val txLaneCode = Input(UInt(3.W))
       val txBeat = Input(UInt(rankW.W))
@@ -152,7 +184,7 @@ class MmplByteSwizzle(params: MmplParams) extends Module {
   private val comboSelW = log2Ceil(math.max(2, combos.length))
 
   private def comboSelect(laneCode: UInt, beat: UInt): UInt = {
-    val lanes = activeLanes(laneCode)
+    val lanes = activeLanes(laneCode, io.ctrl.by8)
     val sel = WireDefault(0.U(comboSelW.W))
     combos.zipWithIndex.foreach {
       case ((comboLanes, comboActive, comboBeat), idx) =>
@@ -169,7 +201,7 @@ class MmplByteSwizzle(params: MmplParams) extends Module {
 
   private def shiftBits(laneCode: UInt, rank: UInt): UInt = {
     val shiftBytes = WireDefault(0.U(shiftBytesW.W))
-    shiftBytes := activeLanesShift(laneCode, rank)
+    shiftBytes := activeLanesShift(laneCode, rank, io.ctrl.by8)
     Cat(shiftBytes, 0.U(3.W))
   }
 

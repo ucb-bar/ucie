@@ -125,11 +125,13 @@ class MmplTest extends AnyFunSpec with ChiselSim {
     r.bits.recvdSpeedDegrade.poke(false.B)
     r.bits.recvdError.poke(false.B)
     r.bits.recvdPhyRetrain.poke(false.B)
-    r.bits.priorWidthDegrade.poke(false.B)
   }
 
   private def initLink(c: Mmpl, n: Int, remoteIds: Seq[Int]): Unit = {
-    for (m <- 0 until n) initModule(c, m, remoteIds(m))
+    for (m <- 0 until n) {
+      initModule(c, m, remoteIds(m))
+      c.io.moduleConnected(m).poke(true.B)
+    }
     c.io.rdi.lclk.poke(false.B)
     c.io.rdi.lpIrdy.poke(false.B)
     c.io.rdi.lpValid.poke(false.B)
@@ -226,6 +228,43 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         }
       }
     }
+
+    it("Withholds the beat from a ready Module until every Module is ready") {
+      /* A Module latches whenever its own pl_trdy meets lp_valid and lp_irdy
+         (spec Table 10-1). Offering the beat to whichever Modules happen to be
+         ready would have them transmit their slice now and then again when the
+         aggregate finally fires, leaving the Modules' byte streams permanently
+         one beat apart on the wire. */
+      val n = 2
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1))
+        val random = new Random(randomSeed)
+        val word = BigInt(aggRdi(n).nBytes * 8, random)
+        c.io.rdi.lpData.poke(word.U((aggRdi(n).nBytes * 8).W))
+        c.io.rdi.lpValid.poke(true.B)
+        c.io.rdi.lpIrdy.poke(true.B)
+
+        // Module 1's AFE is backed up; Module 0 is ready and must not go.
+        c.io.modules(1).rdi.plTrdy.poke(false.B)
+        c.io.rdi.plTrdy.expect(false.B, "the aggregate must not accept a word")
+        for (m <- 0 until n) {
+          c.io
+            .modules(m)
+            .rdi
+            .lpValid
+            .expect(false.B, s"module $m must not latch the beat alone")
+          c.io.modules(m).rdi.lpIrdy.expect(false.B, s"module $m")
+        }
+
+        // Once both are ready the whole beat goes out together.
+        c.io.modules(1).rdi.plTrdy.poke(true.B)
+        c.io.rdi.plTrdy.expect(true.B)
+        for (m <- 0 until n) {
+          c.io.modules(m).rdi.lpValid.expect(true.B, s"module $m")
+          c.io.modules(m).rdi.lpIrdy.expect(true.B, s"module $m")
+        }
+      }
+    }
   }
 
   // ==========================================================================
@@ -307,6 +346,51 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         c.io.modules(0).rdi.plValid.poke(true.B)
         c.io.modules(0).rdi.plData.poke("hAA".U)
         c.io.rdi.plValid.expect(false.B)
+      }
+    }
+
+    it("Absorbs a run of beats from a Module that is ahead of its siblings") {
+      /* pl_valid has no backpressure (spec 10.1.4) and spec 4.7.1.2 warns that
+         Modules of one Link can be staggered, so a Module streaming ahead has
+         nowhere to go but the alignment queue. */
+      val n = 2
+      val depth = params(n).rxAlignDepth
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1))
+        val random = new Random(randomSeed)
+        val words =
+          Seq.fill(depth)(BigInt(aggRdi(n).nBytes * 8, random))
+
+        // Module 0 delivers every slice back to back; Module 1 says nothing.
+        for (w <- words) {
+          c.io.modules(0).rdi.plValid.poke(true.B)
+          c.io
+            .modules(0)
+            .rdi
+            .plData
+            .poke(
+              expectedSlice(w, n, n, 0, 0).U((params(n).bytesPerModule * 8).W)
+            )
+          c.io.rdi.plValid.expect(false.B, "no word is complete yet")
+          c.clock.step()
+        }
+        c.io.modules(0).rdi.plValid.poke(false.B)
+
+        // Module 1 catches up; the words must come back out in order.
+        for (w <- words) {
+          c.io.modules(1).rdi.plValid.poke(true.B)
+          c.io
+            .modules(1)
+            .rdi
+            .plData
+            .poke(
+              expectedSlice(w, n, n, 1, 0).U((params(n).bytesPerModule * 8).W)
+            )
+          c.io.rdi.plValid.expect(true.B, "the pair should now align")
+          c.io.rdi.plData.expect(w.U((aggRdi(n).nBytes * 8).W))
+          c.clock.step()
+        }
+        c.io.modules(1).rdi.plValid.poke(false.B)
       }
     }
   }
@@ -393,6 +477,127 @@ class MmplTest extends AnyFunSpec with ChiselSim {
       }
     }
 
+    it("Defers rather than rejects a message on a Module that loses the grant") {
+      /* `sbLaneIo.rx.ready` is a claim decode, not flow control: a LogicalPhy
+         retires anything no consumer claimed in the cycle it was offered. With
+         one hosted state machine serving several Modules, a Module that loses
+         arbitration has not been rejected -- it has not been looked at yet, and
+         reading its low ready as a rejection destroys the packet. Spec 4.7.1.1
+         makes this reachable: "A packet sent on a given Module ID could be
+         received on a different Module ID." */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+
+        // Modules 1 and 3 both present a message in the same cycle.
+        for (m <- Seq(1, 3)) {
+          c.io.modules(m).rdiHost.get.sbLaneIo.rx.valid.poke(true.B)
+          c.io.modules(m).rdiHost.get.sbLaneIo.rx.bits.data.poke((0x50 + m).U)
+        }
+
+        val held = (0 until n).filter(m =>
+          c.io.modules(m).rdiHost.get.rxHold.peek().litToBoolean
+        )
+        // Exactly one of the two is being looked at this cycle; the other has
+        // not been rejected, it has not had its turn, and must be told to hold
+        // rather than left to read a low ready as "nobody wants this".
+        assert(
+          held.toSet.subsetOf(Set(1, 3)),
+          s"a Module with nothing pending was held: $held"
+        )
+        assert(
+          held.length == 1,
+          s"expected exactly one of {1, 3} to be deferred, held=$held"
+        )
+
+        // Once the Module under consideration goes quiet, the deferred one
+        // gets its turn instead of having been dropped.
+        val deferred = held.head
+        val underConsideration = Seq(1, 3).filterNot(_ == deferred).head
+        c.io
+          .modules(underConsideration)
+          .rdiHost
+          .get
+          .sbLaneIo
+          .rx
+          .valid
+          .poke(false.B)
+        assert(
+          !c.io.modules(deferred).rdiHost.get.rxHold.peek().litToBoolean,
+          s"module $deferred should now be the one being looked at"
+        )
+      }
+    }
+
+    it("Never collapses two sideband credit returns into one") {
+      /* Table 10-1: a 1 on pl_cfg_crd is exactly one credit return, so two
+         Modules returning one on the same cycle cannot share a wire without
+         the second being lost for good. */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+
+        // All four return a credit on the same cycle, then go quiet.
+        var returned = 0
+        for (m <- 0 until n) c.io.modules(m).rdi.plCfgCrd.poke(true.B)
+        if (c.io.rdi.plCfgCrd.peek().litToBoolean) returned += 1
+        c.clock.step()
+        for (m <- 0 until n) c.io.modules(m).rdi.plCfgCrd.poke(false.B)
+
+        for (_ <- 0 until 16) {
+          if (c.io.rdi.plCfgCrd.peek().litToBoolean) returned += 1
+          c.clock.step()
+        }
+        assert(
+          returned == n,
+          s"$n Modules returned a credit each but the Adapter saw $returned"
+        )
+      }
+    }
+
+    it("Leaves an unconnected Module out of every aggregate") {
+      /* Chapter 5 permits a Link whose two die have different Module counts
+         (Table 5-28), where some local Modules are NC and never train. Left in
+         the aggregate, such a Module blocks bring-up for ever and its eventual
+         training timeout drags the whole RDI into LinkError. */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+        // M1 and M3 are not wired to anything, as in spec Figure 4-46.
+        c.io.moduleConnected(1).poke(false.B)
+        c.io.moduleConnected(3).poke(false.B)
+        for (m <- Seq(1, 3)) {
+          c.io.modules(m).status.ltState.poke(LTState.sRESET)
+          c.io.modules(m).rdiHost.get.ltsmState.poke(LTState.sRESET)
+          c.io.modules(m).rdiHost.get.trainingTimeout.poke(true.B)
+          c.io.modules(m).rdi.plTrainError.poke(true.B)
+        }
+        c.clock.step()
+
+        for (m <- Seq(1, 3)) {
+          assert(
+            !c.io.status.moduleEnable(m).peek().litToBoolean,
+            s"module $m is not connected and must not be operational"
+          )
+        }
+        for (m <- Seq(0, 2)) {
+          assert(
+            c.io.status.moduleEnable(m).peek().litToBoolean,
+            s"module $m is connected and must stay operational"
+          )
+        }
+        c.io.rdi.plTrainError.expect(
+          false.B,
+          "an unconnected Module must not take the Link into LinkError"
+        )
+        // Two active Modules, x16 each, so the aggregate is x32.
+        c.io.rdi.plLnkCfg.expect(
+          LinkWidth.x32,
+          "the width must count only the connected Modules"
+        )
+      }
+    }
+
     it("Sends RDI link management on the least Module past SBINIT") {
       // Spec 4.7.1.1: {LinkMgmt.RDI.*} is in Table 7-8, so it uses a single
       // sideband -- the numerically least Module ID whose LTSM is not in RESET
@@ -476,25 +681,148 @@ class MmplTest extends AnyFunSpec with ChiselSim {
   // Sideband cfg routing, spec 4.7.1.1
   // ==========================================================================
   describe("MMPL sideband cfg routing") {
-    it("Transmits on the numerically least Module past SBINIT") {
+    /** Presents one whole cfg packet on the aggregate lp_cfg. */
+    def sendCfgPacket(c: Mmpl, chunks: Seq[BigInt]): Unit = {
+      for (chunk <- chunks) {
+        c.io.rdi.lpCfg.poke(chunk.U(32.W))
+        c.io.rdi.lpCfgVld.poke(true.B)
+        c.clock.step()
+      }
+      c.io.rdi.lpCfgVld.poke(false.B)
+      c.io.rdi.lpCfg.poke(0.U)
+    }
+
+    /** Collects what each Module was handed, cycle by cycle, for `cycles`. */
+    def collectCfgTx(
+        c: Mmpl,
+        n: Int,
+        cycles: Int,
+        onStep: Int => Unit = _ => ()
+    ): Seq[Seq[(Int, BigInt)]] = {
+      val perCycle = scala.collection.mutable.ArrayBuffer[Seq[(Int, BigInt)]]()
+      for (i <- 0 until cycles) {
+        perCycle += (0 until n)
+          .filter(c.io.modules(_).rdi.lpCfgVld.peek().litToBoolean)
+          .map(m => (m, c.io.modules(m).rdi.lpCfg.peek().litValue))
+        onStep(i)
+        c.clock.step()
+      }
+      perCycle.toSeq
+    }
+
+    it("Transmits a whole packet on the numerically least Module past SBINIT") {
       val n = 4
+      val chunksPerPacket = new SidebandParams().sbNodeMsgWidth / 32
       simulate(dut(n)) { c =>
         initLink(c, n, Seq(0, 1, 2, 3))
-        c.io.rdi.lpCfg.poke("hDEADBEEF".U)
-        c.io.rdi.lpCfgVld.poke(true.B)
+        val packet = Seq.tabulate(chunksPerPacket)(i => BigInt(0xd0 + i))
+        sendCfgPacket(c, packet)
 
-        // Everything trained: Module 0 carries it.
-        for (m <- 0 until n) {
-          c.io.modules(m).rdi.lpCfgVld.expect((m == 0).B, s"module $m")
-        }
+        val seen = collectCfgTx(c, n, 16).filter(_.nonEmpty)
+        assert(
+          seen.forall(_.length == 1),
+          s"more than one Module carried a chunk at once: $seen"
+        )
+        assert(
+          seen.map(_.head._1).distinct == Seq(0),
+          s"expected the whole packet on Module 0, got ${seen.map(_.head._1)}"
+        )
+        assert(
+          seen.map(_.head._2) == packet,
+          s"packet came out as ${seen.map(_.head._2)}, expected $packet"
+        )
+      }
+    }
 
+    it("Picks the next eligible Module when Module 0 is not past SBINIT") {
+      val n = 4
+      val chunksPerPacket = new SidebandParams().sbNodeMsgWidth / 32
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
         // Module 0 back in RESET and Module 1 still in SBINIT, so Module 2 wins.
         c.io.modules(0).status.ltState.poke(LTState.sRESET)
         c.io.modules(1).status.ltState.poke(LTState.sSBINIT)
+
+        val packet = Seq.tabulate(chunksPerPacket)(i => BigInt(0xa0 + i))
+        sendCfgPacket(c, packet)
+
+        val seen = collectCfgTx(c, n, 16).filter(_.nonEmpty)
+        assert(
+          seen.map(_.head._1).distinct == Seq(2),
+          s"expected Module 2 to carry it, got ${seen.map(_.head._1)}"
+        )
+        assert(seen.map(_.head._2) == packet, s"got ${seen.map(_.head._2)}")
+      }
+    }
+
+    it("Keeps a packet on one Module even if the eligible set moves") {
+      /* Spec 7.1.4: the phases of a packet go out on consecutive cycles, so the
+         transmitting Module cannot change part way through. The eligible set is
+         a live function of the LTSM states, and Modules train staggered, so
+         without a registered grant a Module coming out of SBINIT mid-packet
+         would take over and both halves would be framed as garbage. */
+      val n = 4
+      val chunksPerPacket = new SidebandParams().sbNodeMsgWidth / 32
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+        // Only Module 2 is eligible when the packet starts.
+        c.io.modules(0).status.ltState.poke(LTState.sSBINIT)
+        c.io.modules(1).status.ltState.poke(LTState.sSBINIT)
+
+        val packet = Seq.tabulate(chunksPerPacket)(i => BigInt(0xb0 + i))
+        sendCfgPacket(c, packet)
+
+        // Module 0 finishes SBINIT one cycle into the transfer, which would
+        // otherwise make it the numerically least eligible Module.
+        val seen = collectCfgTx(
+          c,
+          n,
+          16,
+          onStep = i =>
+            if (i == 1) c.io.modules(0).status.ltState.poke(LTState.sMBTRAIN)
+        ).filter(_.nonEmpty)
+
+        assert(
+          seen.map(_.head._1).distinct == Seq(2),
+          s"the packet was split across Modules ${seen.map(_.head._1)}"
+        )
+        assert(seen.map(_.head._2) == packet, s"got ${seen.map(_.head._2)}")
+      }
+    }
+
+    it("Stages a packet the Adapter sends before any Module is eligible") {
+      /* lp_cfg has no ready line, so chunks that arrive while every Module is
+         still in RESET or SBINIT cannot be back-pressured -- and dropping them
+         also strands the credit the Adapter already spent. */
+      val n = 2
+      val chunksPerPacket = new SidebandParams().sbNodeMsgWidth / 32
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1))
         for (m <- 0 until n) {
-          c.io.modules(m).rdi.lpCfgVld.expect((m == 2).B, s"module $m")
+          c.io.modules(m).status.ltState.poke(LTState.sSBINIT)
         }
-        c.io.modules(2).rdi.lpCfg.expect("hDEADBEEF".U)
+
+        val packet = Seq.tabulate(chunksPerPacket)(i => BigInt(0xc0 + i))
+        sendCfgPacket(c, packet)
+
+        // Nothing may go out while no Module can carry it.
+        val whileIneligible = collectCfgTx(c, n, 8).filter(_.nonEmpty)
+        assert(
+          whileIneligible.isEmpty,
+          s"chunks went out with no eligible Module: $whileIneligible"
+        )
+
+        // Module 1 trains; the staged packet must come out whole, on Module 1.
+        c.io.modules(1).status.ltState.poke(LTState.sMBTRAIN)
+        val seen = collectCfgTx(c, n, 16).filter(_.nonEmpty)
+        assert(
+          seen.map(_.head._1).distinct == Seq(1),
+          s"expected Module 1 to carry it, got ${seen.map(_.head._1)}"
+        )
+        assert(
+          seen.map(_.head._2) == packet,
+          s"staged packet came out as ${seen.map(_.head._2)}"
+        )
       }
     }
 
@@ -661,36 +989,84 @@ class MmplTest extends AnyFunSpec with ChiselSim {
       // Spec 4.5.3.7: all Modules must retrain the same way, and Table 4-12
       // resolves a conflict in favour of the more drastic action.
       val n = 4
+      def encoding(c: Mmpl, m: Int) =
+        c.io.modules(m).ctrl.commonRetrainEncoding.bits.peek().litValue
+
       simulate(dut(n)) { c =>
         initLink(c, n, Seq(0, 1, 2, 3))
+        c.clock.step()
         for (m <- 0 until n) {
           c.io.modules(m).ctrl.commonRetrainEncoding.valid.expect(true.B)
-          c.io
-            .modules(m)
-            .ctrl
-            .commonRetrainEncoding
-            .bits
-            .expect(RetrainEncoding.TXSELFCAL)
+          assert(
+            encoding(c, m) == RetrainEncoding.TXSELFCAL.litValue,
+            s"module $m did not start at TXSELFCAL"
+          )
         }
 
         c.io.modules(2).status.retrainEncoding.poke(RetrainEncoding.REPAIR)
+        c.clock.step()
         for (m <- 0 until n) {
-          c.io
-            .modules(m)
-            .ctrl
-            .commonRetrainEncoding
-            .bits
-            .expect(RetrainEncoding.REPAIR, s"module $m")
+          assert(
+            encoding(c, m) == RetrainEncoding.REPAIR.litValue,
+            s"module $m did not take the Link's REPAIR encoding"
+          )
         }
 
         c.io.modules(0).status.retrainEncoding.poke(RetrainEncoding.SPEEDIDLE)
+        c.clock.step()
         for (m <- 0 until n) {
-          c.io
-            .modules(m)
-            .ctrl
-            .commonRetrainEncoding
-            .bits
-            .expect(RetrainEncoding.SPEEDIDLE, s"module $m")
+          assert(
+            encoding(c, m) == RetrainEncoding.SPEEDIDLE.litValue,
+            s"module $m did not take the Link's SPEEDIDLE encoding"
+          )
+        }
+      }
+    }
+
+    it("Holds the retrain encoding steady once a Module enters PHYRETRAIN") {
+      /* Spec 4.5.3.7 requires the Retrain encoding, and therefore the exit
+         resolution, to be the same on every Module. A Module puts its encoding
+         on the wire in {PHYRETRAIN.retrain start req} and then resolves the
+         remote's reply against it, and Modules enter PHYRETRAIN staggered -- so
+         a value that kept tracking live per-Module state would let one Module
+         transmit one encoding and resolve with another, and the two die would
+         leave PHYRETRAIN for different states. */
+      val n = 4
+      def encoding(c: Mmpl, m: Int) =
+        c.io.modules(m).ctrl.commonRetrainEncoding.bits.peek().litValue
+
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+        c.io.modules(1).status.retrainEncoding.poke(RetrainEncoding.REPAIR)
+        c.clock.step()
+        assert(
+          encoding(c, 0) == RetrainEncoding.REPAIR.litValue,
+          "the Link should have settled on REPAIR before anyone retrains"
+        )
+
+        // Module 0 gets there first and transmits REPAIR.
+        c.io.modules(0).status.ltState.poke(LTState.sPHYRETRAIN)
+        c.clock.step()
+
+        // Module 3 only now discovers an unrepairable fault. The aggregate must
+        // not move under Module 0, which has already committed to REPAIR.
+        c.io.modules(3).status.retrainEncoding.poke(RetrainEncoding.SPEEDIDLE)
+        c.clock.step()
+        for (m <- 0 until n) {
+          assert(
+            encoding(c, m) == RetrainEncoding.REPAIR.litValue,
+            s"module $m saw the encoding change during PHYRETRAIN"
+          )
+        }
+
+        // Once the Link is out of PHYRETRAIN the aggregate tracks again.
+        c.io.modules(0).status.ltState.poke(LTState.sMBTRAIN)
+        c.clock.step()
+        for (m <- 0 until n) {
+          assert(
+            encoding(c, m) == RetrainEncoding.SPEEDIDLE.litValue,
+            s"module $m did not pick the new encoding back up"
+          )
         }
       }
     }

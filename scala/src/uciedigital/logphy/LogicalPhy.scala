@@ -243,6 +243,10 @@ class LogicalPhy(
     sidebandRxReadyRdi := ctrl.io.sbLaneIo.rx.ready
   }
 
+  // A hosted state machine above this Module can ask for a packet to stay put
+  // instead of being retired as unclaimed (see LogicalPhyRdiHostIO.rxHold).
+  val sidebandRxHeldAbove = WireDefault(false.B)
+
   io.mmplRdiHost.foreach { host =>
     // Only offer upward what this Module's own LTSM did not claim, so a hosted
     // state machine merging several Modules is never shown a message that
@@ -250,9 +254,11 @@ class LogicalPhy(
     host.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm
     host.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
     sidebandRxReadyRdi := host.sbLaneIo.rx.ready
+    sidebandRxHeldAbove := host.rxHold
   }
 
-  sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm && !sidebandRxReadyRdi
+  sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm &&
+    !sidebandRxReadyRdi && !sidebandRxHeldAbove
 
   val sbParityErrSeen = RegInit(false.B)
   val sbRxPriorityQueuesFullSeen = RegInit(false.B)
@@ -455,11 +461,19 @@ class LogicalPhy(
 
   val canAcceptLpIrdy = rdiStateSts =/= RDIState.reset
 
+  // Spec 4.5.3.3.5: "UCIe-S x8" puts a x16 Module into x8 mode, which changes
+  // what the "all functional" Lane code means for every block that decodes it.
+  val negotiatedBy8 =
+    ltsm.io.negotiatedPhyParamSettings.valid &&
+      ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
+
   mainbandLaneController.io.rdi.tx.lpIrdy := io.rdi.lpIrdy && isActive && canAcceptLpIrdy
   mainbandLaneController.io.rdi.tx.lpValid := io.rdi.lpValid && isActive
   mainbandLaneController.io.rdi.tx.lpData := io.rdi.lpData
   mainbandLaneController.io.ctrl.localTxFunctionalLanes := ltsm.io.localTxFunctionalLanes
   mainbandLaneController.io.ctrl.localRxFunctionalLanes := ltsm.io.remoteTxFunctionalLanes
+  // Spec 4.5.3.3.5: in x8 mode the "all functional" code covers Lanes 0 to 7.
+  mainbandLaneController.io.ctrl.interpretBy8Lane := negotiatedBy8
   mainbandLaneController.io.mbLanes.tx.ready := io.analog.mainband.tx.ready && isActive
 
   val activeTxLaneMask = PatternLaneMap.decodeLaneMap(
@@ -606,10 +620,6 @@ class LogicalPhy(
   // ============================================================================================
   // RDI outputs
   // ============================================================================================
-  val negotiatedBy8 =
-    ltsm.io.negotiatedPhyParamSettings.valid &&
-      ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
-
   val linkWidth = Wire(LinkWidth())
   linkWidth := LinkWidth.x16
   switch(ltsm.io.localTxFunctionalLanes) {

@@ -127,9 +127,11 @@ class PHYParamExchangeIO extends Bundle {
   (spec 4.5.3.4.12 Step 5c). The MMPL resolves across every operational Module
   and directs each of them to the same next state.
 
-  `priorWidthDegrade` covers a Module that degraded earlier, for example in
-  MBINIT.REPAIRMB: spec 4.7.1.2.1 requires the MMPL to treat that as a Module
-  requesting width degrade even though it sent {MBTRAIN.LINKSPEED done req}.
+  A Module that degraded earlier -- for example in MBINIT.REPAIRMB -- also
+  counts as requesting a width degrade (spec 4.7.1.2.1), but that is not
+  reported here. The test is whether the Module is narrower than "the rest of
+  the operational modules", which no single Module can see, so the MMPL derives
+  it from every Module's width and feeds it to the resolver directly.
  */
 class MmplLinkSpeedReport extends Bundle {
   val sentDone = Bool()
@@ -144,18 +146,16 @@ class MmplLinkSpeedReport extends Bundle {
   val recvdError = Bool()
   val recvdPhyRetrain = Bool()
 
-  val priorWidthDegrade = Bool()
-
   /** This Module wants a width degrade, whichever direction reported it. */
-  def widthDegradeRequested: Bool =
-    sentRepair || recvdRepair || priorWidthDegrade
+  def widthDegradeRequested: Bool = sentRepair || recvdRepair
 
   /** This Module wants a speed degrade, whichever direction reported it. */
   def speedDegradeRequested: Bool = sentSpeedDegrade || recvdSpeedDegrade
 
-  /** Neither side found anything wrong with this Module. */
-  def cleanDone: Bool =
-    sentDone && recvdDone && !priorWidthDegrade
+  /** Either side is taking this Module to PHYRETRAIN, which spec 4.5.3.4.12
+    * Step 5 makes a directive for every Module of the Link.
+    */
+  def phyRetrainRequested: Bool = sentPhyRetrain || recvdPhyRetrain
 }
 
 /*
@@ -211,6 +211,14 @@ class LogicalPhyRdiHostIO(sbParams: SidebandParams) extends Bundle {
   // Flipped because the bundle is written from the state machine's point of
   // view: this Module accepts what it transmits and offers what it received.
   val sbLaneIo = Flipped(new SidebandLaneIO(sbParams))
+
+  /* `sbLaneIo.rx.ready` is a claim decode, not flow control: a LogicalPhy
+     discards anything no consumer claims in the cycle it is offered. One hosted
+     state machine serves several Modules, so it can only look at one of them at
+     a time -- and a Module that loses that arbitration has not been rejected,
+     it has not been looked at yet. `rxHold` says so, and keeps the packet at
+     the head of that Module's receive queue until its turn. */
+  val rxHold = Input(Bool())
 }
 
 /*

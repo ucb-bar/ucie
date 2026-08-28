@@ -114,7 +114,7 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
         "PHY",
         "PHY",
         true,
-        msgInfo = Cat(0.U(12.W), io.localRetrainEncoding.bits)
+        msgInfo = Cat(0.U(13.W), io.localRetrainEncoding.bits)
       )
 
       sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
@@ -206,7 +206,7 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
         "PHY",
         "PHY",
         true,
-        msgInfo = Cat(0.U(12.W), io.localRetrainEncoding.bits)
+        msgInfo = Cat(0.U(13.W), io.localRetrainEncoding.bits)
       )
 
       responderRdy := sbMsgExchanger.io.exchDone
