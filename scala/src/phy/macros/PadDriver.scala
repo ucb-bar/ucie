@@ -2,6 +2,7 @@ package edu.berkeley.cs.uciedigital.phy.macros
 
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.BundleLiterals._
 
 /** Impedance control for a [[PadDriver]], which is a separate cell from the
   * driver inside a [[TxLane]] and keeps its own control encoding.
@@ -11,6 +12,25 @@ class PadDriverCtlIO extends Bundle {
   val pd_ctl = UInt(6.W)
   val en = Bool()
   val en_b = Bool()
+}
+
+object PadDriverCtlIO {
+
+  /** Every segment off and the driver disabled. */
+  def off: PadDriverCtlIO = (new PadDriverCtlIO).Lit(
+    _.pu_ctl -> 0.U,
+    _.pd_ctl -> 0.U,
+    _.en -> false.B,
+    _.en_b -> true.B
+  )
+
+  /** Every segment on, which is what bring-up drives. */
+  def full: PadDriverCtlIO = (new PadDriverCtlIO).Lit(
+    _.pu_ctl -> 63.U,
+    _.pd_ctl -> 63.U,
+    _.en -> true.B,
+    _.en_b -> false.B
+  )
 }
 
 class PadDriverIO extends Bundle {

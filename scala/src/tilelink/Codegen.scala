@@ -238,9 +238,7 @@ object Codegen {
 
   // Standalone drivers (sideband, debug clocks), which are a different cell
   // from the driver inside a TX tile.
-  val enableDriverCtl: BigInt = (new PadDriverCtlIO)
-    .Lit(_.pu_ctl -> 63.U, _.pd_ctl -> 63.U, _.en -> true.B, _.en_b -> false.B)
-    .litValue
+  val enableDriverCtl: BigInt = PadDriverCtlIO.full.litValue
 
   // TX tile at full driver strength with the equalizer branch off and no added
   // clock delay, which is enough to get a lane transmitting during bring-up.

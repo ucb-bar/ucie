@@ -36,7 +36,11 @@ import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
-import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{
+  PadDriverCtlIO,
+  SbSerialIO,
+  TxLaneCtlIO
+}
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
@@ -850,14 +854,24 @@ class UcieTL(
     // and otherwise PhyTest's tester drives. Rx goes to all of them; PhyTest
     // holds its own tester in reset when its sideband is not in `manual`.
     val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
+    // Each producer serializes in its own clock domain, so the clock travels
+    // with the half rate bits and is muxed alongside them.
+    val digiSbTxClk = Wire(new SbSerialIO)
+    digiSbTxClk.clk := digiSb.out.clk
+    digiSbTxClk.d0 := digiSb.out.fwClockD0.asBool
+    digiSbTxClk.d1 := digiSb.out.fwClockD1.asBool
+    val digiSbTxData = Wire(new SbSerialIO)
+    digiSbTxData.clk := digiSb.out.clk
+    digiSbTxData.d0 := digiSb.out.d0.asBool
+    digiSbTxData.d1 := digiSb.out.d1.asBool
     phy.io.sb.txClk := Mux(
       selUcie,
-      digiSb.out.fwClock.asBool.asClock,
+      digiSbTxClk,
       Mux(selSbTl, sbTl.io.sb.txClk, test.io.sb.txClk)
     )
     phy.io.sb.txData := Mux(
       selUcie,
-      digiSb.out.bits.asBool,
+      digiSbTxData,
       Mux(selSbTl, sbTl.io.sb.txData, test.io.sb.txData)
     )
     test.io.sb.rxClk := phy.io.sb.rxClk

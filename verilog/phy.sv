@@ -1,5 +1,5 @@
 interface phy_intf;
-    pad_driver_tile_intf sb_txdata(), sb_txclk();
+    sb_driver_tile_intf sb_txdata(), sb_txclk();
     txdata_tile_intf txdata[`LANES]();
     txdata_tile_intf txclkp(), txclkn(), txval(), txtrk();
 
@@ -26,8 +26,8 @@ module phy(
 //     .Dctrl_value(intf.pll_Dctrl_value)
 // );
 
-pad_driver_tile sb_txdata_drv(.intf(intf.sb_txdata));
-pad_driver_tile sb_txclk_drv(.intf(intf.sb_txclk));
+sb_driver_tile sb_txdata_drv(.intf(intf.sb_txdata));
+sb_driver_tile sb_txclk_drv(.intf(intf.sb_txclk));
 wire [`LANES-1:0] txclk_sed;
 
 clocking_distribution_model #(
@@ -151,6 +151,11 @@ module phy_tb;
     assign intf.pll_clk_out = pll_clkp_out;
     assign intf.sb_txdata.vdd = vdd;
     assign intf.sb_txdata.vss = vss;
+    // The sideband drivers do their own 2:1; this testbench does not exercise
+    // the sideband, so the half rate bits are tied off.
+    assign intf.sb_txdata.clk = pll_clkp_out;
+    assign intf.sb_txdata.d0 = 1'b0;
+    assign intf.sb_txdata.d1 = 1'b0;
     assign intf.sb_txdata.pu_ctl = 0;
     assign intf.sb_txdata.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
     assign intf.sb_txdata.en = 1;
@@ -158,6 +163,11 @@ module phy_tb;
 
     assign intf.sb_txclk.vdd = vdd;
     assign intf.sb_txclk.vss = vss;
+    // The sideband drivers do their own 2:1; this testbench does not exercise
+    // the sideband, so the half rate bits are tied off.
+    assign intf.sb_txclk.clk = pll_clkp_out;
+    assign intf.sb_txclk.d0 = 1'b0;
+    assign intf.sb_txclk.d1 = 1'b0;
     assign intf.sb_txclk.pu_ctl = 0;
     assign intf.sb_txclk.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
     assign intf.sb_txclk.en = 1;

@@ -280,6 +280,70 @@ module txdata_tile (
 
 endmodule
 
+// Sideband bump driver: the 2:1 serializer and the pad driver as one cell,
+// matching the `sb_driver` blackbox in `phy/macros/SbDriver.scala`.
+//
+// VDD and VSS are pins on the cell; this shim ties them off so the
+// digital-only flow does not have to route supplies.
+module sb_driver (
+  input clk,
+  input d0,
+  input d1,
+  input [39:0] pu_ctl,
+  input [39:0] pd_ctlb,
+  input en,
+  input en_b,
+  output out
+);
+  wire serdout;
+  tx_ser21 ser (
+      .din({d1, d0}),
+      .clk(clk),
+      .dout(serdout)
+  );
+  pad_driver_cell drv (
+      .din(serdout),
+      .pu_ctl(pu_ctl),
+      .pd_ctlb(pd_ctlb),
+      .en(en),
+      .enb(en_b),
+      .dout(out),
+      .vdd(1'b1),
+      .vss(1'b0)
+  );
+endmodule
+
+interface sb_driver_tile_intf;
+    // Half rate bits and the clock to serialize them on.
+    logic clk, d0, d1;
+    logic [`PAD_DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
+    logic en, enb;
+    wire out;
+    wire vdd, vss;
+endinterface
+
+// The tile behind `sb_driver`: a 2:1 serializer feeding a pad driver.
+module sb_driver_tile (
+    sb_driver_tile_intf intf
+);
+    wire serdout;
+    tx_ser21 ser (
+        .din({intf.d1, intf.d0}),
+        .clk(intf.clk),
+        .dout(serdout)
+    );
+    pad_driver_cell drv (
+        .din(serdout),
+        .pu_ctl(intf.pu_ctl),
+        .pd_ctlb(intf.pd_ctlb),
+        .en(intf.en),
+        .enb(intf.enb),
+        .dout(intf.out),
+        .vdd(intf.vdd),
+        .vss(intf.vss)
+    );
+endmodule
+
 interface pad_driver_tile_intf;
     logic din;
     logic [`PAD_DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;

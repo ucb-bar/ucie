@@ -2,6 +2,7 @@ package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
 import chisel3.util._
+import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, SbDriver}
 
 // ChiselSim for Chisel 7.0+
 import chisel3.simulator.scalatest.ChiselSim
@@ -78,7 +79,10 @@ class SidebandLinkSerdesTest
     var serializedData = false.B
     var bitstring = ""
 
-    val serLatency = 1
+    // The serializer used to feed a 2:1 that added a cycle before the bits
+    // were observable. That now lives in the sideband bump driver, so the half
+    // rate bits are visible the cycle they are produced.
+    val serLatency = 0
     c.clock.step(serLatency)
 
     for (i <- 0 until loopCount) {
@@ -90,18 +94,18 @@ class SidebandLinkSerdesTest
       }
 
       if ((i >= 0 && i < 64) || (i >= 96 && i < 160)) { // data
-        val bit = c.io.out.bits.peek().litValue
+        val bit = c.io.out.d0.peek().litValue
         bitstring += bit.toString
       } else if ((i >= 64 && i < 96) || (i >= 160 && i < 192)) { // wait
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
       }
 
       c.clock.step()
     }
 
-    c.io.out.bits.expect(0.U)
-    c.io.out.fwClock.expect(false.B)
+    c.io.out.d0.expect(0.U)
+    c.io.out.fwClockD0.expect(false.B)
     c.io.in.ready.expect(true.B)
 
     printDebug(s"[TEST] Captured Bitstring:    ${bitstring.reverse}")
@@ -122,8 +126,8 @@ class SidebandLinkSerdesTest
         c.io.ctrl.txMode.poke(SBRxTxMode.RAW)
         c.io.in.valid.poke(false.B)
         c.clock.step(10)
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
 
         for (i <- 0 until numPackets) {
           printDebug(s"====== Sending packet ${i + 1} ======")
@@ -149,8 +153,8 @@ class SidebandLinkSerdesTest
             c.clock.step(waitAmt)
           }
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
         }
       }
     }
@@ -172,8 +176,8 @@ class SidebandLinkSerdesTest
         c.io.ctrl.txMode.poke(SBRxTxMode.PACKET)
         c.io.in.valid.poke(false.B)
         c.clock.step(10)
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
 
         // Opcode will be valid but randomly selected. Remaining bits are random.
         for (i <- 0 until numPackets) {
@@ -215,8 +219,8 @@ class SidebandLinkSerdesTest
             c.clock.step(waitAmt)
           }
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
         }
       }
     }
@@ -238,8 +242,8 @@ class SidebandLinkSerdesTest
         c.io.ctrl.txMode.poke(SBRxTxMode.PACKET)
         c.io.in.valid.poke(false.B)
         c.clock.step(10)
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
 
         // Opcode will be valid but randomly selected. Remaining bits are random.
         for (i <- 0 until numPackets) {
@@ -283,8 +287,8 @@ class SidebandLinkSerdesTest
             c.clock.step(waitAmt)
           }
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
         }
       }
     }
@@ -306,8 +310,8 @@ class SidebandLinkSerdesTest
         c.io.ctrl.txMode.poke(SBRxTxMode.PACKET)
         c.io.in.valid.poke(false.B)
         c.clock.step(10)
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
 
         // Opcode will be valid but randomly selected. Remaining bits are random.
         for (i <- 0 until numPackets) {
@@ -360,8 +364,8 @@ class SidebandLinkSerdesTest
             c.clock.step(waitAmt)
           }
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
         }
       }
     }
@@ -381,8 +385,8 @@ class SidebandLinkSerdesTest
         c.io.ctrl.txMode.poke(SBRxTxMode.PACKET)
         c.io.in.valid.poke(false.B)
         c.clock.step(10)
-        c.io.out.bits.expect(0.U)
-        c.io.out.fwClock.expect(false.B)
+        c.io.out.d0.expect(0.U)
+        c.io.out.fwClockD0.expect(false.B)
 
         // Opcode will be valid but randomly selected. Remaining bits are random.
         for (i <- 0 until numPackets) {
@@ -432,7 +436,7 @@ class SidebandLinkSerdesTest
           )
           var bitstring = ""
           for (i <- 0 until resetWaitAmt) {
-            val bit = c.io.out.bits.peek().litValue
+            val bit = c.io.out.d0.peek().litValue
             bitstring += bit.toString
             c.io.in.ready.expect(false.B)
             c.clock.step()
@@ -446,16 +450,16 @@ class SidebandLinkSerdesTest
           c.reset.poke(false.B)
 
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
 
           val waitAmt = rand.nextInt(waitCyclesCtrl)
           if (waitAmt != 0) {
             c.clock.step(waitAmt)
           }
           c.io.in.ready.expect(true.B)
-          c.io.out.bits.expect(0.U)
-          c.io.out.fwClock.expect(false.B)
+          c.io.out.d0.expect(0.U)
+          c.io.out.fwClockD0.expect(false.B)
         }
       }
     }
@@ -1314,11 +1318,25 @@ class SidebandLinkSerdesTest
     des.io.ctrl.rxMode := io.ctrl.rxtxMode
 
     ser.io.in <> io.serializerIO.in.msg
-    io.serializerIO.out.bits := ser.io.out.bits
-    io.serializerIO.out.fwClock := ser.io.out.fwClock
+    // The 2:1 now lives in the sideband bump drivers, so the loopback runs
+    // through a real pair of them and the deserializer sees what it would see
+    // on the bump.
+    val sbData = Module(new SbDriver()(includeDefaultModels = true))
+    sbData.io.in.clk := ser.io.out.clk
+    sbData.io.in.d0 := ser.io.out.d0.asBool
+    sbData.io.in.d1 := ser.io.out.d1.asBool
+    sbData.io.ctl := PadDriverCtlIO.full
+    val sbClk = Module(new SbDriver()(includeDefaultModels = true))
+    sbClk.io.in.clk := ser.io.out.clk
+    sbClk.io.in.d0 := ser.io.out.fwClockD0
+    sbClk.io.in.d1 := ser.io.out.fwClockD1
+    sbClk.io.ctl := PadDriverCtlIO.full
 
-    des.io.in.bits := ser.io.out.bits
-    des.io.in.fwClock := ser.io.out.fwClock
+    io.serializerIO.out.bits := sbData.io.out
+    io.serializerIO.out.fwClock := sbClk.io.out
+
+    des.io.in.bits := sbData.io.out
+    des.io.in.fwClock := sbClk.io.out
 
     des.io.out <> io.deserializerIO.out.msg
     io.ctrl.desTimedout := des.io.ctrl.desTimedout

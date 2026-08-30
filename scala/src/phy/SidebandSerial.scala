@@ -3,7 +3,6 @@ package edu.berkeley.cs.uciedigital.phy
 import chisel3._
 import chisel3.util._
 
-import edu.berkeley.cs.uciedigital.utils.Ser21
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 
 /** Ports of a [[SidebandSerial]] link. */
@@ -92,18 +91,15 @@ class SidebandSerial(packetBits: Int, rxQueueDepth: Int) extends Module {
     }
   }
 
-  // The forwarded clock is a gated copy of the digital clock and data is held
-  // across the whole period, so the falling edge lands mid-bit at the receiver.
-  val txsbd = Module(new Ser21)
-  txsbd.io.clk := clock
-  txsbd.io.d0 := txDataBit
-  txsbd.io.d1 := txDataBit
-  val txsbc = Module(new Ser21)
-  txsbc.io.clk := clock
-  txsbc.io.d0 := txClkEn
-  txsbc.io.d1 := 0.U
-  io.sb.txData := txsbd.io.out.asBool
-  io.sb.txClk := txsbc.io.out.asBool.asClock
+  // The `SbDriver` on each bump does the 2:1. The forwarded clock is a gated
+  // copy of the digital clock and data is held across the whole period, so the
+  // falling edge lands mid-bit at the receiver.
+  io.sb.txData.clk := clock
+  io.sb.txData.d0 := txDataBit
+  io.sb.txData.d1 := txDataBit
+  io.sb.txClk.clk := clock
+  io.sb.txClk.d0 := txClkEn
+  io.sb.txClk.d1 := false.B
 
   // RX
   // ====================

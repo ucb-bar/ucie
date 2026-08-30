@@ -45,9 +45,13 @@ class LogPhySidebandChannel(
         val bits = Input(UInt(sbLinkWidth.W))
         val fwClock = Input(UInt(1.W))
       }
+      // Half rate bits for the sideband bump drivers, which do the 2:1.
       val out = new Bundle {
-        val bits = Output(UInt(sbLinkWidth.W))
-        val fwClock = Output(UInt(1.W))
+        val clk = Output(Clock())
+        val d0 = Output(UInt(sbLinkWidth.W))
+        val d1 = Output(UInt(sbLinkWidth.W))
+        val fwClockD0 = Output(UInt(1.W))
+        val fwClockD1 = Output(UInt(1.W))
       }
       val ctrl = new Bundle {
         val txMode = Input(SBRxTxMode())
@@ -91,8 +95,11 @@ class LogPhySidebandChannel(
   io.layer.status.invalidRouteCurr := switch.io.err.invalidRouteCurr
   io.layer.status.invalidRouteLower := switch.io.err.invalidRouteLower
 
-  io.link.out.bits := linkNode.io.txOut.bits
-  io.link.out.fwClock := linkNode.io.txOut.fwClock
+  io.link.out.clk := linkNode.io.txOut.clk
+  io.link.out.d0 := linkNode.io.txOut.d0
+  io.link.out.d1 := linkNode.io.txOut.d1
+  io.link.out.fwClockD0 := linkNode.io.txOut.fwClockD0
+  io.link.out.fwClockD1 := linkNode.io.txOut.fwClockD1
 
   io.link.ctrl.allPacketsSent := linkNode.io.ctrl.allPacketsSent
 

@@ -198,8 +198,7 @@ xrun \\
           "clock_receiver.v",
           "IO_ESD.v",
           "ucie_esd_routable.v",
-          "ucie_rst_sync.v",
-          "ser21.v"
+          "ucie_rst_sync.v"
         )
         Seq(
           disciplines,

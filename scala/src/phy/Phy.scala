@@ -121,9 +121,12 @@ class RxIO(numLanes: Int = 16) extends Bundle {
   val track = Bits(Phy.SerdesRatio.W)
 }
 
+// The sideband bumps as the PHY sees them. The TX side is pre-serialization:
+// the `SbDriver` on each bump does the 2:1, so the digital side hands over the
+// two half rate bits and the clock to serialize them on.
 class SbIO extends Bundle {
-  val txClk = Input(Clock())
-  val txData = Input(Bool())
+  val txClk = Input(new SbSerialIO)
+  val txData = Input(new SbSerialIO)
   val rxClk = Output(Clock())
   val rxData = Output(Bool())
 }
@@ -297,21 +300,19 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // TODO decide on and connect debug signals
   io.debug := DontCare
 
-  // Set up sideband
-  val sbTxClk = Module(new PadDriver)
-  sbTxClk.io.din := io.sb.txClk.asBool
-  io.top.sbTxClk := sbTxClk.io.dout.asClock
-  sbTxClk.io.ctl.pu_ctl := 63.U
-  sbTxClk.io.ctl.pd_ctl := 63.U
-  sbTxClk.io.ctl.en := true.B
-  sbTxClk.io.ctl.en_b := false.B
-  val sbTxData = Module(new PadDriver)
-  sbTxData.io.din := io.sb.txData
-  io.top.sbTxData := sbTxData.io.dout
-  sbTxData.io.ctl.pu_ctl := 63.U
-  sbTxData.io.ctl.pd_ctl := 63.U
-  sbTxData.io.ctl.en := true.B
-  sbTxData.io.ctl.en_b := false.B
+  // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
+  // and the pad driver as one cell.
+  //
+  // TODO: drive these from `commonDriverctl` instead of hardcoding full
+  // strength, so the sideband pads can be calibrated.
+  val sbTxClk = Module(new SbDriver)
+  sbTxClk.io.in := io.sb.txClk
+  io.top.sbTxClk := sbTxClk.io.out.asClock
+  sbTxClk.io.ctl := PadDriverCtlIO.full
+  val sbTxData = Module(new SbDriver)
+  sbTxData.io.in := io.sb.txData
+  io.top.sbTxData := sbTxData.io.out
+  sbTxData.io.ctl := PadDriverCtlIO.full
   val esdSbRxClk = Module(new EsdRoutable)
   val esdSbRxData = Module(new EsdRoutable)
   esdSbRxClk.io.term := io.top.sbRxClk.asBool
