@@ -30,16 +30,6 @@ class SidebandMessageExchanger(sbParams: SidebandParams) extends Module {
   val msgSent = RegInit(false.B)
   val msgReceived = RegInit(false.B)
 
-  assert(
-    !(io.clear && io.req.valid),
-    "[SidebandMessageExchanger] Can't assert clear and req.valid together."
-  )
-
-  when(io.clear) {
-    msgSent := false.B
-    msgReceived := false.B
-  }
-
   io.resp.bits := io.sbLaneIo.rx.bits.data
   io.resp.valid := false.B
 
@@ -62,6 +52,11 @@ class SidebandMessageExchanger(sbParams: SidebandParams) extends Module {
     // combinationally, and within the cycle resp valid goes high
     // Note: This might cause sbLaneIo.rx.bits.data to be a long path
     io.resp.valid := true.B
+  }
+
+  when(io.clear) {
+    msgSent := false.B
+    msgReceived := false.B
   }
 
   // This module can be used to send or receive a single message by driving io.req.valid

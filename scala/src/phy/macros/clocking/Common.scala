@@ -10,6 +10,60 @@ import chisel3.util._
 // Supplies (VDD/VSS) are pins on the IP but are omitted here; they are
 // connected by the physical flow.
 
+object ClkMux {
+
+  // Clocks the observation mux can choose between. Each input hangs its own
+  // pass gate off the shared internal node, so widening this loads every
+  // source clock a little more.
+  val numInputs = 16
+
+  def selWidth: Int = log2Ceil(numInputs)
+}
+
+class ClkMuxIO extends Bundle {
+  val Vin = Input(Vec(ClkMux.numInputs, Clock()))
+  val sel = Input(Vec(ClkMux.numInputs, Bool()))
+  val selb = Input(Vec(ClkMux.numInputs, Bool()))
+  val Vout = Output(Clock())
+}
+
+// Single-ended `ClkMux.numInputs` to 1 clock mux cell.
+//
+// Every input drives a complementary pass gate onto one shared node, so `sel`
+// has to be one-hot and `selb` its exact complement: any other combination
+// either floats the node or shorts two clocks together. The shared output
+// inverter means `Vout` is the inverse of the selected input, which does not
+// matter for the observation-only uses this cell has. Use `connect` rather
+// than driving `sel`/`selb` by hand.
+class ClkMux(implicit includeDefaultModels: Boolean = false)
+    extends BlackBox
+    with HasBlackBoxResource {
+  val io = IO(new ClkMuxIO)
+
+  override val desiredName = "clkmux"
+
+  if (includeDefaultModels) {
+    addResource("/vsrc/clkmux.v")
+  }
+
+  // Passes `ins(sel)`, returning the muxed clock. Inputs past the end of `ins`
+  // are tied off, and the one-hot the cell needs is decoded here so that an out
+  // of range select turns every pass gate off rather than shorting two clocks.
+  def connect(ins: Seq[Clock], sel: UInt): Clock = {
+    require(
+      ins.length <= ClkMux.numInputs,
+      s"${ins.length} clocks does not fit a ${ClkMux.numInputs} input mux"
+    )
+    val oneHot = UIntToOH(sel, ClkMux.numInputs)
+    for (i <- 0 until ClkMux.numInputs) {
+      io.Vin(i) := ins.lift(i).getOrElse(false.B.asClock)
+      io.sel(i) := oneHot(i) && (i < ins.length).B
+      io.selb(i) := !io.sel(i)
+    }
+    io.Vout
+  }
+}
+
 object ClockingTile {
   val phaseSelWidth = 64
   val freqSelWidth = 3
@@ -18,10 +72,6 @@ object ClockingTile {
 class ClockingTileIO extends Bundle {
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val FreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
-  // Active-high enable for the TX clock outputs. Low holds TxClk and TxClkQ
-  // at zero, which stops the clock reaching the TX lanes. DigitalClk is not
-  // gated: the digital domain has to keep running to service the RX AFEs.
-  val ClkGateEn = Input(Bool())
   val DigBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())

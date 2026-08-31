@@ -1345,9 +1345,9 @@ class LinkTrainingSM(
       activeRespSbLane <> mbInitSM.io.responderSbLaneIo
 
       updateLocalTxFuncLanes := mbInitSM.io.txWidthChanged
-      updateRemoteTxFuncLanes := mbInitSM.io.remoteFunctionalLanes
+      updateRemoteTxFuncLanes := mbInitSM.io.rxWidthChanged
       newLocalTxFuncLanes := mbInitSM.io.localFunctionalLanes
-      newLocalRxFuncLanes := mbInitSM.io.rxWidthChanged
+      newLocalRxFuncLanes := mbInitSM.io.remoteFunctionalLanes
 
       substateTransitioning := mbInitSM.io.fsmCtrl.substateTransitioning
 

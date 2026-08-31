@@ -44,9 +44,10 @@ fi
 # svsim invokes $VCS_HOME/bin/vcs directly (PATH is rebuilt by mill's test fork,
 # so PATH tricks don't survive). The shim VCS_HOME interposes a vcs wrapper that
 # restores the real VCS_HOME and puts a C++17-capable g++ (conda gcc-15, -no-pie)
-# ahead of system g++ 4.8 for VCS csrc builds. Machine-specific; skipped elsewhere.
-if [ -d /home/sangwoo/tools/vcs-home-shim ]; then
-  export VCS_HOME=/home/sangwoo/tools/vcs-home-shim
+# ahead of system g++ 4.8 for VCS csrc builds. Point UCIE_VCS_SHIM at one if the
+# host toolchain needs it. Skipped otherwise.
+if [ -n "${UCIE_VCS_SHIM:-}" ] && [ -d "$UCIE_VCS_SHIM" ]; then
+  export VCS_HOME="$UCIE_VCS_SHIM"
 fi
 
 if [ "${1:-}" != "--merge-only" ]; then

@@ -26,6 +26,9 @@ class PatternReaderWithLfsrHarness(afeParams: AfeParams) extends Module {
   val patternReader = Module(new PatternReader(afeParams))
   val rxLfsr = Module(new UcieLFSR(afeParams))
 
+  // The stimulus has no valid qualifier, so every cycle carries a word.
+  patternReader.io.mbRxValid := true.B
+
   patternReader.io.interfaceIo.req.valid := io.interfaceIo.req.valid
   patternReader.io.interfaceIo.req.bits := io.interfaceIo.req.bits
   io.interfaceIo.req.ready := patternReader.io.interfaceIo.req.ready
