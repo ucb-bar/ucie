@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.simulator.scalatest.{ChiselSim, Cli}
@@ -484,7 +485,30 @@ class SidebandChannelRandomTest
         depths
       )
     )
-    dut.io <> io
+    dut.io.rdi <> io.rdi
+    dut.io.layer <> io.layer
+    dut.io.link.in <> io.link.in
+    dut.io.link.ctrl <> io.link.ctrl
+    // This harness stands in for the PHY, so the half rate pair the channel
+    // emits passes through a pair of bump drivers first: `link.out` here is the
+    // serialized stream a receiver on the bumps would see, which is what the
+    // checks below reassemble.
+    io.link.out.bits := SbDriver
+      .bump(
+        dut.io.link.out.clk,
+        dut.io.link.out.d0.asBool,
+        dut.io.link.out.d1.asBool,
+        includeDefaultModels = true
+      )
+      .asUInt
+    io.link.out.fwClock := SbDriver
+      .bump(
+        dut.io.link.out.clk,
+        dut.io.link.out.fwClockD0.asBool,
+        dut.io.link.out.fwClockD1.asBool,
+        includeDefaultModels = true
+      )
+      .asUInt
 
     block(Verification) {
       block(Verification.Cover) {

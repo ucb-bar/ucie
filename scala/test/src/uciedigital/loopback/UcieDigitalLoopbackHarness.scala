@@ -164,17 +164,21 @@ class UcieDigitalLoopbackHarness(
     val adapter = adapters(i).io
     val proto = protocols(i).io
 
-    // The sideband bumps carry what the `SbDriver` on each one emits, so the
-    // peer's half rate pair passes through a driver to become the serial
-    // stream this die's receiver expects.
+    // The peer's half rate pair becomes a serial stream at its bump driver.
     val peerSb = peer.analog.sidebandLink.out
     phy.analog.sidebandLink.in.bits :=
-      SbDriver.bump(peerSb.clk, peerSb.d0.asBool, peerSb.d1.asBool)
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.d0.asBool,
+        peerSb.d1.asBool,
+        includeDefaultModels = true
+      )
     phy.analog.sidebandLink.in.fwClock :=
       SbDriver.bump(
         peerSb.clk,
         peerSb.fwClockD0.asBool,
-        peerSb.fwClockD1.asBool
+        peerSb.fwClockD1.asBool,
+        includeDefaultModels = true
       )
 
     phy.analog.mainband.rx.bits := peer.analog.mainband.tx.bits

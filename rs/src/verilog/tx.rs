@@ -25,9 +25,9 @@ mod tests {
     const SRC_FILES: &[&str] = &[DCDL_SRC, TX_SV_SRC, TX_VAMS_SRC, PRIMITIVES_SV_SRC];
 
     #[test]
-    fn tx_ser21() -> Result<()> {
-        let work_dir = out_dir("tx_ser21");
-        simulate(SRC_FILES, "tx_ser21_tb", &work_dir)?;
+    fn ser21() -> Result<()> {
+        let work_dir = out_dir("ser21");
+        simulate(SRC_FILES, "ser21_tb", &work_dir)?;
         Ok(())
     }
 

@@ -300,9 +300,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
   // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
   // and the pad driver as one cell.
-  //
-  // TODO: drive these from `commonDriverctl` instead of hardcoding full
-  // strength, so the sideband pads can be calibrated.
   val sbTxClk = Module(new SbDriver)
   sbTxClk.io.in := io.sb.txClk
   io.top.sbTxClk := sbTxClk.io.out.asClock
@@ -317,7 +314,9 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   esdSbRxData.io.term := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
-  io.debug.sbTxClk := io.sb.txClk
+  // The forwarded clock as actually transmitted, i.e. after the bump driver
+  // has serialized the half rate pair.
+  io.debug.sbTxClk := sbTxClk.io.out.asClock
 
   // Global clock dividers
   // TX

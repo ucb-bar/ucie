@@ -2,7 +2,7 @@ package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
 import chisel3.util._
-import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, SbDriver}
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 
 // ChiselSim for Chisel 7.0+
 import chisel3.simulator.scalatest.ChiselSim
@@ -1318,25 +1318,26 @@ class SidebandLinkSerdesTest
     des.io.ctrl.rxMode := io.ctrl.rxtxMode
 
     ser.io.in <> io.serializerIO.in.msg
-    // The 2:1 now lives in the sideband bump drivers, so the loopback runs
-    // through a real pair of them and the deserializer sees what it would see
-    // on the bump.
-    val sbData = Module(new SbDriver()(includeDefaultModels = true))
-    sbData.io.in.clk := ser.io.out.clk
-    sbData.io.in.d0 := ser.io.out.d0.asBool
-    sbData.io.in.d1 := ser.io.out.d1.asBool
-    sbData.io.ctl := PadDriverCtlIO.full
-    val sbClk = Module(new SbDriver()(includeDefaultModels = true))
-    sbClk.io.in.clk := ser.io.out.clk
-    sbClk.io.in.d0 := ser.io.out.fwClockD0
-    sbClk.io.in.d1 := ser.io.out.fwClockD1
-    sbClk.io.ctl := PadDriverCtlIO.full
+    // The 2:1 lives in the sideband bump drivers, so the loopback runs through
+    // a real pair and the deserializer sees what it would see on the bump.
+    val sbData = SbDriver.bump(
+      ser.io.out.clk,
+      ser.io.out.d0.asBool,
+      ser.io.out.d1.asBool,
+      includeDefaultModels = true
+    )
+    val sbClk = SbDriver.bump(
+      ser.io.out.clk,
+      ser.io.out.fwClockD0,
+      ser.io.out.fwClockD1,
+      includeDefaultModels = true
+    )
 
-    io.serializerIO.out.bits := sbData.io.out
-    io.serializerIO.out.fwClock := sbClk.io.out
+    io.serializerIO.out.bits := sbData
+    io.serializerIO.out.fwClock := sbClk
 
-    des.io.in.bits := sbData.io.out
-    des.io.in.fwClock := sbClk.io.out
+    des.io.in.bits := sbData
+    des.io.in.fwClock := sbClk
 
     des.io.out <> io.deserializerIO.out.msg
     io.ctrl.desTimedout := des.io.ctrl.desTimedout

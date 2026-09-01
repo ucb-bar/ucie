@@ -4,6 +4,15 @@ import chisel3._
 import chisel3.util._
 import chisel3.experimental.BundleLiterals._
 
+object PadDriver {
+
+  /** Segments in the driver's pull-up and pull-down stacks. `pu_ctl` and
+    * `pd_ctl` are counts of enabled segments, thermometer expanded onto this
+    * many pins.
+    */
+  val DriverSegments = 40
+}
+
 /** Impedance control for a [[PadDriver]], which is a separate cell from the
   * driver inside a [[TxLane]] and keeps its own control encoding.
   */

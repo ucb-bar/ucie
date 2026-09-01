@@ -1,7 +1,7 @@
 package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
-import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, SbDriver}
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
@@ -17,17 +17,21 @@ class SidebandTestLoopback extends Module {
   val dut = Module(new SidebandTest)
   dut.io.regs <> io.regs
   dut.io.en := io.en
-  // The bumps carry what the `SbDriver` on each one emits, so the loopback
-  // runs through a real pair of them rather than short circuiting the TX
-  // signals straight back.
-  val sbTxClk = Module(new SbDriver()(includeDefaultModels = true))
-  sbTxClk.io.in := dut.io.sb.txClk
-  sbTxClk.io.ctl := PadDriverCtlIO.full
-  val sbTxData = Module(new SbDriver()(includeDefaultModels = true))
-  sbTxData.io.in := dut.io.sb.txData
-  sbTxData.io.ctl := PadDriverCtlIO.full
-  dut.io.sb.rxClk := sbTxClk.io.out.asClock
-  dut.io.sb.rxData := sbTxData.io.out
+  // Loop back through real bump drivers, so the 2:1 is exercised too.
+  dut.io.sb.rxClk := SbDriver
+    .bump(
+      dut.io.sb.txClk.clk,
+      dut.io.sb.txClk.d0,
+      dut.io.sb.txClk.d1,
+      includeDefaultModels = true
+    )
+    .asClock
+  dut.io.sb.rxData := SbDriver.bump(
+    dut.io.sb.txData.clk,
+    dut.io.sb.txData.d0,
+    dut.io.sb.txData.d1,
+    includeDefaultModels = true
+  )
 }
 
 class SidebandTestSpec extends AnyFunSpec with ChiselSim {

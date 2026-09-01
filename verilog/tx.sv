@@ -296,7 +296,7 @@ module sb_driver (
   output out
 );
   wire serdout;
-  tx_ser21 ser (
+  ser21 ser (
       .din({d1, d0}),
       .clk(clk),
       .dout(serdout)
@@ -327,7 +327,7 @@ module sb_driver_tile (
     sb_driver_tile_intf intf
 );
     wire serdout;
-    tx_ser21 ser (
+    ser21 ser (
         .din({intf.d1, intf.d0}),
         .clk(intf.clk),
         .dout(serdout)
@@ -344,30 +344,6 @@ module sb_driver_tile (
     );
 endmodule
 
-interface pad_driver_tile_intf;
-    logic din;
-    logic [`PAD_DRIVER_CTL_BITS-1:0] pu_ctl, pd_ctlb;
-    logic en, enb;
-    wire dout;
-    wire vdd, vss;
-endinterface
-
-module pad_driver_tile (
-    pad_driver_tile_intf intf
-);
-    pad_driver_cell drv (
-        .din(intf.din),
-        .pu_ctl(intf.pu_ctl),
-        .pd_ctlb(intf.pd_ctlb),
-        .en(intf.en),
-        .enb(intf.enb),
-        .dout(intf.dout),
-        .vdd(intf.vdd),
-        .vss(intf.vss)
-    );
-
-endmodule
-
 module dcdl_simple(
     input logic clk_in,
     input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
@@ -378,11 +354,9 @@ module dcdl_simple(
 endmodule
 
 
-// Prefixed to keep it out of the way of the digital sideband's `ser21` cell
-// (`scala/resources/vsrc/ser21.v`), which is a different serializer with a
-// different port list. Both end up in the same elaboration when a design
-// emitted from Chisel is simulated against these models.
-module tx_ser21 (
+// 2:1 double data rate serializer, shared by the mainband serializer tree and
+// the sideband bump drivers.
+module ser21 (
     input logic [1:0] din,
     input logic clk,
     output logic dout
@@ -425,7 +399,7 @@ module tree_ser #(
 );
     generate
         if (STAGES == 1) begin
-            tx_ser21 ser (
+            ser21 ser (
                 .clk(clk[0]),
                 .din(din),
                 .dout(dout)
@@ -462,7 +436,7 @@ module tree_ser #(
                 .dout(din_int[1])
             );
 
-            tx_ser21 ser (
+            ser21 ser (
                 .clk(clk[0]),
                 .din(din_int),
                 .dout(dout)
@@ -556,6 +530,6 @@ module ser_tb;
 
 endmodule
 
-module tx_ser21_tb;
+module ser21_tb;
     ser_tb #(.STAGES(1)) inner ();
 endmodule

@@ -5,10 +5,10 @@ import chisel3.util._
 
 object SbDriver {
 
-  /** Segments in the pad driver inside an [[SbDriver]], inherited from
-    * [[PadDriver]]. See `PAD_DRIVER_SEGMENTS` in `verilog/constants.vams`.
+  /** Segments in the pad driver inside an [[SbDriver]]. It is the same driver
+    * cell as a standalone [[PadDriver]], so the two cannot drift apart.
     */
-  val DriverSegments = 40
+  val DriverSegments = PadDriver.DriverSegments
 
   /** Drives one bump from its half rate pair at full strength, returning what a
     * receiver on that bump would see.
@@ -17,10 +17,13 @@ object SbDriver {
     * does: the 2:1 lives in this cell, so the pair has to pass through one to
     * become the serial stream the far side expects.
     */
-  def bump(clk: Clock, d0: Bool, d1: Bool)(implicit
+  def bump(
+      clk: Clock,
+      d0: Bool,
+      d1: Bool,
       includeDefaultModels: Boolean = false
   ): Bool = {
-    val driver = Module(new SbDriver)
+    val driver = Module(new SbDriver()(includeDefaultModels))
     driver.io.in.clk := clk
     driver.io.in.d0 := d0
     driver.io.in.d1 := d1

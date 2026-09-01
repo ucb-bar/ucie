@@ -155,17 +155,21 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
 
     io.reg(i) <> outer.testers(i).module.io
 
-    // The sideband bumps carry what the `SbDriver` on each one emits, so the
-    // peer's half rate pair passes through a driver to become the serial
-    // stream this die's receiver expects.
+    // The peer's half rate pair becomes a serial stream at its bump driver.
     val peerSb = peer.io.phyFacingIo.sidebandLink.out
     me.io.phyFacingIo.sidebandLink.in.bits :=
-      SbDriver.bump(peerSb.clk, peerSb.d0.asBool, peerSb.d1.asBool)
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.d0.asBool,
+        peerSb.d1.asBool,
+        includeDefaultModels = true
+      )
     me.io.phyFacingIo.sidebandLink.in.fwClock :=
       SbDriver.bump(
         peerSb.clk,
         peerSb.fwClockD0.asBool,
-        peerSb.fwClockD1.asBool
+        peerSb.fwClockD1.asBool,
+        includeDefaultModels = true
       )
     me.io.phyFacingIo.mainbandLink.rx.bits :=
       peer.io.phyFacingIo.mainbandLink.tx.bits

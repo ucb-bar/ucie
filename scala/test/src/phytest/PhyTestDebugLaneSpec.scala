@@ -95,18 +95,21 @@ class PhyTestDebugLaneHarness(
   dut.io.tx.ready := true.B
   dut.io.rx.valid := false.B
   dut.io.rx.bits := DontCare
-  // The bumps carry what the `SbDriver` on each one emits, so the loopback runs
-  // through a real pair rather than short circuiting the TX signals back: the
-  // 2:1 serialization happens in that cell.
-  private implicit val sbModels: Boolean = true
+  // Loop back through real bump drivers, so the 2:1 is exercised too.
   dut.io.sb.rxClk := SbDriver
-    .bump(dut.io.sb.txClk.clk, dut.io.sb.txClk.d0, dut.io.sb.txClk.d1)
+    .bump(
+      dut.io.sb.txClk.clk,
+      dut.io.sb.txClk.d0,
+      dut.io.sb.txClk.d1,
+      includeDefaultModels = true
+    )
     .asClock
   dut.io.sb.rxData :=
     SbDriver.bump(
       dut.io.sb.txData.clk,
       dut.io.sb.txData.d0,
-      dut.io.sb.txData.d1
+      dut.io.sb.txData.d1,
+      includeDefaultModels = true
     )
 
   io.state := dut.io.regs.txDebugState
