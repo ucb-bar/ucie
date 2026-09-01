@@ -317,7 +317,14 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // has serialized the half rate pair.
   io.debug.sbTxClk := sbTxClk.io.out.asClock
 
-  // Global clock dividers
+  // Global clock dividers.
+  //
+  // Both dividers come out of reset with every stage of the cascade toggling on
+  // the first edge, so `clkout_3` rises on the same edge the lane serdes loads
+  // its word on. Handing words over on that edge would sample them as they
+  // change, so both directions invert it: the divided clock then rises half a
+  // word period away from the load, in the middle of the stable window. The
+  // serdes shares each direction's reset, so that phase is fixed.
   // TX
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
@@ -332,10 +339,10 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
   rxClkDiv.io.resetb := io.clkRst.rxResetb
-  io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
+  io.clkRst.rxDivClk := (!rxClkDiv.io.clkout_3.asBool).asClock
   val rxRstSync = Module(new RstSync)
   rxRstSync.io.rstbAsync := !io.clkRst.reset
-  rxRstSync.io.clk := rxClkDiv.io.clkout_3
+  rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
 
   // The TX words in lane order, for the uniform lane pipeline below.

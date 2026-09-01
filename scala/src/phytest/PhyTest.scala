@@ -376,10 +376,10 @@ class PhyTest(
   // long as its strobe lasts. Each also holds its direction's clock divider in
   // the PHY, so the serdes and the divided clock they hand words over on come
   // back up together rather than at an arbitrary relative phase.
-  val txSerdesResetb = (!(io.regs.txRst || reset.asBool)).asAsyncReset
-  val rxSerdesResetb = (!(io.regs.rxRst || reset.asBool)).asAsyncReset
-  io.txResetb := txSerdesResetb
-  io.rxResetb := rxSerdesResetb
+  val phyTxRstb = (!(io.regs.txRst || reset.asBool)).asAsyncReset
+  val phyRxRstb = (!(io.regs.rxRst || reset.asBool)).asAsyncReset
+  io.txResetb := phyTxRstb
+  io.rxResetb := phyRxRstb
 
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
@@ -447,8 +447,8 @@ class PhyTest(
   ): (DecoupledIO[UInt], TxLane) = {
     val lane = Module(new TxLane)
     lane.suggestName(name)
-    // The tile's divider reset is active high, `txSerdesResetb` active low.
-    lane.io.rst := (!txSerdesResetb.asBool).asAsyncReset
+    // The tile's divider reset is active high, `phyTxRstb` active low.
+    lane.io.rst := (!phyTxRstb.asBool).asAsyncReset
     lane.io.clk := io.debug.txClk
     lane.io.ctl := ctl.tile
 
@@ -579,7 +579,7 @@ class PhyTest(
   // Sampled with the clock that shifted the data out, the way a mainband RX
   // lane is sampled with the clock the partner die's TX forwarded.
   rxLoopbackLane.io.clk := io.debug.txClk
-  rxLoopbackLane.io.resetb := rxSerdesResetb
+  rxLoopbackLane.io.resetb := phyRxRstb
 
   val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
   rxLoopbackShuffler.suggestName("rxloopback_shuffler")
