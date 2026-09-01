@@ -36,7 +36,11 @@ import edu.berkeley.cs.chippy._
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
-import edu.berkeley.cs.uciedigital.phy.macros.DriverCtlIO
+import edu.berkeley.cs.uciedigital.phy.macros.{
+  PadDriverCtlIO,
+  SbSerialIO,
+  TxLaneCtlIO
+}
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
@@ -327,23 +331,13 @@ class UcieTLRegs(
       )
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
-        w.dll_reset := true.B
-        w.driver.pu_ctl := 0.U
-        w.driver.pd_ctl := 0.U
-        w.driver.en := false.B
-        w.driver.en_b := true.B
-        w.skew.dll_en := false.B
-        w.skew.ocl := false.B
-        w.skew.delay := 0.U
-        w.skew.mux_en := "b00000011".U
-        w.skew.band_ctrl := "b01".U
-        w.skew.mix_en := 0.U
-        w.skew.nen_out := 20.U
-        w.skew.pen_out := 22.U
+        // Every driver segment off out of reset, so a lane stays quiet until
+        // software brings it up.
+        w.tile := TxLaneCtlIO.off
         // The TX tile serializes through an adjacent-pairing tree, so it sends
-        // `din[bitrev5(t)]` in UI `t`. Pre-applying that same permutation here
-        // cancels it, putting the word on the wire in plain bit order; software
-        // can still program any other mapping.
+        // `DataIN[bitrev5(t)]` in UI `t`. Pre-applying that same permutation
+        // here cancels it, putting the word on the wire in plain bit order;
+        // software can still program any other mapping.
         for (i <- 0 until 32) {
           w.shuffler(i) := Phy.treeBitOrder(i).U(5.W)
         }
@@ -378,7 +372,7 @@ class UcieTLRegs(
       // Pad drivers for the observation bumps: TX clock, RX clock, RX data,
       // clock mux.
       val debugDriverctl = RegInit(VecInit(Seq.fill(PhyTest.NumDebugDrivers)({
-        val w = Wire(new DriverCtlIO)
+        val w = Wire(new PadDriverCtlIO)
         w.pu_ctl := 0.U
         w.pd_ctl := 0.U
         w.en := false.B
@@ -394,19 +388,9 @@ class UcieTLRegs(
       val debugRxBit = RegInit(0.U(io.test.rxDebugBit.getWidth.W))
       val debugTxctl = RegInit({
         val w = Wire(new TxLaneDigitalCtlIO)
-        w.dll_reset := true.B
-        w.driver.pu_ctl := 0.U
-        w.driver.pd_ctl := 0.U
-        w.driver.en := false.B
-        w.driver.en_b := true.B
-        w.skew.dll_en := false.B
-        w.skew.ocl := false.B
-        w.skew.delay := 0.U
-        w.skew.mux_en := "b00000011".U
-        w.skew.band_ctrl := "b01".U
-        w.skew.mix_en := 0.U
-        w.skew.nen_out := 20.U
-        w.skew.pen_out := 22.U
+        // Every driver segment off out of reset, so a lane stays quiet until
+        // software brings it up.
+        w.tile := TxLaneCtlIO.off
         for (i <- 0 until 32) {
           w.shuffler(i) := i.U(5.W)
         }
@@ -626,23 +610,12 @@ class UcieTLRegs(
         toRegFieldRw(clkFreqSel, "clkFreqSel")
       ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
-          toRegFieldRw(txctl(i).dll_reset, s"txctl_${i}_dllReset"),
-          toRegFieldRw(txctl(i).driver, s"txctl_${i}_driver"),
-          toRegFieldRw(txctl(i).skew, s"txctl_${i}_skew")
+          toRegFieldRw(txctl(i).tile, s"txctl_${i}_tile")
         ) ++ (0 until 32).map((j: Int) =>
           toRegFieldRw(txctl(i).shuffler(j), s"txctl_${i}_shuffler_$j")
         ) ++ Seq(
           toRegFieldRw(txctl(i).sample_negedge, s"txctl_${i}_sampleNegedge"),
-          toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay"),
-          toRegFieldR(
-            // The last lane is the tester's loopback transmitter, whose DLL
-            // sits in PhyTest rather than in the PHY.
-            applyShift(
-              if (i < params.numLanes + 4) io.phy.dllCode(i)
-              else io.test.loopbackDllCode
-            ),
-            s"txctl_${i}_dllCode"
-          )
+          toRegFieldRw(txctl(i).delay, s"txctl_${i}_delay")
         )
       }) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
@@ -675,16 +648,10 @@ class UcieTLRegs(
       }) ++ (0 until debugDriverctl.length).map((i: Int) => {
         toRegFieldRw(debugDriverctl(i), s"debugDriverctl_${i}")
       }) ++ Seq(
-        toRegFieldRw(debugTxctl.dll_reset, s"debugTxctlDllReset"),
-        toRegFieldRw(debugTxctl.driver, s"debugTxctlDriver"),
-        toRegFieldRw(debugTxctl.skew, s"debugTxctlSkew")
+        toRegFieldRw(debugTxctl.tile, s"debugTxctlTile")
       ) ++ (0 until 32).map((j: Int) =>
         toRegFieldRw(debugTxctl.shuffler(j), s"debugTxctlShuffler_$j")
       ) ++ Seq(
-        toRegFieldR(
-          applyShift(io.test.txDebugDllCode),
-          "debugTxctlDllCode"
-        ),
         toRegFieldR(
           applyShift(io.test.txDebugState),
           "debugTxTestState"
@@ -982,14 +949,24 @@ class UcieTL(
     // and otherwise PhyTest's tester drives. Rx goes to all of them; PhyTest
     // holds its own tester in reset when its sideband is not in `manual`.
     val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
+    // Each producer serializes in its own clock domain, so the clock travels
+    // with the half rate bits and is muxed alongside them.
+    val digiSbTxClk = Wire(new SbSerialIO)
+    digiSbTxClk.clk := digiSb.out.clk
+    digiSbTxClk.d0 := digiSb.out.fwClockD0.asBool
+    digiSbTxClk.d1 := digiSb.out.fwClockD1.asBool
+    val digiSbTxData = Wire(new SbSerialIO)
+    digiSbTxData.clk := digiSb.out.clk
+    digiSbTxData.d0 := digiSb.out.d0.asBool
+    digiSbTxData.d1 := digiSb.out.d1.asBool
     phy.io.sb.txClk := Mux(
       selUcie,
-      digiSb.out.fwClock.asBool.asClock,
+      digiSbTxClk,
       Mux(selSbTl, sbTl.io.sb.txClk, test.io.sb.txClk)
     )
     phy.io.sb.txData := Mux(
       selUcie,
-      digiSb.out.bits.asBool,
+      digiSbTxData,
       Mux(selSbTl, sbTl.io.sb.txData, test.io.sb.txData)
     )
     test.io.sb.rxClk := phy.io.sb.rxClk

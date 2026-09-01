@@ -194,6 +194,9 @@ xrun \\
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
         val constants =
           xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
+        // Behavioral models kept even in an AMS build, because `verilog/` has
+        // no model of these cells. Everything else in `defaultVsrcDir` is left
+        // out so that the AMS model of the same cell takes over.
         val defaultModels = Seq(
           "ucie_clk_dist_network.sv",
           "ucie_clk_div4.v",

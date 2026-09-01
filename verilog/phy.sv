@@ -1,5 +1,5 @@
 interface phy_intf;
-    txdriver_tile_intf sb_txdata(), sb_txclk();
+    sb_driver_tile_intf sb_txdata(), sb_txclk();
     txdata_tile_intf txdata[`LANES]();
     txdata_tile_intf txclkp(), txclkn(), txval(), txtrk();
 
@@ -26,8 +26,8 @@ module phy(
 //     .Dctrl_value(intf.pll_Dctrl_value)
 // );
 
-txdriver_tile sb_txdata_drv(.intf(intf.sb_txdata));
-txdriver_tile sb_txclk_drv(.intf(intf.sb_txclk));
+sb_driver_tile sb_txdata_drv(.intf(intf.sb_txdata));
+sb_driver_tile sb_txclk_drv(.intf(intf.sb_txclk));
 wire [`LANES-1:0] txclk_sed;
 
 clocking_distribution_model #(
@@ -38,7 +38,7 @@ clocking_distribution_model #(
     .clk_out(txclk_sed)
 );
 
-wire deskewed_clk_tx, deskewed_clkp_tx, deskewed_clkn_tx;
+wire deskewed_clk_tx;
 dcdl #(
     .delay_gain(0),
     // FIXME(Di): set the gain for DCDL 
@@ -50,29 +50,18 @@ dcdl #(
     .clk_out(deskewed_clk_tx)
 );
 
-s2d s2d_clklane_inst(
-    .clk_in(deskewed_clk_tx),
-    .clk_outp(deskewed_clkp_tx),
-    .clk_outn(deskewed_clkn_tx)
-);
-assign intf.txclkp.clkp = deskewed_clkp_tx;
-assign intf.txclkp.clkn = deskewed_clkn_tx;
-assign intf.txclkn.clkp = deskewed_clkp_tx;
-assign intf.txclkn.clkn = deskewed_clkn_tx;
-assign intf.txval.clkp = deskewed_clkp_tx;
-assign intf.txval.clkn = deskewed_clkn_tx;
-assign intf.txtrk.clkp = deskewed_clkp_tx;
-assign intf.txtrk.clkn = deskewed_clkn_tx;
+// The TX tiles take a single-ended clock and do their own single to
+// differential conversion internally, so there is no `s2d` on this path.
+assign intf.txclkp.CK = deskewed_clk_tx;
+assign intf.txclkn.CK = deskewed_clk_tx;
+assign intf.txval.CK = deskewed_clk_tx;
+assign intf.txtrk.CK = deskewed_clk_tx;
 
 genvar i;
 generate
     for(i = 0; i < `LANES; i++) begin
         // TODO(Di): DCC?
-        s2d s2d_inst(
-            .clk_in(txclk_sed[i]),
-            .clk_outp(intf.txdata[i].clkp),
-            .clk_outn(intf.txdata[i].clkn)
-        );
+        assign intf.txdata[i].CK = txclk_sed[i];
         txdata_tile txdata_tile(.intf(intf.txdata[i]));
     end
 endgenerate
@@ -162,30 +151,43 @@ module phy_tb;
     assign intf.pll_clk_out = pll_clkp_out;
     assign intf.sb_txdata.vdd = vdd;
     assign intf.sb_txdata.vss = vss;
+    // The sideband drivers do their own 2:1; this testbench does not exercise
+    // the sideband, so the half rate bits are tied off.
+    assign intf.sb_txdata.clk = pll_clkp_out;
+    assign intf.sb_txdata.d0 = 1'b0;
+    assign intf.sb_txdata.d1 = 1'b0;
     assign intf.sb_txdata.pu_ctl = 0;
-    assign intf.sb_txdata.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txdata.pd_ctlb = {`PAD_DRIVER_SEGMENTS{1'b1}};
     assign intf.sb_txdata.en = 1;
     assign intf.sb_txdata.enb = 0;
 
     assign intf.sb_txclk.vdd = vdd;
     assign intf.sb_txclk.vss = vss;
+    // The sideband drivers do their own 2:1; this testbench does not exercise
+    // the sideband, so the half rate bits are tied off.
+    assign intf.sb_txclk.clk = pll_clkp_out;
+    assign intf.sb_txclk.d0 = 1'b0;
+    assign intf.sb_txclk.d1 = 1'b0;
     assign intf.sb_txclk.pu_ctl = 0;
-    assign intf.sb_txclk.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txclk.pd_ctlb = {`PAD_DRIVER_SEGMENTS{1'b1}};
     assign intf.sb_txclk.en = 1;
     assign intf.sb_txclk.enb = 0;
 
     genvar i;
     generate
         for (i = 0; i < `LANES; i++) begin
+            assign intf.txdata[i].vddq = vdd;
             assign intf.txdata[i].vdd = vdd;
             assign intf.txdata[i].vss = vss;
-            assign intf.txdata[i].din = {2**(`SERDES_STAGES-1){2'b01}};
-            assign intf.txdata[i].rstb = ~reset;
-            assign intf.txdata[i].pu_ctl = 0;
-            assign intf.txdata[i].pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
-            assign intf.txdata[i].driver_en = 1;
-            assign intf.txdata[i].driver_enb = 0;
-            assign intf.txdata[i].dl_ctrl = 0;
+            assign intf.txdata[i].DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+            assign intf.txdata[i].RST_async = reset;
+            // Every main driver segment on (`ENP` is active low, `ENN` active high),
+            // equalizer branch off, no added delay on the tile clock.
+            assign intf.txdata[i].ENP = 0;
+            assign intf.txdata[i].ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
+            assign intf.txdata[i].ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+            assign intf.txdata[i].ENN_EQ = 0;
+            assign intf.txdata[i].Dctrl = 0;
 
             assign intf.rxdata[i].vdd = vdd;
             assign intf.rxdata[i].vss = vss;
@@ -198,53 +200,65 @@ module phy_tb;
             assign intf.rxdata[i].b_en = b_en;
             assign intf.rxdata[i].sel_a = sel_a;
             assign intf.rxdata[i].vref_sel = 80;
-            assign intf.rxdata[i].din = intf.txdata[i].dout;
+            assign intf.rxdata[i].din = intf.txdata[i].D2D_TX;
         end
     endgenerate
 
+    assign intf.txclkp.vddq = vdd;
     assign intf.txclkp.vdd = vdd;
     assign intf.txclkp.vss = vss;
-    assign intf.txclkp.din = {2**(`SERDES_STAGES-1){2'b01}};
-    assign intf.txclkp.rstb = ~reset;
-    assign intf.txclkp.pu_ctl = 0;
-    assign intf.txclkp.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
-    assign intf.txclkp.driver_en = 1;
-    assign intf.txclkp.driver_enb = 0;
-    assign intf.txclkp.dl_ctrl = 0;
+    assign intf.txclkp.DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+    assign intf.txclkp.RST_async = reset;
+    // Every main driver segment on (`ENP` is active low, `ENN` active high),
+    // equalizer branch off, no added delay on the tile clock.
+    assign intf.txclkp.ENP = 0;
+    assign intf.txclkp.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
+    assign intf.txclkp.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txclkp.ENN_EQ = 0;
+    assign intf.txclkp.Dctrl = 0;
 
+    assign intf.txclkn.vddq = vdd;
     assign intf.txclkn.vdd = vdd;
     assign intf.txclkn.vss = vss;
-    assign intf.txclkn.din = {2**(`SERDES_STAGES-1){2'b10}};
-    assign intf.txclkn.rstb = ~reset;
-    assign intf.txclkn.pu_ctl = 0;
-    assign intf.txclkn.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
-    assign intf.txclkn.driver_en = 1;
-    assign intf.txclkn.driver_enb = 0;
-    assign intf.txclkn.dl_ctrl = 0;
+    assign intf.txclkn.DataIN = {2**(`SERDES_STAGES-1){2'b10}};
+    assign intf.txclkn.RST_async = reset;
+    // Every main driver segment on (`ENP` is active low, `ENN` active high),
+    // equalizer branch off, no added delay on the tile clock.
+    assign intf.txclkn.ENP = 0;
+    assign intf.txclkn.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
+    assign intf.txclkn.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txclkn.ENN_EQ = 0;
+    assign intf.txclkn.Dctrl = 0;
 
+    assign intf.txval.vddq = vdd;
     assign intf.txval.vdd = vdd;
     assign intf.txval.vss = vss;
-    assign intf.txval.din = {2**(`SERDES_STAGES-3){8'hf0}};
-    assign intf.txval.rstb = ~reset;
-    assign intf.txval.pu_ctl = 0;
-    assign intf.txval.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
-    assign intf.txval.driver_en = 1;
-    assign intf.txval.driver_enb = 0;
-    assign intf.txval.dl_ctrl = 0;
+    assign intf.txval.DataIN = {2**(`SERDES_STAGES-3){8'hf0}};
+    assign intf.txval.RST_async = reset;
+    // Every main driver segment on (`ENP` is active low, `ENN` active high),
+    // equalizer branch off, no added delay on the tile clock.
+    assign intf.txval.ENP = 0;
+    assign intf.txval.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
+    assign intf.txval.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txval.ENN_EQ = 0;
+    assign intf.txval.Dctrl = 0;
 
+    assign intf.txtrk.vddq = vdd;
     assign intf.txtrk.vdd = vdd;
     assign intf.txtrk.vss = vss;
-    assign intf.txtrk.din = {2**(`SERDES_STAGES-1){2'b01}};
-    assign intf.txtrk.rstb = ~reset;
-    assign intf.txtrk.pu_ctl = 0;
-    assign intf.txtrk.pd_ctlb = {`DRIVER_CTL_BITS{1'b1}};
-    assign intf.txtrk.driver_en = 1;
-    assign intf.txtrk.driver_enb = 0;
-    assign intf.txtrk.dl_ctrl = 0;
+    assign intf.txtrk.DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+    assign intf.txtrk.RST_async = reset;
+    // Every main driver segment on (`ENP` is active low, `ENN` active high),
+    // equalizer branch off, no added delay on the tile clock.
+    assign intf.txtrk.ENP = 0;
+    assign intf.txtrk.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
+    assign intf.txtrk.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txtrk.ENN_EQ = 0;
+    assign intf.txtrk.Dctrl = 0;
 
     assign intf.rxclkp.vdd = vdd;
     assign intf.rxclkp.vss = vss;
-    assign intf.rxclkp.clkin = intf.txclkp.dout;
+    assign intf.rxclkp.clkin = intf.txclkp.D2D_TX;
     assign intf.rxclkp.zen = 1;
     assign intf.rxclkp.zctl = 0;
     assign intf.rxclkp.a_pc = a_pc;
@@ -256,7 +270,7 @@ module phy_tb;
 
     assign intf.rxclkn.vdd = vdd;
     assign intf.rxclkn.vss = vss;
-    assign intf.rxclkn.clkin = intf.txclkn.dout;
+    assign intf.rxclkn.clkin = intf.txclkn.D2D_TX;
     assign intf.rxclkn.zen = 1;
     assign intf.rxclkn.zctl = 0;
     assign intf.rxclkn.a_pc = a_pc;
@@ -278,7 +292,7 @@ module phy_tb;
     assign intf.rxval.b_en = b_en;
     assign intf.rxval.sel_a = sel_a;
     assign intf.rxval.vref_sel = 80;
-    assign intf.rxval.din = intf.txval.dout;
+    assign intf.rxval.din = intf.txval.D2D_TX;
 
     assign intf.rxtrk.vdd = vdd;
     assign intf.rxtrk.vss = vss;
@@ -292,7 +306,7 @@ module phy_tb;
     assign intf.rxtrk.b_en = b_en;
     assign intf.rxtrk.sel_a = sel_a;
     assign intf.rxtrk.vref_sel = 80;
-    assign intf.rxtrk.din = intf.txtrk.dout;
+    assign intf.rxtrk.din = intf.txtrk.D2D_TX;
 
     wire [2**`SERDES_STAGES-1:0] dout[`LANES-1:0];
     generate

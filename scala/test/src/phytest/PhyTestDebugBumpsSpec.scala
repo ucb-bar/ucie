@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.util._
 import chisel3.simulator.HasSimulator
 import chisel3.simulator.HasSimulator.simulators.verilator
@@ -74,8 +75,22 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
   dut.io.tx.ready := true.B
   dut.io.rx.valid := false.B
   dut.io.rx.bits := DontCare
-  dut.io.sb.rxClk := dut.io.sb.txClk
-  dut.io.sb.rxData := dut.io.sb.txData
+  // Loop back through real bump drivers, so the 2:1 is exercised too.
+  dut.io.sb.rxClk := SbDriver
+    .bump(
+      dut.io.sb.txClk.clk,
+      dut.io.sb.txClk.d0,
+      dut.io.sb.txClk.d1,
+      includeDefaultModels = true
+    )
+    .asClock
+  dut.io.sb.rxData :=
+    SbDriver.bump(
+      dut.io.sb.txData.clk,
+      dut.io.sb.txData.d0,
+      dut.io.sb.txData.d1,
+      includeDefaultModels = true
+    )
 
   io.bumps := dut.io.bumps
 }

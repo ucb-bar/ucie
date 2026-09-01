@@ -30,10 +30,14 @@ class SidebandLinkNode(
     val rxOut = Decoupled(UInt(sbMsgWidth.W))
 
     /* Interface Facing IOs */
-    // Serialized data going OUT to physical link
+    // Half rate bits going OUT to the sideband bump drivers, which do the
+    // 2:1: `d0` goes out while `clk` is high, `d1` while it is low.
     val txOut = new Bundle {
-      val bits = Output(UInt(sbLinkWidth.W))
-      val fwClock = Output(UInt(1.W))
+      val clk = Output(Clock())
+      val d0 = Output(UInt(sbLinkWidth.W))
+      val d1 = Output(UInt(sbLinkWidth.W))
+      val fwClockD0 = Output(UInt(1.W))
+      val fwClockD1 = Output(UInt(1.W))
     }
 
     // Serialized data coming IN over physical link
@@ -103,8 +107,11 @@ class SidebandLinkNode(
   serializer.io.in.valid := skidBuffer.io.out.valid
   serializer.io.in.bits := newBits
 
-  io.txOut.bits := serializer.io.out.bits
-  io.txOut.fwClock := serializer.io.out.fwClock
+  io.txOut.clk := serializer.io.out.clk
+  io.txOut.d0 := serializer.io.out.d0
+  io.txOut.d1 := serializer.io.out.d1
+  io.txOut.fwClockD0 := serializer.io.out.fwClockD0
+  io.txOut.fwClockD1 := serializer.io.out.fwClockD1
 
   // RX Path: rxIn --> Deserializer --> Parity Check --> PriorityQueue --> rxOut
   val deserializer = Module(

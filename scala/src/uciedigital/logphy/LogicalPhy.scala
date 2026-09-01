@@ -280,8 +280,13 @@ class LogicalPhy(
   logPhySidebandChannel.io.link.ctrl.freezeAcceptingPackets := ltsm.io.sbCtrlIo.freezeAcceptingPackets
   ltsm.io.sbCtrlIo.allPacketsSent := logPhySidebandChannel.io.link.ctrl.allPacketsSent
 
-  io.analog.sidebandLink.out.bits := logPhySidebandChannel.io.link.out.bits
-  io.analog.sidebandLink.out.fwClock := logPhySidebandChannel.io.link.out.fwClock
+  io.analog.sidebandLink.out.clk := logPhySidebandChannel.io.link.out.clk
+  io.analog.sidebandLink.out.d0 := logPhySidebandChannel.io.link.out.d0
+  io.analog.sidebandLink.out.d1 := logPhySidebandChannel.io.link.out.d1
+  io.analog.sidebandLink.out.fwClockD0 :=
+    logPhySidebandChannel.io.link.out.fwClockD0
+  io.analog.sidebandLink.out.fwClockD1 :=
+    logPhySidebandChannel.io.link.out.fwClockD1
   logPhySidebandChannel.io.link.in.bits := io.analog.sidebandLink.in.bits
   logPhySidebandChannel.io.link.in.fwClock := io.analog.sidebandLink.in.fwClock
 

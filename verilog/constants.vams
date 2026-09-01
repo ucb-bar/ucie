@@ -35,14 +35,21 @@
 `define DES_IN_DELAY 10.0
 
 // DRIVER
-// Number of driver pull-up and pull-down control bits
-`define DRIVER_CTL_BITS 5
-// Number of driver segments
-`define DRIVER_SEGMENTS 32
-// Resistance of single driver segment (Ohms)
-`define DRIVER_R_SEGMENT 864
-// Off resistance of driver (Ohms)
+// Off resistance of a driver segment (Ohms), shared by every driver model
 `define DRIVER_R_OFF_SEGMENT 1000000
+
+// PAD DRIVER
+// Nominal pad driver output impedance (Ohms)
+`define PAD_DRIVER_R_OUT 50.0
+// Number of pad driver segments. Every one is code controlled, thermometer
+// coded on `pu_ctl` and `pd_ctlb`, so the reachable range is 0 to
+// `PAD_DRIVER_SEGMENTS` and an all-off code leaves the driver off.
+`define PAD_DRIVER_SEGMENTS 40
+// Segment count at which the driver hits `PAD_DRIVER_R_OUT`, picked near the
+// middle of that range so calibration has codes on both sides of nominal.
+`define PAD_DRIVER_NOMINAL_SEGMENTS 20
+// Resistance of a single pad driver segment (Ohms)
+`define PAD_DRIVER_R_SEGMENT (`PAD_DRIVER_NOMINAL_SEGMENTS * `PAD_DRIVER_R_OUT)
 
 // CLOCK_PATH
 // Clock period
@@ -61,6 +68,20 @@
 // TX
 // TX nominal output impedance (Ohms)
 `define TX_R_OUT 30.0
+// Number of segments in a TX tile's output driver (`ENP`/`ENN`)
+`define TX_DRIVER_SEGMENTS 9
+// Resistance of a single output driver segment (Ohms). Sized so that nominal
+// `TX_R_OUT` lands one code short of the strongest setting, which leaves the
+// impedance calibration codes on both sides of nominal.
+`define TX_DRIVER_R_SEGMENT ((`TX_DRIVER_SEGMENTS - 1) * `TX_R_OUT)
+// Number of segments in the capacitive-peaking equalizer branch
+// (`ENP_EQ`/`ENN_EQ`)
+`define TX_DRIVER_EQ_SEGMENTS 4
+// The equalizer branch is assumed to be built from the same unit segment as
+// the main driver, so at full code it reaches half of nominal drive.
+`define TX_DRIVER_EQ_R_SEGMENT `TX_DRIVER_R_SEGMENT
+// Number of taps in the delay line on a TX tile's high speed clock (`Dctrl`)
+`define TX_DCDL_TAPS 32
 
 // RX
 // RX nominal input impedance (Ohms)
