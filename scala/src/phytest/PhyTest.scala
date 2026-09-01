@@ -468,10 +468,22 @@ class PhyTest(
     fifo.io.deq_reset := !divRstSync.io.rstbSync
     fifo.io.deq.ready := true.B
 
+    // An empty queue sends zeros rather than repeating the last word.
+    val din = Mux(fifo.io.deq.valid, fifo.io.deq.bits, 0.U)
+    // The backup handoff phase the PHY's own lanes have, for the same reason:
+    // a copy of the word relaunched on the other edge of the divided clock,
+    // which `sample_negedge` selects when the queue's edge turns out to sit too
+    // close to the one the tile loads on.
+    val dinNeg = withClockAndReset(
+      (!io.debug.txDivClk.asBool).asClock,
+      !divRstSync.io.rstbSync
+    ) {
+      RegNext(din, 0.U(Phy.SerdesRatio.W))
+    }
+
     val shuffler = Module(new Shuffler(Phy.SerdesRatio))
     shuffler.suggestName(s"${name}_shuffler")
-    // An empty queue sends zeros rather than repeating the last word.
-    shuffler.io.din := Mux(fifo.io.deq.valid, fifo.io.deq.bits, 0.U)
+    shuffler.io.din := Mux(ctl.sample_negedge, dinNeg, din)
     shuffler.io.permutation := ctl.shuffler
     lane.io.din := shuffler.io.dout
 
@@ -599,7 +611,24 @@ class PhyTest(
   // The deserializer has no valid of its own: it hands over a word every
   // divided cycle whether or not the TX is sending.
   rxLoopbackFifo.io.enq.valid := true.B
-  rxLoopbackFifo.io.enq.bits := rxLoopbackShuffler.io.dout
+  // The tile updates its word on the rising edge of the divided clock it
+  // brings out, and that is the edge the queue enqueues on, so the two pass on
+  // the tile's clock to output delay alone. `sample_negedge` takes the word
+  // through a register on the falling edge instead, half a word period from
+  // the update, which the queue then reads with the other half to spare. The
+  // word still reaches the queue on the edge after the one it was made on, so
+  // unlike the PHY's own lanes this costs no latency.
+  val rxLoopbackWordNeg = withClockAndReset(
+    (!rxLoopbackLane.io.divclk).asClock,
+    !rxLoopbackRstSync.io.rstbSync
+  ) {
+    RegNext(rxLoopbackShuffler.io.dout, 0.U(Phy.SerdesRatio.W))
+  }
+  rxLoopbackFifo.io.enq.bits := Mux(
+    io.regs.loopbackRxctl.sample_negedge,
+    rxLoopbackWordNeg,
+    rxLoopbackShuffler.io.dout
+  )
   rxLoopbackFifo.io.deq_clock := clock
   rxLoopbackFifo.io.deq_reset := reset
 
