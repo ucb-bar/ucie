@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.util.experimental.BoringUtils
 import edu.berkeley.cs.chippy.{TLTester, TLTesterIO, TLTesterParams}
 import edu.berkeley.cs.uciedigital.d2dadapter.LinkInitState
@@ -154,10 +155,22 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
 
     io.reg(i) <> outer.testers(i).module.io
 
+    // The peer's half rate pair becomes a serial stream at its bump driver.
+    val peerSb = peer.io.phyFacingIo.sidebandLink.out
     me.io.phyFacingIo.sidebandLink.in.bits :=
-      peer.io.phyFacingIo.sidebandLink.out.bits
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.d0.asBool,
+        peerSb.d1.asBool,
+        includeDefaultModels = true
+      )
     me.io.phyFacingIo.sidebandLink.in.fwClock :=
-      peer.io.phyFacingIo.sidebandLink.out.fwClock
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.fwClockD0.asBool,
+        peerSb.fwClockD1.asBool,
+        includeDefaultModels = true
+      )
     me.io.phyFacingIo.mainbandLink.rx.bits :=
       peer.io.phyFacingIo.mainbandLink.tx.bits
     me.io.phyFacingIo.mainbandLink.rx.valid :=

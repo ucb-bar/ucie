@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.util.experimental.BoringUtils
 import edu.berkeley.cs.uciedigital.d2dadapter.{D2DAdapter, LinkInitState}
 import edu.berkeley.cs.uciedigital.interfaces._
@@ -163,8 +164,22 @@ class UcieDigitalLoopbackHarness(
     val adapter = adapters(i).io
     val proto = protocols(i).io
 
-    phy.analog.sidebandLink.in.bits := peer.analog.sidebandLink.out.bits
-    phy.analog.sidebandLink.in.fwClock := peer.analog.sidebandLink.out.fwClock
+    // The peer's half rate pair becomes a serial stream at its bump driver.
+    val peerSb = peer.analog.sidebandLink.out
+    phy.analog.sidebandLink.in.bits :=
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.d0.asBool,
+        peerSb.d1.asBool,
+        includeDefaultModels = true
+      )
+    phy.analog.sidebandLink.in.fwClock :=
+      SbDriver.bump(
+        peerSb.clk,
+        peerSb.fwClockD0.asBool,
+        peerSb.fwClockD1.asBool,
+        includeDefaultModels = true
+      )
 
     phy.analog.mainband.rx.bits := peer.analog.mainband.tx.bits
     phy.analog.mainband.rx.valid := peer.analog.mainband.tx.valid

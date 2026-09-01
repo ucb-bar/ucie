@@ -213,7 +213,7 @@ class PhyTestRegsIO(
   // Pad driver control for the observation bumps, in `DebugBumpsIO` order:
   // `txClk`, `rxClk`, `rxData`, `clkMux`. The TX data debug lane brings its own
   // driver and takes its control from `txctl` instead.
-  val driverctl = Input(Vec(PhyTest.NumDebugDrivers, new DriverCtlIO))
+  val driverctl = Input(Vec(PhyTest.NumDebugDrivers, new PadDriverCtlIO))
   // Which clock the `clkMux` bump watches, as an index into the mux input list
   // in [[PhyTest]]. Zero selects the sideband forwarded clock and one the TX
   // global divided clock; the rest are not wired up yet.
@@ -235,7 +235,6 @@ class PhyTestRegsIO(
   val txDebugData = Input(Vec(16, UInt(64.W)))
   val txDebugState = Output(TxTestState())
   val txDebugPacketsEnqueued = Output(UInt(bitCounterWidth.W))
-  val txDebugDllCode = Output(UInt(5.W))
 
   // LOOPBACK LANE CONTROL
   // ===========================
@@ -243,7 +242,6 @@ class PhyTestRegsIO(
   // the same per-lane control as a mainband lane but never reaches a bump.
   val loopbackTxctl = Input(new TxLaneDigitalCtlIO)
   val loopbackRxctl = Input(new RxLaneDigitalCtlIO)
-  val loopbackDllCode = Output(UInt(5.W))
 
   // SIDEBAND CONTROL
   // ===========================
@@ -433,7 +431,7 @@ class PhyTest(
       Seq(io.bumps.txClk, io.bumps.rxClk, io.bumps.rxData, io.bumps.clkMux)
     ).zip(io.regs.driverctl)
   ) {
-    val driver = Module(new TxDriver)
+    val driver = Module(new PadDriver)
     driver.suggestName(name)
     driver.io.din := din
     driver.io.ctl := ctl
@@ -454,23 +452,24 @@ class PhyTest(
   ): (DecoupledIO[UInt], TxLane) = {
     val lane = Module(new TxLane)
     lane.suggestName(name)
-    lane.io.dll_reset := ctl.dll_reset
-    lane.io.dll_resetb := !ctl.dll_reset
-    lane.io.ser_resetb := txSerdesResetb
+    // The tile's divider reset is active high, `txSerdesResetb` active low.
+    lane.io.rst := (!txSerdesResetb.asBool).asAsyncReset
     lane.io.clk := io.debug.txClk
-    lane.io.ctl.driver := ctl.driver
-    lane.io.ctl.skew := ctl.skew
+    lane.io.ctl := ctl.tile
 
+    // The tile no longer brings out its own divided clock, so words are handed
+    // over on the TX global divided clock, which is the one the tiles take
+    // their words on.
     val divRstSync = Module(new RstSync)
     divRstSync.suggestName(s"${name}_div_rst_sync")
     divRstSync.io.rstbAsync := !reset.asBool
-    divRstSync.io.clk := lane.io.divclk
+    divRstSync.io.clk := io.debug.txDivClk
 
     val fifo = Module(new AsyncQueue(UInt(Phy.SerdesRatio.W), queueParams))
     fifo.suggestName(s"${name}_fifo")
     fifo.io.enq_clock := clock
     fifo.io.enq_reset := reset
-    fifo.io.deq_clock := lane.io.divclk
+    fifo.io.deq_clock := io.debug.txDivClk
     fifo.io.deq_reset := !divRstSync.io.rstbSync
     fifo.io.deq.ready := true.B
 
@@ -523,7 +522,6 @@ class PhyTest(
 
   val (txDebugEnq, txDebugLane) = txTestLane("txdebug", io.regs.txctl)
   io.bumps.txData := txDebugLane.io.dout
-  io.regs.txDebugDllCode := txDebugLane.io.dll_code
   io.regs.txDebugState := txDebugState
   io.regs.txDebugPacketsEnqueued := txDebugPacketsEnqueued
 
@@ -578,7 +576,6 @@ class PhyTest(
   // own slot in the pattern SRAMs and the capture SRAMs.
   val (txLoopbackEnq, txLoopbackLane) =
     txTestLane("txloopback", io.regs.loopbackTxctl)
-  io.regs.loopbackDllCode := txLoopbackLane.io.dll_code
 
   val rxLoopbackLane = Module(new RxDataLane)
   rxLoopbackLane.suggestName("rxloopback")

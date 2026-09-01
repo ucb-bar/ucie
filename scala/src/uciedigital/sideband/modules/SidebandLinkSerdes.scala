@@ -12,7 +12,6 @@ import chisel3.layers.Verification
 import chisel3.ltl._
 import circt.stage.ChiselStage
 import chisel3.util._
-import edu.berkeley.cs.uciedigital.utils.Ser21
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 
 // ============================================================================
@@ -26,8 +25,13 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
     val in = Flipped(Decoupled(UInt(msgW.W)))
 
     val out = new Bundle {
-      val bits = Output(UInt(sbLinkW.W))
-      val fwClock = Output(Bool())
+      // Half rate bits for the sideband bump drivers; `d0` goes out while
+      // `clk` is high, `d1` while it is low.
+      val clk = Output(Clock())
+      val d0 = Output(UInt(sbLinkW.W))
+      val d1 = Output(UInt(sbLinkW.W))
+      val fwClockD0 = Output(Bool())
+      val fwClockD1 = Output(Bool())
     }
   })
 
@@ -77,21 +81,16 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
     numBeats := 2.U // messages w/ data  (2 64-bit chunk)
   }
 
-  val txsbd = Module(new Ser21)
-  val txsbc = Module(new Ser21)
-
+  // The `SbDriver` on each sideband bump does the 2:1, so this hands over the
+  // two half rate bits rather than a serialized stream. Data is held across
+  // the whole period and the forwarded clock is a gated copy of this clock.
   val dataBit = Mux(outClkEn, packet(sbLinkW - 1, 0), 0.U)
 
-  txsbd.io.clk := clock
-  txsbd.io.d0 := dataBit
-  txsbd.io.d1 := dataBit
-
-  txsbc.io.clk := clock
-  txsbc.io.d0 := outClkEn.asUInt
-  txsbc.io.d1 := 0.U
-
-  io.out.bits := txsbd.io.out
-  io.out.fwClock := txsbc.io.out.asBool
+  io.out.clk := clock
+  io.out.d0 := dataBit
+  io.out.d1 := dataBit
+  io.out.fwClockD0 := outClkEn
+  io.out.fwClockD1 := false.B
 
   // defaults
   io.in.ready := false.B

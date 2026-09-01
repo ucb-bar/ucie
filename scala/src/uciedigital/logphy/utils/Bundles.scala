@@ -67,14 +67,20 @@ class MainbandLaneIO(afeParams: AfeParams) extends Bundle {
   )
 }
 
+// The two directions are not symmetric: `in` is sampled off the bump after the
+// PHY's receiver, while `out` is the half rate pair feeding the sideband bump
+// drivers, which do the 2:1 serialization themselves.
 class SidebandPhyLinkIO(sbLinkWidth: Int) extends Bundle {
   val in = new Bundle {
     val bits = Input(UInt(sbLinkWidth.W))
     val fwClock = Input(UInt(1.W))
   }
   val out = new Bundle {
-    val bits = Output(UInt(sbLinkWidth.W))
-    val fwClock = Output(UInt(1.W))
+    val clk = Output(Clock())
+    val d0 = Output(UInt(sbLinkWidth.W))
+    val d1 = Output(UInt(sbLinkWidth.W))
+    val fwClockD0 = Output(UInt(1.W))
+    val fwClockD1 = Output(UInt(1.W))
   }
 }
 

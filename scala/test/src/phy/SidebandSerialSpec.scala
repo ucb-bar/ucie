@@ -2,6 +2,7 @@ package edu.berkeley.cs.uciedigital.phy
 
 import chisel3._
 import chisel3.util._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
@@ -26,8 +27,21 @@ class SidebandSerialLoopback(packetBits: Int, rxQueueDepth: Int)
   io.rxOverflow := dut.io.rxOverflow
   dut.io.txRst := io.txRst
   dut.io.rxRst := io.rxRst
-  dut.io.sb.rxClk := dut.io.sb.txClk
-  dut.io.sb.rxData := dut.io.sb.txData
+  // Loop back through real bump drivers, so the 2:1 is exercised too.
+  dut.io.sb.rxClk := SbDriver
+    .bump(
+      dut.io.sb.txClk.clk,
+      dut.io.sb.txClk.d0,
+      dut.io.sb.txClk.d1,
+      includeDefaultModels = true
+    )
+    .asClock
+  dut.io.sb.rxData := SbDriver.bump(
+    dut.io.sb.txData.clk,
+    dut.io.sb.txData.d0,
+    dut.io.sb.txData.d1,
+    includeDefaultModels = true
+  )
 }
 
 class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
