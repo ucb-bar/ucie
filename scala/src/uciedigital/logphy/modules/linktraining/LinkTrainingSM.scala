@@ -66,6 +66,7 @@ class LinkTrainingSM(
     // What this Module sent and received in MBTRAIN.LINKSPEED, for the MMPL to
     // resolve across the Link (spec 4.5.3.4.12 Step 5c).
     val linkSpeedReport = Valid(new MmplLinkSpeedReport())
+    val linkSpeedRespMismatch = Output(Bool())
     // Retrain encoding this Module alone derived (spec Table 4-10).
     val retrainEncoding = Output(UInt(3.W))
 
@@ -96,6 +97,17 @@ class LinkTrainingSM(
     // LANE IO BUNDLES (Mixed Decoupled TX/RX)
     // ========================================================================
     val sbLaneIo = new SidebandLaneIO(sbParams)
+    /* Asks LogicalPhy to keep an unclaimed {PHYRETRAIN.retrain start req} at
+       the head of its receive queue instead of retiring it. The two die never
+       enter PHYRETRAIN together: on an RDI retrain the responding die is in
+       Retrain, and so in PHYRETRAIN, a sideband latency before the requesting
+       die; on a PHY retrain from LINKSPEED the requesting die's siblings are
+       directed when the request is sent and the other die's when it arrives
+       (spec 4.5.3.4.12 Step 5). Either way the first die's
+       {PHYRETRAIN.retrain start req} can reach a Module that is still in
+       ACTIVE or MBTRAIN and about to follow, and LogicalPhy would otherwise
+       drop it, since nothing claims it until this machine is in PHYRETRAIN. */
+    val holdSidebandRx = Output(Bool())
 
     // ========================================================================
     // SHARED PATTERN RESOURCES
@@ -292,7 +304,11 @@ class LinkTrainingSM(
   triggerTraining := swTriggerTraining || rdiTriggerTraining || remoteTriggerTraining
   val freshTrainingTrigger = Wire(Bool())
   freshTrainingTrigger := triggerTraining && !prevTrigger
-  prevTrigger := triggerTraining
+  /* A Module the MMPL has taken out of the Link ignores triggers (see the RESET
+     state), and a trigger level that arrived while it was disabled must read as
+     a fresh edge the moment the MMPL restores it, or the rest of the Link would
+     train without it and then wait on its LINKSPEED report for ever. */
+  prevTrigger := triggerTraining && !io.mmplCtrl.moduleDisabled
 
   // ==============================================================================================
   // Phy Parameters
@@ -1004,7 +1020,15 @@ class LinkTrainingSM(
   mbTrainSM.io.phyInRetrain := phyInRetrain
   mbTrainSM.io.multiModule := io.mmplCtrl.multiModule
   mbTrainSM.io.mmplResolution := io.mmplCtrl.resolution
-  io.linkSpeedReport := mbTrainSM.io.linkSpeedReport
+  /* The MBTRAIN sub-machine is only reset in RESET, so its LINKSPEED report
+     would otherwise stay valid while this Module sits in TRAINERROR -- one that
+     timed out waiting on its siblings, or one the resolution disabled -- and the
+     MMPL would keep resolving on, and counting, a Module that has left the
+     Link. The report belongs to MBTRAIN alone. */
+  io.linkSpeedReport.bits := mbTrainSM.io.linkSpeedReport.bits
+  io.linkSpeedReport.valid := mbTrainSM.io.linkSpeedReport.valid &&
+    (currentState === LTState.sMBTRAIN)
+  io.linkSpeedRespMismatch := mbTrainSM.io.linkSpeedRespMismatch
 
   // Table 4-10/11: Local Encoding Generation
   val busyBit = WireInit(io.runtimeLinkCtrlBusyBit.asUInt)
@@ -1310,6 +1334,11 @@ class LinkTrainingSM(
   }
 
   io.sbLaneIo.rx.ready := sidebandClients.map(_.rx.ready).reduce(_ || _)
+  io.holdSidebandRx := io.sbLaneIo.rx.valid &&
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.PHYRETRAIN_RETRAIN_START_REQ) &&
+    ((currentState === LTState.sLINKINIT) ||
+      (currentState === LTState.sACTIVE) ||
+      (currentState === LTState.sMBTRAIN))
 
   // TX Arbitration
   val txArbiter = Module(
@@ -1351,9 +1380,16 @@ class LinkTrainingSM(
         }
       }
 
+      /* A Module the MMPL disabled in MBTRAIN.LINKSPEED goes to "TRAINERROR
+         and eventually RESET" (spec 4.5.3.4.12 Step 5d) and stays there: left
+         to itself it would auto-retrain with its equally disabled partner,
+         reach LINKSPEED, be ignored by the resolver, and time out, over and
+         over. It also keeps the MMPL from seeing the whole Link in RESET, which
+         is what restores the Module for the next training from scratch. */
       when(
         io.pwrGood && io.phyCtrlIo.pllLock && resetMinWait &&
-          (freshTrainingTrigger || autoRetrain)
+          (freshTrainingTrigger || autoRetrain) &&
+          !io.mmplCtrl.moduleDisabled
       ) {
         nextState := LTState.sSBINIT
         sbInitPatternCounter := 0.U

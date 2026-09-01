@@ -62,6 +62,19 @@ case class UcieDigitalTopParams(
       adapter.sideband == logPhy.sideband,
       "Adapter sideband params must match logical PHY sideband params"
     )
+    /* UcieDigitalTop instantiates a single LogicalPhy and ties off its MMPL
+       port, so the register block must advertise the Link software will
+       actually find. Without this a four-module register map elaborates over a
+       one-module datapath: LogPhyRegsPerModule allocates four per-Module
+       register sets and the DVSEC reports a four-module part, and software
+       configures and reads Modules 1..3 that do not exist. Raise this to a
+       MultiModulePhy first if you need numModules > 1 here. */
+    require(
+      regs.numModules == 1,
+      s"UcieDigitalTop builds a single-module Physical Layer, so regs.numModules " +
+        s"must be 1, got ${regs.numModules}. A multi-module Link needs " +
+        s"MultiModulePhy in place of the LogicalPhy instantiated here."
+    )
     this
   }
 }

@@ -56,9 +56,13 @@ case class UcieRegParams(
     vendorId >= 0 && vendorId <= 0xffff,
     s"vendorId must be a 16-bit value, got 0x${vendorId.toHexString}"
   )
+  /* Spec 1.2.2 / 4.7: "the permitted configurations for a multi-module Link are
+     one-, two-, and four-module configurations", and spec 5.7.3.4.1 rule 1 says
+     a degraded Link "shall not be three modules". Three was never a legal count
+     to advertise to software. */
   require(
-    numModules >= 1 && numModules <= 4,
-    s"numModules must be in 1..4, got $numModules"
+    Set(1, 2, 4).contains(numModules),
+    s"numModules must be 1, 2 or 4 (spec 1.2.2), got $numModules"
   )
   if (packageType == UciePackageType.Standard) {
     require(

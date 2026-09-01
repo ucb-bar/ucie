@@ -57,6 +57,7 @@ class LogicalPhyStatusIO extends Bundle {
   val remoteTxFunctionalLanes = Output(UInt(3.W))
   // What this Module sent and received in MBTRAIN.LINKSPEED (spec 4.7.1).
   val linkSpeedReport = Valid(new MmplLinkSpeedReport())
+  val linkSpeedRespMismatch = Output(Bool())
   // Retrain encoding this Module alone derived, for the MMPL to make common
   // across the Link (spec 4.5.3.7).
   val retrainEncoding = Output(UInt(3.W))
@@ -160,6 +161,7 @@ class LogicalPhy(
   io.status.localTxFunctionalLanes := ltsm.io.localTxFunctionalLanes
   io.status.remoteTxFunctionalLanes := ltsm.io.remoteTxFunctionalLanes
   io.status.linkSpeedReport := ltsm.io.linkSpeedReport
+  io.status.linkSpeedRespMismatch := ltsm.io.linkSpeedRespMismatch
   io.status.retrainEncoding := ltsm.io.retrainEncoding
 
   phyLaneTrainer.io.phyTrainIo <> ltsm.io.phyTrainIo
@@ -257,8 +259,11 @@ class LogicalPhy(
     sidebandRxHeldAbove := host.rxHold
   }
 
+  // The LTSM can also ask for a packet to stay put: a {PHYRETRAIN.retrain
+  // start req} that arrived before it reached PHYRETRAIN (LinkTrainingSM's
+  // holdSidebandRx). Retiring it would cost the partner its handshake.
   sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm &&
-    !sidebandRxReadyRdi && !sidebandRxHeldAbove
+    !sidebandRxReadyRdi && !sidebandRxHeldAbove && !ltsm.io.holdSidebandRx
 
   val sbParityErrSeen = RegInit(false.B)
   val sbRxPriorityQueuesFullSeen = RegInit(false.B)

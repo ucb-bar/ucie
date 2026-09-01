@@ -145,6 +145,7 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
 
     // OUT
     val linkSpeedReport = Valid(new MmplLinkSpeedReport())
+    val linkSpeedRespMismatch = Output(Bool())
     val currentState = Output(MBTrainState())
     val mbLaneCtrlIo = new MainbandLaneCtrlIO(afeParams)
     val freqSel = Valid(SpeedMode())
@@ -238,6 +239,7 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.newRemoteFunctionalLanes := responder.io.newRemoteFunctionalLanes
   io.rxWidthChanged := responder.io.rxWidthChanged
   io.doElectricalIdleRx := responder.io.doElectricalIdleRx
+  io.linkSpeedRespMismatch := requester.io.linkSpeedRespMismatch
 
   io.trainingCtrl <> requester.io.trainingCtrl
   io.trainingCtrl.remoteRxSweepResults := responder.io.remoteRxSweepResults
@@ -258,7 +260,7 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.linkSpeedReport.bits.recvdRepair := responder.io.remoteRequestingRepair
   io.linkSpeedReport.bits.recvdSpeedDegrade := responder.io.remoteRequestingSpeedDegrade
   io.linkSpeedReport.bits.recvdError := responder.io.remoteErrorInLinkspeed
-  io.linkSpeedReport.bits.recvdPhyRetrain := responder.io.remoteExitingToPhyretrain
+  io.linkSpeedReport.bits.recvdPhyRetrain := responder.io.remoteRequestingPhyRetrain
   /* The report is only meaningful once both directions have named a next state
      -- except on the PHY retrain path. Spec 4.5.3.4.12 Step 5 makes an
      {exit to phy retrain req} received on ANY Module a directive for the whole
@@ -268,7 +270,7 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
      time out. */
   private val phyRetrainReported =
     requester.io.initiatingExitToPhyretrain ||
-      responder.io.remoteExitingToPhyretrain
+      responder.io.remoteRequestingPhyRetrain
 
   private val bothDirectionsNamed =
     (requester.io.initiatingDone || requester.io.initiatingWidthDegrade ||
@@ -319,6 +321,11 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val initiatingSpeedDegrade = Output(Bool())
     val initiatingWidthDegrade = Output(Bool())
     val initiatingDone = Output(Bool())
+    /* Spec 4.5.3.4.12 Step 5d: "Any mismatch on received message vs. expected
+       resolution must take all modules to TRAINERROR." Only the MMPL can reach
+       the other Modules, so the mismatch is reported up rather than acted on
+       here alone. */
+    val linkSpeedRespMismatch = Output(Bool())
     val txWidthChanged = Output(Bool())
     val newLocalFunctionalLanes = Output(UInt(3.W))
     val mbLaneCtrlIo = new MainbandLaneCtrlIO(afeParams)
@@ -370,6 +377,17 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     errorDetectedReg := true.B
   }
   io.error := errorDetectedReg
+
+  /* Held once raised: the MMPL has to escalate it to the sibling Modules, and
+     they can be several cycles behind. Cleared only by the Module's own reset,
+     which is where a TRAINERROR ends up anyway. */
+  val linkSpeedRespMismatchWire = WireInit(false.B)
+  val linkSpeedRespMismatchReg = RegInit(false.B)
+  when(linkSpeedRespMismatchWire) {
+    linkSpeedRespMismatchReg := true.B
+  }
+  io.linkSpeedRespMismatch :=
+    linkSpeedRespMismatchReg || linkSpeedRespMismatchWire
 
   // sbMsgExchanger Module Defaults
   sbMsgExchanger.io.req.bits := 0.U
@@ -1600,6 +1618,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           initiatingSpeedDegradeFlag := false.B
           initiatingWidthDegradeFlag := false.B
           initiatingDoneFlag := false.B
+          /* The {MBTRAIN.LINKSPEED error req}/{error resp} handshake is scoped
+             to one pass of LINKSPEED (spec 4.5.3.4.12 Step 3/5), so this has to
+             be cleared here with the rest. Carrying it into the next pass wedges
+             the Link: responder s7 holds `responderRdy` low while it is set, and
+             `localNotInitiatingPhyRetrain` is an XOR against initiatingDone that
+             goes low once both are set, so the Module stops answering
+             {error req} as well. */
+          initiatingErrorFlag := false.B
           linkOpsResultsValid := false.B
 
           sbMsgExchanger.io.req.valid := true.B
@@ -1840,6 +1866,18 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
         is(MBTrainSubstate.s12) { // MULTI-MODULE - EXCHANGE THE DIRECTED RESP
           io.doElectricalIdleTx := mmplResolutionReg =/= MmplResolution.done
 
+          /* The resolution was latched in s11, so a directive raised after that
+             would otherwise never be seen. The MMPL escalates to trainError
+             when a sibling reports a response mismatch (spec 4.5.3.4.12
+             Step 5d), and that has to reach a Module already exchanging its
+             own, correctly matching, response. */
+          when(
+            io.mmplResolution.valid &&
+              io.mmplResolution.bits === MmplResolution.trainError
+          ) {
+            errorDetectedWire := true.B
+          }
+
           when(MmplDirectedResp.hasMessage(mmplResolutionReg)) {
             sbMsgExchanger.io.rxRefBitPattern.valid := true.B
             MmplDirectedResp.expect(
@@ -1858,23 +1896,37 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
                 )
             ) {
               errorDetectedWire := true.B
+              linkSpeedRespMismatchWire := true.B
             }
 
             when(io.requesterRdy && io.responderRdy) {
-              nextSubstate := MBTrainSubstate.s0
               switch(mmplResolutionReg) {
                 is(MmplResolution.done) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sTOLINKINIT
                 }
                 is(MmplResolution.repair) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sREPAIR
                 }
                 is(MmplResolution.speedDegrade) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sSPEEDIDLE
                 }
                 is(MmplResolution.disableModule) {
-                  // This Module leaves the Link: TRAINERROR and then RESET.
+                  /* This Module leaves the Link: TRAINERROR and then RESET
+                     (spec 4.5.3.4.12 Step 5d). Hold here while the LTSM runs
+                     the TRAINERROR handshake -- falling through to s0 would
+                     start a fresh LINKSPEED pass, with a new {start req} and a
+                     point test, on a Module that is on its way out. The "sent"
+                     flags are dropped so the report to the MMPL retires now
+                     that the exchange is complete, which lets the MMPL shrink
+                     the operational set without waiting for this Module to
+                     reach RESET. */
                   errorDetectedWire := true.B
+                  initiatingDoneFlag := false.B
+                  initiatingWidthDegradeFlag := false.B
+                  initiatingSpeedDegradeFlag := false.B
                 }
               }
             }
@@ -1991,6 +2043,26 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
   }
+
+  /* The LINKSPEED "sent" flags describe one pass of MBTRAIN.LINKSPEED (spec
+     4.5.3.4.12 Step 5c) and were otherwise only cleared inside substate s0. A
+     Module coming back round to LINKSPEED therefore spent its first cycle
+     there with last pass's flags still set, and the report to the MMPL was
+     valid for that cycle with stale contents. After a PHY retrain taken from
+     LINKSPEED the stale {exit to phy retrain} bit is enough on its own to
+     resolve the whole Link to PHYRETRAIN again, for ever; the stale done,
+     repair and speed-degrade bits can resolve a Link whose Modules re-enter in
+     lockstep on last pass's data at the new speed. Clear them on the way out. */
+  when(
+    currentState === MBTrainState.sLINKSPEED &&
+      nextState =/= MBTrainState.sLINKSPEED
+  ) {
+    initiatingExitToPhyretrainFlag := false.B
+    initiatingErrorFlag := false.B
+    initiatingSpeedDegradeFlag := false.B
+    initiatingWidthDegradeFlag := false.B
+    initiatingDoneFlag := false.B
+  }
 }
 
 class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
@@ -2028,6 +2100,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     val remoteRequestingDone = Output(Bool())
     val remoteRequestingRepair = Output(Bool())
     val remoteRequestingSpeedDegrade = Output(Bool())
+    val remoteRequestingPhyRetrain = Output(Bool())
     val doElectricalIdleRx = Output(Bool())
     val remoteRxSweepResults = Valid(Vec(afeParams.mbLanes, UInt(1.W)))
 
@@ -2128,6 +2201,13 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   val remoteRequestingDoneFlag = RegInit(false.B)
   val remoteRequestingRepairFlag = RegInit(false.B)
   val remoteRequestingSpeedDegradeFlag = RegInit(false.B)
+  /* Set on receipt of {exit to phy retrain req}, not when the response goes
+     out: spec 4.5.3.4.12 Step 5 makes the request itself the directive for
+     every Module of the Link, and the sibling Modules on this die are already
+     a sideband latency behind the requesting die's, whose MMPL learnt of it
+     when the request was sent. Every cycle saved here is margin for their
+     partners' {PHYRETRAIN.retrain start req} to find them in PHYRETRAIN. */
+  val remoteRequestingPhyRetrainFlag = RegInit(false.B)
   // Multi-module only: the resolution the MMPL directed for this Module.
   val mmplResolutionReg = RegInit(MmplResolution.none)
 
@@ -2142,6 +2222,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   io.remoteRequestingDone := remoteRequestingDoneFlag
   io.remoteRequestingRepair := remoteRequestingRepairFlag
   io.remoteRequestingSpeedDegrade := remoteRequestingSpeedDegradeFlag
+  io.remoteRequestingPhyRetrain := remoteRequestingPhyRetrainFlag
   io.doElectricalIdleRx := false.B
 
   // MBTrain.REPAIR registers/wires
@@ -2654,6 +2735,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
           remoteRequestingDoneFlag := false.B
           remoteRequestingRepairFlag := false.B
           remoteRequestingSpeedDegradeFlag := false.B
+          remoteRequestingPhyRetrainFlag := false.B
 
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_START_REQ
@@ -2694,6 +2776,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
               )
             ) {
               io.sbLaneIo.rx.ready := true.B
+              remoteRequestingPhyRetrainFlag := true.B
               nextSubstate := MBTrainSubstate.s6
             }.elsewhen(
               SBMsgCompare(
@@ -2894,6 +2977,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(phyRetrainReqArrived) {
             io.sbLaneIo.rx.ready := true.B
+            remoteRequestingPhyRetrainFlag := true.B
             nextSubstate := MBTrainSubstate.s6
           }.elsewhen(
             io.mmplResolution.valid &&
@@ -2909,6 +2993,15 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
         is(MBTrainSubstate.s12) { // MULTI-MODULE - SEND THE DIRECTED RESP
           io.doElectricalIdleRx := mmplResolutionReg =/= MmplResolution.done
 
+          // The MMPL escalates a sibling's response mismatch to trainError
+          // after the resolution was latched in s11 (spec 4.5.3.4.12 Step 5d).
+          when(
+            io.mmplResolution.valid &&
+              io.mmplResolution.bits === MmplResolution.trainError
+          ) {
+            errorDetectedWire := true.B
+          }
+
           when(MmplDirectedResp.hasMessage(mmplResolutionReg)) {
             // Spec 4.5.3.4.12 Step 5d: send the response the resolution names,
             // whatever request the remote Module Partner actually sent.
@@ -2920,18 +3013,22 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
             responderRdy := sbMsgExchanger.io.msgSent
 
             when(io.responderRdy && io.requesterRdy) {
-              nextSubstate := MBTrainSubstate.s0
               switch(mmplResolutionReg) {
                 is(MmplResolution.done) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sTOLINKINIT
                 }
                 is(MmplResolution.repair) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sREPAIR
                 }
                 is(MmplResolution.speedDegrade) {
+                  nextSubstate := MBTrainSubstate.s0
                   nextState := MBTrainState.sSPEEDIDLE
                 }
                 is(MmplResolution.disableModule) {
+                  // Leaving the Link: hold here for TRAINERROR (spec
+                  // 4.5.3.4.12 Step 5d) rather than restart LINKSPEED in s0.
                   errorDetectedWire := true.B
                 }
               }
@@ -3035,5 +3132,23 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
         }
       }
     }
+  }
+
+  /* Same as the requester: these describe one pass of LINKSPEED and are
+     otherwise only cleared in s0, one cycle after the Module is back, during
+     which the report to the MMPL is valid with last pass's contents. */
+  when(
+    currentState === MBTrainState.sLINKSPEED &&
+      nextState =/= MBTrainState.sLINKSPEED
+  ) {
+    ptTestDoneInLinkSpeed := false.B
+    remoteErrorInLinkspeedFlag := false.B
+    remoteExitingToRepairFlag := false.B
+    remoteExitingToSpeedDegradeFlag := false.B
+    remoteExitingToPhyretrainFlag := false.B
+    remoteRequestingDoneFlag := false.B
+    remoteRequestingRepairFlag := false.B
+    remoteRequestingSpeedDegradeFlag := false.B
+    remoteRequestingPhyRetrainFlag := false.B
   }
 }

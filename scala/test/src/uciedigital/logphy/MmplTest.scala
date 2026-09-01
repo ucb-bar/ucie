@@ -80,6 +80,7 @@ class MmplTest extends AnyFunSpec with ChiselSim {
     st.txLaneMask.poke("hFFFF".U)
     st.rxLaneMask.poke("hFFFF".U)
     st.remoteRequestingTrainError.poke(false.B)
+    st.linkSpeedRespMismatch.poke(false.B)
     st.localTxFunctionalLanes.poke(laneCode.U(3.W))
     st.remoteTxFunctionalLanes.poke(laneCode.U(3.W))
     st.retrainEncoding.poke(RetrainEncoding.TXSELFCAL)
@@ -125,6 +126,16 @@ class MmplTest extends AnyFunSpec with ChiselSim {
     r.bits.recvdSpeedDegrade.poke(false.B)
     r.bits.recvdError.poke(false.B)
     r.bits.recvdPhyRetrain.poke(false.B)
+  }
+
+  /** A Module that has acted on its directive drops its report *and* leaves
+    * MBTRAIN.LINKSPEED. The MMPL holds the directive until the whole Link has
+    * gone, so that a Module still working its way towards the substate that
+    * samples one does not arrive to find it withdrawn (spec 4.7.1.2's stagger).
+    */
+  private def actOnResolution(c: Mmpl, m: Int): Unit = {
+    clearReport(c, m)
+    c.io.modules(m).status.currentState.poke(LTSMState.sLINKINIT)
   }
 
   private def initLink(c: Mmpl, n: Int, remoteIds: Seq[Int]): Unit = {
@@ -477,7 +488,9 @@ class MmplTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("Defers rather than rejects a message on a Module that loses the grant") {
+    it(
+      "Defers rather than rejects a message on a Module that loses the grant"
+    ) {
       /* `sbLaneIo.rx.ready` is a claim decode, not flow control: a LogicalPhy
          retires anything no consumer claimed in the cycle it was offered. With
          one hosted state machine serving several Modules, a Module that loses
@@ -681,6 +694,7 @@ class MmplTest extends AnyFunSpec with ChiselSim {
   // Sideband cfg routing, spec 4.7.1.1
   // ==========================================================================
   describe("MMPL sideband cfg routing") {
+
     /** Presents one whole cfg packet on the aggregate lp_cfg. */
     def sendCfgPacket(c: Mmpl, chunks: Seq[BigInt]): Unit = {
       for (chunk <- chunks) {
@@ -900,11 +914,277 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         c.io.status.moduleEnable(1).expect(true.B, "not dropped yet")
 
         // The Modules act on the directive and leave MBTRAIN.LINKSPEED.
-        for (m <- 0 until n) clearReport(c, m)
+        for (m <- 0 until n) actOnResolution(c, m)
         c.clock.step()
 
         c.io.status.moduleEnable(0).expect(true.B)
         c.io.status.moduleEnable(1).expect(false.B, "Module 1 is disabled")
+      }
+    }
+
+    it("Holds a PHYRETRAIN directive for Modules that reach LINKSPEED late") {
+      /* Spec 4.5.3.4.12 Step 5: an {exit to phy retrain req} received on any
+         Module takes every Module of the Link to PHYRETRAIN. The resolver
+         answers that on one Module's report without waiting for the rest, so
+         the directive has to outlive the Module that raised it -- spec 4.7.1.2
+         allows the others to be a long way behind, and a Module only samples
+         the directive once it reaches the substate that waits for one. */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+
+        // Only Module 2 has anything to say, and it is heading for PHYRETRAIN.
+        val r = c.io.modules(2).status.linkSpeedReport
+        r.valid.poke(true.B)
+        r.bits.recvdPhyRetrain.poke(true.B)
+        c.clock.step()
+
+        for (m <- 0 until n) {
+          c.io.modules(m).ctrl.resolution.valid.expect(true.B)
+          c.io
+            .modules(m)
+            .ctrl
+            .resolution
+            .bits
+            .expect(MmplResolution.phyRetrain, s"Module $m")
+        }
+
+        // Module 2 acts and leaves; the others are still working towards the
+        // substate that samples a directive.
+        actOnResolution(c, 2)
+        c.clock.step()
+        for (m <- Seq(0, 1, 3)) {
+          c.io
+            .modules(m)
+            .ctrl
+            .resolution
+            .valid
+            .expect(true.B, s"Module $m must still see the directive")
+          c.io
+            .modules(m)
+            .ctrl
+            .resolution
+            .bits
+            .expect(MmplResolution.phyRetrain, s"Module $m")
+        }
+
+        // Once the whole Link has left LINKSPEED the directive is retired, and
+        // a PHY retrain drops no Module.
+        for (m <- Seq(0, 1, 3)) actOnResolution(c, m)
+        c.clock.step()
+        c.io.modules(0).ctrl.resolution.valid.expect(false.B)
+        for (m <- 0 until n) {
+          c.io.status.moduleEnable(m).expect(true.B, s"Module $m stays in")
+        }
+      }
+    }
+
+    it(
+      "Holds a PHYRETRAIN directive for a Module that has not reached LINKSPEED"
+    ) {
+      /* Spec 4.5.3.4.12 Step 5 makes a PHY retrain request received on any
+         Module a directive for every Module of the Link, and spec 4.7.1.2 lets
+         a sibling be a long way behind -- still in DATATRAINCENTER2, say. Being
+         outside LINKSPEED does not mean it has acted: it has yet to reach the
+         substate that samples a directive, so the directive must wait for it. */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+        c.io
+          .modules(3)
+          .status
+          .currentState
+          .poke(LTSMState.sMBTRAIN_DATATRAINCENTER2)
+
+        val r = c.io.modules(2).status.linkSpeedReport
+        r.valid.poke(true.B)
+        r.bits.recvdPhyRetrain.poke(true.B)
+        c.clock.step()
+        c.io.modules(3).ctrl.resolution.valid.expect(true.B)
+        c.io.modules(3).ctrl.resolution.bits.expect(MmplResolution.phyRetrain)
+
+        // Everyone in LINKSPEED acts; the straggler has not even arrived.
+        for (m <- Seq(0, 1, 2)) actOnResolution(c, m)
+        c.clock.step()
+        c.io
+          .modules(3)
+          .ctrl
+          .resolution
+          .valid
+          .expect(true.B, "the directive must wait for the straggler")
+        c.io.modules(3).ctrl.resolution.bits.expect(MmplResolution.phyRetrain)
+
+        // It arrives in LINKSPEED, finds the directive waiting, and acts on it.
+        c.io.modules(3).status.currentState.poke(LTSMState.sMBTRAIN_LINKSPEED)
+        c.clock.step()
+        c.io.modules(3).ctrl.resolution.valid.expect(true.B)
+        actOnResolution(c, 3)
+        c.clock.step()
+        c.io.modules(3).ctrl.resolution.valid.expect(false.B, "retired")
+        for (m <- 0 until n) {
+          c.io.status.moduleEnable(m).expect(true.B, s"Module $m stays in")
+        }
+      }
+    }
+
+    it("Withdraws the directive from a Module once it has acted on it") {
+      /* A Module that finishes its exchange walks the rest of MBTRAIN and can be
+         back in LINKSPEED before a slow sibling has left it. It must not find
+         last pass's answer still on offer there. */
+      val n = 2
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1))
+        for (m <- 0 until n) {
+          val r = c.io.modules(m).status.linkSpeedReport
+          r.valid.poke(true.B)
+          r.bits.sentDone.poke(true.B)
+          r.bits.recvdDone.poke(true.B)
+        }
+        c.clock.step()
+        for (m <- 0 until n) {
+          c.io.modules(m).ctrl.resolution.valid.expect(true.B, s"Module $m")
+          c.io.modules(m).ctrl.resolution.bits.expect(MmplResolution.done)
+        }
+
+        // Module 0 acts and is back in LINKSPEED for the next pass before
+        // Module 1 has finished exchanging its response.
+        actOnResolution(c, 0)
+        c.clock.step()
+        c.io.modules(0).ctrl.resolution.valid.expect(false.B, "acted")
+        c.io.modules(1).ctrl.resolution.valid.expect(true.B, "still exchanging")
+        c.io.modules(0).status.currentState.poke(LTSMState.sMBTRAIN_LINKSPEED)
+        c.clock.step()
+        c.io
+          .modules(0)
+          .ctrl
+          .resolution
+          .valid
+          .expect(false.B, "must not be offered last pass's answer")
+        c.io.modules(1).ctrl.resolution.valid.expect(true.B)
+
+        actOnResolution(c, 1)
+        c.clock.step()
+        c.io.modules(1).ctrl.resolution.valid.expect(false.B)
+        c.io.status.resolutionApplied.expect(false.B)
+      }
+    }
+
+    it(
+      "Keeps pl_inband_pres up while a disabled Module passes through TRAINERROR"
+    ) {
+      /* A Module the resolution disables goes to TRAINERROR and RESET by design
+         (spec 4.5.3.4.12 Step 5d). Until its siblings have finished their own
+         exchanges it is still counted operational, and the hosted RDI state
+         machine must not read its TRAINERROR as the Link going down: Table 10-1
+         has pl_inband_pres stay high until the Link is down. */
+      val n = 2
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1))
+        // The hosted machine raised pl_inband_pres when the Modules reached
+        // LINKINIT, and the Modules are now back in LINKSPEED. Sideband cfg
+        // activity keeps the clock handshake open, which RDIController requires
+        // of any pl_inband_pres it presents from Reset.
+        for (m <- 0 until n) {
+          c.io.modules(m).rdiHost.get.cfgSidebandActive.poke(true.B)
+          c.io.modules(m).rdiHost.get.ltsmState.poke(LTState.sLINKINIT)
+        }
+        c.clock.step()
+        c.io.rdi.plInbandPres.expect(true.B)
+        for (m <- 0 until n) {
+          c.io.modules(m).rdiHost.get.ltsmState.poke(LTState.sMBTRAIN)
+        }
+        c.clock.step()
+        c.io.rdi.plInbandPres.expect(true.B)
+
+        // Module 1 asked for a width degrade. Fewer than half reported, so it is
+        // disabled and Module 0 goes on to LINKINIT.
+        for (m <- 0 until n) {
+          val r = c.io.modules(m).status.linkSpeedReport
+          r.valid.poke(true.B)
+          r.bits.sentDone.poke((m == 0).B)
+          r.bits.sentRepair.poke((m == 1).B)
+          r.bits.recvdDone.poke(true.B)
+        }
+        c.clock.step()
+        c.io
+          .modules(1)
+          .ctrl
+          .resolution
+          .bits
+          .expect(MmplResolution.disableModule)
+
+        // Module 1 finishes its exchange first and drops to TRAINERROR while
+        // Module 0 is still exchanging its {done resp}.
+        clearReport(c, 1)
+        c.io.modules(1).status.ltState.poke(LTState.sTRAINERROR)
+        c.io.modules(1).status.currentState.poke(LTSMState.sTRAINERROR)
+        c.io.modules(1).rdiHost.get.ltsmState.poke(LTState.sTRAINERROR)
+        c.clock.step(4)
+        c.io.status
+          .moduleEnable(1)
+          .expect(true.B, "still counted until Module 0 has acted")
+        c.io.rdi.plInbandPres
+          .expect(true.B, "a Module leaving by directive is not the Link down")
+
+        // Module 0 acts; the operational set shrinks and Module 1 no longer
+        // reaches the RDI at all.
+        actOnResolution(c, 0)
+        c.clock.step()
+        c.io.status.moduleEnable(1).expect(false.B, "Module 1 is disabled")
+        c.io.rdi.plInbandPres.expect(true.B)
+      }
+    }
+
+    it(
+      "Takes every Module to TRAINERROR when one reports a response mismatch"
+    ) {
+      /* Spec 4.5.3.4.12 Step 5d: "Any mismatch on received message vs. expected
+         resolution must take all modules to TRAINERROR." A Module only sees its
+         own exchange, so the escalation has to come from here -- otherwise the
+         Module that caught it goes down alone while its siblings complete a
+         handshake the remote Link partner has already contradicted, and the two
+         die end up in different configurations. */
+      val n = 4
+      simulate(dut(n)) { c =>
+        initLink(c, n, Seq(0, 1, 2, 3))
+
+        // A clean pass: every Module reports done, so the Link resolves `done`.
+        for (m <- 0 until n) {
+          val r = c.io.modules(m).status.linkSpeedReport
+          r.valid.poke(true.B)
+          r.bits.sentDone.poke(true.B)
+          r.bits.recvdDone.poke(true.B)
+        }
+        c.clock.step()
+        for (m <- 0 until n) {
+          c.io.modules(m).ctrl.resolution.bits.expect(MmplResolution.done)
+        }
+
+        // Module 2's partner answers something other than {done resp}.
+        c.io.modules(2).status.linkSpeedRespMismatch.poke(true.B)
+        c.clock.step()
+
+        for (m <- 0 until n) {
+          c.io.modules(m).ctrl.resolution.valid.expect(true.B, s"Module $m")
+          c.io
+            .modules(m)
+            .ctrl
+            .resolution
+            .bits
+            .expect(
+              MmplResolution.trainError,
+              s"Module $m must follow the mismatch to TRAINERROR"
+            )
+        }
+        c.io.status.linkResolution.expect(MmplResolution.trainError)
+
+        // The operational set is kept: the Modules reach TRAINERROR and RESET on
+        // their own, and dropping them here would silence pl_trainerror.
+        for (m <- 0 until n) actOnResolution(c, m)
+        c.clock.step()
+        for (m <- 0 until n) {
+          c.io.status.moduleEnable(m).expect(true.B, s"Module $m stays counted")
+        }
       }
     }
 
@@ -924,7 +1204,7 @@ class MmplTest extends AnyFunSpec with ChiselSim {
           r.bits.recvdDone.poke(true.B)
         }
         c.clock.step()
-        for (m <- 0 until n) clearReport(c, m)
+        for (m <- 0 until n) actOnResolution(c, m)
         c.clock.step()
         c.io.status.moduleEnable(1).expect(false.B)
 

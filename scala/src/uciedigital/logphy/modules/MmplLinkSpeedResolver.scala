@@ -43,17 +43,24 @@ import chisel3.util._
 
 class MmplLinkSpeedResolver(params: MmplParams) extends Module {
   private val n = params.numModules
+  private val laneCountW = log2Ceil(params.lanesPerModule + 1)
 
   val io = IO(new Bundle {
     // IN
     val reports = Flipped(Vec(n, Valid(new MmplLinkSpeedReport())))
     val enable = Input(Vec(n, Bool()))
     val currentSpeed = Input(SpeedMode())
-    // Spec 4.7.1.2.1: a Module already narrower than the rest of the
-    // operational Modules counts as requesting a width degrade even though it
-    // exchanged {MBTRAIN.LINKSPEED done req}. Only the MMPL can see every
-    // Module's width, so it computes this and hands it down.
-    val narrowerThanPeers = Input(Vec(n, Bool()))
+    /* Active Lanes each Module currently drives. Spec 4.7.1.2.1: a Module
+       already narrower than the rest of the operational Modules counts as
+       requesting a width degrade even though it exchanged
+       {MBTRAIN.LINKSPEED done req}.
+       The counts come in rather than the derived "narrower" bit, because the
+       predicate is relative to "the rest of the operational modules" and each
+       pass of the flow chart re-enters connector 1 with a *reduced* Module set.
+       A bit computed once against the initial set would still flag the
+       survivors of a disable as narrow after the wide Modules that made them
+       narrow have gone, sending an already-uniform Link to REPAIR for nothing. */
+    val activeLanes = Input(Vec(n, UInt(laneCountW.W)))
 
     // OUT
     val resolved = Output(Bool())
@@ -109,9 +116,19 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
   // ==========================================================================
   private val reported = (0 until n).map(m => io.reports(m).valid)
 
-  private def widthOf(m: Int): Bool =
+  /** Widest Module of a given operational set, spec 4.7.1.2.1's "the rest of
+    * the operational modules". Recomputed per pass, because connector 1 re-runs
+    * the decision with whatever survived the last one.
+    */
+  private def widestOf(active: Seq[Bool]): UInt =
+    (0 until n)
+      .map(m => Mux(active(m), io.activeLanes(m), 0.U))
+      .reduce((a, b) => Mux(a > b, a, b))
+
+  private def widthOf(m: Int, active: Seq[Bool]): Bool =
     reported(m) &&
-      (io.reports(m).bits.widthDegradeRequested || io.narrowerThanPeers(m))
+      (io.reports(m).bits.widthDegradeRequested ||
+        (io.activeLanes(m) < widestOf(active)))
   private def speedOf(m: Int): Bool =
     reported(m) && io.reports(m).bits.speedDegradeRequested
 
@@ -176,7 +193,7 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
 
   /** The decision diamonds of Figure 4-47 / Figure 4-48 for one Module set. */
   private def decide(active: Seq[Bool]): Pass = {
-    val widthRequested = (0 until n).map(m => active(m) && widthOf(m))
+    val widthRequested = (0 until n).map(m => active(m) && widthOf(m, active))
     val speedRequested = (0 until n).map(m => active(m) && speedOf(m))
     val failing =
       (0 until n).map(m => widthRequested(m) || speedRequested(m))
@@ -304,10 +321,18 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
   io.linkResolution := resolution
   io.nextEnable := nextEnable
   for (m <- 0 until n) {
+    /* A Module an earlier resolution already dropped is not part of the Link
+       and has no expected response (spec 4.5.3.4.12 Step 5d directs the Modules
+       operational in the Link), so it is named nothing rather than handed the
+       Link's outcome. */
     io.moduleResolution(m) := Mux(
-      active(m) && !nextEnable(m) && resolution =/= MmplResolution.trainError,
-      MmplResolution.disableModule,
-      resolution
+      !active(m),
+      MmplResolution.none,
+      Mux(
+        !nextEnable(m) && resolution =/= MmplResolution.trainError,
+        MmplResolution.disableModule,
+        resolution
+      )
     )
   }
 
@@ -316,10 +341,14 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
   // ==========================================================================
   block(Verification) {
     block(Verification.Assert) {
-      // Spec 5.7.3.4.1 rule 1: a degraded Link is one or two Modules.
+      // Spec 5.7.3.4.1 rule 1: a degraded Link is one or two Modules. That rule
+      // governs a *degraded* Link, so it does not reach the chart's other exit:
+      // "any modules with an operational configuration? No" leaves none, which
+      // is TRAINERROR rather than an illegal Module count.
       val shrinking = io.resolved && PopCount(nextEnable) < PopCount(active)
       assert(
-        !shrinking || PopCount(nextEnable) === 1.U ||
+        !shrinking || resolution === MmplResolution.trainError ||
+          PopCount(nextEnable) === 1.U ||
           PopCount(nextEnable) === 2.U,
         "FATAL: MMPL resolved to a Module count that is not a permitted configuration"
       )
@@ -343,10 +372,18 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
             .reduce(_ && _),
         "FATAL: MMPL resolution enabled a Module that was not operational"
       )
-      // Spec 4.5.3.4.12 Step 5: PHY retrain is a whole-Link directive.
+      /* Spec 4.5.3.4.12 Step 5: PHY retrain is a whole-Link directive. Checked
+         on what the Modules are actually handed, not on `resolution` -- the
+         `when` above assigns that literally, so testing it there is a tautology
+         the Mux below is under no obligation to honour. */
       assert(
         !io.resolved || !anyPhyRetrain ||
-          resolution === MmplResolution.phyRetrain,
+          ((0 until n)
+            .map(m =>
+              !active(m) || io.moduleResolution(m) === MmplResolution.phyRetrain
+            )
+            .reduce(_ && _) &&
+            (0 until n).map(m => nextEnable(m) === active(m)).reduce(_ && _)),
         "FATAL: MMPL resolved away from PHYRETRAIN while a Module reported one"
       )
     }
@@ -357,7 +394,9 @@ class MmplLinkSpeedResolver(params: MmplParams) extends Module {
       cover(io.resolved && PopCount(nextEnable) < PopCount(active))
       cover(io.resolved && resolution === MmplResolution.trainError)
       // The connector-1 loop actually iterating.
-      cover(io.resolved && passes.head.disabling && !passes(numPasses - 1).disabling)
+      cover(
+        io.resolved && passes.head.disabling && !passes(numPasses - 1).disabling
+      )
     }
   }
 }
