@@ -163,12 +163,11 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
 class PhyClkRstIO extends Bundle {
   // Main digital reset, asynchronous to PHY clocks.
   val reset = Input(Bool())
-  // Asynchronous reset for the RX clock divider.
-  val divResetb = Input(AsyncReset())
   // Asynchronous resets for the lane serdes, so that a test can restart one
-  // direction without disturbing the other. `txResetb` also holds the TX clock
-  // divider, so the serializers and the divided clock they hand words over on
-  // come back up together rather than at an arbitrary relative phase.
+  // direction without disturbing the other: `txResetb` resets the serializers
+  // and `rxResetb` the deserializers. Each also holds its own clock divider, so
+  // the serdes and the divided clock they hand words over on come back up
+  // together rather than at an arbitrary relative phase.
   val txResetb = Input(AsyncReset())
   val rxResetb = Input(AsyncReset())
 
@@ -332,7 +331,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // RX
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
-  rxClkDiv.io.resetb := io.clkRst.divResetb
+  rxClkDiv.io.resetb := io.clkRst.rxResetb
   io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
   val rxRstSync = Module(new RstSync)
   rxRstSync.io.rstbAsync := !io.clkRst.reset

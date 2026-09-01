@@ -94,7 +94,6 @@ class PhyTestRegsIO(
   // =====================
   /** The test setup being targeted. */
   val testTarget = Input(TestTarget())
-  val divResetb = Input(AsyncReset())
 
   /** What drives the mainband. In `tl` the mainband TX/RX FSMs below are held
     * in reset and PhyTest stops driving the lanes.
@@ -274,7 +273,6 @@ class PhyTestIO(
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
   val debug = Flipped(new PhyDebugIO(numLanes))
-  val divResetb = Output(AsyncReset())
   val txResetb = Output(AsyncReset())
   val rxResetb = Output(AsyncReset())
 
@@ -374,15 +372,12 @@ class PhyTest(
     with RequireSyncReset {
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
 
-  io.divResetb := io.regs.divResetb
-
-  // The lane serdes resets follow the global divider reset, and each direction
-  // can additionally be restarted on its own: `txRst` holds the serializers in
-  // reset and `rxRst` the deserializers, for as long as the strobe lasts.
-  val txSerdesResetb =
-    (io.regs.divResetb.asBool && !io.regs.txRst).asAsyncReset
-  val rxSerdesResetb =
-    (io.regs.divResetb.asBool && !io.regs.rxRst).asAsyncReset
+  // `txRst` resets the serializers and `rxRst` the deserializers, each for as
+  // long as its strobe lasts. Each also holds its direction's clock divider in
+  // the PHY, so the serdes and the divided clock they hand words over on come
+  // back up together rather than at an arbitrary relative phase.
+  val txSerdesResetb = (!(io.regs.txRst || reset.asBool)).asAsyncReset
+  val rxSerdesResetb = (!(io.regs.rxRst || reset.asBool)).asAsyncReset
   io.txResetb := txSerdesResetb
   io.rxResetb := rxSerdesResetb
 
