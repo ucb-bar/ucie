@@ -157,7 +157,7 @@ module phy_tb;
     assign intf.sb_txdata.d0 = 1'b0;
     assign intf.sb_txdata.d1 = 1'b0;
     assign intf.sb_txdata.pu_ctl = 0;
-    assign intf.sb_txdata.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txdata.pd_ctlb = {`PAD_DRIVER_SEGMENTS{1'b1}};
     assign intf.sb_txdata.en = 1;
     assign intf.sb_txdata.enb = 0;
 
@@ -169,7 +169,7 @@ module phy_tb;
     assign intf.sb_txclk.d0 = 1'b0;
     assign intf.sb_txclk.d1 = 1'b0;
     assign intf.sb_txclk.pu_ctl = 0;
-    assign intf.sb_txclk.pd_ctlb = {`PAD_DRIVER_CTL_BITS{1'b1}};
+    assign intf.sb_txclk.pd_ctlb = {`PAD_DRIVER_SEGMENTS{1'b1}};
     assign intf.sb_txclk.en = 1;
     assign intf.sb_txclk.enb = 0;
 

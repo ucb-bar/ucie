@@ -41,14 +41,13 @@
 // PAD DRIVER
 // Nominal pad driver output impedance (Ohms)
 `define PAD_DRIVER_R_OUT 50.0
-// Number of pad driver segments, and how many of them are code controlled.
-// The rest are always on, so the reachable range is
-// `PAD_DRIVER_SEGMENTS` - `PAD_DRIVER_CTL_BITS` to `PAD_DRIVER_SEGMENTS`.
-`define PAD_DRIVER_SEGMENTS 32
-`define PAD_DRIVER_CTL_BITS 5
+// Number of pad driver segments. Every one is code controlled, thermometer
+// coded on `pu_ctl` and `pd_ctlb`, so the reachable range is 0 to
+// `PAD_DRIVER_SEGMENTS` and an all-off code leaves the driver off.
+`define PAD_DRIVER_SEGMENTS 40
 // Segment count at which the driver hits `PAD_DRIVER_R_OUT`, picked near the
 // middle of that range so calibration has codes on both sides of nominal.
-`define PAD_DRIVER_NOMINAL_SEGMENTS 30
+`define PAD_DRIVER_NOMINAL_SEGMENTS 20
 // Resistance of a single pad driver segment (Ohms)
 `define PAD_DRIVER_R_SEGMENT (`PAD_DRIVER_NOMINAL_SEGMENTS * `PAD_DRIVER_R_OUT)
 

@@ -68,12 +68,8 @@ class SbDriver(implicit includeDefaultModels: Boolean = false)
   verilogBlackBox.io.d1 := io.in.d1
   io.out := verilogBlackBox.io.out
 
-  val puCtlTherm = Wire(UInt(64.W))
-  puCtlTherm := (1.U << io.ctl.pu_ctl) - 1.U
-  val pdCtlbTherm = Wire(UInt(64.W))
-  pdCtlbTherm := ~((1.U << io.ctl.pd_ctl) - 1.U)
-  verilogBlackBox.io.pu_ctl := puCtlTherm(SbDriver.DriverSegments - 1, 0)
-  verilogBlackBox.io.pd_ctlb := pdCtlbTherm(SbDriver.DriverSegments - 1, 0)
+  verilogBlackBox.io.pu_ctl := PadDriver.thermometer(io.ctl.pu_ctl)
+  verilogBlackBox.io.pd_ctlb := ~PadDriver.thermometer(io.ctl.pd_ctl)
   verilogBlackBox.io.en := io.ctl.en
   verilogBlackBox.io.en_b := io.ctl.en_b
 }
