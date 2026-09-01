@@ -39,9 +39,9 @@ mod tests {
     }
 
     #[test]
-    fn driver_data() -> Result<()> {
-        let work_dir = out_dir("driver_data");
-        simulate(SRC_FILES, "driver_data_tb", &work_dir)?;
+    fn pad_driver_data() -> Result<()> {
+        let work_dir = out_dir("pad_driver_data");
+        simulate(SRC_FILES, "pad_driver_data_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),
@@ -52,9 +52,35 @@ mod tests {
     }
 
     #[test]
-    fn driver_impedance() -> Result<()> {
-        let work_dir = out_dir("driver_impedance");
-        simulate(SRC_FILES, "driver_impedance_tb", &work_dir)?;
+    fn pad_driver_impedance() -> Result<()> {
+        let work_dir = out_dir("pad_driver_impedance");
+        simulate(SRC_FILES, "pad_driver_impedance_tb", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tx_tile_driver_data() -> Result<()> {
+        let work_dir = out_dir("tx_tile_driver_data");
+        simulate(SRC_FILES, "tx_tile_driver_data_tb", &work_dir)?;
+        let output = read_to_string(work_dir.join("xrun.out"))?;
+        assert_eq!(
+            output.matches("Error").count(),
+            0,
+            "output should have no functionality errors"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tx_tile_driver_impedance() -> Result<()> {
+        let work_dir = out_dir("tx_tile_driver_impedance");
+        simulate(SRC_FILES, "tx_tile_driver_impedance_tb", &work_dir)?;
         let output = read_to_string(work_dir.join("xrun.out"))?;
         assert_eq!(
             output.matches("Error").count(),

@@ -23,7 +23,8 @@ import edu.berkeley.cs.uciedigital.phy.macros.clocking._
   * is a test function and lives in `PhyTest`.
   */
 object Phy {
-  val SerdesRatio = 32
+  // Bits per lane per divided clock cycle, set by the TX tile's serializer.
+  val SerdesRatio = TxLane.SerdesRatio
 
   // Lanes that can be selected to carry the valid waveform in a test: the
   // `numLanes` data lanes, the dedicated valid lane, and the track lane. The
@@ -103,9 +104,12 @@ class RxIO(numLanes: Int = 16) extends Bundle {
   val track = Bits(Phy.SerdesRatio.W)
 }
 
+// The sideband bumps as the PHY sees them. The TX side is pre-serialization:
+// the `SbDriver` on each bump does the 2:1, so the digital side hands over the
+// two half rate bits and the clock to serialize them on.
 class SbIO extends Bundle {
-  val txClk = Input(Clock())
-  val txData = Input(Bool())
+  val txClk = Input(new SbSerialIO)
+  val txData = Input(new SbSerialIO)
   val rxClk = Output(Clock())
   val rxData = Output(Bool())
 }
@@ -205,9 +209,8 @@ class Shuffler(width: Int) extends RawModule {
 }
 
 class TxLaneDigitalCtlIO extends Bundle {
-  val dll_reset = Bool()
-  val driver = new DriverCtlIO
-  val skew = new SkewCtlIO
+  // Control that goes straight out to the analog tile's pins.
+  val tile = new TxLaneCtlIO
   val shuffler = Vec(32, UInt(5.W))
   val sample_negedge = Bool()
   val delay = UInt(7.W)
@@ -231,8 +234,6 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // Per-tile lane control, one entry per lane in the layout order described on
   // `Phy`. Each `shuffler` is a bit permutation within its own lane.
   val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
-  // DLL codes read back per physical lane, same order as `txctl`.
-  val dllCode = Output(Vec(numLanes + 4, UInt(5.W)))
   // Clocking tile control: phase code and frequency setting.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
   val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
@@ -297,28 +298,25 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
   // TODO do we need to set pu/pd ctl to 0 when driver en is low?
 
-  // Set up sideband
-  val sbTxClk = Module(new TxDriver)
-  sbTxClk.io.din := io.sb.txClk.asBool
-  io.top.sbTxClk := sbTxClk.io.dout.asClock
-  sbTxClk.io.ctl.pu_ctl := 63.U
-  sbTxClk.io.ctl.pd_ctl := 63.U
-  sbTxClk.io.ctl.en := true.B
-  sbTxClk.io.ctl.en_b := false.B
-  val sbTxData = Module(new TxDriver)
-  sbTxData.io.din := io.sb.txData
-  io.top.sbTxData := sbTxData.io.dout
-  sbTxData.io.ctl.pu_ctl := 63.U
-  sbTxData.io.ctl.pd_ctl := 63.U
-  sbTxData.io.ctl.en := true.B
-  sbTxData.io.ctl.en_b := false.B
+  // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
+  // and the pad driver as one cell.
+  val sbTxClk = Module(new SbDriver)
+  sbTxClk.io.in := io.sb.txClk
+  io.top.sbTxClk := sbTxClk.io.out.asClock
+  sbTxClk.io.ctl := PadDriverCtlIO.full
+  val sbTxData = Module(new SbDriver)
+  sbTxData.io.in := io.sb.txData
+  io.top.sbTxData := sbTxData.io.out
+  sbTxData.io.ctl := PadDriverCtlIO.full
   val esdSbRxClk = Module(new EsdRoutable)
   val esdSbRxData = Module(new EsdRoutable)
   esdSbRxClk.io.term := io.top.sbRxClk.asBool
   esdSbRxData.io.term := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
-  io.debug.sbTxClk := io.sb.txClk
+  // The forwarded clock as actually transmitted, i.e. after the bump driver
+  // has serialized the half rate pair.
+  io.debug.sbTxClk := sbTxClk.io.out.asClock
 
   // Global clock dividers
   // TX
@@ -364,9 +362,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
     val txLane = Module(new TxLane);
     txLane.suggestName(laneName);
-    txLane.io.dll_reset := io.regs.txctl(lane).dll_reset
-    txLane.io.dll_resetb := !io.regs.txctl(lane).dll_reset
-    txLane.io.ser_resetb := io.clkRst.txResetb
+    // The tile's divider reset is active high, `txResetb` active low.
+    txLane.io.rst := (!io.clkRst.txResetb.asBool).asAsyncReset
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
     // The bumps are named, so this is the one place the TX side maps a lane
@@ -382,9 +379,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     } else {
       io.top.txClkN := txLane.io.dout.asClock
     }
-    txLane.io.ctl.driver := io.regs.txctl(lane).driver
-    txLane.io.ctl.skew := io.regs.txctl(lane).skew
-    io.regs.dllCode(lane) := txLane.io.dll_code
+    txLane.io.ctl := io.regs.txctl(lane).tile
   }
 
   // RX Lanes

@@ -96,7 +96,7 @@ class SidebandLinkNodeTest
   // Capture the serialized stream from txOut and reassemble it.
   def captureTxSerial(c: SidebandLinkNode, bitWidth: Int = 128): BigInt = {
     var guard = 0
-    while (c.io.txOut.bits.peek().litValue == 0 && guard < 100) {
+    while (c.io.txOut.d0.peek().litValue == 0 && guard < 100) {
       c.clock.step()
       guard += 1
     }
@@ -104,7 +104,7 @@ class SidebandLinkNodeTest
     val chunks = bitWidth / 64
     for (chunk <- 0 until chunks) {
       for (b <- 0 until 64) {
-        result |= c.io.txOut.bits.peek().litValue << (chunk * 64 + b)
+        result |= c.io.txOut.d0.peek().litValue << (chunk * 64 + b)
         c.clock.step()
       }
       if (chunk < chunks - 1) {

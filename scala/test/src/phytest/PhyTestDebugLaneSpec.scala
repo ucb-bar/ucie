@@ -1,6 +1,8 @@
 package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
+import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
+import edu.berkeley.cs.uciedigital.phy.macros.TxLaneCtlIO
 import chisel3.simulator.HasSimulator
 import chisel3.simulator.HasSimulator.simulators.verilator
 import chisel3.simulator.scalatest.ChiselSim
@@ -41,7 +43,19 @@ class PhyTestDebugLaneHarness(
   laneClk := !laneClk
   dut.io.debug.txClk := laneClk.asClock
   dut.io.debug.rxClk := false.B.asClock
-  dut.io.debug.txDivClk := false.B.asClock
+  // The tile no longer brings out its own divided clock, so the harness
+  // supplies the one the tester hands words over on. Like the PHY's global TX
+  // divider it is held by the same reset as the lane serdes, so the two come up
+  // in a fixed relative phase. The tile takes a word every 16 `txClk` periods,
+  // and `laneClk` is half the main clock, so that is every 16 main cycles.
+  val laneDivClk = withReset(!io.divResetb) {
+    val ctr = RegInit(0.U(4.W))
+    val div = RegInit(false.B)
+    ctr := ctr + 1.U
+    when(ctr === 15.U) { div := !div }
+    div
+  }
+  dut.io.debug.txDivClk := laneDivClk.asClock
   dut.io.debug.sbTxClk := false.B.asClock
   dut.io.debug.rxData := DontCare
 
@@ -62,10 +76,10 @@ class PhyTestDebugLaneHarness(
   dut.io.regs.sb.rxPop := false.B
   dut.io.regs.sb.rxRst := false.B
 
-  // The lane's serializer is only released once `dll_reset` drops. The
-  // shuffler defaults to the permutation that cancels the tile's tree order;
-  // passing the identity instead exposes that raw order.
-  dut.io.regs.txctl.dll_reset := false.B
+  // The lane drives nothing until its driver is enabled. The shuffler defaults
+  // to the permutation that cancels the tile's tree order; passing the identity
+  // instead exposes that raw order.
+  dut.io.regs.txctl.tile := TxLaneCtlIO.full
   for (i <- 0 until Phy.SerdesRatio) {
     dut.io.regs.txctl.shuffler(i) := shuffle(i).U
   }
@@ -81,8 +95,22 @@ class PhyTestDebugLaneHarness(
   dut.io.tx.ready := true.B
   dut.io.rx.valid := false.B
   dut.io.rx.bits := DontCare
-  dut.io.sb.rxClk := dut.io.sb.txClk
-  dut.io.sb.rxData := dut.io.sb.txData
+  // Loop back through real bump drivers, so the 2:1 is exercised too.
+  dut.io.sb.rxClk := SbDriver
+    .bump(
+      dut.io.sb.txClk.clk,
+      dut.io.sb.txClk.d0,
+      dut.io.sb.txClk.d1,
+      includeDefaultModels = true
+    )
+    .asClock
+  dut.io.sb.rxData :=
+    SbDriver.bump(
+      dut.io.sb.txData.clk,
+      dut.io.sb.txData.d0,
+      dut.io.sb.txData.d1,
+      includeDefaultModels = true
+    )
 
   io.state := dut.io.regs.txDebugState
   io.packetsEnqueued := dut.io.regs.txDebugPacketsEnqueued
