@@ -66,6 +66,17 @@ jobs:
             edu.berkeley.cs.uciedigital.phytest.PhyTestSpec \
             edu.berkeley.cs.uciedigital.tilelink.CodegenSpec
 
+      # The multi-module Physical Layer is not reachable from UcieDigitalTop, so
+      # nothing above elaborates it and a refactor can break it silently. These
+      # generators run firtool over Mmpl and MultiModulePhy without a simulator.
+      - name: Elaborate multi-module PHY
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: |
+          ./mill runMain edu.berkeley.cs.uciedigital.logphy.MainMmpl
+          ./mill runMain edu.berkeley.cs.uciedigital.logphy.MainMultiModulePhy
+          ./mill runMain edu.berkeley.cs.uciedigital.logphy.MainMmplByteSwizzle
+          ./mill runMain edu.berkeley.cs.uciedigital.logphy.MainMmplLinkSpeedResolver
+
       # Every other test in TileLinkSpec drives a simulator, so select the one
       # generator test by name rather than running the suite.
       - name: Elaborate UcieTL

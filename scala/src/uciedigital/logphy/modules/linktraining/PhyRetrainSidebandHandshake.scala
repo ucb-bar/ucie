@@ -50,7 +50,14 @@ class PhyRetrainSidebandHandshake(sbParams: SidebandParams) extends Module {
   // OUT
   io.requesterRemoteRetrainEncoding := requester.io.remoteRetrainEncoding
   io.responderRemoteRetrainEncoding := responder.io.remoteRetrainEncoding
-  io.done := requester.io.requesterRdy && responder.io.requesterRdy
+  /* Spec 4.5.3.7: a Module exits PHYRETRAIN "once it has sent and received"
+     {PHYRETRAIN.retrain start resp}, so both halves must be ready. This used to
+     AND the requester's ready with the responder's *copy of the requester's*
+     ready, which let a Module leave as soon as its own request was answered
+     and before it had answered its partner's. The partner's request then
+     arrived at a Module already back in MBTRAIN, and the partner waited for a
+     response that never came. */
+  io.done := requester.io.requesterRdy && responder.io.responderRdy
 }
 
 class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
@@ -122,7 +129,12 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
 
       when(sbMsgExchanger.io.resp.valid) {
         validRemoteRetrainEncoding := true.B
-        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(74, 72)
+        /* Table 7-10: the Retrain Encoding is MsgInfo[2:0], and SBMsgCreate
+           places MsgInfo at bits [55:40] of the header -- the same slice the
+           REPAIR lane-map decode reads. Bits [74:72] are data bits, always
+           zero on a message without data, so the Table 4-12 resolution never
+           saw the remote encoding and every die fell back to its own. */
+        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(42, 40)
       }
 
       requesterRdy := sbMsgExchanger.io.exchDone
@@ -197,7 +209,12 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
 
       when(sbMsgExchanger.io.resp.valid) {
         validRemoteRetrainEncoding := true.B
-        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(74, 72)
+        /* Table 7-10: the Retrain Encoding is MsgInfo[2:0], and SBMsgCreate
+           places MsgInfo at bits [55:40] of the header -- the same slice the
+           REPAIR lane-map decode reads. Bits [74:72] are data bits, always
+           zero on a message without data, so the Table 4-12 resolution never
+           saw the remote encoding and every die fell back to its own. */
+        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(42, 40)
       }
 
       sbMsgExchanger.io.req.valid := io.localRetrainEncoding.valid

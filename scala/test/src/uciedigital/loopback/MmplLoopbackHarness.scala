@@ -56,6 +56,10 @@ class MmplLoopbackHarness(
     val lpStateReq = Input(Vec(2, RDIStateReq()))
     val swStartLinkTraining = Input(Vec(2, Bool()))
     val pwrGood = Input(Vec(2, Bool()))
+    // Runtime Link Test Control register change, per die and Module, which in
+    // MBTRAIN.LINKSPEED with PHY_IN_RETRAIN set is the trigger for a PHY
+    // retrain from LINKSPEED (spec 4.5.3.4.12 Step 4a).
+    val changeInRuntimeLinkCtrlRegs = Input(Vec(2, Vec(n, Bool())))
 
     // Per Module, because a multi-module Link can have Modules in different
     // states before the MMPL resolves them.
@@ -82,6 +86,10 @@ class MmplLoopbackHarness(
     val plTrdy = Output(Vec(2, Bool()))
     val plValid = Output(Vec(2, Bool()))
     val sbFaultSeen = Output(Vec(2, Bool()))
+    // Which Module latched a fault, and the header of the first packet that
+    // caused one, so a test can name the message rather than just the die.
+    val sbUnhandledSeen = Output(Vec(2, Vec(n, Bool())))
+    val sbFirstFaultHeader = Output(Vec(2, Vec(n, UInt(64.W))))
 
     val injectLaneError =
       Option.when(laneErrorInjection)(Input(Vec(2, Vec(n, Bool()))))
@@ -141,7 +149,8 @@ class MmplLoopbackHarness(
       ctrl.swStartLinkTraining := io.swStartLinkTraining(i)
       ctrl.retryTrainingAmt := 0.U
       ctrl.maxErrorThresholdPerLane := 0.U
-      ctrl.changeInRuntimeLinkCtrlRegsDetected := false.B
+      ctrl.changeInRuntimeLinkCtrlRegsDetected :=
+        io.changeInRuntimeLinkCtrlRegs(i)(m)
       ctrl.runtimeLinkCtrlBusyBit := false.B
       ctrl.runtimeRequestForRepair := false.B
       ctrl.swRetrainRequest := false.B
@@ -208,6 +217,11 @@ class MmplLoopbackHarness(
     io.plValid(i) := dut.rdi.plValid
     io.plData.foreach(_(i) := dut.rdi.plData)
 
+    for (m <- 0 until n) {
+      io.sbUnhandledSeen(i)(m) :=
+        dut.status(m).sideband.sbUnhandledCurrentLayerMsgSeen
+      io.sbFirstFaultHeader(i)(m) := dut.status(m).sideband.sbFirstFaultHeader
+    }
     io.sbFaultSeen(i) := (0 until n)
       .map { m =>
         val sb = dut.status(m).sideband

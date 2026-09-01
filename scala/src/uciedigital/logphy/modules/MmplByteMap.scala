@@ -139,9 +139,9 @@ class MmplByteSwizzle(params: MmplParams) extends Module {
 
   // Rank, the active Module count and the beat index are all in 0 to n.
   private val rankW = log2Ceil(n + 1)
-  // Largest byte offset a legal rank can introduce is (n - 1) * mbLanes. Sized
-  // one bit wider so an out-of-range rank saturates high instead of wrapping
-  // to zero and aliasing onto rank 0's slice.
+  // Largest byte offset a legal rank can introduce is (n - 1) * mbLanes, and
+  // rank <= n - 1 by construction, so this is exact for every rank the MMPL can
+  // present. Chisel truncates a too-wide assignment rather than saturating it.
   private val shiftBytesW = log2Ceil(n * params.afe.mbLanes + 1)
 
   val io = IO(new Bundle {
