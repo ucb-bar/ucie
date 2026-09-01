@@ -170,6 +170,12 @@ class MmplModuleCtrlIO extends Bundle {
   // with the same retrain encoding, because they must stay at one width and
   // speed.
   val commonRetrainEncoding = Valid(UInt(3.W))
+  /* This Module is not part of the operational Link: a LINKSPEED resolution
+     disabled it (spec 4.5.3.4.12 Step 5d, "TRAINERROR and eventually RESET")
+     or it has no remote Module Partner (Table 5-28's NC). It holds in RESET
+     rather than retraining on its own, until the whole Link retrains from
+     RESET and the MMPL restores it. */
+  val moduleDisabled = Output(Bool())
 
   /** Drives the directives for a Link with no MMPL above it. */
   def tieOffSingleModule(): Unit = {
@@ -178,6 +184,7 @@ class MmplModuleCtrlIO extends Bundle {
     resolution.bits := MmplResolution.none
     commonRetrainEncoding.valid := false.B
     commonRetrainEncoding.bits := 0.U
+    moduleDisabled := false.B
   }
 }
 

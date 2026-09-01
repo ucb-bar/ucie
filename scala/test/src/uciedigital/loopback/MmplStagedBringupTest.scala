@@ -56,7 +56,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
     (0 until 2)
       .map { die =>
         val per = modules(h)
-          .map(m => s"m$m=${h.io.ltState(die)(m).peek()}")
+          .map(m =>
+            s"m$m=${h.io.ltState(die)(m).peek()}/${h.io.ltsmState(die)(m).peek()}"
+          )
           .mkString(" ")
         s"die$die[$per]"
       }
@@ -119,6 +121,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
       h.io.lpStateReq(die).poke(RDIStateReq.nop)
       h.io.swStartLinkTraining(die).poke(false.B)
       h.io.pwrGood(die).poke(true.B)
+      for (m <- modules(h)) {
+        h.io.changeInRuntimeLinkCtrlRegs(die)(m).poke(false.B)
+      }
     }
     h.clock.step(resetWait + 128)
     for (die <- 0 until 2; m <- modules(h)) {
@@ -544,7 +549,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
 
           // MBTRAIN.REPAIR has to complete for the Link to carry on training.
           for (m <- injected) h.io.injectLaneError.get(0)(m).poke(false.B)
-          stepWhileFailing(h, mbTrainCycles, "every Module left MBTRAIN.REPAIR") {
+          stepWhileFailing(
+            h,
+            mbTrainCycles,
+            "every Module left MBTRAIN.REPAIR"
+          ) {
             (0 until 2).forall(die =>
               (0 until numModules).forall(m =>
                 h.io.ltsmState(die)(m).peek().litValue !=
@@ -617,7 +626,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           }
 
           for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
-          stepWhileFailing(h, rdiFlagCycles, "the degraded RDI reached Active") {
+          stepWhileFailing(
+            h,
+            rdiFlagCycles,
+            "the degraded RDI reached Active"
+          ) {
             (0 until 2).forall(die =>
               h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
             )
@@ -638,6 +651,128 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           }
         }
       }
+
+      it("Stage 11: a PHY retrain from LINKSPEED takes every Module round") {
+        /* Spec 4.5.3.4.12 Step 4a: with PHY_IN_RETRAIN set, a change in the
+           Runtime Link Test Control register makes a Module send
+           {MBTRAIN.LINKSPEED exit to phy retrain req}, and Step 5 has the
+           request received on any Module take every Module of the Link to
+           PHYRETRAIN. Driven end to end on two dies: an Adapter-directed
+           retrain first, so PHY_IN_RETRAIN is set, then the register change on
+           one Module of die 0, then a clean pass back to Active with no Module
+           lost. A stale {exit to phy retrain} bit surviving into the next
+           LINKSPEED pass turns this into a PHYRETRAIN loop, and a sibling
+           entering PHYRETRAIN after its partner's {PHYRETRAIN.retrain start
+           req} has arrived deadlocks it. */
+        simulate(harness(false), firtoolOpts = firtoolOpts) { h =>
+          def allIn(state: LTState.Type): Boolean =
+            everyModule(h) { (die, m) =>
+              h.io.ltState(die)(m).peek().litValue == state.litValue
+            }
+          def rdiIn(state: RDIState.Type): Boolean =
+            (0 until 2).forall { die =>
+              h.io.plStateSts(die).peek().litValue == state.litValue
+            }
+
+          bringUpToActive(h)
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepUntil(h, rdiFlagCycles, "aggregate RDI Active")(
+            rdiIn(RDIState.active)
+          )
+
+          // Die 0's Adapter asks for a retrain. Die 1's makes no request while
+          // the Link retrains, as spec 10.3.3.4 has it wait for the PHY.
+          h.io.lpStateReq(1).poke(RDIStateReq.nop)
+          h.io.lpStateReq(0).poke(RDIStateReq.retrain)
+          stepWhileFailing(
+            h,
+            sidebandCycles,
+            "both RDIs in Retrain and every Module in PHYRETRAIN"
+          ) {
+            rdiIn(RDIState.retrain) && allIn(LTState.sPHYRETRAIN)
+          }
+          h.io.lpStateReq(0).poke(RDIStateReq.nop)
+
+          // Die 0 Module 0 sees the register change and will take the
+          // LINKSPEED exit; the MMPLs must carry every other Module along.
+          h.io.changeInRuntimeLinkCtrlRegs(0)(0).poke(true.B)
+          stepWhileFailing(h, mbTrainCycles, "every Module back in MBTRAIN") {
+            allIn(LTState.sMBTRAIN)
+          }
+
+          // Modules enter and leave the second PHYRETRAIN staggered, so watch
+          // for each one rather than for a cycle with all of them there. The
+          // register change is withdrawn as soon as the Module that took the
+          // exit is back in PHYRETRAIN, so the next pass completes.
+          val seen = Array.fill(2, numModules)(false)
+          var left = 2 * mbTrainCycles
+          while (left > 0 && !seen.forall(_.forall(identity))) {
+            for (die <- 0 until 2; m <- 0 until numModules) {
+              if (
+                h.io.ltState(die)(m).peek().litValue ==
+                  LTState.sPHYRETRAIN.litValue
+              ) seen(die)(m) = true
+            }
+            if (seen(0)(0)) h.io.changeInRuntimeLinkCtrlRegs(0)(0).poke(false.B)
+            h.clock.step(1)
+            left -= 1
+          }
+          for (die <- 0 until 2; m <- 0 until numModules) {
+            assert(
+              seen(die)(m),
+              s"die $die module $m never followed the LINKSPEED exit to " +
+                s"PHYRETRAIN: ${states(h)}"
+            )
+          }
+
+          stepWhileFailing(
+            h,
+            2 * mbTrainCycles,
+            "every Module back in LINKINIT after the PHY retrain"
+          ) {
+            allIn(LTState.sLINKINIT)
+          }
+          for (die <- 0 until 2; m <- 0 until numModules) {
+            h.io
+              .moduleEnable(die)(m)
+              .expect(true.B, s"die $die module $m lost to a PHY retrain")
+          }
+
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepWhileFailing(h, rdiFlagCycles, "aggregate RDI Active again") {
+            rdiIn(RDIState.active)
+          }
+          stepWhileFailing(h, rdiFlagCycles, "every Module ACTIVE again") {
+            allIn(LTState.sACTIVE)
+          }
+          for (die <- 0 until 2) {
+            h.io.plTrainError(die).expect(false.B, s"die $die training error")
+            assert(
+              !h.io.sbFaultSeen(die).peekBoolean(),
+              s"die $die sideband fault: ${sidebandFaults(h)}"
+            )
+          }
+        }
+      }
     }
   }
+
+  /** Names the first faulting sideband packet on every Module that saw one,
+    * decoded per the header layout SBMsgCreate builds.
+    */
+  private def sidebandFaults(h: H): String =
+    (for {
+      die <- 0 until 2
+      m <- modules(h)
+      if h.io.sbUnhandledSeen(die)(m).peekBoolean() ||
+        h.io.sbFirstFaultHeader(die)(m).peek().litValue != 0
+    } yield {
+      val hdr = h.io.sbFirstFaultHeader(die)(m).peek().litValue
+      val opcode = (hdr & 0x1f).toInt
+      val msgCode = ((hdr >> 14) & 0xff).toInt
+      val msgSubcode = ((hdr >> 32) & 0xff).toInt
+      val msgInfo = ((hdr >> 40) & 0xffff).toInt
+      f"die $die module $m unhandled=${h.io.sbUnhandledSeen(die)(m).peekBoolean()} " +
+        f"opcode=$opcode%02x msgCode=$msgCode%02x subcode=$msgSubcode%02x info=$msgInfo%04x"
+    }).mkString("; ")
 }

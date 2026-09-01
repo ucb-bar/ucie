@@ -143,7 +143,16 @@ class SidebandInterfaceNode(
   priorityQueue.io.enq.valid := gatedDeserializerValid
 
   priorityQueue.io.deq <> io.rxOut
-  io.rxCreditReturn := io.rxOut.ready && io.rxOut.valid // Return credit when message is sent out
+  /* Return a credit only for packets that consumed one. Spec 7.1.3.1: "The
+     Transmitter must not check for credits before sending Register Access
+     Completions, and the Receiver must guarantee unconditional sinking for any
+     Register Access Completion packets", and 7.1.3.3: "Register Access
+     completions do not consume a credit and must always sink." The transmit
+     path above already honours that (`consumeCredit`); returning one here for a
+     completion is the same asymmetry seen from the other side, and it pushes
+     the remote transmitter's counter above the credits it was given. */
+  io.rxCreditReturn := io.rxOut.ready && io.rxOut.valid &&
+    !SBM.isRegAccessComplete(io.rxOut.bits(4, 0))
 
   // The priority queue must not be full when there is a valid message incoming
   io.rxPriorityQueuesFull := gatedDeserializerValid && !priorityQueue.io.enq.ready

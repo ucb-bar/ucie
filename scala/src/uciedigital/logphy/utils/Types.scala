@@ -144,7 +144,11 @@ case class MmplParams(
     /* Mainband beats of skew the receive gather absorbs between Modules.
        Spec 4.7.1.2 notes Modules of one Link can be staggered, and pl_valid has
        no backpressure (spec 10.1.4), so a Module running ahead has nowhere to
-       go but this queue. */
+       go but this queue. It is also the bound on how long one Module may
+       withhold pl_valid -- after a Valid framing error, say -- while its
+       siblings keep delivering, before the hosted RDI state machine must have
+       left Active and flushed the gather: a slice arriving at a full queue is
+       dropped, and asserted on. */
     rxAlignDepth: Int = 8,
     /* Whole sideband cfg packets the transmit path stages before handing one to
        a Module. Spec 7.1.4 needs the phases of a packet on consecutive cycles,
@@ -168,12 +172,25 @@ case class MmplParams(
     afe.mbSerializerRatio % 8 == 0,
     s"MMPL requires a serializer ratio that is a multiple of 8, got ${afe.mbSerializerRatio}"
   )
-  // MainbandLaneController.activeLanesForCode reports 16 active Lanes for the
-  // "all functional" code regardless of mbLanes, so an x8 Module would disagree
-  // with the MMPL byte map. Standard Package x16 is the integration target.
+  /* MainbandLaneController.activeLanesForCode reports 16 active Lanes for the
+     "all functional" code regardless of mbLanes, so an x8 Module would disagree
+     with the MMPL byte map. Standard Package x16 is the integration target.
+
+     The package type is part of the check, not just the width. `packageType`
+     is the only thing selecting Figure 4-48's resolution rules over Figure
+     4-47's (MmplLinkSpeedResolver), and nothing downstream ties it to
+     regs.UciePackageType -- so an Advanced part left on the default would
+     silently run the Standard flow chart, degrading speed where the spec
+     requires a repair, consistently on both die and therefore invisibly.
+     Spec Figure 1-14 also puts Advanced multi-module Modules at x64 or x32, so
+     an Advanced x16 was never a legal configuration to accept in the first
+     place. Advanced multi-module is not implemented or tested here; refuse it
+     at elaboration rather than run the wrong chart. */
   require(
-    numModules == 1 || afe.mbLanes == 16,
-    s"Multi-module MMPL currently targets Standard Package x16 Modules, got x${afe.mbLanes}"
+    numModules == 1 ||
+      (packageType == MmplPackageType.Standard && afe.mbLanes == 16),
+    s"Multi-module MMPL currently targets Standard Package x16 Modules, got " +
+      s"$packageType x${afe.mbLanes}"
   )
 
   /** Lanes one Module owns at full width. */
@@ -212,6 +229,6 @@ case class MmplParams(
     trainError    -> no operational configuration remains
  */
 object MmplResolution extends ChiselEnum {
-  val none, done, repair, speedDegrade, disableModule, phyRetrain,
-      trainError = Value
+  val none, done, repair, speedDegrade, disableModule, phyRetrain, trainError =
+    Value
 }

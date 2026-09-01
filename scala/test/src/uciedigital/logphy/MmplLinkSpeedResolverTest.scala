@@ -114,7 +114,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   /** One trip through the decision diamonds of Figure 4-48. */
   private def decideOnce(
       reports: Seq[Report],
-      narrower: Seq[Boolean],
+      laneCounts: Seq[Int],
       active: Seq[Boolean],
       speedGTs: Int,
       numModules: Int,
@@ -125,9 +125,15 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
     val nextLower = if (idx == 0) 0 else ladder(idx - 1)
     val none = Seq.fill(numModules)(false)
 
+    /* Spec 4.7.1.2.1's "lower ... from the rest of the operational modules" is
+       relative to whichever Modules are still in the Link on this pass, so the
+       widest is recomputed here rather than fixed once. */
+    val widest =
+      (0 until numModules).map(m => if (active(m)) laneCounts(m) else 0).max
     val widthReq = (0 until numModules).map { m =>
       active(m) &&
-      (reports(m).sentRepair || reports(m).recvdRepair || narrower(m))
+      (reports(m).sentRepair || reports(m).recvdRepair ||
+        laneCounts(m) < widest)
     }
     val speedReq = (0 until numModules).map { m =>
       active(m) &&
@@ -153,7 +159,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   /** The whole chart including the loop back through connector 1. */
   private def model(
       reports: Seq[Report],
-      narrower: Seq[Boolean],
+      laneCounts: Seq[Int],
       enable: Seq[Boolean],
       speedGTs: Int,
       numModules: Int,
@@ -168,7 +174,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
     while (result.isEmpty && guard < numModules + 1) {
       guard += 1
       val (link, doomed) =
-        decideOnce(reports, narrower, active, speedGTs, numModules, standard)
+        decideOnce(reports, laneCounts, active, speedGTs, numModules, standard)
       if (link != "disable") result = Some(Outcome(link, active))
       else {
         val survivors = survivorsOf(active, doomed, numModules)
@@ -215,6 +221,16 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
     port.bits.recvdPhyRetrain.poke(report.recvdPhyRetrain.B)
   }
 
+  /** Lane count standing in for "already width degraded" vs "full width". The
+    * resolver compares counts rather than taking a precomputed narrow bit, so a
+    * Link whose Modules are all degraded to the same width has no narrow Module
+    * -- which is the behaviour spec 4.7.1.2.1 asks for.
+    */
+  private val fullWidthLanes = 16
+  private val degradedLanes = 8
+  private def laneCountFor(narrow: Boolean): Int =
+    if (narrow) degradedLanes else fullWidthLanes
+
   private def apply(
       c: MmplLinkSpeedResolver,
       reports: Seq[Report],
@@ -228,9 +244,13 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
     c.io.currentSpeed.poke(speed)
     for (m <- 0 until numModules) {
       c.io.enable(m).poke(enable(m).B)
-      c.io.narrowerThanPeers(m).poke((enable(m) && narrow(m)).B)
+      c.io.activeLanes(m).poke(laneCountFor(narrow(m)).U)
       driveReport(c.io.reports(m), reports(m), enable(m))
     }
+    /* The block is combinational, but a Chisel `assert` only samples on a clock
+       edge -- without a step the whole Verification layer never evaluates and
+       the design's own spec checks are dead weight in every test. */
+    c.clock.step()
     assert(
       c.io.resolved.peek().litToBoolean,
       "resolver did not report resolved"
@@ -277,12 +297,20 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
     // Per-Module directives must agree with nextEnable.
     for (m <- 0 until numModules) {
       val perModule = resolutionName(c.io.moduleResolution(m).peek().litValue)
-      if (out.link == "trainError") {
+      if (!enable(m)) {
+        // A Module an earlier resolution already dropped is not in the Link and
+        // has no expected response (spec 4.5.3.4.12 Step 5d), so it must be
+        // named nothing rather than handed the Link's outcome.
+        assert(
+          perModule == "none",
+          s"$context: Module $m is not in the Link but was told $perModule"
+        )
+      } else if (out.link == "trainError") {
         assert(
           perModule == "trainError",
           s"$context: Module $m was told $perModule, Link resolved trainError"
         )
-      } else if (enable(m) && !out.nextEnable(m)) {
+      } else if (!out.nextEnable(m)) {
         assert(
           perModule == "disableModule",
           s"$context: Module $m is dropped but was told $perModule"
@@ -411,7 +439,13 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
       // four-Module Links, so the clean Module simply carries on alone.
       simulate(new MmplLinkSpeedResolver(MmplParams(numModules = 2))) { c =>
         val out =
-          apply(c, Seq(sentRepairReq, clean), Seq(true, true), SpeedMode.speed16, 2)
+          apply(
+            c,
+            Seq(sentRepairReq, clean),
+            Seq(true, true),
+            SpeedMode.speed16,
+            2
+          )
         assert(out.link == "done", s"expected done, got ${out.link}")
         assert(
           out.nextEnable == Seq(false, true),
@@ -539,6 +573,60 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
       }
     }
 
+    it(
+      "stops calling a Module narrow once the wide Modules have been dropped"
+    ) {
+      /* Spec 4.7.1.2.1 measures "lower ... from the rest of the operational
+         modules", and the flow chart's connector 1 re-enters the decision with
+         the reduced Module set -- so the comparison has to be remade against
+         the survivors. A narrow bit computed once against the starting set
+         still flags the survivors of a disable as narrow after the very
+         Modules that made them narrow have gone, sending an already-uniform
+         Link to MBTRAIN.REPAIR to halve a width that needed no halving. */
+      simulate(new MmplLinkSpeedResolver(MmplParams(numModules = 2))) { c =>
+        // M0 is full width and cannot degrade further at 4 GT/s; M1 already
+        // went to x8 in MBINIT.REPAIRMB and is otherwise clean.
+        val out = apply(
+          c,
+          Seq(sentSpeedReq, clean),
+          Seq(true, true),
+          SpeedMode.speed4,
+          2,
+          narrower = Seq(false, true)
+        )
+        assert(
+          out.nextEnable == Seq(false, true),
+          s"expected M0 disabled and M1 to survive, got ${out.nextEnable}"
+        )
+        assert(
+          out.link == "done",
+          s"M1 is alone and uniform at x8, so the Link proceeds to LINKINIT; " +
+            s"got ${out.link}"
+        )
+      }
+
+      // The same on a four-Module Link, where rule 2 takes M1 down with M0 and
+      // leaves the two narrow Modules as a matched pair.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        val out = apply(
+          c,
+          Seq(sentSpeedReq, clean, clean, clean),
+          allEnabled,
+          SpeedMode.speed4,
+          4,
+          narrower = Seq(false, false, true, true)
+        )
+        assert(
+          out.nextEnable == Seq(false, false, true, true),
+          s"expected {M2, M3} to survive, got ${out.nextEnable}"
+        )
+        assert(
+          out.link == "done",
+          s"the survivors are both x8, so nothing is narrower; got ${out.link}"
+        )
+      }
+    }
+
     it("lets a Link that has already degraded together proceed to LINKINIT") {
       // The counterpart, and the reason the test above is stated relative to
       // the other Modules rather than against full width: once every Module has
@@ -594,7 +682,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         c.io.currentSpeed.poke(SpeedMode.speed16)
         for (m <- 0 until 4) {
           c.io.enable(m).poke(true.B)
-          c.io.narrowerThanPeers(m).poke(false.B)
+          c.io.activeLanes(m).poke(fullWidthLanes.U)
         }
         // Only M2 has anything to say, and it is heading for PHYRETRAIN.
         driveReport(c.io.reports(0), clean, valid = false)
@@ -629,7 +717,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         c.io.currentSpeed.poke(SpeedMode.speed16)
         for (m <- 0 until 4) {
           c.io.enable(m).poke(true.B)
-          c.io.narrowerThanPeers(m).poke(false.B)
+          c.io.activeLanes(m).poke(fullWidthLanes.U)
           driveReport(c.io.reports(m), clean, valid = m != 3)
         }
         assert(
@@ -653,7 +741,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   describe("MmplLinkSpeedResolver exhaustively, two modules") {
     val numModules = 2
     val params = MmplParams(numModules = numModules)
-    val noneNarrow = Seq.fill(numModules)(false)
+    val noneNarrow = Seq.fill(numModules)(fullWidthLanes)
 
     it("matches the reference model at every Link speed") {
       simulate(new MmplLinkSpeedResolver(params)) { c =>
@@ -702,7 +790,7 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   describe("MmplLinkSpeedResolver exhaustively, four modules") {
     val numModules = 4
     val params = MmplParams(numModules = numModules)
-    val noneNarrow = Seq.fill(numModules)(false)
+    val noneNarrow = Seq.fill(numModules)(fullWidthLanes)
     // 4 GT/s exercises the base case, 8 GT/s the width-over-speed comparison,
     // and 16 GT/s the speed degrade.
     val sampledSpeeds = speeds.filter { case (_, gts) =>
