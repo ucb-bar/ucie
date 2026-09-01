@@ -41,7 +41,6 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
   dut.io.regs.mainbandMode := BandMode.tl
   dut.io.regs.sidebandMode := BandMode.tl
   dut.io.regs.testTarget := TestTarget.mainband
-  dut.io.regs.divResetb := false.B.asAsyncReset
   dut.io.regs.txRst := false.B
   dut.io.regs.rxRst := false.B
   dut.io.regs.txExecute := false.B

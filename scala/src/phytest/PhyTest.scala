@@ -94,7 +94,6 @@ class PhyTestRegsIO(
   // =====================
   /** The test setup being targeted. */
   val testTarget = Input(TestTarget())
-  val divResetb = Input(AsyncReset())
 
   /** What drives the mainband. In `tl` the mainband TX/RX FSMs below are held
     * in reset and PhyTest stops driving the lanes.
@@ -274,7 +273,6 @@ class PhyTestIO(
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
   val debug = Flipped(new PhyDebugIO(numLanes))
-  val divResetb = Output(AsyncReset())
   val txResetb = Output(AsyncReset())
   val rxResetb = Output(AsyncReset())
 
@@ -374,17 +372,14 @@ class PhyTest(
     with RequireSyncReset {
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
 
-  io.divResetb := io.regs.divResetb
-
-  // The lane serdes resets follow the global divider reset, and each direction
-  // can additionally be restarted on its own: `txRst` holds the serializers in
-  // reset and `rxRst` the deserializers, for as long as the strobe lasts.
-  val txSerdesResetb =
-    (io.regs.divResetb.asBool && !io.regs.txRst).asAsyncReset
-  val rxSerdesResetb =
-    (io.regs.divResetb.asBool && !io.regs.rxRst).asAsyncReset
-  io.txResetb := txSerdesResetb
-  io.rxResetb := rxSerdesResetb
+  // `txRst` resets the serializers and `rxRst` the deserializers, each for as
+  // long as its strobe lasts. Each also holds its direction's clock divider in
+  // the PHY, so the serdes and the divided clock they hand words over on come
+  // back up together rather than at an arbitrary relative phase.
+  val phyTxRstb = (!(io.regs.txRst || reset.asBool)).asAsyncReset
+  val phyRxRstb = (!(io.regs.rxRst || reset.asBool)).asAsyncReset
+  io.txResetb := phyTxRstb
+  io.rxResetb := phyRxRstb
 
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
@@ -452,8 +447,8 @@ class PhyTest(
   ): (DecoupledIO[UInt], TxLane) = {
     val lane = Module(new TxLane)
     lane.suggestName(name)
-    // The tile's divider reset is active high, `txSerdesResetb` active low.
-    lane.io.rst := (!txSerdesResetb.asBool).asAsyncReset
+    // The tile's divider reset is active high, `phyTxRstb` active low.
+    lane.io.rst := (!phyTxRstb.asBool).asAsyncReset
     lane.io.clk := io.debug.txClk
     lane.io.ctl := ctl.tile
 
@@ -584,7 +579,7 @@ class PhyTest(
   // Sampled with the clock that shifted the data out, the way a mainband RX
   // lane is sampled with the clock the partner die's TX forwarded.
   rxLoopbackLane.io.clk := io.debug.txClk
-  rxLoopbackLane.io.resetb := rxSerdesResetb
+  rxLoopbackLane.io.resetb := phyRxRstb
 
   val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
   rxLoopbackShuffler.suggestName("rxloopback_shuffler")

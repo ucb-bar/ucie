@@ -274,7 +274,6 @@ class UcieTLRegs(
       io.ucieCtrl.retryTrainingAmt := ucieRetryTrainingAmt
       // MMIO registers.
       val testTarget = RegInit(TestTarget.mainband)
-      val divResetb = RegInit(false.B.asAsyncReset)
       val txTestMode = RegInit(TxTestMode.manual)
       val txDataMode = RegInit(DataMode.finite)
       val txLfsrSeed = RegInit(
@@ -475,7 +474,6 @@ class UcieTLRegs(
       io.test.txDataOffset := applyShift(txDataOffset)
 
       io.test.testTarget := applyShift(testTarget)
-      io.test.divResetb := applyShift(divResetb)
       io.test.mainbandMode := applyShift(mainbandMode)
       io.test.sidebandMode := applyShift(sidebandMode)
       io.test.txTestMode := applyShift(txTestMode)
@@ -536,7 +534,6 @@ class UcieTLRegs(
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
       val mmioRegs = Seq(
         toRegFieldRw(testTarget, "testTarget"),
-        toRegFieldRw(divResetb, "divResetb"),
         toRegFieldRw(txTestMode, "txTestMode"),
         toRegFieldRw(txDataMode, "txDataMode")
       ) ++ (0 until PhyTest.numTestLanes(params.numLanes)).map((i: Int) => {
@@ -863,7 +860,6 @@ class UcieTL(
     }
     io.debug <> test.io.bumps
     test.io.debug <> phy.io.debug
-    phy.io.clkRst.divResetb := test.io.divResetb
     phy.io.clkRst.txResetb := test.io.txResetb
     phy.io.clkRst.rxResetb := test.io.rxResetb
     test.io.regs <> regs.module.io.test
