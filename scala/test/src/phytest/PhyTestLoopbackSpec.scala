@@ -20,7 +20,8 @@ import edu.berkeley.cs.uciedigital.phy.Phy
 class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     extends Module {
   val io = IO(new Bundle {
-    val divResetb = Input(Bool())
+    // Active low hold on the lane serdes, driven onto `txRst`/`rxRst`.
+    val serdesRstb = Input(Bool())
     val fsmRst = Input(Bool())
     val execute = Input(Bool())
     val repeatPeriod = Input(UInt((bufferDepthPerLane - 5 + 1).W))
@@ -48,7 +49,7 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   // divider it is held by the same reset as the lane serdes, so the two come up
   // in a fixed relative phase. The tile takes a word every 16 `txClk` periods,
   // and `laneClk` is half the main clock, so that is every 16 main cycles.
-  val laneDivClk = withReset(!io.divResetb) {
+  val laneDivClk = withReset(!io.serdesRstb) {
     val ctr = RegInit(0.U(4.W))
     val div = RegInit(false.B)
     ctr := ctr + 1.U
@@ -66,15 +67,14 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.testTarget := TestTarget.loopback
   dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
-  dut.io.regs.divResetb := io.divResetb.asAsyncReset
   dut.io.regs.txTestMode := TxTestMode.manual
   dut.io.regs.txDataMode := DataMode.infinite
   dut.io.regs.rxDataMode := DataMode.infinite
   dut.io.regs.txManualRepeatPeriod := io.repeatPeriod
   dut.io.regs.txPacketsToSend := 0.U
   dut.io.regs.rxPacketsToReceive := 0.U
-  dut.io.regs.txRst := io.fsmRst
-  dut.io.regs.rxRst := io.fsmRst
+  dut.io.regs.txRst := io.fsmRst || !io.serdesRstb
+  dut.io.regs.rxRst := io.fsmRst || !io.serdesRstb
   dut.io.regs.txExecute := io.execute
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.txDataChunkIn.valid := io.writeChunk
@@ -153,7 +153,7 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
   describe("PhyTest loopback lane") {
     it("should carry the manual pattern from the TX lane to the RX lane") {
       simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
-        c.io.divResetb.poke(false.B)
+        c.io.serdesRstb.poke(false.B)
         c.io.fsmRst.poke(false.B)
         c.io.execute.poke(false.B)
         c.io.writeChunk.poke(false.B)
@@ -164,7 +164,7 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
         c.io.rxDataOffset.poke(0.U)
         c.io.repeatPeriod.poke(words.length.U)
         c.clock.step(4)
-        c.io.divResetb.poke(true.B)
+        c.io.serdesRstb.poke(true.B)
         c.clock.step(4)
 
         // The loopback lane sits in the last group, at the lane's own slot

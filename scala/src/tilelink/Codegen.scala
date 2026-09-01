@@ -301,7 +301,6 @@ object Codegen {
     reqs += write("txClkN", defaultClkN)
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
-    reqs += write("divResetb", 1)
 
     for (i <- 0 until PhyTest.NumDebugDrivers) {
       reqs += write(s"debugDriverctl_$i", enableDriverCtl)
@@ -727,10 +726,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
     body.append(
       formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
-    )
-    // TODO: Gate clock before de-asserting reset.
-    body.append(
-      formatWriteNamedReg("divResetb", f.formatLong(1))
     )
 
     {

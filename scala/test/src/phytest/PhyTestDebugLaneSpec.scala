@@ -24,7 +24,8 @@ class PhyTestDebugLaneHarness(
     shuffle: Int => Int = Phy.treeBitOrder
 ) extends Module {
   val io = IO(new Bundle {
-    val divResetb = Input(Bool())
+    // Active low hold on the lane serdes, driven onto `txRst`/`rxRst`.
+    val serdesRstb = Input(Bool())
     val data = Input(Vec(16, UInt(64.W)))
     val repeatPeriod = Input(UInt(6.W))
     val fsmRst = Input(Bool())
@@ -48,7 +49,7 @@ class PhyTestDebugLaneHarness(
   // divider it is held by the same reset as the lane serdes, so the two come up
   // in a fixed relative phase. The tile takes a word every 16 `txClk` periods,
   // and `laneClk` is half the main clock, so that is every 16 main cycles.
-  val laneDivClk = withReset(!io.divResetb) {
+  val laneDivClk = withReset(!io.serdesRstb) {
     val ctr = RegInit(0.U(4.W))
     val div = RegInit(false.B)
     ctr := ctr + 1.U
@@ -66,11 +67,10 @@ class PhyTestDebugLaneHarness(
   dut.io.regs.testTarget := TestTarget.mainband
   dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
-  dut.io.regs.divResetb := io.divResetb.asAsyncReset
-  dut.io.regs.txRst := false.B
+  dut.io.regs.txRst := !io.serdesRstb
   dut.io.regs.txExecute := false.B
   dut.io.regs.txDataChunkIn.valid := false.B
-  dut.io.regs.rxRst := false.B
+  dut.io.regs.rxRst := !io.serdesRstb
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.sb.txSend := false.B
   dut.io.regs.sb.rxPop := false.B
@@ -146,7 +146,7 @@ class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {
     // and checks the bump carries the resulting UI sequence.
     def runAndCheck(shuffle: Int => Int, what: String): Unit =
       simulate(new PhyTestDebugLaneHarness(shuffle = shuffle)) { c =>
-        c.io.divResetb.poke(false.B)
+        c.io.serdesRstb.poke(false.B)
         c.io.repeatPeriod.poke(words.length.U)
         c.io.fsmRst.poke(false.B)
         c.io.execute.poke(false.B)
@@ -158,7 +158,7 @@ class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {
         }
         c.clock.step(4)
         // Release the serializer's divider, then load the FSM's seeds.
-        c.io.divResetb.poke(true.B)
+        c.io.serdesRstb.poke(true.B)
         c.clock.step(4)
         c.io.fsmRst.poke(true.B)
         c.clock.step()

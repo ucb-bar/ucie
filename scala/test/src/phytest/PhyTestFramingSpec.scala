@@ -56,7 +56,6 @@ class PhyTestLfsrLoopback(
   dut.io.regs := DontCare
 
   dut.io.regs.testTarget := TestTarget.mainband
-  dut.io.regs.divResetb := false.B.asAsyncReset
   dut.io.regs.txTestMode := TxTestMode.lfsr
   dut.io.regs.txDataMode := DataMode.infinite
   dut.io.regs.rxDataMode := DataMode.infinite
