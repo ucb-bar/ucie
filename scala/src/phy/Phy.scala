@@ -211,9 +211,6 @@ class TxLaneDigitalCtlIO extends Bundle {
   // Control that goes straight out to the analog tile's pins.
   val tile = new TxLaneCtlIO
   val shuffler = Vec(32, UInt(5.W))
-  // Hand the word over from the backup registers on the other edge of the
-  // divided clock rather than straight from the queue. See the TX lanes in
-  // [[Phy]] for what that trades.
   val sample_negedge = Bool()
   val delay = UInt(7.W)
 }
@@ -227,8 +224,6 @@ class RxLaneDigitalCtlIO extends Bundle {
   val afeOpCycles = UInt(16.W)
   val afeOverlapCycles = UInt(16.W)
   val shuffler = Vec(32, UInt(5.W))
-  // As on TX: take the word the queue enqueues from the backup registers on
-  // the other edge of the divided clock rather than from the tile directly.
   val sample_negedge = Bool()
   val delay = UInt(7.W)
 }
@@ -340,13 +335,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   txRstSync.io.clk := io.clkRst.txDivClk
   io.clkRst.txDivRst := !txRstSync.io.rstbSync
   io.debug.txDivClk := io.clkRst.txDivClk
-  // The clock the backup TX samplers below run on: `txDivClk` inverted, rather
-  // than `clkout_3` taken straight from the divider, so that it is the other
-  // edge of the queue's clock by construction rather than by coincidence. The
-  // queues themselves are not in scope to invert -- they sit in `UcieTL`, which
-  // dequeues both `txTestFifo` and `txTlFifo` on this very port -- so this is
-  // as close to `!queue.deq_clock` as the PHY can be written.
-  val txDivClkInv = (!io.clkRst.txDivClk.asBool).asClock
   // RX
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
@@ -356,9 +344,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.rstbAsync := !io.clkRst.reset
   rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
-  // As on TX: the other edge of the port `UcieTL` enqueues `rxTestFifo` and
-  // `rxTlFifo` on.
-  val rxDivClkInv = (!io.clkRst.rxDivClk.asBool).asClock
 
   // The TX words in lane order, for the uniform lane pipeline below.
   val txLaneDin = Wire(Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W)))
@@ -370,28 +355,17 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   txLaneDin(Phy.clkPLane(numLanes)) := io.tx.clkp
   txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
 
-  // The backup TX handoff phase.
-  //
-  // The queue upstream hands a word over on the rising edge of `txDivClk`,
-  // half a word period from the edge the tiles load on, and everything from
-  // there to a tile is combinational. That half period is only as good as the
-  // assumption behind it: a tile divides the lane clock itself, so its load
-  // edge sits where the clock distribution puts it rather than where the
-  // divider here says it does. If the two come out closer than intended, the
-  // tile samples the word as it is changing.
-  //
-  // These registers are the other option. One word wide set, clocked on the
-  // other edge of `txDivClk`, relaunches the whole vector half a word period
-  // later; a lane whose `sample_negedge` is set takes its word from there, so
-  // its handoff moves to the opposite phase. Which of the two lands in the
-  // middle of a tile's load window depends on skew that is not known until the
-  // part is on a bench, hence the choice, and hence per lane. A lane that
-  // moves also sends its word one word period later than the lanes that did
-  // not, so the link has to be deskewed again afterwards.
-  //
-  // `txDivRst` is deasserted on the rising edge of `txDivClk`, half a period
-  // before these registers act on it.
-  val txLaneDinNeg = withClockAndReset(txDivClkInv, io.clkRst.txDivRst) {
+  // The backup TX handoff phase. The queue hands a word over on the rising edge
+  // of `txDivClk` and the tiles load half a word period later, which is only
+  // where the clock distribution actually puts that load edge. This set
+  // relaunches the words on the other edge of `txDivClk`, half a period away,
+  // for lanes whose `sample_negedge` picks it; which of the two lands in the
+  // middle of a tile's load window is a bring-up question, hence per lane. A
+  // lane that moves sends one word period later than one that did not.
+  val txLaneDinNeg = withClockAndReset(
+    (!io.clkRst.txDivClk.asBool).asClock,
+    io.clkRst.txDivRst
+  ) {
     RegNext(txLaneDin, 0.U.asTypeOf(chiselTypeOf(txLaneDin)))
   }
 
@@ -489,16 +463,14 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     }
   }
 
-  // The backup RX handoff phase, the mirror of the TX one above.
-  //
-  // A tile updates its word on the falling edge of `rxDivClk` and the queue
-  // upstream samples it on the rising edge, half a word period apart and, as
-  // on TX, only as far as the recovered lane clocks agree with the divider
-  // here. These registers sample the words on the other edge instead, and a
-  // lane whose `sample_negedge` is set hands that copy over: the queue then
-  // sees a register in its own domain rather than a tile's output, at the same
-  // one word period of added latency the TX side pays.
-  val rxLaneDoutNeg = withClockAndReset(rxDivClkInv, io.clkRst.rxDivRst) {
+  // The backup RX handoff phase, the mirror of the TX one: a tile updates its
+  // word on the falling edge of `rxDivClk` and the queue samples it on the
+  // rising edge, so this set samples on the other edge instead and the queue
+  // reads a register in its own domain. Same one word period of added latency.
+  val rxLaneDoutNeg = withClockAndReset(
+    (!io.clkRst.rxDivClk.asBool).asClock,
+    io.clkRst.rxDivRst
+  ) {
     RegNext(rxLaneDout, 0.U.asTypeOf(chiselTypeOf(rxLaneDout)))
   }
   val rxLaneWord = VecInit(
@@ -516,8 +488,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   }
   io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
   io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
-  // The bump follows the phase its lane is set to, so it shows the word the
-  // queue takes rather than one the digital may not be using.
-  io.debug.rxData := rxLaneWord
+  io.debug.rxData := rxLaneDout
 
 }

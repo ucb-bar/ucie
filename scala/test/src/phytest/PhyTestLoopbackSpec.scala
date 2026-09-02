@@ -155,104 +155,99 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
     BigInt("a5a5a5a5", 16)
   )
 
-  // The pattern goes out on the loopback TX lane and comes back on the
-  // loopback RX lane whichever handoff phase each end is set to. An end on
-  // the backup phase delays its word by one divided cycle, and since the RX
-  // starts capturing on the first word it sees that is not zero, the readback
-  // lands on the same word boundary either way.
-  def checkLoopback(
-      txSampleNegedge: Boolean,
-      rxSampleNegedge: Boolean
-  ): Unit =
-    simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
-      c.io.txSampleNegedge.poke(txSampleNegedge.B)
-      c.io.rxSampleNegedge.poke(rxSampleNegedge.B)
-      c.io.serdesRstb.poke(false.B)
-      c.io.fsmRst.poke(false.B)
-      c.io.execute.poke(false.B)
-      c.io.writeChunk.poke(false.B)
-      c.io.chunkIn.poke(0.U)
-      c.io.txDataLaneGroup.poke(0.U)
-      c.io.txDataOffset.poke(0.U)
-      c.io.rxDataLane.poke(0.U)
-      c.io.rxDataOffset.poke(0.U)
-      c.io.repeatPeriod.poke(words.length.U)
-      c.clock.step(4)
-      c.io.serdesRstb.poke(true.B)
-      c.clock.step(4)
-
-      // The loopback lane sits in the last group, at the lane's own slot
-      // within it.
-      c.io.txDataLaneGroup.poke((loopbackLane >> 2).U)
-      for ((word, offset) <- words.zipWithIndex) {
-        c.io.txDataOffset.poke(offset.U)
-        c.io.chunkIn.poke((word << (32 * (loopbackLane % 4))).U)
-        c.io.writeChunk.poke(true.B)
-        c.clock.step()
-        c.io.writeChunk.poke(false.B)
-        c.clock.step()
-      }
-
-      c.io.fsmRst.poke(true.B)
-      c.clock.step()
-      c.io.fsmRst.poke(false.B)
-      c.clock.step(4)
-
-      c.io.execute.poke(true.B)
-      c.clock.step()
-      c.io.execute.poke(false.B)
-
-      // Both async queues have to carry their far sides out of reset before
-      // anything moves, and each lane word takes a full divided cycle.
-      c.clock.step(64 * divCycle)
-
-      assert(
-        c.io.state.peek() == TxTestState.run,
-        "an infinite run should still be going"
-      )
-      val sent = c.io.txPacketsSent.peek().litValue
-      assert(
-        sent >= words.length,
-        s"the TX FSM should have enqueued onto the loopback lane, got $sent"
-      )
-      val received = c.io.rxPacketsReceived.peek().litValue
-      assert(
-        received >= words.length,
-        s"loopback RX should have captured whole packets, got $received"
-      )
-
-      // Read the capture SRAM back on the loopback lane.
-      c.io.rxDataLane.poke(loopbackLane.U)
-      val captured = (0 until words.length).map { offset =>
-        c.io.rxDataOffset.poke(offset.U)
-        c.clock.step(2)
-        c.io.rxDataChunk.peek().litValue
-      }
-
-      // Bit 0 of the first word is set, so capture starts on that word and
-      // the readback has to match the pattern offset for offset.
-      assert(
-        captured == words,
-        s"captured ${captured.map(_.toString(16))} does not match " +
-          s"${words.map(_.toString(16))}"
-      )
-    }
-
   describe("PhyTest loopback lane") {
+    // The pattern comes back whichever handoff phase each end is on: an end on
+    // the backup phase delays its word by a divided cycle, and the RX starts
+    // capturing on the first word it sees that is not zero either way.
+    def checkLoopback(txNeg: Boolean, rxNeg: Boolean): Unit =
+      simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
+        c.io.txSampleNegedge.poke(txNeg.B)
+        c.io.rxSampleNegedge.poke(rxNeg.B)
+        c.io.serdesRstb.poke(false.B)
+        c.io.fsmRst.poke(false.B)
+        c.io.execute.poke(false.B)
+        c.io.writeChunk.poke(false.B)
+        c.io.chunkIn.poke(0.U)
+        c.io.txDataLaneGroup.poke(0.U)
+        c.io.txDataOffset.poke(0.U)
+        c.io.rxDataLane.poke(0.U)
+        c.io.rxDataOffset.poke(0.U)
+        c.io.repeatPeriod.poke(words.length.U)
+        c.clock.step(4)
+        c.io.serdesRstb.poke(true.B)
+        c.clock.step(4)
+
+        // The loopback lane sits in the last group, at the lane's own slot
+        // within it.
+        c.io.txDataLaneGroup.poke((loopbackLane >> 2).U)
+        for ((word, offset) <- words.zipWithIndex) {
+          c.io.txDataOffset.poke(offset.U)
+          c.io.chunkIn.poke((word << (32 * (loopbackLane % 4))).U)
+          c.io.writeChunk.poke(true.B)
+          c.clock.step()
+          c.io.writeChunk.poke(false.B)
+          c.clock.step()
+        }
+
+        c.io.fsmRst.poke(true.B)
+        c.clock.step()
+        c.io.fsmRst.poke(false.B)
+        c.clock.step(4)
+
+        c.io.execute.poke(true.B)
+        c.clock.step()
+        c.io.execute.poke(false.B)
+
+        // Both async queues have to carry their far sides out of reset before
+        // anything moves, and each lane word takes a full divided cycle.
+        c.clock.step(64 * divCycle)
+
+        assert(
+          c.io.state.peek() == TxTestState.run,
+          "an infinite run should still be going"
+        )
+        val sent = c.io.txPacketsSent.peek().litValue
+        assert(
+          sent >= words.length,
+          s"the TX FSM should have enqueued onto the loopback lane, got $sent"
+        )
+        val received = c.io.rxPacketsReceived.peek().litValue
+        assert(
+          received >= words.length,
+          s"loopback RX should have captured whole packets, got $received"
+        )
+
+        // Read the capture SRAM back on the loopback lane.
+        c.io.rxDataLane.poke(loopbackLane.U)
+        val captured = (0 until words.length).map { offset =>
+          c.io.rxDataOffset.poke(offset.U)
+          c.clock.step(2)
+          c.io.rxDataChunk.peek().litValue
+        }
+
+        // Bit 0 of the first word is set, so capture starts on that word and
+        // the readback has to match the pattern offset for offset.
+        assert(
+          captured == words,
+          s"captured ${captured.map(_.toString(16))} does not match " +
+            s"${words.map(_.toString(16))}"
+        )
+      }
+
     it("should carry the manual pattern from the TX lane to the RX lane") {
-      checkLoopback(txSampleNegedge = false, rxSampleNegedge = false)
+      checkLoopback(txNeg = false, rxNeg = false)
     }
 
     it("should carry it with the TX lane on the backup handoff phase") {
-      checkLoopback(txSampleNegedge = true, rxSampleNegedge = false)
+      checkLoopback(txNeg = true, rxNeg = false)
     }
 
     it("should carry it with the RX lane on the backup handoff phase") {
-      checkLoopback(txSampleNegedge = false, rxSampleNegedge = true)
+      checkLoopback(txNeg = false, rxNeg = true)
     }
 
     it("should carry it with both ends on the backup handoff phase") {
-      checkLoopback(txSampleNegedge = true, rxSampleNegedge = true)
+      checkLoopback(txNeg = true, rxNeg = true)
     }
   }
 }
