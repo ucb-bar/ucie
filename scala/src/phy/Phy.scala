@@ -340,6 +340,13 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   txRstSync.io.clk := io.clkRst.txDivClk
   io.clkRst.txDivRst := !txRstSync.io.rstbSync
   io.debug.txDivClk := io.clkRst.txDivClk
+  // The clock the backup TX samplers below run on: `txDivClk` inverted, rather
+  // than `clkout_3` taken straight from the divider, so that it is the other
+  // edge of the queue's clock by construction rather than by coincidence. The
+  // queues themselves are not in scope to invert -- they sit in `UcieTL`, which
+  // dequeues both `txTestFifo` and `txTlFifo` on this very port -- so this is
+  // as close to `!queue.deq_clock` as the PHY can be written.
+  val txDivClkInv = (!io.clkRst.txDivClk.asBool).asClock
   // RX
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
@@ -349,6 +356,9 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.rstbAsync := !io.clkRst.reset
   rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDivRst := !rxRstSync.io.rstbSync
+  // As on TX: the other edge of the port `UcieTL` enqueues `rxTestFifo` and
+  // `rxTlFifo` on.
+  val rxDivClkInv = (!io.clkRst.rxDivClk.asBool).asClock
 
   // The TX words in lane order, for the uniform lane pipeline below.
   val txLaneDin = Wire(Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W)))
@@ -381,10 +391,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   //
   // `txDivRst` is deasserted on the rising edge of `txDivClk`, half a period
   // before these registers act on it.
-  val txLaneDinNeg = withClockAndReset(
-    (!io.clkRst.txDivClk.asBool).asClock,
-    io.clkRst.txDivRst
-  ) {
+  val txLaneDinNeg = withClockAndReset(txDivClkInv, io.clkRst.txDivRst) {
     RegNext(txLaneDin, 0.U.asTypeOf(chiselTypeOf(txLaneDin)))
   }
 
@@ -491,10 +498,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // lane whose `sample_negedge` is set hands that copy over: the queue then
   // sees a register in its own domain rather than a tile's output, at the same
   // one word period of added latency the TX side pays.
-  val rxLaneDoutNeg = withClockAndReset(
-    (!io.clkRst.rxDivClk.asBool).asClock,
-    io.clkRst.rxDivRst
-  ) {
+  val rxLaneDoutNeg = withClockAndReset(rxDivClkInv, io.clkRst.rxDivRst) {
     RegNext(rxLaneDout, 0.U.asTypeOf(chiselTypeOf(rxLaneDout)))
   }
   val rxLaneWord = VecInit(
