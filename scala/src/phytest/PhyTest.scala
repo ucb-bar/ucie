@@ -468,10 +468,20 @@ class PhyTest(
     fifo.io.deq_reset := !divRstSync.io.rstbSync
     fifo.io.deq.ready := true.B
 
+    // An empty queue sends zeros rather than repeating the last word.
+    val din = Mux(fifo.io.deq.valid, fifo.io.deq.bits, 0.U)
+    // The backup handoff phase the PHY's own lanes have, for the same reason:
+    // the word relaunched on the other edge of the divided clock.
+    val dinNeg = withClockAndReset(
+      (!io.debug.txDivClk.asBool).asClock,
+      !divRstSync.io.rstbSync
+    ) {
+      RegNext(din, 0.U(Phy.SerdesRatio.W))
+    }
+
     val shuffler = Module(new Shuffler(Phy.SerdesRatio))
     shuffler.suggestName(s"${name}_shuffler")
-    // An empty queue sends zeros rather than repeating the last word.
-    shuffler.io.din := Mux(fifo.io.deq.valid, fifo.io.deq.bits, 0.U)
+    shuffler.io.din := Mux(ctl.sample_negedge, dinNeg, din)
     shuffler.io.permutation := ctl.shuffler
     lane.io.din := shuffler.io.dout
 
@@ -599,7 +609,21 @@ class PhyTest(
   // The deserializer has no valid of its own: it hands over a word every
   // divided cycle whether or not the TX is sending.
   rxLoopbackFifo.io.enq.valid := true.B
-  rxLoopbackFifo.io.enq.bits := rxLoopbackShuffler.io.dout
+  // The tile updates its word on the same divided clock edge the queue
+  // enqueues on, so the two pass on the tile's clock to output delay alone.
+  // `sample_negedge` takes the word through a register on the falling edge
+  // instead, half a word period from the update. No latency either way.
+  val rxLoopbackWordNeg = withClockAndReset(
+    (!rxLoopbackLane.io.divclk).asClock,
+    !rxLoopbackRstSync.io.rstbSync
+  ) {
+    RegNext(rxLoopbackShuffler.io.dout, 0.U(Phy.SerdesRatio.W))
+  }
+  rxLoopbackFifo.io.enq.bits := Mux(
+    io.regs.loopbackRxctl.sample_negedge,
+    rxLoopbackWordNeg,
+    rxLoopbackShuffler.io.dout
+  )
   rxLoopbackFifo.io.deq_clock := clock
   rxLoopbackFifo.io.deq_reset := reset
 

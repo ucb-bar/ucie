@@ -32,6 +32,9 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     val rxDataLane = Input(UInt(log2Ceil(numLanes + 3).W))
     val rxDataOffset = Input(UInt((bufferDepthPerLane - 5).W))
     val rxDataChunk = Output(UInt(32.W))
+    // The loopback pair's backup handoff phase, one bit per direction.
+    val txSampleNegedge = Input(Bool())
+    val rxSampleNegedge = Input(Bool())
     val rxPacketsReceived = Output(UInt(64.W))
     val txPacketsSent = Output(UInt(64.W))
     val state = Output(TxTestState())
@@ -99,6 +102,8 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     dut.io.regs.loopbackTxctl.shuffler(i) := Phy.treeBitOrder(i).U
     dut.io.regs.loopbackRxctl.shuffler(i) := i.U
   }
+  dut.io.regs.loopbackTxctl.sample_negedge := io.txSampleNegedge
+  dut.io.regs.loopbackRxctl.sample_negedge := io.rxSampleNegedge
   dut.io.regs.loopbackRxctl.afeBypassEn := false.B
   dut.io.regs.loopbackRxctl.afeOpCycles := 16.U
   dut.io.regs.loopbackRxctl.afeOverlapCycles := 2.U
@@ -151,8 +156,13 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
   )
 
   describe("PhyTest loopback lane") {
-    it("should carry the manual pattern from the TX lane to the RX lane") {
+    // The pattern comes back whichever handoff phase each end is on: an end on
+    // the backup phase delays its word by a divided cycle, and the RX starts
+    // capturing on the first word it sees that is not zero either way.
+    def checkLoopback(txNeg: Boolean, rxNeg: Boolean): Unit =
       simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
+        c.io.txSampleNegedge.poke(txNeg.B)
+        c.io.rxSampleNegedge.poke(rxNeg.B)
         c.io.serdesRstb.poke(false.B)
         c.io.fsmRst.poke(false.B)
         c.io.execute.poke(false.B)
@@ -223,6 +233,21 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
             s"${words.map(_.toString(16))}"
         )
       }
+
+    it("should carry the manual pattern from the TX lane to the RX lane") {
+      checkLoopback(txNeg = false, rxNeg = false)
+    }
+
+    it("should carry it with the TX lane on the backup handoff phase") {
+      checkLoopback(txNeg = true, rxNeg = false)
+    }
+
+    it("should carry it with the RX lane on the backup handoff phase") {
+      checkLoopback(txNeg = false, rxNeg = true)
+    }
+
+    it("should carry it with both ends on the backup handoff phase") {
+      checkLoopback(txNeg = true, rxNeg = true)
     }
   }
 }
