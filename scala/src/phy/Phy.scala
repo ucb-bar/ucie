@@ -355,6 +355,20 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   txLaneDin(Phy.clkPLane(numLanes)) := io.tx.clkp
   txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
 
+  // The backup TX handoff phase. The queue hands a word over on the rising edge
+  // of `txDivClk` and the tiles load half a word period later, which is only
+  // where the clock distribution actually puts that load edge. This set
+  // relaunches the words on the other edge of `txDivClk`, half a period away,
+  // for lanes whose `sample_negedge` picks it; which of the two lands in the
+  // middle of a tile's load window is a bring-up question, hence per lane. A
+  // lane that moves sends one word period later than one that did not.
+  val txLaneDinNeg = withClockAndReset(
+    (!io.clkRst.txDivClk.asBool).asClock,
+    io.clkRst.txDivRst
+  ) {
+    RegNext(txLaneDin, 0.U.asTypeOf(chiselTypeOf(txLaneDin)))
+  }
+
   // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
   for (lane <- 0 until Phy.numTxLanes(numLanes)) {
     val laneName = Phy.laneName("tx", lane, numLanes)
@@ -363,7 +377,11 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     // is in terms of the lane's own word.
     val txShuffler = Module(new Shuffler(Phy.SerdesRatio))
     txShuffler.suggestName(s"${laneName}_shuffler")
-    txShuffler.io.din := txLaneDin(lane)
+    txShuffler.io.din := Mux(
+      io.regs.txctl(lane).sample_negedge,
+      txLaneDinNeg(lane),
+      txLaneDin(lane)
+    )
     txShuffler.io.permutation := io.regs.txctl(lane).shuffler
 
     val txLane = Module(new TxLane);
@@ -445,11 +463,31 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     }
   }
 
-  for (lane <- 0 until numLanes) {
-    io.rx.data(lane) := rxLaneDout(lane)
+  // The backup RX handoff phase, the mirror of the TX one: a tile updates its
+  // word on the falling edge of `rxDivClk` and the queue samples it on the
+  // rising edge, so this set samples on the other edge instead and the queue
+  // reads a register in its own domain. Same one word period of added latency.
+  val rxLaneDoutNeg = withClockAndReset(
+    (!io.clkRst.rxDivClk.asBool).asClock,
+    io.clkRst.rxDivRst
+  ) {
+    RegNext(rxLaneDout, 0.U.asTypeOf(chiselTypeOf(rxLaneDout)))
   }
-  io.rx.valid := rxLaneDout(Phy.validLane(numLanes))
-  io.rx.track := rxLaneDout(Phy.trackLane(numLanes))
+  val rxLaneWord = VecInit(
+    (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
+      Mux(
+        io.regs.rxctl(lane).sample_negedge,
+        rxLaneDoutNeg(lane),
+        rxLaneDout(lane)
+      )
+    )
+  )
+
+  for (lane <- 0 until numLanes) {
+    io.rx.data(lane) := rxLaneWord(lane)
+  }
+  io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
+  io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
 
 }
