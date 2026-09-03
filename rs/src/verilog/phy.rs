@@ -1,23 +1,26 @@
-use const_format::concatcp;
-
-use crate::verilog::VERILOG_SRC_DIR;
-
-pub const PHY_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/phy.sv");
+//! The whole PHY: every lane's tiles, the clock distribution between them, and
+//! a loopback from each transmitter to the receiver facing it.
+//!
+//! Run at every level, which is what says the levels are interchangeable at
+//! more than cell granularity. The circuit level is by far the longest bench
+//! here -- the switched-capacitor front ends put the analog solver on
+//! femtosecond steps, twenty lanes over -- so reach for the eye level while
+//! iterating.
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
     use test_log::test;
 
-    use crate::{
-        tests::out_dir,
-        verilog::{get_src_files, simulate},
-    };
+    use crate::verilog::{Level, harness::expect_clean};
 
     #[test]
-    fn phy() -> Result<()> {
-        let work_dir = out_dir("phy");
-        simulate(get_src_files(), "phy_tb", &work_dir)?;
-        Ok(())
+    fn eye() -> Result<()> {
+        expect_clean(Level::Eye, "phy_tb")
+    }
+
+    #[test]
+    fn circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "phy_tb")
     }
 }

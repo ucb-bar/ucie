@@ -101,7 +101,6 @@ module rx_data_lane (
     vref_sel_6
   };
   rxdata_tile_intf intf();
-  assign intf.din = din;
   assign intf.clk = clk;
   assign intf.rstb = rstb;
   assign intf.zen = zen;
@@ -149,7 +148,8 @@ module rx_data_lane (
   assign dout_31 = intf.dout[31];
   assign divclk = intf.divclk;
   rxdata_tile tile(
-    .intf(intf)
+    .intf(intf),
+    .din(din)
   );
 endmodule
 
@@ -222,7 +222,6 @@ module rx_clock_lane (
     vref_sel_6
   };
   rxclk_tile_intf intf();
-  assign intf.clkin = clkin;
   assign clkout = intf.clkout;
   assign intf.zen = zen;
   assign intf.zctl = zctl;
@@ -235,12 +234,12 @@ module rx_clock_lane (
   assign intf.vdd = 1'b1;
   assign intf.vss = 1'b0;
   rxclk_tile tile(
-    .intf(intf)
+    .intf(intf),
+    .clkin(clkin)
   );
 endmodule
 
 interface rxdata_tile_intf;
-    wire din;
     logic clk;
     logic divclk;
     logic rstb;
@@ -252,15 +251,21 @@ interface rxdata_tile_intf;
     wire vdd, vss;
 endinterface
 
+// As on the TX side, the bump is a pin rather than a member of
+// `rxdata_tile_intf`: a SystemVerilog interface cannot hold an electrical net,
+// and a bump routed through one arrives at the termination and the front end
+// through connect modules rather than as a shared analog node. See
+// `verilog/README.md`.
 module rxdata_tile(
-    rxdata_tile_intf intf
+    rxdata_tile_intf intf,
+    input din
 );
 
 wire vref;
 wire dout_afe;
 
 termination term(
-    .vin(intf.din),
+    .vin(din),
     .en(intf.zen),
     .zctl(intf.zctl),
     .vss(intf.vss)
@@ -275,7 +280,7 @@ rdac rdac(
 
 rx_afe afe(
     .vref(vref),
-    .din(intf.din),
+    .din(din),
     .a_en(intf.a_en),
     .a_pc(intf.a_pc),
     .b_en(intf.b_en),
@@ -308,7 +313,6 @@ tree_des des(
 endmodule
 
 interface rxclk_tile_intf;
-    wire clkin;
     logic clkout;
     logic zen;
     logic [`TERMINATION_CTL_BITS-1:0] zctl;
@@ -318,13 +322,14 @@ interface rxclk_tile_intf;
 endinterface
 
 module rxclk_tile(
-    rxclk_tile_intf intf
+    rxclk_tile_intf intf,
+    input clkin
 );
 
 wire vref;
 
 termination term(
-    .vin(intf.clkin),
+    .vin(clkin),
     .en(intf.zen),
     .zctl(intf.zctl),
     .vss(intf.vss)
@@ -339,7 +344,7 @@ rdac rdac(
 
 rx_afe afe(
     .vref(vref),
-    .din(intf.clkin),
+    .din(clkin),
     .a_en(intf.a_en),
     .a_pc(intf.a_pc),
     .b_en(intf.b_en),

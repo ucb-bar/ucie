@@ -58,8 +58,17 @@ module clkmux(
 
   reg selected;
   integer i;
+  integer num_sel;
   always @(*) begin
-    if (sel != ~selb || $onehot(sel) !== 1'b1) begin
+    // Counted rather than checked with $onehot, which is a SystemVerilog
+    // system function and this is a Verilog file: an AMS build compiles it
+    // alongside the Verilog-AMS models, where the SystemVerilog parser cannot
+    // be turned on.
+    num_sel = 0;
+    for (i = 0; i < 16; i = i + 1) begin
+      if (sel[i] === 1'b1) num_sel = num_sel + 1;
+    end
+    if (sel !== ~selb || num_sel !== 1) begin
       selected = 1'bx;
     end else begin
       selected = 1'b0;
