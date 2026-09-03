@@ -243,7 +243,7 @@ class SidebandLinkDeserializer(
       val bits = Input(UInt(sbLinkW.W))
       val fwClock = Input(Bool())
     }
-    val out = Decoupled(UInt(msgW.W))
+    val out = Decoupled(new SbLinkRxWord(msgW))
   })
 
   require(sbLinkW == 1, "Sideband link width must be 1 per spec")
@@ -258,7 +258,7 @@ class SidebandLinkDeserializer(
 
   // The assembled message word crosses to the local clock domain through an async FIFO.
   val rxQueue = Module(
-    new AsyncQueue(UInt(msgW.W), AsyncQueueParams(depth = asyncQueueDepth))
+    new AsyncQueue(new SbLinkRxWord(msgW), AsyncQueueParams(depth = asyncQueueDepth))
   )
   rxQueue.io.enq_clock := negFwClock
   rxQueue.io.enq_reset := reset.asBool
@@ -271,6 +271,7 @@ class SidebandLinkDeserializer(
     val counter = RegInit(0.U(log2Ceil(msgW).W))
     val maxBits = RegInit((msgW - 1).U(log2Ceil(msgW).W))
     val dataReg = RegInit(0.U(msgW.W))
+    val capturedIsRaw = RegInit(true.B)
 
     val isWoData =
       SBMsgOpcode.OpsWithoutData.map(_.asUInt === dataReg(4, 0)).reduce(_ || _)
@@ -279,11 +280,9 @@ class SidebandLinkDeserializer(
     // Opcode (bits[4:0]) determines message length once the first 5 bits arrive.
     // RAW means read raw bits (will be 64 bits).
     when(counter === 5.U) {
-      maxBits := Mux(
-        isWoData || (io.ctrl.rxMode === SBRxTxMode.RAW),
-        63.U,
-        127.U
-      )
+      val rxIsRaw = io.ctrl.rxMode === SBRxTxMode.RAW
+      maxBits := Mux(isWoData || rxIsRaw, 63.U, 127.U)
+      capturedIsRaw := rxIsRaw
     }
 
     val completeWord = dataReg.bitSet(counter, io.in.bits.asBool)
@@ -291,7 +290,8 @@ class SidebandLinkDeserializer(
     counter := Mux(recvDone, 0.U, counter + 1.U)
 
     rxQueue.io.enq.valid := recvDone
-    rxQueue.io.enq.bits := completeWord
+    rxQueue.io.enq.bits.data := completeWord
+    rxQueue.io.enq.bits.isRaw := capturedIsRaw
 
     // Register before the CDC to the local domain: the comparator output can
     // glitch while the counter transitions, and the async local clock could
@@ -314,7 +314,7 @@ class SidebandLinkDeserializer(
 
   io.ctrl.desTimedout := timeoutCounter === desTimeoutCycles.U
 
-  val outputOpcode = io.out.bits(4, 0)
+  val outputOpcode = io.out.bits.data(4, 0)
   val outputIsWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === outputOpcode).reduce(_ || _)
 
@@ -349,15 +349,15 @@ class SidebandLinkDeserializer(
       }
 
       cover(
-        io.out.fire && io.ctrl.rxMode === SBRxTxMode.RAW,
+        io.out.fire && io.out.bits.isRaw,
         "SidebandLinkDeserializerRaw64Output"
       )
       cover(
-        io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && outputIsWoData,
+        io.out.fire && !io.out.bits.isRaw && outputIsWoData,
         "SidebandLinkDeserializerPacket64Output"
       )
       cover(
-        io.out.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && !outputIsWoData,
+        io.out.fire && !io.out.bits.isRaw && !outputIsWoData,
         "SidebandLinkDeserializerPacket128Output"
       )
       cover(
