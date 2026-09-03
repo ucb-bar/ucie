@@ -386,6 +386,28 @@ interface sbrx_tile_intf;
     wire din;
 endinterface
 
+// The mainband deserializer: a binary tree of `des12` cells, the fastest one
+// first, that turns a double data rate serial stream into a `2**STAGES` bit
+// word.
+//
+// This is the mirror image of `tree_ser`: the tree pairs ADJACENT bus bits at
+// every level, so a cell only ever drives the two neighbouring bits of its
+// output bus. Each level takes the earlier of its two half rate streams into
+// the low half of its bus, which at the last level leaves cell k driving
+// `dout[2*k]` and `dout[2*k+1]`.
+//
+// That wiring undoes the tree's own bit reversal on the way in, so `dout[j]`
+// carries the bit received in UI `bitrev(j)`, the reversal of the STAGES index
+// bits, i.e. for 32 bits `dout[0]` is UI 0, `dout[1]` is UI 16, `dout[2]` is
+// UI 8, and so on rather than `dout[t]` being UI `t`. A `tree_ser` on the far
+// end reverses the same way, so the two cancel bit for bit once the word
+// boundaries line up; against anything else the digital side has to undo it
+// (that is what the per-lane shuffler behind the tile is for).
+//
+// One consequence: which `2**STAGES` UI of the stream land in one word is set
+// by where this tile's divider chain came out of reset, and because the tree
+// reverses bit order an offset capture is NOT a rotation of `dout`. Word
+// alignment has to be fixed on the serial side, before the tree.
 module tree_des #(
     parameter integer STAGES = `SERDES_STAGES
 )(
@@ -406,15 +428,10 @@ module tree_des #(
             logic [2**(STAGES-1)-1:0] dout0;
             logic [2**(STAGES-1)-1:0] dout1;
 
-            genvar i;
-            for (i = 0; i < 2**STAGES; i++) begin
-                if (i % 2 == 0) begin
-                    assign dout[i] = dout0[i/2];
-                end
-                else begin
-                    assign dout[i] = dout1[i/2];
-                end
-            end
+            // `dout_int[0]` is the bit this level captured first, so the
+            // earlier of the two streams fills the low half of the bus.
+            assign dout[2**(STAGES-1)-1:0] = dout0;
+            assign dout[2**STAGES-1:2**(STAGES-1)] = dout1;
 
             tree_des #(
                 .STAGES(STAGES-1)
@@ -449,6 +466,15 @@ module des_tb;
     localparam CYCLES = 16;    // number of test cycles
     localparam DIN_DELAY = `T_HOLD_DEFAULT; // delay after fast clock edge that din changes
 
+    // The bit `dout[j]` carries came in on UI `treeBitOrder(j)`: the reversal
+    // of the STAGES index bits. See `tree_des`.
+    function automatic integer treeBitOrder(integer t);
+        treeBitOrder = 0;
+        for (int b = 0; b < STAGES; b++) begin
+            treeBitOrder |= ((t >> b) & 1) << (STAGES - 1 - b);
+        end
+    endfunction
+
     logic clk;
     logic [STAGES-1:0] desclk;
     logic rstb;
@@ -481,6 +507,17 @@ module des_tb;
     // Clock generation
     initial clk = 0;
     always #(`MIN_PERIOD/2) clk = ~clk;
+
+    // The same window in time order: `dout_time[t]` is the bit that came in on
+    // UI `t`. `treeBitOrder` is its own inverse, so applying it to the index
+    // undoes the tree. The alignment search below slides the captured window
+    // by whole UI, and that is a rotation only in time order.
+    logic [2**STAGES-1:0] dout_time;
+    always_comb begin
+        for (int t = 0; t < 2**STAGES; t++) begin
+            dout_time[t] = dout[treeBitOrder(t)];
+        end
+    end
 
     bit [2**STAGES-1:0] expected_q[$];
     bit [2**STAGES-1:0] next_bits;
@@ -516,17 +553,17 @@ module des_tb;
     reg [2**STAGES-1:0] next;
     reg [STAGES:0] shift;
     initial begin
-        @(posedge |dout);
+        @(posedge |dout_time);
         @(posedge desclk[STAGES-1]);
         for (integer i = 2**STAGES - 1; i >= 0; i--) begin
-            if (dout[i]) shift = i + 1;
+            if (dout_time[i]) shift = i + 1;
         end
-        prev = dout >> shift;
-        
+        prev = dout_time >> shift;
+
         for (integer i = 0; i < CYCLES; i++) begin
             @(posedge desclk[STAGES-1]);
-            next = prev | (dout << (2**STAGES - shift));
-            prev = dout >> shift;
+            next = prev | (dout_time << (2**STAGES - shift));
+            prev = dout_time >> shift;
             expected = expected_q.pop_front();
             $display("Expected %0b, got %0b", expected, next);
             if (expected !== next)

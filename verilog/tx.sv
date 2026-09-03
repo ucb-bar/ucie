@@ -228,6 +228,26 @@ module ser21 (
 
 endmodule
 
+// The mainband serializer: a binary tree of `ser21` cells, the fastest one
+// last, that turns a `2**STAGES` bit word into a double data rate serial
+// stream.
+//
+// The tree pairs ADJACENT bus bits at every level, so a cell only ever sees the
+// two neighbouring bits of its input bus and the layout stays a regular tree.
+// Each level splits its bus into contiguous halves and sends the low half
+// first, which at the last level leaves cell k holding `din[2*k]` and
+// `din[2*k+1]`.
+//
+// That wiring emits the bit-reversal permutation: the bit sent in UI `t` is
+// `din[bitrev(t)]`, the reversal of the STAGES index bits, i.e. for 32 bits
+//
+//   D0 D16 D8 D24 D4 D20 D12 D28 D2 D18 D10 D26 D6 D22 D14 D30
+//   D1 D17 D9 D25 D5 D21 D13 D29 D3 D19 D11 D27 D7 D23 D15 D31
+//
+// rather than D0 D1 D2 D3. `tree_des` reverses the same way, so a tree at each
+// end of a link cancels once the word boundaries line up; against anything else
+// the digital side has to undo it (that is what the per-lane shuffler in front
+// of the tile is for).
 module tree_ser #(
     parameter integer STAGES = `SERDES_STAGES
 )(
@@ -248,15 +268,10 @@ module tree_ser #(
             logic [2**(STAGES-1)-1:0] din0;
             logic [2**(STAGES-1)-1:0] din1;
 
-            genvar i;
-            for (i = 0; i < 2**STAGES; i++) begin
-                if (i % 2 == 0) begin
-                    assign din0[i/2] = din[i];
-                end
-                else begin
-                    assign din1[i/2] = din[i];
-                end
-            end
+            // `din_int[0]` goes out during the high phase of this level's
+            // clock, so the low half of the bus is the half that goes first.
+            assign din0 = din[2**(STAGES-1)-1:0];
+            assign din1 = din[2**STAGES-1:2**(STAGES-1)];
 
             tree_ser #(
                 .STAGES(STAGES-1)
@@ -289,6 +304,15 @@ module ser_tb;
 
     parameter STAGES = `SERDES_STAGES;          // width of serializer
     parameter CYCLES = 16;    // number of test cycles
+
+    // The bit the tree sends in UI `t` is `din[treeBitOrder(t)]`: the reversal
+    // of the STAGES index bits. See `tree_ser`.
+    function automatic integer treeBitOrder(integer t);
+        treeBitOrder = 0;
+        for (int b = 0; b < STAGES; b++) begin
+            treeBitOrder |= ((t >> b) & 1) << (STAGES - 1 - b);
+        end
+    endfunction
 
     logic clk;
     logic [STAGES-1:0] serclk;
@@ -343,8 +367,8 @@ module ser_tb;
         for (integer i = 0; i < CYCLES; i=i+1) begin
             @(negedge serclk[STAGES-1]);
             din = $urandom_range(0, 2**(2**STAGES) - 1);
-            for (int b = 0; b < 2**STAGES; b++) begin
-                expected_q.push_back(din[b]);   // push LSB first if that is how your design emits
+            for (int t = 0; t < 2**STAGES; t++) begin
+                expected_q.push_back(din[treeBitOrder(t)]);
             end
         end
     end

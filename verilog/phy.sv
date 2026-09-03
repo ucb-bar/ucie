@@ -95,6 +95,50 @@ rxdata_tile rxtrk_tile(.intf(intf.rxtrk));
 endmodule
 
 module phy_tb;
+    // Every lane in the digital PHY has a bit shuffler between the digital word
+    // and its tile -- in front of the serializer on TX, behind the deserializer
+    // on RX -- and both reset to the permutation that cancels the tile's serdes
+    // tree. See `Shuffler` and `Phy.treeBitOrder` in `phy/Phy.scala`.
+    //
+    // This bench wires the tiles up directly, with no digital PHY in between,
+    // so it stands in for those shufflers itself. Everything below is written
+    // in the order it should appear ON THE WIRE and passed through `shuffle`,
+    // and `dout` is brought back through `shuffle` before it is checked.
+    //
+    // It matters most for the forwarded clock. A TX tile sends `DataIN[bitrev(t)]`
+    // in UI `t`, and `bitrev` swaps the fastest varying index bit for the
+    // slowest, so 0101..01 fed in raw leaves the tile as a single
+    // `2**SERDES_STAGES` UI square wave rather than one edge per UI -- and the
+    // receiver recovers a clock a whole word period long.
+
+    // Reversal of the `SERDES_STAGES` index bits: `Phy.treeBitOrder`.
+    function automatic integer tree_bit_order(input integer t);
+        tree_bit_order = 0;
+        for (int b = 0; b < `SERDES_STAGES; b++) begin
+            tree_bit_order |= ((t >> b) & 1) << (`SERDES_STAGES - 1 - b);
+        end
+    endfunction
+
+    // What a lane's shuffler does out of reset: `dout[i] = din[bitrev(i)]`.
+    // Its own inverse, so the same function serves on both sides.
+    function automatic logic [2**`SERDES_STAGES-1:0] shuffle(
+        input logic [2**`SERDES_STAGES-1:0] din
+    );
+        for (int i = 0; i < 2**`SERDES_STAGES; i++) begin
+            shuffle[i] = din[tree_bit_order(i)];
+        end
+    endfunction
+
+    // The patterns, in wire order. One edge per UI is the forwarded half-rate
+    // clock and the fastest thing a data lane can send; the valid lane sends
+    // four UI low then four UI high.
+    localparam logic [2**`SERDES_STAGES-1:0] ALT_HIGH_FIRST =
+        {2**(`SERDES_STAGES-1){2'b01}};
+    localparam logic [2**`SERDES_STAGES-1:0] ALT_LOW_FIRST =
+        {2**(`SERDES_STAGES-1){2'b10}};
+    localparam logic [2**`SERDES_STAGES-1:0] VALID_PATTERN =
+        {2**(`SERDES_STAGES-3){8'hf0}};
+
     wire vdd = 1, vss = 0;
     reg reset = 1;
     reg pll_clkp_out;
@@ -179,7 +223,7 @@ module phy_tb;
             assign intf.txdata[i].vddq = vdd;
             assign intf.txdata[i].vdd = vdd;
             assign intf.txdata[i].vss = vss;
-            assign intf.txdata[i].DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+            assign intf.txdata[i].DataIN = shuffle(ALT_HIGH_FIRST);
             assign intf.txdata[i].RST_async = reset;
             // Every main driver segment on (`ENP` is active low, `ENN` active high),
             // equalizer branch off, no added delay on the tile clock.
@@ -207,7 +251,7 @@ module phy_tb;
     assign intf.txclkp.vddq = vdd;
     assign intf.txclkp.vdd = vdd;
     assign intf.txclkp.vss = vss;
-    assign intf.txclkp.DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+    assign intf.txclkp.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txclkp.RST_async = reset;
     // Every main driver segment on (`ENP` is active low, `ENN` active high),
     // equalizer branch off, no added delay on the tile clock.
@@ -220,7 +264,7 @@ module phy_tb;
     assign intf.txclkn.vddq = vdd;
     assign intf.txclkn.vdd = vdd;
     assign intf.txclkn.vss = vss;
-    assign intf.txclkn.DataIN = {2**(`SERDES_STAGES-1){2'b10}};
+    assign intf.txclkn.DataIN = shuffle(ALT_LOW_FIRST);
     assign intf.txclkn.RST_async = reset;
     // Every main driver segment on (`ENP` is active low, `ENN` active high),
     // equalizer branch off, no added delay on the tile clock.
@@ -233,7 +277,7 @@ module phy_tb;
     assign intf.txval.vddq = vdd;
     assign intf.txval.vdd = vdd;
     assign intf.txval.vss = vss;
-    assign intf.txval.DataIN = {2**(`SERDES_STAGES-3){8'hf0}};
+    assign intf.txval.DataIN = shuffle(VALID_PATTERN);
     assign intf.txval.RST_async = reset;
     // Every main driver segment on (`ENP` is active low, `ENN` active high),
     // equalizer branch off, no added delay on the tile clock.
@@ -246,7 +290,7 @@ module phy_tb;
     assign intf.txtrk.vddq = vdd;
     assign intf.txtrk.vdd = vdd;
     assign intf.txtrk.vss = vss;
-    assign intf.txtrk.DataIN = {2**(`SERDES_STAGES-1){2'b01}};
+    assign intf.txtrk.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txtrk.RST_async = reset;
     // Every main driver segment on (`ENP` is active low, `ENN` active high),
     // equalizer branch off, no added delay on the tile clock.
@@ -308,24 +352,33 @@ module phy_tb;
     assign intf.rxtrk.vref_sel = 80;
     assign intf.rxtrk.din = intf.txtrk.D2D_TX;
 
+    // Raw tile output, and the same word past the lane's shuffler -- which is
+    // what the digital PHY would hand on, in wire order, bit 0 first received.
     wire [2**`SERDES_STAGES-1:0] dout[`LANES-1:0];
+    wire [2**`SERDES_STAGES-1:0] dout_shuffled[`LANES-1:0];
     generate
     for(i = 0; i < `LANES; i++) begin
         assign dout[i] = intf.rxdata[i].dout;
+        assign dout_shuffled[i] = shuffle(dout[i]);
     end
     endgenerate
 
-    wire [2**`SERDES_STAGES-1:0] expected_a = {2**(`SERDES_STAGES-1){2'b01}};
-    wire [2**`SERDES_STAGES-1:0] expected_b = {2**(`SERDES_STAGES-1){2'b10}};
+    // Nothing here aligns the two ends -- each divider chain comes out of reset
+    // where it comes out -- so the receiver may be a UI off and see the
+    // alternating stream either way up.
+    wire [2**`SERDES_STAGES-1:0] expected_a = ALT_HIGH_FIRST;
+    wire [2**`SERDES_STAGES-1:0] expected_b = ALT_LOW_FIRST;
     initial begin
         #200000; // FIXME(Di): Do we need to wait this long for reset?
         reset = 0;
         
         #200000;
         for (integer i = 0; i < `LANES; i++) begin
-            $display("Lane %d dout = %x", i, dout[i]);
-            if (dout[i] !== expected_a && dout[i] !== expected_b)
-                $error("Incorrect RX data output: expected %x or %x, got %x", expected_a, expected_b, dout[i]);
+            $display("Lane %d dout = %x (tile), %x (shuffled)",
+                     i, dout[i], dout_shuffled[i]);
+            if (dout_shuffled[i] !== expected_a && dout_shuffled[i] !== expected_b)
+                $error("Incorrect RX data output: expected %x or %x, got %x",
+                       expected_a, expected_b, dout_shuffled[i]);
         end
 
         $finish;

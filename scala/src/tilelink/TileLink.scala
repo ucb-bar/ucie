@@ -357,8 +357,13 @@ class UcieTLRegs(
         w.afeBypass.bEn := false.B
         w.afeBypass.bPc := true.B
         w.afeBypass.selA := false.B
+        // The RX tile deserializes through the mirror image of the TX tile's
+        // adjacent-pairing tree, so the bit it puts in `dout(j)` is the one
+        // received in UI `bitrev5(j)`. Applying that same permutation here
+        // cancels it, so the digital side reads the word in the order it came
+        // off the wire; software can still program any other mapping.
         for (i <- 0 until 32) {
-          w.shuffler(i) := i.U(5.W)
+          w.shuffler(i) := Phy.treeBitOrder(i).U(5.W)
         }
         w.sample_negedge := false.B
         w.delay := 0.U
