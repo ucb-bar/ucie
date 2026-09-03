@@ -107,43 +107,55 @@ module rx_data_lane (
         shiftReg <= (shiftReg << 1'b1) | din;
     end
   end
-  // The deserializer captures in time order: the bit received in UI t lands at
-  // dout[t]. The TX tile serializes through a tree and so sends in bit-reversed
-  // order; correcting that mismatch is what the per-lane shuffler is for.
-  // Keeping this sequential is also what lets the digital RX realign on an
-  // arbitrary word boundary, since an offset capture is then a rotation of the
-  // stream rather than a scramble.
+  // The tile deserializes through an adjacent-pairing binary tree
+  // (deserializer_1to32), the mirror image of the TX tile's serializer, so the
+  // bit that lands in dout[j] is the one received in UI bitrev5(j), not UI j:
+  //
+  //   UI0 UI16 UI8 UI24 UI4 UI20 UI12 UI28 UI2 UI18 UI10 UI26 UI6 UI22 UI14 UI30
+  //   UI1 UI17 UI9 UI25 UI5 UI21 UI13 UI29 UI3 UI19 UI11 UI27 UI7 UI23 UI15 UI31
+  //
+  // Tapping the shift register in that permuted order reproduces the tree's
+  // wire order while keeping this a plain shift register: the same word rate
+  // (one word per divclk, 32 UI DDR), just the tree's bit order. `shiftReg[31]`
+  // is the oldest bit in the window and `shiftReg[0]` the newest, so UI t is
+  // `shiftReg[31-t]`.
+  //
+  // A TX tile on the far end reverses the same way, so the two trees cancel
+  // once the word boundaries line up; against anything else the per-lane
+  // shuffler behind the tile has to undo this. Note that the boundary cannot be
+  // fixed after the tree: it reverses bit order, so an offset capture is a
+  // scramble of dout rather than a rotation of it.
   assign dout_0  = outputReg[31];
-  assign dout_1  = outputReg[30];
-  assign dout_2  = outputReg[29];
-  assign dout_3  = outputReg[28];
+  assign dout_1  = outputReg[15];
+  assign dout_2  = outputReg[23];
+  assign dout_3  = outputReg[7];
   assign dout_4  = outputReg[27];
-  assign dout_5  = outputReg[26];
-  assign dout_6  = outputReg[25];
-  assign dout_7  = outputReg[24];
-  assign dout_8  = outputReg[23];
-  assign dout_9  = outputReg[22];
+  assign dout_5  = outputReg[11];
+  assign dout_6  = outputReg[19];
+  assign dout_7  = outputReg[3];
+  assign dout_8  = outputReg[29];
+  assign dout_9  = outputReg[13];
   assign dout_10 = outputReg[21];
-  assign dout_11 = outputReg[20];
-  assign dout_12 = outputReg[19];
-  assign dout_13 = outputReg[18];
+  assign dout_11 = outputReg[5];
+  assign dout_12 = outputReg[25];
+  assign dout_13 = outputReg[9];
   assign dout_14 = outputReg[17];
-  assign dout_15 = outputReg[16];
-  assign dout_16 = outputReg[15];
+  assign dout_15 = outputReg[1];
+  assign dout_16 = outputReg[30];
   assign dout_17 = outputReg[14];
-  assign dout_18 = outputReg[13];
-  assign dout_19 = outputReg[12];
-  assign dout_20 = outputReg[11];
+  assign dout_18 = outputReg[22];
+  assign dout_19 = outputReg[6];
+  assign dout_20 = outputReg[26];
   assign dout_21 = outputReg[10];
-  assign dout_22 = outputReg[9];
-  assign dout_23 = outputReg[8];
-  assign dout_24 = outputReg[7];
-  assign dout_25 = outputReg[6];
-  assign dout_26 = outputReg[5];
+  assign dout_22 = outputReg[18];
+  assign dout_23 = outputReg[2];
+  assign dout_24 = outputReg[28];
+  assign dout_25 = outputReg[12];
+  assign dout_26 = outputReg[20];
   assign dout_27 = outputReg[4];
-  assign dout_28 = outputReg[3];
-  assign dout_29 = outputReg[2];
-  assign dout_30 = outputReg[1];
+  assign dout_28 = outputReg[24];
+  assign dout_29 = outputReg[8];
+  assign dout_30 = outputReg[16];
   assign dout_31 = outputReg[0];
   assign divclk = divClock;
 endmodule

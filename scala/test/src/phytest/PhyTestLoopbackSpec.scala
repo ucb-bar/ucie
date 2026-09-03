@@ -92,15 +92,16 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.sb.rxPop := false.B
   dut.io.regs.sb.rxRst := false.B
 
-  // Identity shufflers and an enabled driver on the loopback transmitter, so a
-  // word comes back in the order it went out.
+  // Tree-cancelling shufflers and an enabled driver on the loopback
+  // transmitter, so a word comes back in the order it went out.
   dut.io.regs.loopbackTxctl.tile := TxLaneCtlIO.full
   for (i <- 0 until Phy.SerdesRatio) {
-    // The TX tile serializes through a tree; undoing that here puts the word on
-    // the wire in plain bit order, so the sequential RX tile reads it back
-    // unchanged. This is what the register file's reset value does too.
+    // Both tiles go through a tree, the RX one the mirror image of the TX one.
+    // Undoing it at each end puts the word on the wire in plain bit order and
+    // reads it back unchanged. This is what the register file's reset values
+    // do too.
     dut.io.regs.loopbackTxctl.shuffler(i) := Phy.treeBitOrder(i).U
-    dut.io.regs.loopbackRxctl.shuffler(i) := i.U
+    dut.io.regs.loopbackRxctl.shuffler(i) := Phy.treeBitOrder(i).U
   }
   dut.io.regs.loopbackTxctl.sample_negedge := io.txSampleNegedge
   dut.io.regs.loopbackRxctl.sample_negedge := io.rxSampleNegedge

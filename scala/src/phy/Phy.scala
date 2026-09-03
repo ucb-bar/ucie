@@ -63,14 +63,21 @@ object Phy {
   def rxLaneWords(rx: RxIO, numLanes: Int): Vec[UInt] =
     VecInit((0 until numLanes).map(rx.data(_)) ++ Seq(rx.valid, rx.track))
 
-  // The order the TX tile puts a word on the wire. It serializes through an
-  // adjacent-pairing binary tree, so the bit sent in UI `t` is
-  // `din(treeBitOrder(t))` -- bit reversal of the five index bits, giving
-  // D0 D16 D8 D24 D4 D20 ... rather than D0 D1 D2 D3.
+  // The order a tile puts a word on the wire, and takes one off it. The TX tile
+  // serializes through an adjacent-pairing binary tree, so the bit sent in UI
+  // `t` is `din(treeBitOrder(t))` -- bit reversal of the five index bits,
+  // giving D0 D16 D8 D24 D4 D20 ... rather than D0 D1 D2 D3. The RX tile
+  // deserializes through the mirror image of that tree, so `dout(j)` is the bit
+  // received in UI `treeBitOrder(j)`.
   //
-  // The RX tile deserializes in time order, so a lane's shuffler has to undo
-  // this for a word to arrive as it was sent. `treeBitOrder` is its own
-  // inverse, so applying it on either side cancels it.
+  // Each lane's shuffler therefore applies this permutation to cancel its own
+  // tile's tree, which is what both reset values do. `treeBitOrder` is its own
+  // inverse, so the same mapping serves in either direction. Two tiles wired
+  // together would cancel each other without any of this, but going through
+  // plain bit order is what makes a lane interoperable, and it is also what
+  // lets the RX realign on an arbitrary word boundary: past the shuffler an
+  // offset capture is a rotation of the stream, where in tree order it is a
+  // scramble.
   def treeBitOrder(t: Int): Int =
     (0 until 5).map(b => ((t >> b) & 1) << (4 - b)).sum
 
@@ -191,8 +198,11 @@ class PhyClkRstIO extends Bundle {
 // One sits on each TX lane's serializer input and each RX lane's
 // deserializer output so that a bit ordering mismatch between the digital
 // word and the analog tile (or between the two dies) can be corrected from
-// software. The identity permutation (`permutation(i) = i`) is the reset
-// value and leaves the word untouched.
+// software. Both reset to [[Phy.treeBitOrder]], which cancels the tile's own
+// serdes tree: past a TX shuffler bit 0 of the word is the first bit on the
+// wire, and past an RX shuffler bit 0 is the first bit received. The identity
+// permutation (`permutation(i) = i`) leaves the tile's tree order exposed
+// instead.
 //
 // `permutation` is not required to be a bijection: repeating an index
 // broadcasts that bit, which is useful for driving fixed patterns during
