@@ -56,28 +56,6 @@ import testchipip.soc.{
   ChipletIO
 }
 
-/** Physical orientation of a UCIe instance on the die, named after the axis the
-  * block's bumps run along.
-  *
-  * Two UCIe instances with the same parameters elaborate to the same hardware,
-  * so Chisel puts them in one dedup group (the group is the proposed module
-  * name) and firtool folds them into a single SystemVerilog module. Physical
-  * design needs one module per instance, because the two are placed in
-  * different orientations and hardened separately. The orientation is part of
-  * the module name, which splits the dedup groups and keeps the two hierarchies
-  * apart.
-  */
-sealed abstract class UcieOrientation(val moduleSuffix: String)
-
-object UcieOrientation {
-
-  /** North-south: placed unrotated (R0). */
-  case object NS extends UcieOrientation("_NS")
-
-  /** East-west: placed rotated 90 degrees (R90). */
-  case object EW extends UcieOrientation("_EW")
-}
-
 case class UcieTLParams(
     address: BigInt = 0x200000,
     bufferDepthPerLane: Int = 11,
@@ -96,14 +74,27 @@ case class UcieTLParams(
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
     sbRxQueueDepth: Int = 4,
-    // Physical orientation of this instance. It names the module, so two
-    // instances only share a SystemVerilog module if they are placed the same
-    // way round.
-    orientation: UcieOrientation = UcieOrientation.NS
+    // Names the emitted module (see `moduleSuffix`). Instances that share an id
+    // share a SystemVerilog module; give an instance its own id to harden it
+    // separately in physical design.
+    moduleId: Int = 0
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
   def controlManagerBusWhere = Some(managerWhere)
+
+  /** Suffix appended to the module names of this instance.
+    *
+    * Two UCIe instances with the same parameters elaborate to the same
+    * hardware, so Chisel puts them in one dedup group (the group is the
+    * proposed module name) and firtool folds them into a single SystemVerilog
+    * module -- which is what you want when they are hardened together. Physical
+    * design sometimes needs one module per instance instead, e.g. when the two
+    * are placed in different orientations and hardened separately; giving them
+    * different `moduleId`s splits the dedup groups and keeps the hierarchies
+    * apart. Id 0 keeps the unsuffixed name.
+    */
+  def moduleSuffix: String = if (moduleId == 0) "" else s"_$moduleId"
   // Width of the credit fields carried alongside every framed TL packet.
   def creditBits: Int = log2Up(tlBufferDepth + 1)
   def instantiate(params: OffchipSubsystemParams, id: Int)(implicit
@@ -766,7 +757,7 @@ class UcieTL(
 )(implicit
     p: Parameters
 ) extends LazyModule {
-  override lazy val desiredName = s"UcieTL${params.orientation.moduleSuffix}"
+  override lazy val desiredName = s"UcieTL${params.moduleSuffix}"
 
   // Main digital clock node.
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
@@ -1373,8 +1364,7 @@ class UcieChipletLink(
     extends ChipletLinkWrapper {
   // Follows the UcieTL naming: the wrapper wraps exactly one UcieTL, so it has
   // to split along with it.
-  override lazy val desiredName =
-    s"UcieChipletLink${params.orientation.moduleSuffix}"
+  override lazy val desiredName = s"UcieChipletLink${params.moduleSuffix}"
 
   val ucie = LazyModule(
     new UcieTL(

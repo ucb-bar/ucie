@@ -16,7 +16,8 @@ git submodule update --init --recursive
 
 The top level is `UcieTL`: the analog PHY, the UCIe digital stack (protocol layer, die-to-die
 adapter, and logical PHY), and the register block reachable over TileLink. The emitted module name
-carries the orientation the block is placed in, so the default parameters emit `UcieTL_NS`. To
+carries `moduleId` when it is nonzero, so the default parameters emit `UcieTL`, and a second
+instance parameterized with `moduleId = 1` emits `UcieTL_1` instead of deduping into the first. To
 generate it, run the following from the `scala/` folder:
 
 ```bash
