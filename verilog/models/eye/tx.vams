@@ -1,0 +1,123 @@
+// Eye-level models of the TX analog front end: the pad driver behind a
+// sideband or debug bump, and the output driver of a mainband TX tile.
+//
+// Both are the same reduction. A driver is a pull-up conductance and a
+// pull-down conductance, sized by how many segments the thermometer codes
+// enable, handed from one rail to the other by a finite-slew ramp off the
+// pre-driver. That ramp is `EYE_TX_SLEW` and it is what gives a UI its edges;
+// the receiver's termination on the far end turns the two conductances into
+// the level it slices. Between them that is a whole eye -- height from the
+// divider, width from the ramp -- which is all this level owes the receiver.
+//
+// The difference from `models/circuit` is where the edge comes from. There
+// `din` is an electrical net and the edge is whatever the digital-to-analog
+// connect modules in `xcelium/amscf.scs` produce; here `din` stays digital and
+// the edge is a model parameter, so a test can close the eye on purpose.
+// Neither level models what shapes an edge beyond a straight ramp: the output
+// capacitance, the series capacitor that gives the equalizer branch its high
+// frequency boost, or segment mismatch.
+
+// Pad output driver segment stack, nominally `PAD_DRIVER_R_OUT` at
+// `PAD_DRIVER_NOMINAL_SEGMENTS` of its `PAD_DRIVER_SEGMENTS` segments enabled.
+module pad_driver_cell (
+    input din,
+    input [`PAD_DRIVER_SEGMENTS-1:0] pu_ctl, pd_ctlb,
+    input en, enb,
+    output dout,
+    inout vdd, vss
+);
+    electrical dout, vdd, vss;
+
+    integer i, pu_on, pd_on;
+    real d;
+    analog begin
+        // `pu_ctl` is thermometer coded and active high, `pd_ctlb` thermometer
+        // coded and active low, so both read as a count of enabled segments.
+        // Every segment is code controlled, so an all-off code leaves the
+        // driver off.
+        pu_on = 0;
+        for (i = 0; i < `PAD_DRIVER_SEGMENTS; i=i+1) begin
+            if (pu_ctl[i])
+                pu_on = pu_on + 1;
+        end
+        pd_on = 0;
+        for (i = 0; i < `PAD_DRIVER_SEGMENTS; i=i+1) begin
+            if (!pd_ctlb[i])
+                pd_on = pd_on + 1;
+        end
+
+        // The pre-driver ramp. Both stacks conduct while it is in flight, which
+        // is what puts a finite edge on the output rather than a step.
+        d = transition(din, 0, `EYE_TX_SLEW * 1p);
+
+        I(vdd, dout) <+ V(vdd, dout) * d
+            * transition(en, 0, `T_RISE_FALL_DEFAULT * 1p)
+            * transition(pu_on, 0, `T_RISE_FALL_DEFAULT * 1p)
+            / `PAD_DRIVER_R_SEGMENT;
+        I(dout, vss) <+ V(dout, vss) * (1 - d)
+            * transition(!enb, 0, `T_RISE_FALL_DEFAULT * 1p)
+            * transition(pd_on, 0, `T_RISE_FALL_DEFAULT * 1p)
+            / `PAD_DRIVER_R_SEGMENT;
+
+        // Leakage through the segments that are off or not selected.
+        I(vdd, dout) <+ V(vdd, dout) / `DRIVER_R_OFF_SEGMENT;
+        I(dout, vss) <+ V(dout, vss) / `DRIVER_R_OFF_SEGMENT;
+    end
+endmodule
+
+// Output driver of a UCIe TX tile: an N-over-N stack whose pull-up and
+// pull-down impedance is set by the thermometer codes `ENP` and `ENN`, next to
+// a capacitive-peaking equalizer branch set by `ENP_EQ` and `ENN_EQ`.
+//
+// `ENP` and `ENP_EQ` are active low (a one turns its segment off); `ENN` and
+// `ENN_EQ` are active high.
+module tx_tile_driver (
+    input din,
+    input [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN,
+    input [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ,
+    output dout,
+    inout vddq, vss
+);
+    electrical dout, vddq, vss;
+
+    integer i, pu_on, pd_on, pu_eq_on, pd_eq_on;
+    real d;
+    analog begin
+        // Count the enabled segments on each rail.
+        pu_on = 0;
+        for (i = 0; i < `TX_DRIVER_SEGMENTS; i=i+1) begin
+            if (!ENP[i])
+                pu_on = pu_on + 1;
+        end
+        pd_on = 0;
+        for (i = 0; i < `TX_DRIVER_SEGMENTS; i=i+1) begin
+            if (ENN[i])
+                pd_on = pd_on + 1;
+        end
+        pu_eq_on = 0;
+        for (i = 0; i < `TX_DRIVER_EQ_SEGMENTS; i=i+1) begin
+            if (!ENP_EQ[i])
+                pu_eq_on = pu_eq_on + 1;
+        end
+        pd_eq_on = 0;
+        for (i = 0; i < `TX_DRIVER_EQ_SEGMENTS; i=i+1) begin
+            if (ENN_EQ[i])
+                pd_eq_on = pd_eq_on + 1;
+        end
+
+        d = transition(din, 0, `EYE_TX_SLEW * 1p);
+
+        I(vddq, dout) <+ V(vddq, dout) * d * (
+            transition(pu_on, 0, `T_RISE_FALL_DEFAULT * 1p) / `TX_DRIVER_R_SEGMENT
+            + transition(pu_eq_on, 0, `T_RISE_FALL_DEFAULT * 1p) / `TX_DRIVER_EQ_R_SEGMENT
+        );
+        I(dout, vss) <+ V(dout, vss) * (1 - d) * (
+            transition(pd_on, 0, `T_RISE_FALL_DEFAULT * 1p) / `TX_DRIVER_R_SEGMENT
+            + transition(pd_eq_on, 0, `T_RISE_FALL_DEFAULT * 1p) / `TX_DRIVER_EQ_R_SEGMENT
+        );
+
+        // Leakage through the segments that are off or not selected.
+        I(vddq, dout) <+ V(vddq, dout) / `DRIVER_R_OFF_SEGMENT;
+        I(dout, vss) <+ V(dout, vss) / `DRIVER_R_OFF_SEGMENT;
+    end
+endmodule

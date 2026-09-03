@@ -25,7 +25,7 @@ import chisel3.simulator.ChiselSim
 import chisel3.simulator.HasSimulator.simulators.verilator
 import svsim.verilator.Backend.CompilationSettings
 import _root_.circt.stage.ChiselStage
-import edu.berkeley.cs.uciedigital.Utils
+import edu.berkeley.cs.uciedigital.{AmsLevel, Utils}
 import chisel3.testing.HasTestingDirectory
 import java.nio.file.Paths
 import freechips.rocketchip.tilelink._
@@ -51,9 +51,18 @@ abstract class SVTestDriver extends TestDriver {
 
   val codegen = new Codegen(new SystemVerilogFormatter)
 
-  def setStimulus(name: String, body: String) = setInline(
-    s"${name}.sv",
-    s"""
+  /** Emits this driver as a SystemVerilog module.
+    *
+    * `body` is the stimulus, inlined as statements into an `initial` block that
+    * has already brought the design out of reset, so it cannot declare
+    * subroutines. `moduleItems` is inlined at module scope next to the
+    * sequences `Codegen` emits, which is where a driver that needs a task of
+    * its own puts it.
+    */
+  def setStimulus(name: String, body: String, moduleItems: String = "") =
+    setInline(
+      s"${name}.sv",
+      s"""
 `timescale 1ps/100fs
 
 function string basename(string path);
@@ -243,6 +252,7 @@ module ${name}(
   `define READ_UCIE_MSG(drv, addr, result, msg) drv.read_ucie(addr, result, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
   `define EXPECT_UCIE_MSG(drv, addr, data, msg) drv.expect_ucie(addr, data, $$sformatf("%s (%s:%0d)", msg, basename(`__FILE__), `__LINE__))
 ${Codegen.indent(codegen.formatFns())}
+${Codegen.indent(moduleItems)}
   initial digitalClock = 1'b0;
   initial ucieBypassClock = 1'b0;
   initial ucieDigitalBypassClock = 1'b0;
@@ -277,7 +287,7 @@ ${Codegen.indent(body, n = 2)}
   end
 endmodule
           """.trim
-  )
+    )
 }
 
 class SimTop[T <: SVTestDriver](
@@ -608,6 +618,157 @@ tl_sideband();
   )
 }
 
+/** Trains one mainband lane over MMIO, the way software would.
+  *
+  * Nothing here reaches past the register block: `setup_ucie`, `set_tx_delay`,
+  * `set_rx_vref` and `run_lfsr` are the sequences `Codegen` emits, and the two
+  * codes being swept -- `txctl_<lane>_tile`'s delay taps and
+  * `rxctl_<lane>_vrefSel` -- are pins on the analog tiles. So this measures
+  * exactly what a driver on real silicon would measure, through exactly the
+  * registers it would use.
+  *
+  * The two sweeps are the two axes of an eye. The delay line moves where in the
+  * UI the far receiver samples the lane; the reference ladder moves where
+  * between the rails it slices. A code outside the eye on either axis shows up
+  * as bit errors against the LFSR pattern, and the widest run of clean codes is
+  * the eye. Both sweeps have to find a bounded run -- the test fails if every
+  * code works, because a model that trains without a wrong answer is not
+  * modelling the thing being trained. That is what `models/eye` exists to
+  * provide and what the behavioral models in `scala/resources/vsrc` cannot; see
+  * `verilog/README.md`.
+  *
+  * The pattern and the scoring come from `PhyTest`, which `setup_ucie` selects
+  * as the controller, because that is where the per-lane bit error counters
+  * are. The link training state machine does not yet program either code:
+  * `PhyLaneTrainer` reports every calibration state complete without running
+  * one, so moving this sweep behind the LTSM is a matter of giving that module
+  * the registers to drive.
+  */
+class TrainMainbandTestDriver extends SVTestDriver {
+  setStimulus(
+    "TrainMainbandTestDriver",
+    """
+begin : train
+  integer delay_score[`TRAIN_DELAY_TAPS];
+  integer vref_score[`TRAIN_VREF_CODES];
+  integer delay_start, delay_len, vref_start, vref_len;
+  integer trained_tap, trained_vref;
+  integer clean_taps, clean_vrefs;
+  reg [63:0] packets;
+  reg [63:0] errors;
+  string row;
+
+  setup_ucie();
+  seed_lfsrs();
+
+  $display("Training mainband lane %0d over MMIO", `TRAIN_LANE);
+
+  // SWEEP 1: where in the UI the lane is sampled.
+  clean_taps = 0;
+  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+    set_tx_delay(`TRAIN_LANE, t);
+    run_lfsr(`TRAIN_PACKETS);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+    `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+    delay_score[t] = (packets >= `TRAIN_PACKETS && errors == 64'h0) ? 1 : 0;
+    clean_taps = clean_taps + delay_score[t];
+    $display("  tap %2d: %0d packets, %0d bit errors", t, packets, errors);
+  end
+
+  longest_run(delay_score, `TRAIN_DELAY_TAPS, delay_start, delay_len);
+  trained_tap = delay_start + delay_len / 2;
+  row = "";
+  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++)
+    row = {row, delay_score[t] == 1 ? "#" : "."};
+  $display("  eye: %s  (%0d taps, centered on tap %0d)", row, delay_len, trained_tap);
+
+  // SWEEP 2: what level the lane is sliced against, at the sampling point the
+  // first sweep found.
+  set_tx_delay(`TRAIN_LANE, trained_tap);
+  clean_vrefs = 0;
+  for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
+    set_rx_vref(`TRAIN_LANE, i * `TRAIN_VREF_STEP);
+    run_lfsr(`TRAIN_PACKETS);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+    `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+    vref_score[i] = (packets >= `TRAIN_PACKETS && errors == 64'h0) ? 1 : 0;
+    clean_vrefs = clean_vrefs + vref_score[i];
+    $display("  vref_sel %3d: %0d packets, %0d bit errors",
+             i * `TRAIN_VREF_STEP, packets, errors);
+  end
+
+  longest_run(vref_score, `TRAIN_VREF_CODES, vref_start, vref_len);
+  trained_vref = (vref_start + vref_len / 2) * `TRAIN_VREF_STEP;
+  row = "";
+  for (int i = 0; i < `TRAIN_VREF_CODES; i++)
+    row = {row, vref_score[i] == 1 ? "#" : "."};
+  $display("  eye: %s  (%0d codes, centered on vref_sel %0d)",
+           row, vref_len, trained_vref);
+
+  // The link at the codes the two sweeps picked.
+  $display("Trained lane %0d: tap %0d, vref_sel %0d",
+           `TRAIN_LANE, trained_tap, trained_vref);
+  set_tx_delay(`TRAIN_LANE, trained_tap);
+  set_rx_vref(`TRAIN_LANE, trained_vref);
+  run_lfsr(`TRAIN_PACKETS);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+  `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  assert(packets >= `TRAIN_PACKETS)
+    else $fatal(1, "Trained lane received %0d of %0d packets", packets, `TRAIN_PACKETS);
+  assert(errors == 64'h0)
+    else $fatal(1, "Trained lane has %0d bit errors", errors);
+
+  // An eye has to be bounded on both axes. If every code works, the model in
+  // front of the receiver is not resolving the thing being trained, and this
+  // sweep proved nothing.
+  assert(delay_len > 0 && clean_taps < `TRAIN_DELAY_TAPS)
+    else $fatal(1, "Sampling point sweep found %0d of %0d taps clean, so the delay line is not moving the sampling point",
+                clean_taps, `TRAIN_DELAY_TAPS);
+  assert(vref_len > 0 && clean_vrefs < `TRAIN_VREF_CODES)
+    else $fatal(1, "Reference sweep found %0d of %0d codes clean, so the slicer is not comparing against its reference",
+                clean_vrefs, `TRAIN_VREF_CODES);
+end
+          """.trim,
+    moduleItems = """
+// Longest run of consecutive clean codes in `score`, as a start index and a
+// length. That run is the eye, and its middle is the code to train to.
+task automatic longest_run(
+  input integer score[],
+  input integer n,
+  output integer start,
+  output integer len
+);
+  begin
+    integer run_start;
+    integer run_len;
+    start = 0;
+    len = 0;
+    run_start = 0;
+    run_len = 0;
+    for (int i = 0; i < n; i++) begin
+      if (score[i] == 1) begin
+        if (run_len == 0) run_start = i;
+        run_len = run_len + 1;
+      end else begin
+        run_len = 0;
+      end
+      if (run_len > len) begin
+        len = run_len;
+        start = run_start;
+      end
+    end
+  end
+endtask
+          """.trim
+  )
+}
+
 class TlLongTestDriver extends SVTestDriver {
   setStimulus(
     "TlLongTestDriver",
@@ -873,6 +1034,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     }
 
     it(
+      "should train the mainband over MMIO using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new TrainMainbandTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_train_the_mainband_over_MMIO_using_Xcelium_with_PHY_analog_models",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    it(
       "should support simple manual test using Xcelium with PHY analog models"
     ) {
       implicit val p = Parameters.empty
@@ -881,7 +1055,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium_with_PHY_analog_models",
-        includeVamsModels = true
+        amsLevel = Some(AmsLevel.Eye)
       )
     }
   }

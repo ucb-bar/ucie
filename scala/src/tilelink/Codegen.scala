@@ -27,7 +27,11 @@ import edu.berkeley.cs.uciedigital.phytest.{
   DataMode,
   TxTestState
 }
-import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{
+  PadDriverCtlIO,
+  TxLane,
+  TxLaneCtlIO
+}
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -244,6 +248,74 @@ object Codegen {
   // TX tile at full driver strength with the equalizer branch off and no added
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
+
+  /** Bit position of `Dctrl` inside the packed `TxLaneCtlIO` word.
+    *
+    * A training sweep walks the delay line, so it needs to build one control
+    * word per tap. Emitting the position lets it do that at run time from
+    * [[enableTxCtl]] rather than needing a constant per tap, and taking the
+    * position from the Chisel type rather than writing it down means a field
+    * added to `TxLaneCtlIO` cannot silently move it.
+    */
+  val txCtlDelayLsb: BigInt = {
+    val oneTap = enableTxCtl ^
+      TxLaneCtlIO
+        .codes(driver = TxLane.DriverSegments, eq = 0, delay = 1)
+        .litValue
+    require(
+      oneTap.bitCount == 1,
+      s"one delay tap should differ from `full` in exactly one bit, got 0x${oneTap.toString(16)}"
+    )
+    BigInt(oneTap.lowestSetBit)
+  }
+
+  /** Seed both ends of a training run's LFSRs with this.
+    *
+    * Any nonzero value does; the RX scores what it receives against its own
+    * LFSR run from the same seed, so the two only have to agree.
+    */
+  val trainLfsrSeed: BigInt = BigInt("0123456789abcdef", 16)
+
+  /** The lane a training run trains.
+    *
+    * One data lane, while the rest of the link stays where `setup_ucie` left
+    * it: the forwarded clock the receiver samples on and the valid waveform it
+    * frames against both come off other lanes, so moving one data lane's
+    * sampling point or reference moves it against a link that is otherwise
+    * holding still. That is per-lane deskew, and it is the only shape of
+    * training that a single-ended forwarded-clock PHY can do from one side.
+    */
+  val trainLane: Int = 0
+
+  /** Delay line taps to sweep, one `DCDL_DELAY_STEP` (10 ps) apart. A UI is
+    * 62.5 ps at 16 GT/s, so this covers about two of them: enough to see the
+    * sampling point leave the eye on one side and re-enter it a UI later.
+    */
+  val trainDelayTaps: Int = 13
+
+  /** Reference codes to sweep, as `trainVrefCodes` steps of `trainVrefStep` up
+    * the ladder. `rxctl_<lane>_vrefSel` is 7 bits against an 8 bit ladder, so
+    * software can only reach the bottom half of the supply -- which is where
+    * the receiver's swing is, since the driver and the far termination divide
+    * it down.
+    */
+  val trainVrefCodes: Int = 16
+  val trainVrefStep: Int = 8
+
+  /** Packets per point of a training sweep. Long enough that a sampling point
+    * that has slipped a UI shows up as errors on about half the bits, short
+    * enough that a sweep is not the whole simulation.
+    */
+  val trainPackets: Int = 16
+
+  /** How many times `run_lfsr` reads back the packet count before giving up.
+    *
+    * A register round trip is far longer than a packet, so a run that is going
+    * to finish finishes within a couple of reads. What this bounds is how long
+    * a run that is never going to finish costs -- which during a sweep is every
+    * code outside the eye, so it is kept tight.
+    */
+  val trainPollTries: Int = 8
 
   val ucieParams: UcieTLParams = UcieTLParams()
 
@@ -575,7 +647,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("defaultValid", Codegen.defaultValid),
         ("defaultTrack", Codegen.defaultTrack),
         ("enableDriverCtl", Codegen.enableDriverCtl),
-        ("enableTxCtl", Codegen.enableTxCtl)
+        ("enableTxCtl", Codegen.enableTxCtl),
+        ("txCtlDelayLsb", Codegen.txCtlDelayLsb),
+        ("trainLfsrSeed", Codegen.trainLfsrSeed),
+        ("trainLane", BigInt(Codegen.trainLane)),
+        ("trainDelayTaps", BigInt(Codegen.trainDelayTaps)),
+        ("trainVrefCodes", BigInt(Codegen.trainVrefCodes)),
+        ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
+        ("trainPackets", BigInt(Codegen.trainPackets))
       )
     ) {
       sb.append(
@@ -672,6 +751,138 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     )
     sb.toString
+  }
+
+  /** Sets one lane's sampling point: full driver strength with `taps` of the
+    * tile's delay line enabled.
+    *
+    * The delay line sits on the tile's high speed clock, so delaying it moves
+    * when the lane puts a bit on the wire, which against a forwarded clock that
+    * has not moved is the same thing as moving where in the UI the far receiver
+    * samples. `Dctrl` is thermometer coded.
+    */
+  def formatSetTxDelayFn(): String = {
+    val body = new StringBuilder
+    val delayCode =
+      s"(${f.formatConstantRef("enableTxCtl")} | " +
+        s"(((${f.formatLong(1)} << taps) - ${f.formatLong(1)}) << " +
+        s"${f.formatConstantRef("txCtlDelayLsb")}))"
+    body.append(
+      f.formatFnCall(
+        "write_txctl",
+        args = Seq("lane", f.formatConstantRef("txctlTileOfs"), delayCode)
+      )
+    )
+    f.formatFn(
+      "set_tx_delay",
+      body.toString,
+      args = Seq(Arg("lane", Datatype.Long), Arg("taps", Datatype.Long))
+    )
+  }
+
+  /** Sets one lane's slicing reference, as a code up the tile's ladder. */
+  def formatSetRxVrefFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      f.formatFnCall(
+        "write_rxctl",
+        args = Seq("lane", f.formatConstantRef("rxctlVrefSelOfs"), "code")
+      )
+    )
+    f.formatFn(
+      "set_rx_vref",
+      body.toString,
+      args = Seq(Arg("lane", Datatype.Long), Arg("code", Datatype.Long))
+    )
+  }
+
+  /** Seeds both ends' LFSRs, so the receiver can score what it gets against the
+    * pattern it expects and count the bits that differ.
+    *
+    * Every lane is seeded, not just one under test: the receiver frames on the
+    * valid waveform, so the lanes that are not being trained have to stay
+    * readable for it to keep framing. The seed registers hold their value
+    * across a `reset_fsms`, which reseeds from them, so a sweep seeds once and
+    * then reruns as often as it likes.
+    */
+  def formatSeedLfsrsFn(): String = {
+    val seedLoop = new StringBuilder
+    seedLoop.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("txLfsrSeed")} + i * ${f.formatConstantRef("txLfsrSeedWidth")}",
+        f.formatConstantRef("trainLfsrSeed")
+      )
+    )
+    seedLoop.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("rxLfsrSeed")} + i * ${f.formatConstantRef("rxLfsrSeedWidth")}",
+        f.formatConstantRef("trainLfsrSeed")
+      )
+    )
+    f.formatFn(
+      "seed_lfsrs",
+      f.formatForLoop(
+        "i",
+        PhyTest.numTestLanes(params.numLanes),
+        seedLoop.toString
+      )
+    )
+  }
+
+  /** Runs `packets` packets of the LFSR pattern across the mainband and waits
+    * for the receiver to score them. Call `seed_lfsrs` first.
+    *
+    * The wait is bounded rather than a spin on `rxPacketsReceived`: a training
+    * sweep visits codes at which the lane receives nothing at all, and a spin
+    * would hang on the first of them instead of scoring it.
+    */
+  def formatRunLfsrFn(): String = {
+    val body = new StringBuilder
+    body.append(f.formatFnCall("reset_fsms"))
+
+    body.append(
+      formatWriteNamedReg(
+        "testTarget",
+        f.formatConstantRef("testTargetMainband")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeLfsr"))
+    )
+    body.append(
+      formatWriteNamedReg("txDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    // The receiver stops at `packets` too, rather than running on. Left
+    // counting, it would keep scoring the idle zeros a lane sends once the
+    // transmitter is done against the pattern its own LFSR carries on
+    // generating, and every point of a sweep would come back with the same
+    // handful of errors whether or not its code was any good.
+    body.append(
+      formatWriteNamedReg("rxDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    body.append(formatWriteNamedReg("rxPacketsToReceive", "packets"))
+    body.append(formatWriteNamedReg("txPacketsToSend", "packets"))
+    body.append(formatWriteNamedReg("txExecute", f.formatLong(1)))
+
+    val pollBody = new StringBuilder
+    pollBody.append(
+      f.formatReadReg(
+        "regDrv",
+        "r",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = true
+      )
+    )
+    pollBody.append(f.formatIfStmt("r >= packets", f.breakStmt()))
+    body.append(f.formatForLoop("w", Codegen.trainPollTries, pollBody.toString))
+
+    f.formatFn(
+      "run_lfsr",
+      body.toString,
+      args = Seq(Arg("packets", Datatype.Long))
+    )
   }
 
   def formatSetupUcieFn(): String = {
@@ -1215,7 +1426,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatResetFsmsFn())
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
+    sb.append(formatSetTxDelayFn())
+    sb.append(formatSetRxVrefFn())
     sb.append(formatSetupUcieFn())
+    sb.append(formatSeedLfsrsFn())
+    sb.append(formatRunLfsrFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatManualLoopbackFn())
@@ -1237,8 +1452,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 /** Generates a C header (`ucie.h`) that mirrors the SystemVerilog setup
   * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
   * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
-  * `reset_fsms`, and `setup_ucie`. RISC-V test programs can `#include` it to
-  * program the UCIe MMIO registers from C.
+  * `set_tx_delay`, `set_rx_vref`, `reset_fsms`, `setup_ucie`, `seed_lfsrs`, and
+  * `run_lfsr`. RISC-V test programs can `#include` it to program the UCIe MMIO
+  * registers from C, and the last four are enough to train a lane the way
+  * `TrainMainbandTestDriver` does in simulation.
   *
   * Run with one argument — the destination path: ./mill ucie.runMain
   * edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader \ software/ucie.h
@@ -1282,7 +1499,15 @@ object GenUcieHeader {
     sb.append("\n")
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
+    sb.append(cg.formatSetTxDelayFn())
+    sb.append("\n")
+    sb.append(cg.formatSetRxVrefFn())
+    sb.append("\n")
     sb.append(cg.formatSetupUcieFn())
+    sb.append("\n")
+    sb.append(cg.formatSeedLfsrsFn())
+    sb.append("\n")
+    sb.append(cg.formatRunLfsrFn())
     sb.append("\n#endif\n")
     sb.toString
   }
