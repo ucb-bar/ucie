@@ -124,7 +124,7 @@ class SidebandLinkNodeTest
       guard += 1
     }
     c.io.rxOut.valid.expect(true.B)
-    val t = c.io.rxOut.bits.peek().litValue >> 64
+    val t = c.io.rxOut.bits.data.peek().litValue >> 64
     c.clock.step()
     c.io.rxOut.ready.poke(false.B)
     t
@@ -354,7 +354,7 @@ class SidebandLinkNodeTest
           guard += 1
         }
         c.io.rxOut.valid.expect(true.B)
-        assert(c.io.rxOut.bits.peek().litValue == msg)
+        assert(c.io.rxOut.bits.data.peek().litValue == msg)
       }
     }
   }

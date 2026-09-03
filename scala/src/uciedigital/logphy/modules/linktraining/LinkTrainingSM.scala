@@ -127,7 +127,7 @@ class LinkTrainingSM(
     false.B
   ) // sticky the training timed out flag since counter reuse
   val resetMinWait = RegInit(false.B)
-  val resetMinWaitMaxCycles = (timeoutCycles / 2).U // 4ms
+  val resetMinWaitMaxCycles = 20000.U //ELLA NO COMMIT!!!! DO NOT COMMIT THIS!!!!!!!!!! (timeoutCycles / 2).U // 4ms
   val substateTransitioning = Wire(Bool())
   val trainErrorHandshakeTimedout = WireInit(false.B)
 
