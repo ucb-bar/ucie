@@ -245,6 +245,23 @@ object Codegen {
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
 
+  // Bits within the DVSEC LinkControl word (UcieLinkDvsecRegs.scala) to set
+  // for digital-controller bring-up: raw_format_enable (bit 0, the only
+  // flit format this stack implements) and start_link_training (bit 10,
+  // auto-clearing). LinkControl also packs target_link_width/
+  // target_link_speed, which already reset to this chip's max width/speed,
+  // so setup_ucie_digital ORs this mask into a read-modify-write rather than
+  // overwriting the whole word.
+  val linkControlBringupMask: BigInt = (BigInt(1) << 0) | (BigInt(1) << 10)
+
+  // Bit index of link_status (link-up) within the packed DVSEC LinkStatus
+  // word (UcieLinkDvsecRegs.scala), counting from the start of that word's
+  // first field (raw_format_enabled, bit 0): raw_format_enabled(1) +
+  // multi_protocol_enabled(1) + enhanced_multi_proto_enabled(1) +
+  // x32_adv_pkg_enabled(1) + rsvd(3) + link_width_enabled(4) +
+  // link_speed_enabled(4) = 15.
+  val linkStatusLinkUpBit: Int = 15
+
   val ucieParams: UcieTLParams = UcieTLParams()
 
   /** Elaborates UcieTL with `params` and returns its register map.
@@ -762,6 +779,114 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.toString
   }
 
+  /** MMIO setup to bring the link up through the digital controller
+    * (`UcieDigitalTop`) instead of PhyTest: enables the mainband pad drivers,
+    * kicks off DVSEC link training, and hands the mainband/sideband muxes to
+    * `ucieDigital` by setting `controllerSel`. Unlike `setup_ucie`, this
+    * skips every PhyTest-only knob (manual clock/valid patterns, debug
+    * drivers, `reset_fsms`) since the digital controller neither reads nor is
+    * reset by them.
+    *
+    * Blocks until DVSEC `LinkStatus` reports link-up before returning, so a
+    * caller can start using the link immediately after this returns -- the
+    * same contract `setup_ucie` gives PhyTest callers by leaving the PHY
+    * ready to go, just enforced here by polling instead.
+    */
+  def formatSetupUcieDigitalFn(): String = {
+    val sb = new StringBuilder
+    val body = new StringBuilder
+
+    {
+      val loopBody = new StringBuilder
+      for (
+        case (ofs, value) <- Seq(
+          ("Tile", f.formatConstantRef("enableTxCtl"))
+        )
+      ) {
+        loopBody.append(
+          f.formatFnCall(
+            "write_txctl",
+            args = Seq("lane", f.formatConstantRef(s"txctl${ofs}Ofs"), value)
+          )
+        )
+      }
+      for (
+        case (ofs, value) <- Seq(
+          ("Zen", f.formatLong(1)),
+          ("Zctl", f.formatLong(0))
+        )
+      ) {
+        loopBody.append(
+          f.formatFnCall(
+            "write_rxctl",
+            args = Seq("lane", f.formatConstantRef(s"rxctl${ofs}Ofs"), value)
+          )
+        )
+      }
+      // Only the real mainband lanes -- unlike setup_ucie, there's no PhyTest
+      // debug/loopback lane to bring up here.
+      body.append(f.formatForLoop("lane", params.numLanes, loopBody.toString))
+    }
+
+    // DVSEC LinkControl packs raw_format_enable and start_link_training
+    // alongside target_link_width/target_link_speed (see
+    // Codegen.linkControlBringupMask), so read-modify-write instead of
+    // clobbering the whole word.
+    body.append(
+      f.formatReadReg(
+        "regDrv",
+        "linkControl",
+        f.formatConstantRef("rawFormatEnable")
+      )
+    )
+    body.append(
+      f.formatWriteReg(
+        "regDrv",
+        f.formatConstantRef("rawFormatEnable"),
+        s"linkControl | ${f.formatLong(Codegen.linkControlBringupMask.toLong)}"
+      )
+    )
+
+    // Both error masks reset to "all masked"; unmask so real link errors
+    // surface in LinkStatus/IRQs instead of only latching silently.
+    body.append(formatWriteNamedReg("uncorrErrMask", f.formatLong(0)))
+    body.append(formatWriteNamedReg("corrErrMask", f.formatLong(0)))
+
+    // Hand the mainband/sideband muxes to the digital controller.
+    body.append(
+      formatWriteNamedReg(
+        "controllerSel",
+        f.formatConstantRef("controllerSelUcie")
+      )
+    )
+
+    // Block until training completes. LinkStatus is named after its first
+    // packed field, raw_format_enabled (see Codegen.linkStatusLinkUpBit for
+    // link_status's bit position within that same word).
+    {
+      val whileBody = new StringBuilder
+      whileBody.append(
+        f.formatReadReg(
+          "regDrv",
+          "linkStatus",
+          f.formatConstantRef("rawFormatEnabled")
+        )
+      )
+      whileBody.append(
+        f.formatIfStmt(
+          s"(linkStatus >> ${f.formatLong(
+              Codegen.linkStatusLinkUpBit.toLong
+            )}) & ${f.formatLong(1)}",
+          f.breakStmt()
+        )
+      )
+      body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+    }
+
+    sb.append(f.formatFn("setup_ucie_digital", body.toString))
+    sb.toString
+  }
+
   def formatWriteTxDataChunkFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
@@ -1216,6 +1341,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetupUcieFn())
+    sb.append(formatSetupUcieDigitalFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatManualLoopbackFn())
@@ -1237,8 +1363,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 /** Generates a C header (`ucie.h`) that mirrors the SystemVerilog setup
   * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
   * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
-  * `reset_fsms`, and `setup_ucie`. RISC-V test programs can `#include` it to
-  * program the UCIe MMIO registers from C.
+  * `reset_fsms`, `setup_ucie`, and `setup_ucie_digital`. RISC-V test programs
+  * can `#include` it to program the UCIe MMIO registers from C.
   *
   * Run with one argument — the destination path: ./mill ucie.runMain
   * edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader \ software/ucie.h
@@ -1283,6 +1409,8 @@ object GenUcieHeader {
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
     sb.append(cg.formatSetupUcieFn())
+    sb.append("\n")
+    sb.append(cg.formatSetupUcieDigitalFn())
     sb.append("\n#endif\n")
     sb.toString
   }

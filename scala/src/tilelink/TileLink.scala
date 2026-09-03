@@ -829,7 +829,7 @@ class UcieTL(
     childReset := digitalClockNode.in(0)._1.reset
     override def provideImplicitClockToLazyChildren = true
 
-    val regmap = regs.module.regmap
+    val regmap = regs.module.regmap ++ regs.module.ucieRegmap
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY
