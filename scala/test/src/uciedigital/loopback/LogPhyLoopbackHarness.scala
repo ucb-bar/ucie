@@ -104,6 +104,7 @@ class LogPhyLoopbackHarness(
     dut.ctrl.changeInRuntimeLinkCtrlRegsDetected := false.B
     dut.ctrl.runtimeLinkCtrlBusyBit := false.B
     dut.ctrl.runtimeRequestForRepair := false.B
+    dut.mmplCtrl.tieOffSingleModule()
     dut.ctrl.swRetrainRequest := false.B
     dut.ctrl.linkOpParamOverride := false.B
     dut.ctrl.clockPhaseSelect := 0.U

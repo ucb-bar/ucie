@@ -36,8 +36,13 @@ Some individual blocks have their own generators under `scala/src`, each writing
 
 ```bash
 ./mill runMain edu.berkeley.cs.uciedigital.logphy.MainLogicalPhy
+./mill runMain edu.berkeley.cs.uciedigital.logphy.MainMultiModulePhy
 ./mill runMain edu.berkeley.cs.uciedigital.protocol.MainProtocolLayer
 ```
+
+`MainMultiModulePhy` generates the multi-module Physical Layer: one Multi-module
+PHY Logic block (`Mmpl`) over several `LogicalPhy` instances, presenting a single
+RDI to one Die-to-Die Adapter.
 
 To list every block generator:
 

@@ -209,6 +209,7 @@ class UcieDigitalLoopbackHarness(
     phy.ctrl.changeInRuntimeLinkCtrlRegsDetected := false.B
     phy.ctrl.runtimeLinkCtrlBusyBit := false.B
     phy.ctrl.runtimeRequestForRepair := false.B
+    phy.mmplCtrl.tieOffSingleModule()
     phy.ctrl.swRetrainRequest := false.B
     phy.ctrl.linkOpParamOverride := false.B
     phy.ctrl.clockPhaseSelect := 0.U

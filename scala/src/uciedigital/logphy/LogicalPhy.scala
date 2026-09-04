@@ -51,6 +51,16 @@ class LogicalPhyStatusIO extends Bundle {
   val txLaneMask = Output(UInt(16.W))
   val rxLaneMask = Output(UInt(16.W))
   val remoteRequestingTrainError = Output(Bool())
+  // Functional-Lane codes, which the MMPL byte map needs to know how many Lanes
+  // carry data in each direction.
+  val localTxFunctionalLanes = Output(UInt(3.W))
+  val remoteTxFunctionalLanes = Output(UInt(3.W))
+  // What this Module sent and received in MBTRAIN.LINKSPEED (spec 4.7.1).
+  val linkSpeedReport = Valid(new MmplLinkSpeedReport())
+  val linkSpeedRespMismatch = Output(Bool())
+  // Retrain encoding this Module alone derived, for the MMPL to make common
+  // across the Link (spec 4.5.3.7).
+  val retrainEncoding = Output(UInt(3.W))
   val sideband = new LogicalPhySidebandStatusIO()
 }
 
@@ -71,7 +81,13 @@ class LogicalPhy(
     rdiParams: RdiParams = RdiParams(64, 32),
     retryW: Int = 10,
     desTimeoutCycles: Int = 512,
-    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
+    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
+    // Simulation-only shortening of the link training residency timeouts.
+    timeoutCyclesOverride: Option[Int] = None,
+    // A single-module Link owns its RDI state machine. On a multi-module Link
+    // there is one state machine for the whole Link (spec 3.5), so the MMPL
+    // hosts it and this Module exposes io.mmplRdiHost instead.
+    hasRdiStateMachine: Boolean = true
 ) extends Module {
   // Current integration target is Standard Package operation in Streaming RAW mode only.
   val io = IO(new Bundle {
@@ -79,10 +95,19 @@ class LogicalPhy(
     val ctrl = new LogicalPhyCtrlIO(retryW, afeParams)
     val status = new LogicalPhyStatusIO()
     val analog = new LogicalPhyAnalogIO(afeParams, sbParams)
+    // Directives from the Multi-module PHY Logic above this Module (spec 4.7).
+    // Call tieOffSingleModule() when this Module is the whole Link.
+    val mmplCtrl = Flipped(new MmplModuleCtrlIO())
+    // Present only when the RDI state machine lives above this Module.
+    val mmplRdiHost =
+      Option.when(!hasRdiStateMachine)(new LogicalPhyRdiHostIO(sbParams))
   })
 
-  val ltsm = Module(new LinkTrainingSM(sbParams, afeParams, retryW))
-  val rdiController = Module(new RDIController(sbParams))
+  val ltsm = Module(
+    new LinkTrainingSM(sbParams, afeParams, retryW, timeoutCyclesOverride)
+  )
+  val rdiController =
+    Option.when(hasRdiStateMachine)(Module(new RDIController(sbParams)))
   val mainbandLaneController = Module(
     new MainbandLaneController(afeParams, rdiParams)
   )
@@ -120,6 +145,7 @@ class LogicalPhy(
   ltsm.io.changeInRuntimeLinkCtrlRegsDetected := io.ctrl.changeInRuntimeLinkCtrlRegsDetected
   ltsm.io.runtimeLinkCtrlBusyBit := io.ctrl.runtimeLinkCtrlBusyBit
   ltsm.io.runtimeRequestForRepair := io.ctrl.runtimeRequestForRepair
+  ltsm.io.mmplCtrl <> io.mmplCtrl
 
   io.status.ltState := ltsm.io.ltState
   io.status.currentState := ltsm.io.currentState
@@ -132,6 +158,11 @@ class LogicalPhy(
   io.status.txLaneMask := ltsm.io.txLaneMask
   io.status.rxLaneMask := ltsm.io.rxLaneMask
   io.status.remoteRequestingTrainError := ltsm.io.remoteRequestingTrainError
+  io.status.localTxFunctionalLanes := ltsm.io.localTxFunctionalLanes
+  io.status.remoteTxFunctionalLanes := ltsm.io.remoteTxFunctionalLanes
+  io.status.linkSpeedReport := ltsm.io.linkSpeedReport
+  io.status.linkSpeedRespMismatch := ltsm.io.linkSpeedRespMismatch
+  io.status.retrainEncoding := ltsm.io.retrainEncoding
 
   phyLaneTrainer.io.phyTrainIo <> ltsm.io.phyTrainIo
 
@@ -144,19 +175,44 @@ class LogicalPhy(
       (ltsm.io.ltState === LTState.sMBTRAIN) ||
       (ltsm.io.ltState === LTState.sPHYRETRAIN)
 
-  rdiController.io.rdi.lpStateReq := io.rdi.lpStateReq
-  rdiController.io.rdi.lpWakeReq := io.rdi.lpWakeReq
-  rdiController.io.rdi.lpClkAck := io.rdi.lpClkAck
-  rdiController.io.rdi.lpStallAck := io.rdi.lpStallAck
-  rdiController.io.ltsmState := ltsm.io.ltState
-  rdiController.io.doRdiBringup := ltsm.io.rdi.doRdiBringup
-  ltsm.io.rdi.doingRdiBringUp := rdiController.io.doingRdiBringup
-  rdiController.io.trainingTimeout := ltsm.io.trainingTimedout || ltsm.io.forceRdiLinkError
-  rdiController.io.plPhyInRecenter := phyInRecenter
-  rdiController.io.cfgSidebandActive := logPhySidebandChannel.io.rdi.activity
-  rdiController.io.clocksUngatedAndStable := phyControlTranslator.io.toDigital.clocksUngatedAndStable
+  val trainingTimeout =
+    ltsm.io.trainingTimedout || ltsm.io.forceRdiLinkError
+  val cfgSidebandActive = logPhySidebandChannel.io.rdi.activity
+  val clocksUngatedAndStable =
+    phyControlTranslator.io.toDigital.clocksUngatedAndStable
 
-  ltsm.io.rdi.plStateSts := rdiController.io.rdi.plStateSts
+  rdiController.foreach { ctrl =>
+    ctrl.io.rdi.lpStateReq := io.rdi.lpStateReq
+    ctrl.io.rdi.lpWakeReq := io.rdi.lpWakeReq
+    ctrl.io.rdi.lpClkAck := io.rdi.lpClkAck
+    ctrl.io.rdi.lpStallAck := io.rdi.lpStallAck
+    ctrl.io.ltsmState := ltsm.io.ltState
+    ctrl.io.doRdiBringup := ltsm.io.rdi.doRdiBringup
+    ctrl.io.trainingTimeout := trainingTimeout
+    ctrl.io.plPhyInRecenter := phyInRecenter
+    ctrl.io.cfgSidebandActive := cfgSidebandActive
+    ctrl.io.clocksUngatedAndStable := clocksUngatedAndStable
+  }
+
+  io.mmplRdiHost.foreach { host =>
+    host.ltsmState := ltsm.io.ltState
+    host.doRdiBringup := ltsm.io.rdi.doRdiBringup
+    host.trainingTimeout := trainingTimeout
+    host.plPhyInRecenter := phyInRecenter
+    host.cfgSidebandActive := cfgSidebandActive
+    host.clocksUngatedAndStable := clocksUngatedAndStable
+  }
+
+  // The RDI state, wherever the machine that drives it lives.
+  val rdiStateSts = rdiController
+    .map(_.io.rdi.plStateSts)
+    .getOrElse(io.mmplRdiHost.get.plStateSts)
+
+  ltsm.io.rdi.doingRdiBringUp := rdiController
+    .map(_.io.doingRdiBringup)
+    .getOrElse(io.mmplRdiHost.get.doingRdiBringup)
+
+  ltsm.io.rdi.plStateSts := rdiStateSts
   ltsm.io.rdi.lpStateReq := io.rdi.lpStateReq
 
   logPhySidebandChannel.io.rdi.in.valid := io.rdi.lpCfgVld
@@ -183,11 +239,31 @@ class LogicalPhy(
   ltsm.io.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
   sidebandRxReadyLtsm := ltsm.io.sbLaneIo.rx.ready
 
-  rdiController.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid
-  rdiController.io.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
-  sidebandRxReadyRdi := rdiController.io.sbLaneIo.rx.ready
+  rdiController.foreach { ctrl =>
+    ctrl.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid
+    ctrl.io.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
+    sidebandRxReadyRdi := ctrl.io.sbLaneIo.rx.ready
+  }
 
-  sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm && !sidebandRxReadyRdi
+  // A hosted state machine above this Module can ask for a packet to stay put
+  // instead of being retired as unclaimed (see LogicalPhyRdiHostIO.rxHold).
+  val sidebandRxHeldAbove = WireDefault(false.B)
+
+  io.mmplRdiHost.foreach { host =>
+    // Only offer upward what this Module's own LTSM did not claim, so a hosted
+    // state machine merging several Modules is never shown a message that
+    // belongs to one of their link training state machines.
+    host.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm
+    host.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
+    sidebandRxReadyRdi := host.sbLaneIo.rx.ready
+    sidebandRxHeldAbove := host.rxHold
+  }
+
+  // The LTSM can also ask for a packet to stay put: a {PHYRETRAIN.retrain
+  // start req} that arrived before it reached PHYRETRAIN (LinkTrainingSM's
+  // holdSidebandRx). Retiring it would cost the partner its handshake.
+  sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm &&
+    !sidebandRxReadyRdi && !sidebandRxHeldAbove && !ltsm.io.holdSidebandRx
 
   val sbParityErrSeen = RegInit(false.B)
   val sbRxPriorityQueuesFullSeen = RegInit(false.B)
@@ -243,9 +319,17 @@ class LogicalPhy(
   sidebandTxArbiter.io.in(0).bits := ltsm.io.sbLaneIo.tx.bits.data
   ltsm.io.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(0).ready
 
-  sidebandTxArbiter.io.in(1).valid := rdiController.io.sbLaneIo.tx.valid
-  sidebandTxArbiter.io.in(1).bits := rdiController.io.sbLaneIo.tx.bits.data
-  rdiController.io.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(1).ready
+  rdiController.foreach { ctrl =>
+    sidebandTxArbiter.io.in(1).valid := ctrl.io.sbLaneIo.tx.valid
+    sidebandTxArbiter.io.in(1).bits := ctrl.io.sbLaneIo.tx.bits.data
+    ctrl.io.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(1).ready
+  }
+
+  io.mmplRdiHost.foreach { host =>
+    sidebandTxArbiter.io.in(1).valid := host.sbLaneIo.tx.valid
+    sidebandTxArbiter.io.in(1).bits := host.sbLaneIo.tx.bits.data
+    host.sbLaneIo.tx.ready := sidebandTxArbiter.io.in(1).ready
+  }
 
   val sidebandTxQueue = Module(
     new Queue(UInt(sbParams.sbNodeMsgWidth.W), 1, pipe = true, flow = false)
@@ -326,7 +410,7 @@ class LogicalPhy(
   ltsm.io.phyCtrlIo.pllLock := phyControlTranslator.io.toDigital.pllLock
 
   // TODO: Route this to a future digital power-management / clock-control block.
-  dontTouch(rdiController.io.ungateClocks)
+  rdiController.foreach(ctrl => dontTouch(ctrl.io.ungateClocks))
 
   // ============================================================================================
   // Scramblers/Descrambler
@@ -385,14 +469,21 @@ class LogicalPhy(
   patternReader.io.mbRxLaneIo := rawRxLaneBits
   patternReader.io.mbRxValid := io.analog.mainband.rx.valid
 
-  val rdiStateSts = rdiController.io.rdi.plStateSts
   val canAcceptLpIrdy = rdiStateSts =/= RDIState.reset
+
+  // Spec 4.5.3.3.5: "UCIe-S x8" puts a x16 Module into x8 mode, which changes
+  // what the "all functional" Lane code means for every block that decodes it.
+  val negotiatedBy8 =
+    ltsm.io.negotiatedPhyParamSettings.valid &&
+      ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
 
   mainbandLaneController.io.rdi.tx.lpIrdy := io.rdi.lpIrdy && isActive && canAcceptLpIrdy
   mainbandLaneController.io.rdi.tx.lpValid := io.rdi.lpValid && isActive
   mainbandLaneController.io.rdi.tx.lpData := io.rdi.lpData
   mainbandLaneController.io.ctrl.localTxFunctionalLanes := ltsm.io.localTxFunctionalLanes
   mainbandLaneController.io.ctrl.localRxFunctionalLanes := ltsm.io.remoteTxFunctionalLanes
+  // Spec 4.5.3.3.5: in x8 mode the "all functional" code covers Lanes 0 to 7.
+  mainbandLaneController.io.ctrl.interpretBy8Lane := negotiatedBy8
   mainbandLaneController.io.mbLanes.tx.ready := io.analog.mainband.tx.ready && isActive
 
   val activeTxLaneMask = PatternLaneMap.decodeLaneMap(
@@ -438,7 +529,12 @@ class LogicalPhy(
     true.B
   )
 
-  rdiController.io.validFramingError := mainbandLaneController.io.ctrl.validFramingError
+  rdiController.foreach(
+    _.io.validFramingError := mainbandLaneController.io.ctrl.validFramingError
+  )
+  io.mmplRdiHost.foreach(
+    _.validFramingError := mainbandLaneController.io.ctrl.validFramingError
+  )
 
   // In Streaming RAW mode, framing corruption in ACTIVE triggers pl_error and
   // the data path is stalled until retrain completes and LTSM returns to ACTIVE.
@@ -534,10 +630,6 @@ class LogicalPhy(
   // ============================================================================================
   // RDI outputs
   // ============================================================================================
-  val negotiatedBy8 =
-    ltsm.io.negotiatedPhyParamSettings.valid &&
-      ltsm.io.negotiatedPhyParamSettings.bits.ucieSx8.asBool
-
   val linkWidth = Wire(LinkWidth())
   linkWidth := LinkWidth.x16
   switch(ltsm.io.localTxFunctionalLanes) {
@@ -565,10 +657,15 @@ class LogicalPhy(
   )
   io.rdi.plData := Mux(isActive, mainbandLaneController.io.rdi.rx.plData, 0.U)
   io.rdi.plStateSts := rdiStateSts
-  io.rdi.plInbandPres := rdiController.io.rdi.plInbandPres
-  io.rdi.plStallReq := rdiController.io.rdi.plStallReq
-  io.rdi.plClkReq := rdiController.io.rdi.plClkReq
-  io.rdi.plWakeAck := rdiController.io.rdi.plWakeAck
+  // With the state machine hosted above, these belong to the hosted one and the
+  // block above this Module drives the Adapter with them; there is nothing
+  // meaningful for a single Module to say.
+  io.rdi.plInbandPres := rdiController
+    .map(_.io.rdi.plInbandPres)
+    .getOrElse(false.B)
+  io.rdi.plStallReq := rdiController.map(_.io.rdi.plStallReq).getOrElse(false.B)
+  io.rdi.plClkReq := rdiController.map(_.io.rdi.plClkReq).getOrElse(false.B)
+  io.rdi.plWakeAck := rdiController.map(_.io.rdi.plWakeAck).getOrElse(false.B)
   io.rdi.plSpeedmode := ltsm.io.phyCtrlIo.freqSel
   io.rdi.plLnkCfg := linkWidth
   io.rdi.plNfError := false.B

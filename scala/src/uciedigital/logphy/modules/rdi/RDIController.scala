@@ -130,7 +130,11 @@ class RDIController(sbParams: SidebandParams) extends Module {
           "FATAL: pl_inband_pres assertion in RESET must be covered by the clock handshake"
         )
       }
-      when(mustHoldClocksUntilStateChanges) {
+      // The clock requester needs one cycle to leave sIDLE and raise
+      // pl_clk_req, so the check starts once the handshake is under way. From
+      // there the requester cannot fall back to sIDLE while the transition is
+      // still pending, so a de-assertion would be a real violation.
+      when(mustHoldClocksUntilStateChanges && !clockRequester.io.ctrl.inIdle) {
         assert(
           clockRequester.io.rdi.plClkReq,
           "FATAL: pl_clk_req must remain asserted while leaving RESET/PM states"
@@ -142,7 +146,10 @@ class RDIController(sbParams: SidebandParams) extends Module {
           "FATAL: Sideband traffic to the Adapter must be covered by the clock handshake"
         )
       }
-      when(io.cfgSidebandActive) {
+      // Same one-cycle allowance as above: cfg activity feeds
+      // keepClockRequested, and the requester needs a cycle to leave sIDLE and
+      // raise pl_clk_req. Once it has left, a de-assertion is a real violation.
+      when(io.cfgSidebandActive && !clockRequester.io.ctrl.inIdle) {
         assert(
           clockRequester.io.rdi.plClkReq,
           "FATAL: RDI cfg sideband activity must be covered by the clock handshake"
