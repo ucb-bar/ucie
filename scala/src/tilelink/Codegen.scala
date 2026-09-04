@@ -828,6 +828,19 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       body.append(f.formatForLoop("lane", params.numLanes, loopBody.toString))
     }
 
+    // Hand the mainband/sideband muxes to the digital controller BEFORE
+    // kicking off training below: phy.io.sb.txClk/txData (TileLink.scala) mux
+    // on this same controllerSel, so if it's written after start_link_training,
+    // SBInit's first clock-pattern transmission starts while the bump is still
+    // routed to PhyTest's driver and gets silently dropped mid-word until this
+    // write finally lands.
+    body.append(
+      formatWriteNamedReg(
+        "controllerSel",
+        f.formatConstantRef("controllerSelUcie")
+      )
+    )
+
     // DVSEC LinkControl packs raw_format_enable and start_link_training
     // alongside target_link_width/target_link_speed (see
     // Codegen.linkControlBringupMask), so read-modify-write instead of
@@ -851,14 +864,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     // surface in LinkStatus/IRQs instead of only latching silently.
     body.append(formatWriteNamedReg("uncorrErrMask", f.formatLong(0)))
     body.append(formatWriteNamedReg("corrErrMask", f.formatLong(0)))
-
-    // Hand the mainband/sideband muxes to the digital controller.
-    body.append(
-      formatWriteNamedReg(
-        "controllerSel",
-        f.formatConstantRef("controllerSelUcie")
-      )
-    )
 
     // Block until training completes. LinkStatus is named after its first
     // packed field, raw_format_enabled (see Codegen.linkStatusLinkUpBit for
