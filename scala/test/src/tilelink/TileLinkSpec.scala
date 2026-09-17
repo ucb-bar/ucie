@@ -618,7 +618,7 @@ tl_sideband();
   )
 }
 
-/** Trains one mainband lane over MMIO, the way software would.
+/** Trains every mainband lane over MMIO, the way software would.
   *
   * Nothing here reaches past the register block: `setup_ucie`, `set_tx_delay`,
   * `set_rx_vref` and `run_lfsr` are the sequences `Codegen` emits, and the two
@@ -627,14 +627,32 @@ tl_sideband();
   * exactly what a driver on real silicon would measure, through exactly the
   * registers it would use.
   *
-  * The two sweeps are the two axes of an eye. The delay line moves where in the
-  * UI the far receiver samples the lane; the reference ladder moves where
-  * between the rails it slices. A code outside the eye on either axis shows up
-  * as bit errors against the LFSR pattern, and the widest run of clean codes is
-  * the eye. Both sweeps have to find a bounded run -- the test fails if every
-  * code works, because a model that trains without a wrong answer is not
-  * modelling the thing being trained. That is what `models/eye` exists to
-  * provide and what the behavioral models in `scala/resources/vsrc` cannot; see
+  * Three sweeps. The first two are the two axes of an eye, run across every
+  * data lane at once: the delay line moves where in the UI the far receiver
+  * samples a lane, the reference ladder moves where between the rails it
+  * slices, and each lane is scored from its own counters so one pass trains the
+  * whole set.
+  *
+  * FRAMING is why valid is not swept with them. The receiver frames every
+  * lane's comparison on the edge it sees on valid, so moving valid together
+  * with the lanes it frames keeps the two in step and measures nothing -- and
+  * when the pair lands badly the receiver never aligns at all, which reads as
+  * every lane receiving nothing rather than as a code being wrong. Held still,
+  * valid gives the framing something to be wrong about: a data lane that slips
+  * into the next UI has slipped relative to valid, and `PhyTest` scores the
+  * same capture framed a UI either side, so reading all three counters
+  * separates "this lane's data is wrong" from "this lane slipped a UI". Only
+  * the nominal counter defines the eye, since treating a slipped UI as inside
+  * it would merge two adjacent UI into one apparent opening; the other two are
+  * diagnosis, and the sweep reports where they mattered. The third sweep is the
+  * other half of that experiment -- valid alone, past data lanes held still --
+  * and doubles as how valid gets trained, since valid cannot be scored against
+  * a framing it is itself producing.
+  *
+  * Both sweeps have to find a bounded run -- the test fails if every code
+  * works, because a model that trains without a wrong answer is not modelling
+  * the thing being trained. That is what `models/eye` exists to provide and
+  * what the behavioral models in `scala/resources/vsrc` cannot; see
   * `verilog/README.md`.
   *
   * The pattern and the scoring come from `PhyTest`, which `setup_ucie` selects
@@ -649,93 +667,275 @@ class TrainMainbandTestDriver extends SVTestDriver {
     "TrainMainbandTestDriver",
     """
 begin : train
-  integer delay_score[`TRAIN_DELAY_TAPS];
-  integer vref_score[`TRAIN_VREF_CODES];
-  integer delay_start, delay_len, vref_start, vref_len;
-  integer trained_tap, trained_vref;
-  integer clean_taps, clean_vrefs;
-  reg [63:0] packets;
-  reg [63:0] errors;
+  integer tap_score[`TRAIN_DATA_LANES][`TRAIN_DELAY_TAPS];
+  integer vref_score[`TRAIN_DATA_LANES][`TRAIN_VREF_CODES];
+  integer valid_score[`TRAIN_DELAY_TAPS];
+  integer trained_tap[`TRAIN_SCORE_LANES];
+  integer trained_vref[`TRAIN_DATA_LANES];
+  integer run_start, run_len;
+  integer clean_nom, clean_any;
+  integer tap_slipped, vref_slipped, valid_slipped;
+  integer valid_broken, valid_trained_tap;
+  integer bounded_taps, bounded_vrefs;
+  reg [63:0] dbg_tx;
+  reg [63:0] dbg_rx;
   string row;
+
+  // `integer` comes up X, and X plus one stays X.
+  bounded_taps = 0;
+  bounded_vrefs = 0;
+  tap_slipped = 0;
+  vref_slipped = 0;
+  valid_slipped = 0;
+  valid_broken = 0;
 
   setup_ucie();
   seed_lfsrs();
 
-  $display("Training mainband lane %0d over MMIO", `TRAIN_LANE);
+  $display("Training %0d data lanes over MMIO, framing on valid (lane %0d)",
+           `TRAIN_DATA_LANES, `TRAIN_VALID_LANE);
 
-  // SWEEP 1: where in the UI the lane is sampled.
-  clean_taps = 0;
+  // SWEEP 1: where in the UI each data lane is sampled.
+  //
+  // Valid stays where `setup_ucie` left it. The receiver frames every lane's
+  // comparison on the edge it sees there, so moving valid along with the lanes
+  // it frames would keep the two in step and measure nothing -- and when it
+  // lands badly the receiver never aligns at all, which reads as every lane
+  // receiving nothing rather than as a code being wrong. Held still, it also
+  // gives the framing something to be wrong ABOUT: a data lane that slips into
+  // the next UI has slipped relative to valid, which is exactly the condition
+  // `rxBitErrorsEarly` and `rxBitErrorsLate` claim to resolve.
   for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
-    set_tx_delay(`TRAIN_LANE, t);
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, t);
+    // Programming a batch of lanes leaves the mainband idle for long enough
+    // that the next run does not align. It is the same effect that makes the
+    // very first run after `setup_ucie` come back empty -- that is just the
+    // largest batch of all, 63 writes -- and one run is enough to recover from
+    // it. So each point runs twice and scores the second.
     run_lfsr(`TRAIN_PACKETS);
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
-    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
-    `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
-    delay_score[t] = (packets >= `TRAIN_PACKETS && errors == 64'h0) ? 1 : 0;
-    clean_taps = clean_taps + delay_score[t];
-    $display("  tap %2d: %0d packets, %0d bit errors", t, packets, errors);
+    run_lfsr(`TRAIN_PACKETS);
+    score_lanes();
+    clean_nom = 0;
+    clean_any = 0;
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+      // The eye is where the NOMINAL framing reads clean. A lane that only
+      // reads clean a UI either side has slipped, and counting that as inside
+      // the eye would merge two adjacent UI into one apparent opening and pick
+      // a code sitting on the boundary between them.
+      tap_score[l][t] = (lane_framing[l] == 0) ? 1 : 0;
+      if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
+      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+    end
+    if (clean_any > clean_nom) tap_slipped = tap_slipped + 1;
+    $display("  tap %2d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
+             t, clean_nom, `TRAIN_DATA_LANES, clean_any, `TRAIN_DATA_LANES,
+             clean_any > clean_nom ? "   <- slip resolved by early/late" : "");
+    report_framing();
   end
 
-  longest_run(delay_score, `TRAIN_DELAY_TAPS, delay_start, delay_len);
-  trained_tap = delay_start + delay_len / 2;
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    longest_run(tap_score[l], `TRAIN_DELAY_TAPS, run_start, run_len);
+    trained_tap[l] = run_start + run_len / 2;
+    if (run_len > 0 && run_len < `TRAIN_DELAY_TAPS)
+      bounded_taps = bounded_taps + 1;
+    row = "";
+    for (int t = 0; t < `TRAIN_DELAY_TAPS; t++)
+      row = {row, tap_score[l][t] == 1 ? "#" : "."};
+    $display("  lane %2d eye: %s  (%0d taps, tap %0d)",
+             l, row, run_len, trained_tap[l]);
+  end
+
+  // SWEEP 2: what level each data lane slices against, at the sampling point
+  // its own first sweep found.
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+      set_rx_vref(l, i * `TRAIN_VREF_STEP);
+    run_lfsr(`TRAIN_PACKETS);
+    run_lfsr(`TRAIN_PACKETS);
+    score_lanes();
+    clean_nom = 0;
+    clean_any = 0;
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+      vref_score[l][i] = (lane_framing[l] == 0) ? 1 : 0;
+      if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
+      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+    end
+    if (clean_any > clean_nom) vref_slipped = vref_slipped + 1;
+    $display("  vref_sel %3d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
+             i * `TRAIN_VREF_STEP, clean_nom, `TRAIN_DATA_LANES,
+             clean_any, `TRAIN_DATA_LANES,
+             clean_any > clean_nom ? "   <- slip resolved by early/late" : "");
+    report_framing();
+  end
+
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    longest_run(vref_score[l], `TRAIN_VREF_CODES, run_start, run_len);
+    trained_vref[l] = (run_start + run_len / 2) * `TRAIN_VREF_STEP;
+    if (run_len > 0 && run_len < `TRAIN_VREF_CODES)
+      bounded_vrefs = bounded_vrefs + 1;
+    row = "";
+    for (int i = 0; i < `TRAIN_VREF_CODES; i++)
+      row = {row, vref_score[l][i] == 1 ? "#" : "."};
+    $display("  lane %2d eye: %s  (%0d codes, vref_sel %0d)",
+             l, row, run_len, trained_vref[l]);
+  end
+
+  // SWEEP 3: valid alone, with every data lane held at the codes it just
+  // picked. This is the other half of the framing experiment -- sweep 1 moved
+  // the framed lanes past a fixed edge, this moves the edge past fixed lanes --
+  // and it is also how valid gets trained, since valid cannot be scored against
+  // a framing it is itself producing. Its quality is whether the lanes it
+  // frames read clean.
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    set_tx_delay(l, trained_tap[l]);
+    set_rx_vref(l, trained_vref[l]);
+  end
+  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+    set_tx_delay(`TRAIN_VALID_LANE, t);
+    run_lfsr(`TRAIN_PACKETS);
+    run_lfsr(`TRAIN_PACKETS);
+    score_lanes();
+    clean_nom = 0;
+    clean_any = 0;
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+      if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
+      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+    end
+    valid_score[t] = (clean_nom == `TRAIN_DATA_LANES) ? 1 : 0;
+    if (clean_nom < `TRAIN_DATA_LANES) valid_broken = valid_broken + 1;
+    if (clean_any > clean_nom) valid_slipped = valid_slipped + 1;
+    $display("  valid tap %2d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
+             t, clean_nom, `TRAIN_DATA_LANES, clean_any, `TRAIN_DATA_LANES,
+             clean_any > clean_nom ? "   <- slip resolved by early/late" : "");
+    report_framing();
+  end
+
+  longest_run(valid_score, `TRAIN_DELAY_TAPS, run_start, run_len);
+  valid_trained_tap = run_start + run_len / 2;
+  trained_tap[`TRAIN_VALID_LANE] = valid_trained_tap;
   row = "";
   for (int t = 0; t < `TRAIN_DELAY_TAPS; t++)
-    row = {row, delay_score[t] == 1 ? "#" : "."};
-  $display("  eye: %s  (%0d taps, centered on tap %0d)", row, delay_len, trained_tap);
+    row = {row, valid_score[t] == 1 ? "#" : "."};
+  $display("  valid  eye: %s  (%0d taps, tap %0d)",
+           row, run_len, valid_trained_tap);
 
-  // SWEEP 2: what level the lane is sliced against, at the sampling point the
-  // first sweep found.
-  set_tx_delay(`TRAIN_LANE, trained_tap);
-  clean_vrefs = 0;
-  for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
-    set_rx_vref(`TRAIN_LANE, i * `TRAIN_VREF_STEP);
-    run_lfsr(`TRAIN_PACKETS);
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
-    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
-    `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
-    vref_score[i] = (packets >= `TRAIN_PACKETS && errors == 64'h0) ? 1 : 0;
-    clean_vrefs = clean_vrefs + vref_score[i];
-    $display("  vref_sel %3d: %0d packets, %0d bit errors",
-             i * `TRAIN_VREF_STEP, packets, errors);
+  // The link at the codes every lane picked for itself.
+  $display("Trained:");
+  set_tx_delay(`TRAIN_VALID_LANE, valid_trained_tap);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    set_tx_delay(l, trained_tap[l]);
+    set_rx_vref(l, trained_vref[l]);
+    $display("  lane %2d: tap %0d, vref_sel %0d", l, trained_tap[l], trained_vref[l]);
+  end
+  $display("  valid  : tap %0d", valid_trained_tap);
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  score_lanes();
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    assert(lane_framing[l] == 0)
+      else $fatal(1, "Lane %0d is not clean at its trained codes (framing code %0d)",
+                  l, lane_framing[l]);
   end
 
-  longest_run(vref_score, `TRAIN_VREF_CODES, vref_start, vref_len);
-  trained_vref = (vref_start + vref_len / 2) * `TRAIN_VREF_STEP;
-  row = "";
-  for (int i = 0; i < `TRAIN_VREF_CODES; i++)
-    row = {row, vref_score[i] == 1 ? "#" : "."};
-  $display("  eye: %s  (%0d codes, centered on vref_sel %0d)",
-           row, vref_len, trained_vref);
+  $display("Framing: a slipped UI was resolved by early/late at %0d of %0d sampling points, %0d of %0d reference points, and %0d of %0d valid points",
+           tap_slipped, `TRAIN_DELAY_TAPS, vref_slipped, `TRAIN_VREF_CODES,
+           valid_slipped, `TRAIN_DELAY_TAPS);
 
-  // The link at the codes the two sweeps picked.
-  $display("Trained lane %0d: tap %0d, vref_sel %0d",
-           `TRAIN_LANE, trained_tap, trained_vref);
-  set_tx_delay(`TRAIN_LANE, trained_tap);
-  set_rx_vref(`TRAIN_LANE, trained_vref);
-  run_lfsr(`TRAIN_PACKETS);
-  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
-  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
-  `READ_UCIE(regDrv, `RX_BIT_ERRORS + `TRAIN_LANE * `RX_BIT_ERRORS_WIDTH, errors);
-  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
-  assert(packets >= `TRAIN_PACKETS)
-    else $fatal(1, "Trained lane received %0d of %0d packets", packets, `TRAIN_PACKETS);
-  assert(errors == 64'h0)
-    else $fatal(1, "Trained lane has %0d bit errors", errors);
+  // Walking valid across more than a UI has to disturb the framing somewhere.
+  // If it never does, valid is not the edge the receiver aligns on and nothing
+  // else this sweep reports about framing means anything. Whether the early and
+  // late counters then resolve those points is the open question the sweep
+  // exists to answer, so that is reported rather than asserted.
+  assert(valid_broken > 0)
+    else $fatal(1, "Moving valid across %0d taps never disturbed the framing, so the receiver is not aligning on it",
+                `TRAIN_DELAY_TAPS);
 
-  // An eye has to be bounded on both axes. If every code works, the model in
-  // front of the receiver is not resolving the thing being trained, and this
-  // sweep proved nothing.
-  assert(delay_len > 0 && clean_taps < `TRAIN_DELAY_TAPS)
-    else $fatal(1, "Sampling point sweep found %0d of %0d taps clean, so the delay line is not moving the sampling point",
-                clean_taps, `TRAIN_DELAY_TAPS);
-  assert(vref_len > 0 && clean_vrefs < `TRAIN_VREF_CODES)
-    else $fatal(1, "Reference sweep found %0d of %0d codes clean, so the slicer is not comparing against its reference",
-                clean_vrefs, `TRAIN_VREF_CODES);
+  // An eye has to be bounded on both axes, for every lane. If every code works
+  // the model in front of the receiver is not resolving the thing being
+  // trained, and the sweep proved nothing.
+  assert(bounded_taps == `TRAIN_DATA_LANES)
+    else $fatal(1, "Only %0d of %0d lanes found a bounded sampling eye, so the delay line is not moving the sampling point",
+                bounded_taps, `TRAIN_DATA_LANES);
+  assert(bounded_vrefs == `TRAIN_DATA_LANES)
+    else $fatal(1, "Only %0d of %0d lanes found a bounded reference eye, so the slicer is not comparing against its reference",
+                bounded_vrefs, `TRAIN_DATA_LANES);
 end
           """.trim,
     moduleItems = """
+// Which framing, if any, read clean for each scored lane at the last
+// measurement: 0 nominal, 1 a UI early, 2 a UI late, 3 real bit errors,
+// 4 the lane received nothing.
+integer lane_framing[`TRAIN_SCORE_LANES];
+
+// Reads every scored lane's three bit error counters under one counter pause.
+//
+// The three differ only in where the pattern is assumed to have started: the
+// receiver frames on the valid lane's edge, so a valid bit that was itself
+// mis-sampled leaves the whole capture a UI out of step and pins the nominal
+// count near half the bits received. Whichever framing reads zero is the one
+// that was right.
+task automatic score_lanes();
+  begin
+    reg [63:0] packets;
+    reg [63:0] nominal;
+    reg [63:0] early;
+    reg [63:0] late;
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + l * `RX_BIT_ERRORS_WIDTH, nominal);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY + l * `RX_BIT_ERRORS_EARLY_WIDTH, early);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE + l * `RX_BIT_ERRORS_LATE_WIDTH, late);
+      // A re-framed capture is recognised by its error count collapsing
+      // relative to the nominal one, not by reaching exactly zero. A lane that
+      // has slipped a UI is usually also sampling near the edge that it slipped
+      // across, so some of its bits are genuinely corrupted on top of the slip
+      // and no framing scores clean: at one tap either side of the boundary the
+      // right framing lands around a tenth of the nominal count, not at zero.
+      // Testing for zero bins that alongside a total failure and hides the very
+      // effect these counters exist to show.
+      if (packets < `TRAIN_PACKETS) lane_framing[l] = 4;
+      else if (nominal == 64'h0) lane_framing[l] = 0;
+      else if (early * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 1;
+      else if (late * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 2;
+      else lane_framing[l] = 3;
+      // A witness lane's raw counts. Classifying each framing as clean or not
+      // throws away the thing worth knowing: whether a framing that is not
+      // exactly zero is nonetheless far below the nominal count, which is what
+      // a one UI slip resolved by re-framing looks like.
+      if (l == 0)
+        $display("          lane 0: %0d packets, nominal %0d, early %0d, late %0d",
+                 packets, nominal, early, late);
+    end
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  end
+endtask
+
+// One character per scored lane -- the data lanes, then valid last, so the
+// string is one longer than the counts the sweeps print. Shown only when a
+// point needed something other than the nominal framing or failed outright.
+// `.` nominal, `e` a UI early, `l` a UI late, `x` real errors, `-` nothing
+// received.
+task automatic report_framing();
+  begin
+    string marks;
+    bit interesting;
+    marks = "";
+    interesting = 1'b0;
+    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
+      case (lane_framing[l])
+        0: marks = {marks, "."};
+        1: begin marks = {marks, "e"}; interesting = 1'b1; end
+        2: begin marks = {marks, "l"}; interesting = 1'b1; end
+        3: begin marks = {marks, "x"}; interesting = 1'b1; end
+        default: begin marks = {marks, "-"}; interesting = 1'b1; end
+      endcase
+    end
+    if (interesting) $display("          framing: %s", marks);
+  end
+endtask
+
 // Longest run of consecutive clean codes in `score`, as a start index and a
 // length. That run is the eye, and its middle is the code to train to.
 task automatic longest_run(

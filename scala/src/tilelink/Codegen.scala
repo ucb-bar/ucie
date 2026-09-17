@@ -276,16 +276,35 @@ object Codegen {
     */
   val trainLfsrSeed: BigInt = BigInt("0123456789abcdef", 16)
 
-  /** The lane a training run trains.
+  /** Data lanes a training run sweeps, which is all of them.
     *
-    * One data lane, while the rest of the link stays where `setup_ucie` left
-    * it: the forwarded clock the receiver samples on and the valid waveform it
-    * frames against both come off other lanes, so moving one data lane's
-    * sampling point or reference moves it against a link that is otherwise
-    * holding still. That is per-lane deskew, and it is the only shape of
-    * training that a single-ended forwarded-clock PHY can do from one side.
+    * Every lane carries its own delay and reference codes and is scored from
+    * its own bit error counter, so one sweep trains the whole set: each point
+    * programs every lane to the same code and reads back one result per lane,
+    * and each lane then keeps whichever code its own scores liked. That matters
+    * because the clock distribution network hands every lane a different
+    * arrival time, so the lanes have no reason to agree on an answer.
     */
-  val trainLane: Int = 0
+  def trainDataLanes(numLanes: Int): Int = numLanes
+
+  /** The valid lane, swept alongside the data lanes.
+    *
+    * Sweeping it is not free: the receiver frames every lane's comparison on
+    * the edge it sees here, so a valid code that is off by a UI throws off the
+    * framing for the whole set rather than just for one lane. That is what
+    * `rxBitErrorsEarly` and `rxBitErrorsLate` exist for -- they score the same
+    * capture framed a UI either side -- and scoring against all three is what
+    * lets a sweep tell "this lane's data is wrong" from "the whole capture was
+    * framed a UI late", which is recoverable.
+    */
+  def trainValidLane(numLanes: Int): Int = PhyTest.validLane(numLanes)
+
+  /** Lanes a training run scores: the data lanes, then valid. The track and
+    * forwarded-clock lanes are left where `setup_ucie` put them -- track
+    * carries nothing the mainband reads, and moving a clock lane's codes takes
+    * the sampling clock away from every lane at once.
+    */
+  def trainScoreLanes(numLanes: Int): Int = trainDataLanes(numLanes) + 1
 
   /** Delay line taps to sweep, one `DCDL_DELAY_STEP` (10 ps) apart. A UI is
     * 62.5 ps at 16 GT/s, so this covers about two of them: enough to see the
@@ -307,6 +326,17 @@ object Codegen {
     * enough that a sweep is not the whole simulation.
     */
   val trainPackets: Int = 16
+
+  /** How far below the nominal count a re-framed error count has to fall before
+    * the capture counts as a slipped UI rather than as broken data.
+    *
+    * A slipped lane is usually sampling near the edge it slipped across, so it
+    * carries genuinely corrupted bits on top of the slip and the right framing
+    * does not reach zero -- measured at about a tenth of the nominal count one
+    * tap either side of the boundary, against a half that a wrong framing
+    * gives. Four separates those comfortably.
+    */
+  val trainSlipRatio: Int = 4
 
   /** How many times `run_lfsr` reads back the packet count before giving up.
     *
@@ -650,11 +680,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("enableTxCtl", Codegen.enableTxCtl),
         ("txCtlDelayLsb", Codegen.txCtlDelayLsb),
         ("trainLfsrSeed", Codegen.trainLfsrSeed),
-        ("trainLane", BigInt(Codegen.trainLane)),
+        ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
+        ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
+        ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
         ("trainDelayTaps", BigInt(Codegen.trainDelayTaps)),
         ("trainVrefCodes", BigInt(Codegen.trainVrefCodes)),
         ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
-        ("trainPackets", BigInt(Codegen.trainPackets))
+        ("trainPackets", BigInt(Codegen.trainPackets)),
+        ("trainSlipRatio", BigInt(Codegen.trainSlipRatio))
       )
     ) {
       sb.append(
