@@ -28,6 +28,7 @@ import edu.berkeley.cs.uciedigital.phytest.{
   TxTestState
 }
 import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.Phy
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -797,35 +798,59 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val body = new StringBuilder
 
     {
-      val loopBody = new StringBuilder
+      // Phy.scala's lane numbering: numLanes data lanes, then valid, then
+      // track, then the two forwarded-clock lanes -- TX drives all
+      // numLanes+4 of them (ucieDigital's mainband tx.bits.clkp/clkn/trk are
+      // wired straight into the clkP/clkN/track TxLane instances, same as
+      // any data lane), so leaving the extra four at their reset "driver
+      // off" state silently drops whatever's sent on them, clock included.
+      val txLoopBody = new StringBuilder
       for (
         case (ofs, value) <- Seq(
           ("Tile", f.formatConstantRef("enableTxCtl"))
         )
       ) {
-        loopBody.append(
+        txLoopBody.append(
           f.formatFnCall(
             "write_txctl",
             args = Seq("lane", f.formatConstantRef(s"txctl${ofs}Ofs"), value)
           )
         )
       }
+      body.append(
+        f.formatForLoop(
+          "lane",
+          Phy.numTxLanes(params.numLanes),
+          txLoopBody.toString
+        )
+      )
+    }
+
+    {
+      // RX only needs data+valid+track (Phy.numRxDataLanes): its clkP/clkN
+      // lanes recover a clock rather than deserializing a word, so they
+      // don't need a receiver enable the way the others do.
+      val rxLoopBody = new StringBuilder
       for (
         case (ofs, value) <- Seq(
           ("Zen", f.formatLong(1)),
           ("Zctl", f.formatLong(0))
         )
       ) {
-        loopBody.append(
+        rxLoopBody.append(
           f.formatFnCall(
             "write_rxctl",
             args = Seq("lane", f.formatConstantRef(s"rxctl${ofs}Ofs"), value)
           )
         )
       }
-      // Only the real mainband lanes -- unlike setup_ucie, there's no PhyTest
-      // debug/loopback lane to bring up here.
-      body.append(f.formatForLoop("lane", params.numLanes, loopBody.toString))
+      body.append(
+        f.formatForLoop(
+          "lane",
+          Phy.numRxDataLanes(params.numLanes),
+          rxLoopBody.toString
+        )
+      )
     }
 
     // Hand the mainband/sideband muxes to the digital controller BEFORE
