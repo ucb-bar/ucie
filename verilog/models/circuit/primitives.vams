@@ -1,3 +1,10 @@
+// Circuit-level analog primitives: the reference ladder, and the inverter,
+// capacitor and switch that `models/circuit/rx.vams` builds its sampler out of.
+//
+// `inv`, `cap` and `sw` exist only because that sampler is modelled as a
+// circuit. `models/eye` has no counterpart for them, because nothing at that
+// level is built out of anything.
+
 module rdac(out, sel, vdd, vss);
     output out;
     input [`RDAC_SEL_BITS-1:0] sel;
@@ -8,94 +15,6 @@ module rdac(out, sel, vdd, vss);
     analog begin
         V(out, vss) <+ V(vdd, vss) * transition(sel, 0, `T_RISE_FALL_DEFAULT * 1p) / (2 ** `RDAC_SEL_BITS);
     end
-endmodule
-
-module comparator(a, b, out);
-    input a, b;
-    output out;
-    electrical a, b, out;
-
-    analog begin
-        if (V(a) > V(b))
-            V(out) <+ 1;
-        else
-            V(out) <+ 0;
-    end
-endmodule
-
-module rdac_tb;
-
-    // Parameters
-    localparam integer SEL_MAX = (1 << `RDAC_SEL_BITS) - 1;
-
-    // Electrical nets
-    electrical vdd, vss, out0, out1, low, high;
-
-    // Digital select buses
-    reg [`RDAC_SEL_BITS-1:0] sel0;
-    reg [`RDAC_SEL_BITS-1:0] sel1;
-
-    wire cmp_out;
-
-    integer result;
-
-    // Instantiate RDACs
-    rdac dut0 (
-        .out(out0),
-        .sel(sel0),
-        .vdd(vdd),
-        .vss(vss)
-    );
-    rdac dut1 (
-        .out(out1),
-        .sel(sel1),
-        .vdd(vdd),
-        .vss(vss)
-    );
-
-    // Compare RDAC outputs.
-    comparator cmp (
-        .a(out0),
-        .b(out1),
-        .out(cmp_out)
-    );
-
-    // Drive VDD/VSS as ideal sources
-    analog begin
-        V(vdd) <+ `VDD;
-        V(vss) <+ 0.0;
-    end
-
-    initial begin
-        sel0 = 0;
-        sel1 = 1;
-
-        // Sweep full ladder range
-        repeat (SEL_MAX) begin
-            #20;
-            if (cmp_out !== 0) $display("Error: out0 should be less than out1");
-            else $display("Correct comparison output for sel0 = %b, sel1 = %b", sel0, sel1);
-            sel0 = sel0 + 1;
-            sel1 = sel1 + 1;
-        end
-
-        sel0 = 1;
-        sel1 = 0;
-
-        // Sweep full ladder range
-        repeat (SEL_MAX) begin
-            #20;
-            if (cmp_out !== 1) $display("Error: out1 should be less than out0");
-            else $display("Correct comparison output for sel0 = %b, sel1 = %b", sel0, sel1);
-            sel0 = sel0 + 1;
-            sel1 = sel1 + 1;
-        end
-
-        #20;
-        $finish;
-    end
-
-
 endmodule
 
 module inv(a, o, vdd, vss);

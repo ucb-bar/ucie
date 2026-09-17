@@ -8,12 +8,37 @@ import chisel3.RawModule
 import circt.stage.ChiselStage
 import edu.berkeley.cs.uciedigital.tilelink.SimTop
 
+/** Abstraction level of the analog PHY models a simulation is built against.
+  *
+  * Each level is a directory under `verilog/models` holding a complete set of
+  * analog cells, compiled alongside the level-independent `verilog/common`.
+  * `verilog/README.md` has the contract they all implement and what separates
+  * them. Selecting no level at all leaves the behavioral models in
+  * `scala/resources/vsrc` in place, which is what a Verilator build wants.
+  */
+sealed abstract class AmsLevel(val dirName: String)
+
+object AmsLevel {
+
+  /** Finite driver slew and a reference comparison: the least that puts an eye
+    * in front of the receiver, and so the least that can be trained against.
+    */
+  case object Eye extends AmsLevel("eye")
+
+  /** The front end as it is built, down to the switched-capacitor sampler and
+    * the segments of the drivers.
+    */
+  case object Circuit extends AmsLevel("circuit")
+}
+
 object Utils {
   val root = Path(
     Paths.get(sys.env("MILL_TEST_RESOURCE_DIR")).toAbsolutePath
   ) / os.up / os.up
   val buildRoot = root / "build"
   val verilogSrcDir = root / os.up / "verilog"
+  val verilogCommonDir = verilogSrcDir / "common"
+  val verilogModelsDir = verilogSrcDir / "models"
   val defaultVsrcDir = root / "resources" / "vsrc"
   val constants = verilogSrcDir / "constants.vams"
   val xceliumDir = root / os.up / "xcelium"
@@ -154,6 +179,10 @@ xrun \\
 
   /** Finds source files within a given source directory with the given file
     * extensions.
+    *
+    * Packages come first: a simulator compiles in the order it is handed files
+    * and a package has to be compiled before whatever imports it. Nothing else
+    * here has an ordering requirement.
     */
   def getSourceFiles(
       sourceDir: Path,
@@ -163,13 +192,21 @@ xrun \\
       .walk(sourceDir)
       .filter(os.isFile)
       .filter(path => fileExtensions.exists(ext => path.last.endsWith(ext)))
+      .sortBy(path => !path.last.endsWith("_pkg.sv"))
   }
 
+  /** Elaborates `dut`, writes a script that simulates it, and runs it.
+    *
+    * `amsLevel` selects which set of analog PHY models the design is built
+    * against; leaving it `None` keeps the behavioral models in
+    * `scala/resources/vsrc`, which is the only thing Verilator can build. See
+    * `verilog/README.md`.
+    */
   def simulate[T <: RawModule](
       dut: => T,
       writeSimScript: (Path, String, Path, Seq[Path]) => Unit,
       workDir: Path,
-      includeVamsModels: Boolean = false
+      amsLevel: Option[AmsLevel] = None
   )(implicit p: Parameters) = {
     val sourceDir = workDir / "src"
     os.remove.all(sourceDir)
@@ -188,33 +225,36 @@ xrun \\
       )
     )
     val sourceFiles = getSourceFiles(sourceDir) ++ {
-      if (includeVamsModels) {
-        val xceliumHome = Path(sys.env("XCELIUM_HOME"))
-        val disciplines =
-          xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
-        val constants =
-          xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
-        // Behavioral models kept even in an AMS build, because `verilog/` has
-        // no model of these cells. Everything else in `defaultVsrcDir` is left
-        // out so that the AMS model of the same cell takes over.
-        val defaultModels = Seq(
-          "ucie_clk_dist_network.sv",
-          "ucie_clk_div4.v",
-          "clkmux.v",
-          "clocking_tile.v",
-          "clock_receiver.v",
-          "IO_ESD.v",
-          "ucie_esd_routable.v",
-          "ucie_rst_sync.v"
-        )
-        Seq(
-          disciplines,
-          constants,
-          controlFile,
-          Utils.constants
-        ) ++ getSourceFiles(verilogSrcDir) ++
-          defaultModels.map(module => defaultVsrcDir / module)
-      } else { Seq.empty }
+      amsLevel match {
+        case Some(level) =>
+          val xceliumHome = Path(sys.env("XCELIUM_HOME"))
+          val disciplines =
+            xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
+          val constants =
+            xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
+          // Behavioral models kept even in an AMS build, because `verilog/` has
+          // no model of these cells. Everything else in `defaultVsrcDir` is left
+          // out so that the AMS model of the same cell takes over.
+          val defaultModels = Seq(
+            "ucie_clk_dist_network.sv",
+            "ucie_clk_div4.v",
+            "clkmux.v",
+            "clocking_tile.v",
+            "clock_receiver.v",
+            "IO_ESD.v",
+            "ucie_esd_routable.v",
+            "ucie_rst_sync.v"
+          )
+          Seq(
+            disciplines,
+            constants,
+            controlFile,
+            Utils.constants
+          ) ++ getSourceFiles(verilogCommonDir) ++
+            getSourceFiles(verilogModelsDir / level.dirName) ++
+            defaultModels.map(module => defaultVsrcDir / module)
+        case None => Seq.empty
+      }
     }
 
     val sourceFilesList = simDir / "sourceFiles.F"
@@ -227,11 +267,9 @@ xrun \\
       topModule,
       sourceFilesList,
       os.walk(sourceDir).filter(os.isDir) ++ Seq(sourceDir) ++ {
-        if (includeVamsModels) {
-          Seq(
-            verilogSrcDir
-          )
-        } else { Seq.empty }
+        // `constants.vams` is `\`include`d by the models, so the directory
+        // holding it has to be on the include path.
+        amsLevel.map(_ => verilogSrcDir).toSeq
       }
     )
 

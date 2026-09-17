@@ -30,9 +30,9 @@ module tx_lane (
   assign intf.vddq = 1'b1;
   assign intf.vdd = 1'b1;
   assign intf.vss = 1'b0;
-  assign D2D_TX = intf.D2D_TX;
   txdata_tile tile(
-    .intf(intf)
+    .intf(intf),
+    .D2D_TX(D2D_TX)
   );
 
 endmodule
@@ -64,7 +64,6 @@ interface txdata_tile_intf;
     logic CK;
     // Asynchronous reset for the tile's clock dividers, active high.
     logic RST_async;
-    wire D2D_TX;
     logic [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN;
     logic [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ;
     logic [`TX_DCDL_TAPS-1:0] Dctrl;
@@ -72,8 +71,17 @@ interface txdata_tile_intf;
     wire vddq, vdd, vss;
 endinterface
 
+// The bump a tile drives is a pin rather than a member of `txdata_tile_intf`,
+// because a SystemVerilog interface cannot hold an electrical net: a bump
+// routed through one is resolved to a logic net, and the analog models on
+// either side of it get connect modules instead of a shared node. On a pin the
+// net resolves to whatever is attached, so a bench that wires two tiles
+// together with a plain `wire` gets the driver, the channel and the far
+// termination as one analog node -- which is the whole of what the eye's height
+// is made of. See `verilog/README.md`.
 module txdata_tile (
-    txdata_tile_intf intf
+    txdata_tile_intf intf,
+    output D2D_TX
 );
 
     // `Dctrl` is thermometer coded, so the delay follows the number of taps
@@ -111,7 +119,7 @@ module txdata_tile (
         .ENN(intf.ENN),
         .ENP_EQ(intf.ENP_EQ),
         .ENN_EQ(intf.ENN_EQ),
-        .dout(intf.D2D_TX),
+        .dout(D2D_TX),
         .vddq(intf.vddq),
         .vss(intf.vss)
     );
@@ -156,13 +164,14 @@ interface sb_driver_tile_intf;
     logic clk, d0, d1;
     logic [`PAD_DRIVER_SEGMENTS-1:0] pu_ctl, pd_ctlb;
     logic en, enb;
-    wire out;
     wire vdd, vss;
 endinterface
 
-// The tile behind `sb_driver`: a 2:1 serializer feeding a pad driver.
+// The tile behind `sb_driver`: a 2:1 serializer feeding a pad driver. Its bump
+// is a pin for the same reason `txdata_tile`'s is.
 module sb_driver_tile (
-    sb_driver_tile_intf intf
+    sb_driver_tile_intf intf,
+    output out
 );
     wire serdout;
     ser21 ser (
@@ -176,19 +185,29 @@ module sb_driver_tile (
         .pd_ctlb(intf.pd_ctlb),
         .en(intf.en),
         .enb(intf.enb),
-        .dout(intf.out),
+        .dout(out),
         .vdd(intf.vdd),
         .vss(intf.vss)
     );
 endmodule
 
+// Delay line on a tile's high speed clock: `DCDL_DELAY_OFS` plus `dl_ctrl`
+// steps of `DCDL_DELAY_STEP`, in ps.
+//
+// Transport delay, not inertial. A continuous assignment would be inertial and
+// would swallow every pulse shorter than the delay it is set to, which past
+// about five taps is every pulse a 16 GT/s clock has -- the line would not
+// delay the clock, it would stop it. A code change of more than half a clock
+// period in one write can still reorder edges, so software steps this.
 module dcdl_simple(
     input logic clk_in,
     input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
     output logic clk_out
 );
 
-    assign #(dl_ctrl * `DCDL_DELAY_STEP + `DCDL_DELAY_OFS) clk_out = clk_in;
+    initial clk_out = 1'b0;
+    always @(clk_in)
+        clk_out <= #(dl_ctrl * `DCDL_DELAY_STEP + `DCDL_DELAY_OFS) clk_in;
 endmodule
 
 

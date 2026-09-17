@@ -1,0 +1,134 @@
+// Eye-level models of the RX analog front end: the bump termination and the
+// front end that turns the level on the bump into a bit.
+//
+// `rx_slicer` is the point of this level. Everything a receiver does reduces to
+// one comparison -- is the incoming level above `vref`? -- and that comparison
+// is what this models, with a delay and an output edge and nothing else. Put
+// the TX driver's ramp in front of it and the eye is there: a `vref` outside
+// the swing the driver and the far termination divide down to slices every UI
+// the same way, and moving where in the UI the lane is sampled eventually moves
+// it into the next one. Both are codes software has to get right, and both are
+// what `verilog/common/training_tb.sv` measures.
+//
+// The difference from `models/circuit` is the sampler around that comparison.
+// There the two halves are switched-capacitor auto-zeroing samplers -- six
+// switches, two capacitors and two inverter pairs -- which is where the level
+// being compared against `vref` physically comes from, and which also carries
+// the offset the auto-zeroing exists to cancel, the finite gain of the slicing
+// inverters, and the charge the sampling switches kick back onto the pad. None
+// of that is here. What is kept is the handover those halves perform, because
+// it is the digital AFE controller's job to drive it and a lane that is handed
+// a bad `a_en`/`a_pc`/`b_en`/`b_pc`/`sel_a` sequence should still go deaf.
+//
+// `VOS` is the slicer's input-referred offset, which the auto-zeroing at the
+// lower level exists to remove. `rx_afe` passes it through and it defaults to
+// zero, so by default every lane wants the same `vref` code; give the lanes
+// their own offsets to make per-lane `vref` training do real work.
+
+// The comparison the whole receiver turns on: `out` goes high while `vin` is
+// above `vref`, after `EYE_SLICER_DELAY`.
+module rx_slicer (
+    input vin, vref,
+    output out,
+    inout vdd, vss
+);
+    electrical vin, vref, out, vdd, vss;
+    parameter real VOS = 0;
+
+    real level;
+    analog begin
+        // `transition` takes a piecewise constant argument, so the output level
+        // is only ever written on an event. `cross` fires on a crossing and not
+        // on where the operating point started, so the initial solution has to
+        // set it too -- otherwise a lane whose input comes up already above
+        // `vref` reads low until the first edge.
+        @(initial_step)
+            level = (V(vin, vss) - V(vref, vss) - VOS > 0) ? V(vdd, vss) : 0.0;
+        @(cross(V(vin, vss) - V(vref, vss) - VOS, +1)) level = V(vdd, vss);
+        @(cross(V(vin, vss) - V(vref, vss) - VOS, -1)) level = 0.0;
+        // The delay is taken out of the front of the ramp so that the output
+        // reaches half swing `EYE_SLICER_DELAY` after the input crossed.
+        V(out, vss) <+ transition(
+            level,
+            `EYE_SLICER_DELAY * 1p - `EYE_SLICER_SLEW * 1p / 2,
+            `EYE_SLICER_SLEW * 1p
+        );
+    end
+endmodule
+
+module rx_afe (
+    inout vref,
+    input din,
+    input a_en,
+    input a_pc,
+    input b_en,
+    input b_pc,
+    input sel_a,
+    output dout,
+    inout vdd, vss
+);
+    // Input-referred offset of this lane's slicer. Passed through so that a
+    // bench can give each lane its own, which is what makes `vref` a per-lane
+    // code rather than one number the whole link shares.
+    parameter real VOS = 0;
+
+    electrical vref, din, vdd, vss, slice;
+
+    rx_slicer #(
+        .VOS(VOS)
+    ) sl (
+        .vin(din),
+        .vref(vref),
+        .out(slice),
+        .vdd(vdd),
+        .vss(vss)
+    );
+
+    // `slice` is electrical and `rx_afe_holdsel` takes it digitally, so the
+    // analog-to-digital connect module lands on this port.
+    rx_afe_holdsel hs (
+        .slice(slice),
+        .a_en(a_en),
+        .a_pc(a_pc),
+        .b_en(b_en),
+        .b_pc(b_pc),
+        .sel_a(sel_a),
+        .dout(dout)
+    );
+endmodule
+
+// Bump termination: `TERMINATION_SEGMENTS - TERMINATION_CTL_BITS` segments that
+// are on whenever the termination is enabled, plus `TERMINATION_CTL_BITS` more
+// that `zctl` switches in. Same resistances as `models/circuit`; what is not
+// modelled at either level is the pad capacitance the termination sits on.
+module termination (
+    input vin,
+    input en,
+    input [`TERMINATION_CTL_BITS-1:0] zctl,
+    inout vss
+);
+    electrical vin, vss;
+
+    integer i, num_on;
+    real on;
+    analog begin
+        num_on = 0;
+        for (i = 0; i < `TERMINATION_CTL_BITS; i=i+1) begin
+            if (zctl[i])
+                num_on = num_on + 1;
+        end
+        on = transition(en, 0, `T_RISE_FALL_DEFAULT * 1p);
+
+        I(vin, vss) <+ V(vin, vss) * on
+            * (`TERMINATION_SEGMENTS - `TERMINATION_CTL_BITS
+               + transition(num_on, 0, `T_RISE_FALL_DEFAULT * 1p))
+            / `TERMINATION_R_SEGMENT;
+        // Leakage through the segments that are off, and through all of them
+        // while the termination is disabled.
+        I(vin, vss) <+ V(vin, vss)
+            * (`TERMINATION_SEGMENTS
+               - on * (`TERMINATION_SEGMENTS - `TERMINATION_CTL_BITS
+                       + transition(num_on, 0, `T_RISE_FALL_DEFAULT * 1p)))
+            / `TERMINATION_R_OFF_SEGMENT;
+    end
+endmodule
