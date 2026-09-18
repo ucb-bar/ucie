@@ -96,7 +96,7 @@ class LinkTrainingSM(
   // Variables
   // ==============================================================================================
   val mbSerializerRatio = afeParams.mbSerializerRatio
-  val timeoutMs = 0.008
+  val timeoutMs = 0.00005 //0.008 // TEMP HACK, DON'T COMMIT
   val operatingFreq = 800000000 // TODO: Put this into an object
   val retryAmtW = retryW // TODO: Need to put retryW into an object
 
@@ -127,7 +127,7 @@ class LinkTrainingSM(
     false.B
   ) // sticky the training timed out flag since counter reuse
   val resetMinWait = RegInit(false.B)
-  val resetMinWaitMaxCycles = 20000.U //ELLA NO COMMIT!!!! DO NOT COMMIT THIS!!!!!!!!!! (timeoutCycles / 2).U // 4ms
+  val resetMinWaitMaxCycles = (timeoutCycles / 2).U // 4ms
   val substateTransitioning = Wire(Bool())
   val trainErrorHandshakeTimedout = WireInit(false.B)
 
