@@ -14,43 +14,17 @@ module clocking_tile(
 
   assign TxClk = BypassClk;
 
-  // TxClkQ is the quadrature (90 degree) phase of TxClk, and the forwarded
-  // clock lanes are driven from it, so it becomes the far end's sampling clock.
-  // Its phase matters more than it looks: the lane serdes are DDR, so one clock
-  // period is two UI. 90 degrees lands the receiver's sampling edge in the
-  // middle of a UI; 180 degrees is a whole UI, which slips every deserialized
-  // word by one bit.
+  // TxClkQ is the quadrature (90 degree) phase of TxClk in the real tile, and
+  // the distribution network hands it to the two forwarded-clock lanes.
   //
-  // A quarter-cycle shift cannot be expressed combinationally, so this measures
-  // the incoming clock and re-emits it a quarter period late. `#` delays are
-  // not synthesizable, which is fine here -- this file is a simulation stub,
-  // loaded only under `includeDefaultModels`.
-  real prevPosedge;
-  real period;
-  reg  seenPosedge;
-  reg  txClkQReg;
-
-  initial begin
-    prevPosedge = 0.0;
-    period      = 0.0;
-    seenPosedge = 1'b0;
-    txClkQReg   = 1'b0;
-  end
-
-  // Measured across a full cycle, so the shift does not depend on duty cycle.
-  // `period` stays 0 until the second posedge, leaving TxClkQ unshifted for the
-  // first cycle out of reset.
-  always @(posedge BypassClk) begin
-    if (seenPosedge) period = $realtime - prevPosedge;
-    prevPosedge = $realtime;
-    seenPosedge = 1'b1;
-  end
-
-  // Re-emit both edges a quarter period late. Nonblocking with an
-  // intra-assignment delay, so this never suspends and cannot miss an edge.
-  always @(BypassClk) begin
-    txClkQReg <= #(period / 4.0) BypassClk;
-  end
-
-  assign TxClkQ = txClkQReg;
+  // This model leaves it in phase, and the quarter-period shift is applied to
+  // the clkP/clkN bump outputs instead (see `ucie_quarter_delay.v`). Shifting
+  // it here would give the clock lanes' serializers a different set of clock
+  // edges from the data lanes, so their wake counters and word framing would
+  // advance at different times. The receiver has no clock at all until the
+  // clkP lane starts driving, so any difference in when the clock and data
+  // lanes start becomes a capture offset on every deserialized word. Moving
+  // the shift downstream keeps every TX lane clocked identically and leaves
+  // only the transmitted waveform shifted, which is the part that matters.
+  assign TxClkQ = BypassClk;
 endmodule

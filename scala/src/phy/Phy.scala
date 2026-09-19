@@ -409,9 +409,21 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     } else if (lane == Phy.trackLane(numLanes)) {
       io.top.txTrack := txLane.io.dout
     } else if (lane == Phy.clkPLane(numLanes)) {
-      io.top.txClkP := txLane.io.dout.asClock
+      // The forwarded clock has to land in the middle of the data eye, a
+      // quarter-period shift. Shifting the bump rather than the lane clock
+      // keeps every TX lane counting the same edges, so the clock lanes and the
+      // data lanes wake together -- see `vsrc/ucie_quarter_delay.v`.
+      val txClkPDelay = Module(new QuarterDelay)
+      txClkPDelay.suggestName(s"${laneName}_quarter_delay")
+      txClkPDelay.io.clk := clkDist.io.txLaneClk(lane)
+      txClkPDelay.io.din := txLane.io.dout
+      io.top.txClkP := txClkPDelay.io.dout.asClock
     } else {
-      io.top.txClkN := txLane.io.dout.asClock
+      val txClkNDelay = Module(new QuarterDelay)
+      txClkNDelay.suggestName(s"${laneName}_quarter_delay")
+      txClkNDelay.io.clk := clkDist.io.txLaneClk(lane)
+      txClkNDelay.io.din := txLane.io.dout
+      io.top.txClkN := txClkNDelay.io.dout.asClock
     }
     txLane.io.ctl := io.regs.txctl(lane).tile
   }
