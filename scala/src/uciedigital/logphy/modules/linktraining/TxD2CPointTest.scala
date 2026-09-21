@@ -73,7 +73,7 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
         is(PatternSelect.VALTRAIN) {
           txInitPtTestResults(0) := sbMsgExchanger.io.resp.bits(19)
         }
-        is(PatternSelect.LFSR) {
+        is(PatternSelect.LFSR, PatternSelect.PERLANEID) {
           for (i <- 0 until afeParams.mbLanes) {
             txInitPtTestResults(i) := sbMsgExchanger.io.resp.bits(64 + i)
           }
@@ -91,8 +91,9 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
   // If start is HIGH, then patternType can either be VALTRAIN or LFSR
   assert(
     ((!io.start) || ((io.patternType === PatternSelect.VALTRAIN) ||
-      (io.patternType === PatternSelect.LFSR))),
-    "PatternType should only be VALTRAIN or LFSR"
+      (io.patternType === PatternSelect.LFSR) ||
+      (io.patternType === PatternSelect.PERLANEID))),
+    "PatternType should only be VALTRAIN, LFSR or PERLANEID"
   )
   io.patternWriterIo.req.bits.patternType := patternTypeReg
   io.patternWriterIo.req.valid := false.B
@@ -247,8 +248,9 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
   // If start is HIGH, then patternType can either be VALTRAIN or LFSR
   assert(
     ((!io.start) || ((io.patternType === PatternSelect.VALTRAIN) ||
-      (io.patternType === PatternSelect.LFSR))),
-    "PatternType should only be VALTRAIN or LFSR"
+      (io.patternType === PatternSelect.LFSR) ||
+      (io.patternType === PatternSelect.PERLANEID))),
+    "PatternType should only be VALTRAIN, LFSR or PERLANEID"
   )
   io.patternReaderIo.req.valid := false.B
   io.patternReaderIo.req.bits.patternType := patternTypeReg // from LTSM
@@ -308,10 +310,13 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
       sbMsgExchanger.io.rxRefBitPattern.valid := true.B
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.LFSR_CLEAR_ERROR_REQ
 
-      assert(
-        io.patternReaderIo.req.ready === true.B,
-        "PatternReader should be ready to accept"
-      )
+      // The reader is started here, so it only has to be idle on the request.
+      when(sbMsgExchanger.io.resp.valid) {
+        assert(
+          io.patternReaderIo.req.ready === true.B,
+          "PatternReader should be ready to accept"
+        )
+      }
 
       io.patternReaderIo.req.valid := sbMsgExchanger.io.resp.valid
       sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived

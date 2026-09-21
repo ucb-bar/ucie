@@ -159,3 +159,25 @@ class ClkDiv4(implicit includeDefaultModels: Boolean = false)
     addResource("/vsrc/ucie_clk_div4.v")
   }
 }
+
+class QuarterDelayIO extends Bundle {
+  // Reference whose period sets the shift, not a clock for `din`.
+  val clk = Input(Clock())
+  val din = Input(Bool())
+  val dout = Output(Bool())
+}
+
+// Quarter-period shift for the forwarded-clock bumps. See
+// `vsrc/ucie_quarter_delay.v` for why the shift belongs on the bump rather than
+// on the clock that drives the lane.
+class QuarterDelay(implicit includeDefaultModels: Boolean = false)
+    extends BlackBox
+    with HasBlackBoxResource {
+  val io = IO(new QuarterDelayIO)
+
+  override val desiredName = "ucie_quarter_delay"
+
+  if (includeDefaultModels) {
+    addResource("/vsrc/ucie_quarter_delay.v")
+  }
+}

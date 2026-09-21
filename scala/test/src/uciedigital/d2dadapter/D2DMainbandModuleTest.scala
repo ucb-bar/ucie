@@ -225,12 +225,10 @@ class D2DMainbandModuleTest extends AnyFunSpec with ChiselSim {
         c.io.fdi.plValid.expect(true.B)
         c.io.fdi.plData.expect(BigInt("dead", 16).U)
 
-        // The captured beat is held until rxActiveReq drops.
-        c.clock.step(2)
-        c.io.fdi.plValid.expect(true.B)
-        c.io.state.rxActiveReq.poke(false.B)
+        // plValid is a per beat qualifier, so it drops the next cycle.
         c.clock.step()
         c.io.fdi.plValid.expect(false.B)
+        c.io.fdi.plData.expect(BigInt("dead", 16).U)
       }
     }
 
