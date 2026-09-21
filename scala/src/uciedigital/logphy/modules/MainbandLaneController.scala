@@ -46,6 +46,11 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
     val mbLanes = new MainbandLaneIO(afeParams)
     val ctrl = new Bundle {
       val validFramingError = Output(Bool())
+      // High on the cycles a framed word is taken off the lanes. The
+      // descrambler has to advance in step with the far scrambler, which only
+      // advances on words it actually sent, so it keys off this rather than
+      // off every word the RX queue hands over.
+      val rxWordAccepted = Output(Bool())
       val localTxFunctionalLanes = Input(UInt(3.W))
       val localRxFunctionalLanes = Input(UInt(3.W))
     }
@@ -209,7 +214,18 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   val rxBeatCtr = RegInit(0.U(beatCtrW.W))
   val rxDataAccum = Reg(Vec(nBytes, UInt(8.W)))
   val rxLastBeat = rxBeatCtr === (numRxBeats - 1.U)
-  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready
+
+  // The RX lanes free run: the deserializers hand over a word every word
+  // period whether or not the far end was sending, so arrival alone says
+  // nothing about whether a word carries data. The valid lane is what says so
+  // -- the transmitter drives `validFrame` across every beat of a transfer and
+  // zeros between them -- so only framed words are taken as beats. Counting an
+  // unframed one would shift every later beat, fill the accumulator with
+  // whatever was idling on the lanes, and advance the descrambler past the far
+  // scrambler, which garbles every word after it.
+  val rxFramed = io.mbLanes.rx.bits.valid === validFrame
+  val rxIdle = io.mbLanes.rx.bits.valid === 0.U
+  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready && rxFramed
 
   when(rxAccepting) {
     rxBeatCtr := Mux(rxLastBeat, 0.U, rxBeatCtr + 1.U)
@@ -258,9 +274,13 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   io.rdi.rx.plValid := rxAccepting && rxLastBeat
   io.rdi.rx.plData := currentRxData.asUInt
 
-  // Valid-framing error detection
-  val rxValidBits = rxBundle.valid
-  val currentFramingError = io.mbLanes.rx.valid && (rxValidBits =/= validFrame)
+  io.ctrl.rxWordAccepted := rxAccepting
+
+  // Valid-framing error detection. An idle word carries a zeroed valid lane by
+  // construction, so only framing that is neither idle nor a full frame is
+  // corrupt -- flagging idle here would latch an error on every gap between
+  // transfers.
+  val currentFramingError = io.mbLanes.rx.valid && !rxFramed && !rxIdle
   val stickyError = RegInit(false.B)
   when(currentFramingError) {
     stickyError := true.B
