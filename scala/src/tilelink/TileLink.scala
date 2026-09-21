@@ -1107,7 +1107,20 @@ class UcieTL(
           params.queueParams
         )
       )
-      txAQ.io.enq.valid := selUcie
+      // Offered only when there is a beat to send. The `tl` path below enqueues
+      // unconditionally so its lanes keep moving through gaps in traffic, but
+      // the ucie path cannot: a word offered here becomes an RDI word, which
+      // keeps the lane controller transmitting and the valid lane carrying a
+      // full frame even with nothing to carry. The receiver then cannot tell a
+      // data word from a gap, and -- since the scrambler advances per word sent
+      // and the far descrambler per word taken off the lanes -- the two count
+      // different words and drift apart, so every word lands descrambled
+      // against the wrong state. Idling here leaves the lanes quiet between
+      // beats, which is what keeps the two ends counting the same words.
+      val ucieTxBeat = (clientTl.d.valid && dAvail) ||
+        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
+        creditRetValid
+      txAQ.io.enq.valid := selUcie && ucieTxBeat
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset

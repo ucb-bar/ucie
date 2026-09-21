@@ -351,8 +351,12 @@ class LogicalPhy(
   )
   scrambler.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(scramblerReset))
 
+  // Only framed words advance the descrambler. The far scrambler advances once
+  // per word it sends, so keying off every word the RX queue delivers -- the
+  // lanes free run, so most of them carry nothing -- would run the two out of
+  // step and garble the data from the first idle gap onwards.
   val rxRuntimeIncrement =
-    io.analog.mainband.rx.valid && io.analog.mainband.rx.ready && isActive
+    mainbandLaneController.io.ctrl.rxWordAccepted && isActive
   val descramblerIncrement = Mux(
     isActive,
     rxRuntimeIncrement,
