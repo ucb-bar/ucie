@@ -283,7 +283,11 @@ class UcieTLRegs(
           )
         )
       )
+      val clkGateEn = RegInit(true.B)
+      val txDivRst = RegInit(false.B)
+      val rxDivRst = RegInit(false.B)
       val txRst = Wire(DecoupledIO(UInt(1.W)))
+      val txFsmRst = Wire(DecoupledIO(UInt(1.W)))
       val txExecute = Wire(DecoupledIO(UInt(1.W)))
       val txWriteChunk = Wire(DecoupledIO(UInt(1.W)))
       val txManualRepeatPeriod =
@@ -308,6 +312,7 @@ class UcieTLRegs(
       )
       val rxLfsrValid = RegInit(0.U(32.W))
       val rxRst = Wire(DecoupledIO(UInt(1.W)))
+      val rxFsmRst = Wire(DecoupledIO(UInt(1.W)))
       val rxPacketsToReceive =
         RegInit(0.U(io.test.rxPacketsToReceive.getWidth.W))
       val rxPauseCounters = RegInit(0.U(1.W))
@@ -443,13 +448,16 @@ class UcieTLRegs(
         RegNext(RegNext(io.sbTlRxOverflow, false.B), false.B)
 
       txRst.ready := true.B
+      txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
       rxRst.ready := true.B
+      rxFsmRst.ready := true.B
 
       // Holds a one-cycle register write out for `UcieTLRegs.rstStrobeCycles`
-      // cycles. `txRst`/`rxRst` reach the lane serializers and deserializers as
-      // well as the test FSMs, so a single-cycle strobe is uncomfortably short.
+      // cycles. `txRst`/`rxRst` cross into a divided clock domain a quarter the
+      // rate of this one and `txFsmRst`/`rxFsmRst` into the UCIe clock domain,
+      // so a single-cycle strobe is uncomfortably short.
       def stretched(pulse: Bool): Bool = {
         val remaining =
           RegInit(0.U(log2Ceil(UcieTLRegs.rstStrobeCycles).W))
@@ -484,7 +492,11 @@ class UcieTLRegs(
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
+      io.phy.clkGateEn := applyShift(clkGateEn)
+      io.test.txDivRst := applyShift(txDivRst)
+      io.test.rxDivRst := applyShift(rxDivRst)
       io.test.txRst := applyShift(stretched(txRst.valid))
+      io.test.txFsmRst := applyShift(stretched(txFsmRst.valid))
       io.test.txExecute := applyShift(txExecute.valid)
       io.test.txManualRepeatPeriod := applyShift(txManualRepeatPeriod)
       io.test.txPacketsToSend := applyShift(txPacketsToSend)
@@ -495,6 +507,7 @@ class UcieTLRegs(
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
       io.test.rxLfsrValid := applyShift(rxLfsrValid)
       io.test.rxRst := applyShift(stretched(rxRst.valid))
+      io.test.rxFsmRst := applyShift(stretched(rxFsmRst.valid))
       io.test.rxPacketsToReceive := applyShift(rxPacketsToReceive)
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
@@ -544,7 +557,11 @@ class UcieTLRegs(
       ) ++ (0 until PhyTest.numTestLanes(params.numLanes)).map((i: Int) => {
         toRegFieldRw(txLfsrSeed(i), s"txLfsrSeed_$i")
       }) ++ Seq(
+        toRegFieldRw(clkGateEn, "clkGateEn"),
+        toRegFieldRw(txDivRst, "txDivRst"),
+        toRegFieldRw(rxDivRst, "rxDivRst"),
         RegField.w(1, txRst, RegFieldDesc("txRst", "")),
+        RegField.w(1, txFsmRst, RegFieldDesc("txFsmRst", "")),
         RegField.w(1, txExecute, RegFieldDesc("txExecute", "")),
         RegField.w(1, txWriteChunk, RegFieldDesc("txWriteChunk", "")),
         toRegFieldR(
@@ -592,6 +609,7 @@ class UcieTLRegs(
         )
       }) ++ Seq(
         RegField.w(1, rxRst, RegFieldDesc("rxRst", "")),
+        RegField.w(1, rxFsmRst, RegFieldDesc("rxFsmRst", "")),
         toRegFieldRw(rxPacketsToReceive, "rxPacketsToReceive"),
         toRegFieldRw(rxPauseCounters, "rxPauseCounters"),
         toRegFieldR(
@@ -867,6 +885,8 @@ class UcieTL(
     test.io.debug <> phy.io.debug
     phy.io.clkRst.txResetb := test.io.txResetb
     phy.io.clkRst.rxResetb := test.io.rxResetb
+    phy.io.clkRst.txRst := test.io.txRst
+    phy.io.clkRst.rxRst := test.io.rxRst
     test.io.regs <> regs.module.io.test
 
     // One controller select, plus a per-band mode that only means anything
@@ -884,7 +904,7 @@ class UcieTL(
     txTestFifo.io.enq_clock := phy.io.clkRst.ucieClk
     txTestFifo.io.enq_reset := phy.io.clkRst.ucieRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
-    txTestFifo.io.deq_reset := phy.io.clkRst.txDivRst
+    txTestFifo.io.deq_reset := phy.io.clkRst.txDivClkRst
     // TODO: should deq ready be synchronous to deq clock?
     // txTestFifo crosses both the phytest and ucie mainband tx signals to the PHY.
     txTestFifo.io.deq.ready := !selMbTl
@@ -894,7 +914,7 @@ class UcieTL(
     rxTestFifo.io.enq.bits := phy.io.rx
     rxTestFifo.io.enq.valid := !selMbTl
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
-    rxTestFifo.io.enq_reset := phy.io.clkRst.rxDivRst
+    rxTestFifo.io.enq_reset := phy.io.clkRst.rxDivClkRst
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
@@ -1166,7 +1186,7 @@ class UcieTL(
       txTlFifo.io.enq_clock := childClock
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
-      txTlFifo.io.deq_reset := phy.io.clkRst.txDivRst
+      txTlFifo.io.deq_reset := phy.io.clkRst.txDivClkRst
       txTlFifo.io.deq.ready := selMbTl
 
       val rxTlFifo =
@@ -1175,7 +1195,7 @@ class UcieTL(
       rxTlFifo.io.enq.bits := phy.io.rx
       rxTlFifo.io.enq.valid := selMbTl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
-      rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
+      rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivClkRst
       rxTlFifo.io.deq <> validFramer.io.phy
       rxTlFifo.io.deq_clock := childClock
       rxTlFifo.io.deq_reset := childReset

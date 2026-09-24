@@ -340,12 +340,19 @@ object Codegen {
 
   /** How many times `run_lfsr` reads back the packet count before giving up.
     *
-    * A register round trip is far longer than a packet, so a run that is going
-    * to finish finishes within a couple of reads. What this bounds is how long
-    * a run that is never going to finish costs -- which during a sweep is every
-    * code outside the eye, so it is kept tight.
+    * This has to outlast the burst. A register round trip is longer than a
+    * packet, but the burst does not begin until the run's programming writes
+    * have all landed, so what the window must cover is the tail of those writes
+    * plus the burst behind them -- not the burst alone.
+    *
+    * Eight was enough only because the burst happened to finish before the
+    * first read back. Two further writes in `reset_fsms` delayed the burst past
+    * the end of that window, and every run then scored a partial count taken
+    * mid-burst: full packets sent, a fraction of them counted. It is still a
+    * bound on what a run that will never finish costs -- every code outside the
+    * eye during a sweep -- so it is raised only as far as it has to be.
     */
-  val trainPollTries: Int = 8
+  val trainPollTries: Int = 16
 
   val ucieParams: UcieTLParams = UcieTLParams()
 
@@ -702,11 +709,20 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
+    // Datapath first, then the FSMs that feed it: `txRst`/`rxRst` flush the
+    // serdes handoff and the PHY side of the async queues, `txFsmRst`/
+    // `rxFsmRst` return the test FSMs and their counters to idle.
     body.append(
       formatWriteNamedReg("txRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("rxRst", f.formatLong(1))
+    )
+    body.append(
+      formatWriteNamedReg("txFsmRst", f.formatLong(1))
+    )
+    body.append(
+      formatWriteNamedReg("rxFsmRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("debugTxFsmRst", f.formatLong(1))
@@ -811,6 +827,48 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       body.toString,
       args = Seq(Arg("lane", Datatype.Long), Arg("taps", Datatype.Long))
     )
+  }
+
+  /** Stops or starts the clock the clocking tile sends to the TX lanes.
+    *
+    * A delay code must only be changed with this off. The line's length moves
+    * under whatever edge is travelling through it, and the tile's divider
+    * counts what comes out the far end: shortening it by several taps at once
+    * costs an edge, the divider is left a count behind, and its word boundary
+    * sits a UI off the valid lane it is framed against. Nothing recovers that
+    * on its own -- the dividers hold their phase until something resets them.
+    */
+  def formatSetClkGateFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", "en"))
+    f.formatFn(
+      "set_clk_gate",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
+  }
+
+  /** Restarts every clock divider: the global ones and the one in each tile,
+    * both directions.
+    *
+    * `txDivRst` and `rxDivRst` are separate registers so a direction can be
+    * retimed on its own; this resets both, which is what a delay change wants,
+    * since gating the TX clock also stops the forwarded clock the RX dividers
+    * run on.
+    *
+    * Asserted and released as a level rather than strobed, because it is meant
+    * to be held across a window with the TX clock gated off: the tile dividers
+    * take it with no clock present, and all of them then restart on the first
+    * edge after the clock comes back, which is what puts them back in a known
+    * phase with each other.
+    */
+  def formatResetDividersFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("txDivRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
+    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
+    f.formatFn("reset_dividers", body.toString)
   }
 
   /** Sets one lane's slicing reference, as a code up the tile's ladder. */
@@ -988,6 +1046,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg("debugTxctlTile", f.formatConstantRef("enableTxCtl"))
     )
+    // Put every divider -- the global ones and the one in each tile -- into a
+    // known phase with each other, once. After this the clock gate alone is
+    // enough: it is latched on the clock's low phase, so gating and ungating
+    // loses no edge and the dividers pick up exactly where they left off. A
+    // delay code only needs the clock quiet while the line length moves, not
+    // the dividers restarted.
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("reset_dividers"))
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
     body.append(f.formatFnCall("reset_fsms"))
     // Leave both bands under PhyTest; each test selects what it needs.
     body.append(
@@ -1459,6 +1526,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatResetFsmsFn())
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
+    sb.append(formatSetClkGateFn())
+    sb.append(formatResetDividersFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
     sb.append(formatSetupUcieFn())
@@ -1532,6 +1601,8 @@ object GenUcieHeader {
     sb.append("\n")
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
+    sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatResetDividersFn())
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")
     sb.append(cg.formatSetRxVrefFn())

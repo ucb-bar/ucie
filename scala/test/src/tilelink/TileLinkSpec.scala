@@ -573,6 +573,79 @@ class MmioSimpleTestDriver extends SVTestDriver {
   )
 }
 
+/** A fast check on the two things a training sweep depends on and neither the
+  * Verilator tests nor a single `run_lfsr` exercises: that a run's packets are
+  * all counted, and that a lane still reads clean after its delay has been
+  * moved across the eye and back.
+  *
+  * Runs in about three minutes against `models/eye`, where the full sweep takes
+  * fifty, which is the difference between iterating on a change and guessing at
+  * it.
+  */
+class ResetReproTestDriver extends SVTestDriver {
+  setStimulus(
+    "ResetReproTestDriver",
+    """
+begin : repro
+  reg [63:0] sent;
+  reg [63:0] got;
+  reg [63:0] nom;
+  integer i;
+  integer fails;
+
+  fails = 0;
+  setup_ucie();
+  seed_lfsrs();
+
+  // 1. Every packet sent is counted. `run_lfsr` gives up after a fixed number
+  // of read backs, so a run whose burst starts late reads a partial count --
+  // full packets sent, a fraction of them scored.
+  for (i = 0; i < 3; i++) begin
+    run_lfsr(`TRAIN_PACKETS);
+    `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+    $display("REPRO run %0d: tx sent %0d, rx received %0d", i, sent, got);
+    if (got != sent) begin
+      $display("REPRO FAIL: run %0d counted %0d of %0d packets", i, got, sent);
+      fails = fails + 1;
+    end
+  end
+
+  // 2. A lane moved out past the eye and back reads clean again. Shortening
+  // the delay line moves it under whatever edge is travelling through it, so
+  // every code change is made with the TX clock gated off. The dividers are
+  // not restarted here: `setup_ucie` already put them in a common phase, and
+  // the gate is latched on the clock's low phase, so stopping and starting it
+  // costs no edge and leaves that phase intact.
+  set_clk_gate(0);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 12);
+  set_clk_gate(1);
+
+  set_clk_gate(0);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 2);
+  set_clk_gate(1);
+
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+  `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  $display("REPRO after delay excursion: rx received %0d, nominal errors %0d",
+           got, nom);
+  if (nom != 0) begin
+    $display("REPRO FAIL: %0d bit errors after returning to a trained tap",
+             nom);
+    fails = fails + 1;
+  end
+
+  if (fails != 0) $fatal(1, "%0d repro checks failed", fails);
+  $display("TEST PASSED");
+end
+    """.trim
+  )
+}
+
 class ManualSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "ManualSimpleTestDriver",
@@ -706,7 +779,9 @@ begin : train
   // the next UI has slipped relative to valid, which is exactly the condition
   // `rxBitErrorsEarly` and `rxBitErrorsLate` claim to resolve.
   for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+    set_clk_gate(0);
     for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, t);
+    set_clk_gate(1);
     // Programming a batch of lanes leaves the mainband idle for long enough
     // that the next run does not align. It is the same effect that makes the
     // very first run after `setup_ucie` come back empty -- that is just the
@@ -747,7 +822,9 @@ begin : train
 
   // SWEEP 2: what level each data lane slices against, at the sampling point
   // its own first sweep found.
+  set_clk_gate(0);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  set_clk_gate(1);
   for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
     for (int l = 0; l < `TRAIN_DATA_LANES; l++)
       set_rx_vref(l, i * `TRAIN_VREF_STEP);
@@ -787,12 +864,14 @@ begin : train
   // and it is also how valid gets trained, since valid cannot be scored against
   // a framing it is itself producing. Its quality is whether the lanes it
   // frames read clean.
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-    set_tx_delay(l, trained_tap[l]);
-    set_rx_vref(l, trained_vref[l]);
-  end
+  set_clk_gate(0);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  set_clk_gate(1);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_rx_vref(l, trained_vref[l]);
   for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+    set_clk_gate(0);
     set_tx_delay(`TRAIN_VALID_LANE, t);
+    set_clk_gate(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     score_lanes();
@@ -822,9 +901,11 @@ begin : train
 
   // The link at the codes every lane picked for itself.
   $display("Trained:");
+  set_clk_gate(0);
   set_tx_delay(`TRAIN_VALID_LANE, valid_trained_tap);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  set_clk_gate(1);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-    set_tx_delay(l, trained_tap[l]);
     set_rx_vref(l, trained_vref[l]);
     $display("  lane %2d: tap %0d, vref_sel %0d", l, trained_tap[l], trained_vref[l]);
   end
@@ -881,6 +962,7 @@ task automatic score_lanes();
     reg [63:0] nominal;
     reg [63:0] early;
     reg [63:0] late;
+    reg [63:0] sent;
     `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
     `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
     for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
@@ -904,9 +986,14 @@ task automatic score_lanes();
       // throws away the thing worth knowing: whether a framing that is not
       // exactly zero is nonetheless far below the nominal count, which is what
       // a one UI slip resolved by re-framing looks like.
-      if (l == 0)
-        $display("          lane 0: %0d packets, nominal %0d, early %0d, late %0d",
-                 packets, nominal, early, late);
+      if (l == 0) begin
+        // `TX_PACKETS_SENT` alongside the RX count: a shortfall that shows up
+        // on both is the transmitter not sending, one that shows up only here
+        // is the receiver not counting what was sent.
+        `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+        $display("          lane 0: %0d packets (tx sent %0d), nominal %0d, early %0d, late %0d",
+                 packets, sent, nominal, early, late);
+      end
     end
     `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
   end
@@ -1230,6 +1317,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ManualSimpleTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_manual_test_using_Xcelium"
+      )
+    }
+
+    it(
+      "should repro the reset packet shortfall using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new ResetReproTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_repro_the_reset_packet_shortfall",
+        amsLevel = Some(AmsLevel.Eye)
       )
     }
 
