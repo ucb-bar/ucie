@@ -62,8 +62,9 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
     dut.io.regs.driverctl(i).en_b := false.B
   }
 
-  dut.io.debug.txClk := io.txClk.asClock
-  dut.io.debug.rxClk := io.rxClk.asClock
+  dut.io.debug.testTxLaneClk.foreach(_ := io.txClk.asClock)
+  dut.io.debug.testTxPadClk := io.txClk.asClock
+  dut.io.debug.testRxPadClk := io.rxClk.asClock
   dut.io.debug.txDivClk := io.txDivClk.asClock
   dut.io.debug.sbTxClk := io.sbTxClk.asClock
   dut.io.debug.rxData := io.rxData
