@@ -306,11 +306,29 @@ object Codegen {
     */
   def trainScoreLanes(numLanes: Int): Int = trainDataLanes(numLanes) + 1
 
-  /** Delay line taps to sweep, one `DCDL_DELAY_STEP` (10 ps) apart. A UI is
-    * 62.5 ps at 16 GT/s, so this covers about two of them: enough to see the
-    * sampling point leave the eye on one side and re-enter it a UI later.
+  /** Points in the coarse sweep, and taps between them, on the global delay
+    * line.
+    *
+    * That line sits on the quadrature clock, which is what the forwarded clock
+    * lanes carry and therefore what the far side samples with, so moving it
+    * moves the sampling point against every lane at once. Its 64 taps of 1 ps
+    * are a shade over one UI at 16 GT/s, so a sweep of the whole range sees the
+    * eye open and close exactly once. Stepping 4 taps keeps that to 16 points
+    * at 4 ps resolution, which is fine against an eye tens of ps wide.
     */
-  val trainDelayTaps: Int = 13
+  val trainGlobalCodes: Int = 16
+  val trainGlobalStep: Int = 4
+
+  /** Points in the per-lane trim sweep, and taps between them, on a lane's own
+    * delay line.
+    *
+    * Those lines are 32 taps of `DCDL_DELAY_STEP` (0.15625 ps), 5 ps end to
+    * end: enough to pull a lane back through the spread the clock tree gives
+    * it, and deliberately not enough to move it across a UI. That is the global
+    * line's job. Stepping 2 taps covers the range in 16 points.
+    */
+  val trainLocalCodes: Int = 16
+  val trainLocalStep: Int = 2
 
   /** Reference codes to sweep, as `trainVrefCodes` steps of `trainVrefStep` up
     * the ladder. `rxctl_<lane>_vrefSel` is 7 bits against an 8 bit ladder, so
@@ -690,7 +708,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
         ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
-        ("trainDelayTaps", BigInt(Codegen.trainDelayTaps)),
+        ("trainGlobalCodes", BigInt(Codegen.trainGlobalCodes)),
+        ("trainGlobalStep", BigInt(Codegen.trainGlobalStep)),
+        ("trainLocalCodes", BigInt(Codegen.trainLocalCodes)),
+        ("trainLocalStep", BigInt(Codegen.trainLocalStep)),
         ("trainVrefCodes", BigInt(Codegen.trainVrefCodes)),
         ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
         ("trainPackets", BigInt(Codegen.trainPackets)),
@@ -869,6 +890,28 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
     body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
     f.formatFn("reset_dividers", body.toString)
+  }
+
+  /** Sets the global delay line, thermometer coded over `clkPhaseSel`.
+    *
+    * This is the coarse knob: it delays the quadrature clock, which is the one
+    * the forwarded clock lanes carry, so it moves where in the UI the far side
+    * samples every lane. A lane's own line only trims around whatever this
+    * picks.
+    */
+  def formatSetGlobalDelayFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      formatWriteNamedReg(
+        "clkPhaseSel",
+        s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})"
+      )
+    )
+    f.formatFn(
+      "set_global_delay",
+      body.toString,
+      args = Seq(Arg("taps", Datatype.Long))
+    )
   }
 
   /** Sets one lane's slicing reference, as a code up the tile's ladder. */
@@ -1527,6 +1570,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetClkGateFn())
+    sb.append(formatSetGlobalDelayFn())
     sb.append(formatResetDividersFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
@@ -1602,6 +1646,7 @@ object GenUcieHeader {
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
     sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetGlobalDelayFn())
     sb.append(cg.formatResetDividersFn())
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")

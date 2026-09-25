@@ -124,6 +124,8 @@ module training_tb;
     // The data lane samples on the clock the clock lane recovered, which is
     // what the clock distribution network hands it in the real PHY.
     assign rxdata_intf.clk = rxclk_intf.clkout;
+    // No local RX trim in this bench; the sweep here moves the TX delay.
+    assign rxdata_intf.Dctrl = '0;
 
     // AFE HANDOVER
     // The two halves of each receiving front end take turns, which is the

@@ -32,6 +32,18 @@ object AmsLevel {
 }
 
 object Utils {
+
+  /** Whether the analog runs model lane to lane clock skew.
+    *
+    * The skew model is a real distribution tree -- eighty analog clock nets --
+    * and costs several times the run time of the plain fanout, so it is off
+    * unless a run is specifically exercising the per-lane delay trim that
+    * exists to absorb that skew. Nothing else needs it: with the fanout every
+    * lane's clock is identical, which is the right model for a digital run and
+    * an acceptable one for a sweep that is only placing the sampling point.
+    */
+  val clkSkew: Boolean = false
+
   val root = Path(
     Paths.get(sys.env("MILL_TEST_RESOURCE_DIR")).toAbsolutePath
   ) / os.up / os.up
@@ -170,7 +182,9 @@ xrun \\
   -define layer$$Verification$$Assume$$Temporal \\
   -define layer$$Verification$$Cover$$Temporal \\
   -define RANDOMIZE_MEM_INIT -define RANDOMIZE_REG_INIT -define RANDOMIZE_GARBAGE_ASSIGN -define RANDOMIZE_INVALID_ASSIGN \\
-  -f ${sourceFilesList.toString} \\
+${
+          if (clkSkew) "  -define UCIE_CLK_SKEW \\\n" else ""
+        }  -f ${sourceFilesList.toString} \\
   > >(tee -a xrun.out) 2> >(tee -a xrun.err >&2)
 """
     )

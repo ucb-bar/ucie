@@ -58,8 +58,14 @@
 `define DCDL_CTRL_BITWIDTH 8
 // Digitally-controlled delay line delay offset (ps)
 `define DCDL_DELAY_OFS 10.0
-// Digitally-controlled delay line delay sep (ps)
-`define DCDL_DELAY_STEP 10.0
+// Digitally-controlled delay line delay sep (ps).
+//
+// This is the per-lane trim, not the coarse one. Its whole range is
+// `TX_DCDL_TAPS` steps, which at 0.15625 ps is 5 ps -- enough to pull a lane
+// back through the spread the clock tree gives it and no further. Moving the
+// sampling point across a UI is the global line's job, on the quadrature
+// clock, which covers 64 ps in 64 taps of 1 ps.
+`define DCDL_DELAY_STEP 0.15625
 // Clock distribution mean delay
 `define CLK_DIST_DELAY_MU 200e-12
 // Clock distribution std deviation

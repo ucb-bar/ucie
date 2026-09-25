@@ -270,6 +270,7 @@ module phy_tb;
             assign intf.rxdata[i].vdd = vdd;
             assign intf.rxdata[i].vss = vss;
             assign intf.rxdata[i].rstb = ~reset;
+            assign intf.rxdata[i].Dctrl = '0;
             assign intf.rxdata[i].zen = 1;
             assign intf.rxdata[i].zctl = 0;
             assign intf.rxdata[i].a_pc = a_pc;

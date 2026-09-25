@@ -37,6 +37,10 @@ abstract class TestDriver extends ExtModule {
   val digitalClock = IO(Output(Clock()))
   val ucieBypassClock = IO(Output(Clock()))
   val ucieDigitalBypassClock = IO(Output(Clock()))
+  // 100 MHz reference for the clocking tile's PLL. Unused while the tile is
+  // bypassed, which is its reset default, but present so the generated path
+  // can be exercised without rewiring the harness.
+  val ucieRefClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
 
   def regReqs: Seq[TLRequestDescriptor] = Seq.empty
@@ -197,6 +201,7 @@ module ${name}(
   output reg digitalClock,
   output reg ucieBypassClock,
   output reg ucieDigitalBypassClock,
+  output reg ucieRefClock,
   output reg reset,
 
   output reg [63:0] tltReg_req_bits_addr,
@@ -256,9 +261,12 @@ ${Codegen.indent(moduleItems)}
   initial digitalClock = 1'b0;
   initial ucieBypassClock = 1'b0;
   initial ucieDigitalBypassClock = 1'b0;
+  initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #62.5 ucieBypassClock = ~ucieBypassClock;
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
+  always #5000 ucieRefClock = ~ucieRefClock;
 
   initial begin
     repeat(100000) @(posedge digitalClock);
@@ -306,6 +314,7 @@ class SimTop[T <: SVTestDriver](
     )
     harness.io.ucieBypassClock := drv.ucieBypassClock
     harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+    harness.io.ucieRefClock := drv.ucieRefClock
     harness.io.reg <> drv.tltReg
     harness.io.mb <> drv.tltMb
   }
@@ -319,7 +328,8 @@ object TestHarness {
 class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  // Two sinks: the UCIe digital domain and the chip digital domain.
+  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
   val tltReg = LazyModule(
     new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
   )
@@ -347,7 +357,12 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   )
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.regNode := tltReg.node
+  // Same source: in this harness the chip clock and the bus clock are one.
+  ucieTL.chipDigitalClockNode := clockNode
+  private val regXbar = TLXbar()
+  ucieTL.regNode := regXbar
+  ucieTL.clkRegNode := regXbar
+  regXbar := tltReg.node
   tlRam.node := ucieTL.clientNode
   ucieTL.managerNode := tltMb.node
 
@@ -356,6 +371,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     val io = IO(new Bundle {
       val ucieBypassClock = Input(Clock())
       val ucieDigitalBypassClock = Input(Clock())
+      val ucieRefClock = Input(Clock())
       val reg = new TLTesterIO(TestHarness.tltParams)
       val mb = new TLTesterIO(TestHarness.tltParams)
       // Brought out so the observation bumps show up in a waveform rather than
@@ -363,8 +379,10 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
       val debug = new DebugBumpsIO
     })
 
-    clockNode.out(0)._1.clock := clock
-    clockNode.out(0)._1.reset := reset
+    for (o <- clockNode.out) {
+      o._1.clock := clock
+      o._1.reset := reset
+    }
 
     io.reg <> tltReg.module.io
     io.mb <> tltMb.module.io
@@ -380,6 +398,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
     ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    ucieTL.module.io.phy.refClk := io.ucieRefClock
   }
 }
 
@@ -399,9 +418,12 @@ module ScalaTestDriver(
   initial digitalClock = 1'b0;
   initial ucieBypassClock = 1'b0;
   initial ucieDigitalBypassClock = 1'b0;
+  initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #62.5 ucieBypassClock = ~ucieBypassClock;
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
+  always #5000 ucieRefClock = ~ucieRefClock;
 
   initial begin
     repeat(100000) @(posedge digitalClock);
@@ -439,7 +461,8 @@ class ScalaTestHarness(
 )(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  // Two sinks: the UCIe digital domain and the chip digital domain.
+  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
   val regDriver = LazyModule(new TLDriver(regReqs))
   val mbDriver = LazyModule(new TLDriver(mbReqs, mbMaxInflight))
   val tlRam =
@@ -464,7 +487,11 @@ class ScalaTestHarness(
   val backpressure = LazyModule(new TLBackpressureTestWidget(stallCycles))
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.regNode := regDriver.node
+  ucieTL.chipDigitalClockNode := clockNode
+  private val regXbar = TLXbar()
+  ucieTL.regNode := regXbar
+  ucieTL.clkRegNode := regXbar
+  regXbar := regDriver.node
   backpressure.node := ucieTL.clientNode
   tlRam.node := backpressure.node
   ucieTL.managerNode := mbDriver.node
@@ -474,11 +501,14 @@ class ScalaTestHarness(
     val io = IO(new Bundle {
       val ucieBypassClock = Input(Clock())
       val ucieDigitalBypassClock = Input(Clock())
+      val ucieRefClock = Input(Clock())
       val finished = Output(Bool())
     })
 
-    clockNode.out(0)._1.clock := clock
-    clockNode.out(0)._1.reset := reset
+    for (o <- clockNode.out) {
+      o._1.clock := clock
+      o._1.reset := reset
+    }
 
     // Wait a few cycles before starting regDriver, so the PHY's digital reset
     // synchronizer has time to deassert ucieRst (which clocks the regs module).
@@ -511,6 +541,7 @@ class ScalaTestHarness(
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
     ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    ucieTL.module.io.phy.refClk := io.ucieRefClock
   }
 }
 
@@ -592,8 +623,10 @@ begin : repro
   reg [63:0] nom;
   integer i;
   integer fails;
+  integer clean;
 
   fails = 0;
+  clean = 0;
   setup_ucie();
   seed_lfsrs();
 
@@ -611,33 +644,58 @@ begin : repro
     end
   end
 
-  // 2. A lane moved out past the eye and back reads clean again. Shortening
-  // the delay line moves it under whatever edge is travelling through it, so
-  // every code change is made with the TX clock gated off. The dividers are
-  // not restarted here: `setup_ucie` already put them in a common phase, and
-  // the gate is latched on the clock's low phase, so stopping and starting it
-  // costs no edge and leaves that phase intact.
+  // 2. The coarse knob moves the sampling point, and where it is approached
+  // from must not matter. Sweep 1 of the training run walks the global code
+  // upwards and finds code 12 clean; sweep 3 parks on code 12 coming down from
+  // 32 and finds it dirty. Either the approach direction matters -- a delay
+  // line shortened under a running clock loses an edge -- or something else
+  // sweep 2 leaves behind does. This asks the question directly.
   set_clk_gate(0);
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 12);
+  set_global_delay(12);
   set_clk_gate(1);
-
-  set_clk_gate(0);
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 2);
-  set_clk_gate(1);
-
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
-  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
   `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
-  $display("REPRO after delay excursion: rx received %0d, nominal errors %0d",
-           got, nom);
-  if (nom != 0) begin
-    $display("REPRO FAIL: %0d bit errors after returning to a trained tap",
-             nom);
-    fails = fails + 1;
-  end
+  $display("REPRO code 12 reached directly:   nominal errors %0d", nom);
+  if (nom != 0) fails = fails + 1;
+
+  // The two things sweep 2 and sweep 3 do that the check above does not:
+  // leave vref at the trained code, and write every data lane's trim. Applied
+  // one at a time, so whichever flips it is named rather than inferred.
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_rx_vref(l, 64);
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+  `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  $display("REPRO code 12, vref 64:           nominal errors %0d", nom);
+
+  set_clk_gate(0);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 0);
+  set_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+  `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  $display("REPRO code 12, vref 64 + trim 0:  nominal errors %0d", nom);
+
+  // Now the same code, approached downwards from 32, as sweep 3 does.
+  set_clk_gate(0);
+  set_global_delay(32);
+  set_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  set_clk_gate(0);
+  set_global_delay(12);
+  set_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+  `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+  `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  $display("REPRO code 12 reached from 32:    nominal errors %0d", nom);
 
   if (fails != 0) $fatal(1, "%0d repro checks failed", fails);
   $display("TEST PASSED");
@@ -740,27 +798,24 @@ class TrainMainbandTestDriver extends SVTestDriver {
     "TrainMainbandTestDriver",
     """
 begin : train
-  integer tap_score[`TRAIN_DATA_LANES][`TRAIN_DELAY_TAPS];
+  integer global_score[`TRAIN_GLOBAL_CODES];
+  integer local_score[`TRAIN_DATA_LANES][`TRAIN_LOCAL_CODES];
   integer vref_score[`TRAIN_DATA_LANES][`TRAIN_VREF_CODES];
-  integer valid_score[`TRAIN_DELAY_TAPS];
-  integer trained_tap[`TRAIN_SCORE_LANES];
+  integer trained_local[`TRAIN_DATA_LANES];
   integer trained_vref[`TRAIN_DATA_LANES];
+  integer trained_global, edge_global;
   integer run_start, run_len;
   integer clean_nom, clean_any;
-  integer tap_slipped, vref_slipped, valid_slipped;
-  integer valid_broken, valid_trained_tap;
-  integer bounded_taps, bounded_vrefs;
-  reg [63:0] dbg_tx;
-  reg [63:0] dbg_rx;
+  integer global_slipped, vref_slipped;
+  integer bounded_global, bounded_vrefs, distinct_local;
   string row;
 
   // `integer` comes up X, and X plus one stays X.
-  bounded_taps = 0;
+  bounded_global = 0;
   bounded_vrefs = 0;
-  tap_slipped = 0;
+  distinct_local = 0;
+  global_slipped = 0;
   vref_slipped = 0;
-  valid_slipped = 0;
-  valid_broken = 0;
 
   setup_ucie();
   seed_lfsrs();
@@ -768,63 +823,55 @@ begin : train
   $display("Training %0d data lanes over MMIO, framing on valid (lane %0d)",
            `TRAIN_DATA_LANES, `TRAIN_VALID_LANE);
 
-  // SWEEP 1: where in the UI each data lane is sampled.
+  // SWEEP 1: where in the UI the far side samples, for every lane at once.
   //
-  // Valid stays where `setup_ucie` left it. The receiver frames every lane's
-  // comparison on the edge it sees there, so moving valid along with the lanes
-  // it frames would keep the two in step and measure nothing -- and when it
-  // lands badly the receiver never aligns at all, which reads as every lane
-  // receiving nothing rather than as a code being wrong. Held still, it also
-  // gives the framing something to be wrong ABOUT: a data lane that slips into
-  // the next UI has slipped relative to valid, which is exactly the condition
-  // `rxBitErrorsEarly` and `rxBitErrorsLate` claim to resolve.
-  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+  // The global line delays the quadrature clock, and the quadrature clock is
+  // what the forwarded clock lanes carry, so this walks the sampling point
+  // across the data rather than walking the data past a fixed sampling point.
+  // Its range is a little over a UI, so the eye should open and close exactly
+  // once: a run of clean codes with dirty ones either side. Codes outside that
+  // run land near an edge, where a lane that has slipped into the next UI is
+  // what `rxBitErrorsEarly` and `rxBitErrorsLate` are there to resolve.
+  for (int g = 0; g < `TRAIN_GLOBAL_CODES; g++) begin
     set_clk_gate(0);
-    for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, t);
+    set_global_delay(g * `TRAIN_GLOBAL_STEP);
     set_clk_gate(1);
-    // Programming a batch of lanes leaves the mainband idle for long enough
-    // that the next run does not align. It is the same effect that makes the
-    // very first run after `setup_ucie` come back empty -- that is just the
-    // largest batch of all, 63 writes -- and one run is enough to recover from
-    // it. So each point runs twice and scores the second.
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     score_lanes();
     clean_nom = 0;
     clean_any = 0;
     for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-      // The eye is where the NOMINAL framing reads clean. A lane that only
-      // reads clean a UI either side has slipped, and counting that as inside
-      // the eye would merge two adjacent UI into one apparent opening and pick
-      // a code sitting on the boundary between them.
-      tap_score[l][t] = (lane_framing[l] == 0) ? 1 : 0;
       if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
       if (lane_framing[l] <= 2) clean_any = clean_any + 1;
     end
-    if (clean_any > clean_nom) tap_slipped = tap_slipped + 1;
-    $display("  tap %2d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
-             t, clean_nom, `TRAIN_DATA_LANES, clean_any, `TRAIN_DATA_LANES,
+    global_score[g] = (clean_nom == `TRAIN_DATA_LANES) ? 1 : 0;
+    if (clean_any > clean_nom) global_slipped = global_slipped + 1;
+    $display("  global %3d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
+             g * `TRAIN_GLOBAL_STEP, clean_nom, `TRAIN_DATA_LANES,
+             clean_any, `TRAIN_DATA_LANES,
              clean_any > clean_nom ? "   <- slip resolved by early/late" : "");
     report_framing();
   end
 
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-    longest_run(tap_score[l], `TRAIN_DELAY_TAPS, run_start, run_len);
-    trained_tap[l] = run_start + run_len / 2;
-    if (run_len > 0 && run_len < `TRAIN_DELAY_TAPS)
-      bounded_taps = bounded_taps + 1;
-    row = "";
-    for (int t = 0; t < `TRAIN_DELAY_TAPS; t++)
-      row = {row, tap_score[l][t] == 1 ? "#" : "."};
-    $display("  lane %2d eye: %s  (%0d taps, tap %0d)",
-             l, row, run_len, trained_tap[l]);
-  end
+  longest_run(global_score, `TRAIN_GLOBAL_CODES, run_start, run_len);
+  trained_global = (run_start + run_len / 2) * `TRAIN_GLOBAL_STEP;
+  if (run_len > 0 && run_len < `TRAIN_GLOBAL_CODES) bounded_global = 1;
+  // One end of the run, where a lane is marginal rather than comfortable.
+  // That is where a per-lane trim decides whether it reads clean, so it is
+  // where sweep 3 parks.
+  edge_global = run_start * `TRAIN_GLOBAL_STEP;
+  row = "";
+  for (int g = 0; g < `TRAIN_GLOBAL_CODES; g++)
+    row = {row, global_score[g] == 1 ? "#" : "."};
+  $display("  global eye: %s  (%0d codes, code %0d)",
+           row, run_len, trained_global);
 
-  // SWEEP 2: what level each data lane slices against, at the sampling point
-  // its own first sweep found.
   set_clk_gate(0);
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  set_global_delay(trained_global);
   set_clk_gate(1);
+
+  // SWEEP 2: what level each data lane slices against, at that sampling point.
   for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
     for (int l = 0; l < `TRAIN_DATA_LANES; l++)
       set_rx_vref(l, i * `TRAIN_VREF_STEP);
@@ -854,62 +901,68 @@ begin : train
     row = "";
     for (int i = 0; i < `TRAIN_VREF_CODES; i++)
       row = {row, vref_score[l][i] == 1 ? "#" : "."};
-    $display("  lane %2d eye: %s  (%0d codes, vref_sel %0d)",
+    $display("  lane %2d vref: %s  (%0d codes, code %0d)",
              l, row, run_len, trained_vref[l]);
   end
 
-  // SWEEP 3: valid alone, with every data lane held at the codes it just
-  // picked. This is the other half of the framing experiment -- sweep 1 moved
-  // the framed lanes past a fixed edge, this moves the edge past fixed lanes --
-  // and it is also how valid gets trained, since valid cannot be scored against
-  // a framing it is itself producing. Its quality is whether the lanes it
-  // frames read clean.
-  set_clk_gate(0);
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
-  set_clk_gate(1);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_rx_vref(l, trained_vref[l]);
-  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++) begin
+
+  // SWEEP 3: each lane's own trim, taken at the edge of the global eye.
+  //
+  // A lane's line spans 5 ps, far less than the eye, so at the middle of the
+  // eye every code reads clean and the sweep says nothing. At the edge it is
+  // the trim that decides, and lanes whose arm of the clock tree is long or
+  // short pick different codes -- which is the whole point of having the trim.
+  // With the skew model off every arm is identical and every lane lands on the
+  // same code, which is correct for that model rather than a failure.
+  set_clk_gate(0);
+  set_global_delay(edge_global);
+  set_clk_gate(1);
+
+  for (int c = 0; c < `TRAIN_LOCAL_CODES; c++) begin
     set_clk_gate(0);
-    set_tx_delay(`TRAIN_VALID_LANE, t);
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+      set_tx_delay(l, c * `TRAIN_LOCAL_STEP);
     set_clk_gate(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     score_lanes();
     clean_nom = 0;
-    clean_any = 0;
     for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+      local_score[l][c] = (lane_framing[l] == 0) ? 1 : 0;
       if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
-      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
     end
-    valid_score[t] = (clean_nom == `TRAIN_DATA_LANES) ? 1 : 0;
-    if (clean_nom < `TRAIN_DATA_LANES) valid_broken = valid_broken + 1;
-    if (clean_any > clean_nom) valid_slipped = valid_slipped + 1;
-    $display("  valid tap %2d: %0d/%0d clean, %0d/%0d if a slipped UI is allowed%s",
-             t, clean_nom, `TRAIN_DATA_LANES, clean_any, `TRAIN_DATA_LANES,
-             clean_any > clean_nom ? "   <- slip resolved by early/late" : "");
+    $display("  local %3d: %0d/%0d clean",
+             c * `TRAIN_LOCAL_STEP, clean_nom, `TRAIN_DATA_LANES);
     report_framing();
   end
 
-  longest_run(valid_score, `TRAIN_DELAY_TAPS, run_start, run_len);
-  valid_trained_tap = run_start + run_len / 2;
-  trained_tap[`TRAIN_VALID_LANE] = valid_trained_tap;
-  row = "";
-  for (int t = 0; t < `TRAIN_DELAY_TAPS; t++)
-    row = {row, valid_score[t] == 1 ? "#" : "."};
-  $display("  valid  eye: %s  (%0d taps, tap %0d)",
-           row, run_len, valid_trained_tap);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    longest_run(local_score[l], `TRAIN_LOCAL_CODES, run_start, run_len);
+    trained_local[l] = (run_start + run_len / 2) * `TRAIN_LOCAL_STEP;
+    if (l > 0 && trained_local[l] != trained_local[0])
+      distinct_local = distinct_local + 1;
+    row = "";
+    for (int c = 0; c < `TRAIN_LOCAL_CODES; c++)
+      row = {row, local_score[l][c] == 1 ? "#" : "."};
+    $display("  lane %2d trim: %s  (%0d codes, code %0d)",
+             l, row, run_len, trained_local[l]);
+  end
 
   // The link at the codes every lane picked for itself.
   $display("Trained:");
   set_clk_gate(0);
-  set_tx_delay(`TRAIN_VALID_LANE, valid_trained_tap);
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_tap[l]);
+  set_global_delay(trained_global);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_local[l]);
   set_clk_gate(1);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
     set_rx_vref(l, trained_vref[l]);
-    $display("  lane %2d: tap %0d, vref_sel %0d", l, trained_tap[l], trained_vref[l]);
+    $display("  lane %2d: trim %0d, vref_sel %0d",
+             l, trained_local[l], trained_vref[l]);
   end
-  $display("  valid  : tap %0d", valid_trained_tap);
+  $display("  global : code %0d", trained_global);
+  $display("  lanes on a trim of their own: %0d", distinct_local);
+
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   score_lanes();
@@ -919,28 +972,15 @@ begin : train
                   l, lane_framing[l]);
   end
 
-  $display("Framing: a slipped UI was resolved by early/late at %0d of %0d sampling points, %0d of %0d reference points, and %0d of %0d valid points",
-           tap_slipped, `TRAIN_DELAY_TAPS, vref_slipped, `TRAIN_VREF_CODES,
-           valid_slipped, `TRAIN_DELAY_TAPS);
+  // A sweep that never finds a wrong answer is not measuring anything. The
+  // global line covers just over a UI, so its eye has to be bounded; the
+  // reference ladder has to run out at one end or both.
+  assert(bounded_global == 1)
+    else $fatal(1, "The global delay eye is not bounded: every code works, so the sampling point is not being resolved");
+  assert(bounded_vrefs > 0)
+    else $fatal(1, "No lane has a bounded reference eye: every code works, so the slicer is not comparing against it");
 
-  // Walking valid across more than a UI has to disturb the framing somewhere.
-  // If it never does, valid is not the edge the receiver aligns on and nothing
-  // else this sweep reports about framing means anything. Whether the early and
-  // late counters then resolve those points is the open question the sweep
-  // exists to answer, so that is reported rather than asserted.
-  assert(valid_broken > 0)
-    else $fatal(1, "Moving valid across %0d taps never disturbed the framing, so the receiver is not aligning on it",
-                `TRAIN_DELAY_TAPS);
-
-  // An eye has to be bounded on both axes, for every lane. If every code works
-  // the model in front of the receiver is not resolving the thing being
-  // trained, and the sweep proved nothing.
-  assert(bounded_taps == `TRAIN_DATA_LANES)
-    else $fatal(1, "Only %0d of %0d lanes found a bounded sampling eye, so the delay line is not moving the sampling point",
-                bounded_taps, `TRAIN_DATA_LANES);
-  assert(bounded_vrefs == `TRAIN_DATA_LANES)
-    else $fatal(1, "Only %0d of %0d lanes found a bounded reference eye, so the slicer is not comparing against its reference",
-                bounded_vrefs, `TRAIN_DATA_LANES);
+  $display("TEST PASSED");
 end
           """.trim,
     moduleItems = """

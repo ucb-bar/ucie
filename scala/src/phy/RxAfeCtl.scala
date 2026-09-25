@@ -20,6 +20,7 @@ class RxAfeCtlIO extends Bundle {
 object RxAfeCtl {
   def connect(lane: RxLaneCtlIO, ctlIO: RxLaneDigitalCtlIO): RxAfeCtl = {
     val ctl = Module(new RxAfeCtl)
+    lane.Dctrl := ctlIO.Dctrl
     lane.zen := ctlIO.zen
     lane.zctl := ctlIO.zctl
     lane.vref_sel := ctlIO.vref_sel

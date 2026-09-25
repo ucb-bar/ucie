@@ -57,6 +57,38 @@ module rx_data_lane (
    input zctl_18,
    input zctl_19,
    input a_en,
+   input Dctrl_0,
+   input Dctrl_1,
+   input Dctrl_2,
+   input Dctrl_3,
+   input Dctrl_4,
+   input Dctrl_5,
+   input Dctrl_6,
+   input Dctrl_7,
+   input Dctrl_8,
+   input Dctrl_9,
+   input Dctrl_10,
+   input Dctrl_11,
+   input Dctrl_12,
+   input Dctrl_13,
+   input Dctrl_14,
+   input Dctrl_15,
+   input Dctrl_16,
+   input Dctrl_17,
+   input Dctrl_18,
+   input Dctrl_19,
+   input Dctrl_20,
+   input Dctrl_21,
+   input Dctrl_22,
+   input Dctrl_23,
+   input Dctrl_24,
+   input Dctrl_25,
+   input Dctrl_26,
+   input Dctrl_27,
+   input Dctrl_28,
+   input Dctrl_29,
+   input Dctrl_30,
+   input Dctrl_31,
    input a_pc,
    input b_en,
    input b_pc,
@@ -100,7 +132,42 @@ module rx_data_lane (
     vref_sel_5,
     vref_sel_6
   };
+  wire [31:0] Dctrl = {
+    Dctrl_31,
+    Dctrl_30,
+    Dctrl_29,
+    Dctrl_28,
+    Dctrl_27,
+    Dctrl_26,
+    Dctrl_25,
+    Dctrl_24,
+    Dctrl_23,
+    Dctrl_22,
+    Dctrl_21,
+    Dctrl_20,
+    Dctrl_19,
+    Dctrl_18,
+    Dctrl_17,
+    Dctrl_16,
+    Dctrl_15,
+    Dctrl_14,
+    Dctrl_13,
+    Dctrl_12,
+    Dctrl_11,
+    Dctrl_10,
+    Dctrl_9,
+    Dctrl_8,
+    Dctrl_7,
+    Dctrl_6,
+    Dctrl_5,
+    Dctrl_4,
+    Dctrl_3,
+    Dctrl_2,
+    Dctrl_1,
+    Dctrl_0
+  };
   rxdata_tile_intf intf();
+  assign intf.Dctrl = Dctrl;
   assign intf.clk = clk;
   assign intf.rstb = rstb;
   assign intf.zen = zen;
@@ -241,6 +308,8 @@ endmodule
 
 interface rxdata_tile_intf;
     logic clk;
+    // Delay taps on the sampling clock, thermometer coded as on the TX tile.
+    logic [2**`SERDES_STAGES-1:0] Dctrl;
     logic divclk;
     logic rstb;
     logic [2**`SERDES_STAGES-1:0] dout;
@@ -291,12 +360,22 @@ rx_afe afe(
     .vss(intf.vss)
 );
 
+// Local delay line on the sampling clock, the RX counterpart of the TX
+// tile's. `Dctrl` is thermometer coded, so the delay follows the number of
+// taps enabled rather than the value of the bus.
+logic rxclkin;
+dcdl_simple rxdl(
+    .clk_in(intf.clk),
+    .dl_ctrl(`DCDL_CTRL_BITWIDTH'($countones(intf.Dctrl))),
+    .clk_out(rxclkin)
+);
+
 logic [`SERDES_STAGES-1:0] desclk;
-assign desclk[0] = intf.clk;
+assign desclk[0] = rxclkin;
 generate
     if (`SERDES_STAGES > 1) begin
         clkdiv clkdiv (
-            .clkin(intf.clk),
+            .clkin(rxclkin),
             .clkout(desclk[`SERDES_STAGES-1:1]),
             .rstb(intf.rstb)
         );

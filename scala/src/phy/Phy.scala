@@ -164,6 +164,9 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
   val sbRxData = Input(Bool())
   val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
+  // 100 MHz reference for the clocking tile's PLL.
+  val refClk = Input(Clock())
+
 }
 
 // PHY clock and reset IOs.
@@ -186,6 +189,13 @@ class PhyClkRstIO extends Bundle {
   // applies and then releases synchronously.
   val txRst = Input(Bool())
   val rxRst = Input(Bool())
+
+  // Clock source selects. They decide where `ucieClk` comes from, so they are
+  // held in a register block on the chip's own digital clock rather than in
+  // the one that runs on `ucieClk`, and they arrive here rather than through
+  // `PhyRegsIO`.
+  val digClkBypassEn = Input(Bool())
+  val txClkBypassEn = Input(Bool())
 
   // UCIe digital clock (800 MHz).
   //
@@ -238,6 +248,10 @@ class TxLaneDigitalCtlIO extends Bundle {
 }
 
 class RxLaneDigitalCtlIO extends Bundle {
+  // Delay taps on this lane's sampling clock, thermometer coded. The RX
+  // counterpart of the TX tile's `Dctrl`: it moves where in the UI this lane
+  // samples, independently of every other lane.
+  val Dctrl = UInt(RxDataLane.DelayTaps.W)
   val zen = Bool()
   val zctl = UInt(5.W)
   val vref_sel = UInt(7.W)
@@ -304,6 +318,9 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.PhaseSel := io.regs.clkPhaseSel
   clkTile.io.FreqSel := io.regs.clkFreqSel
   clkTile.io.ClkGateEn := io.regs.clkGateEn
+  clkTile.io.DigBypassEn := io.clkRst.digClkBypassEn
+  clkTile.io.TxBypassEn := io.clkRst.txClkBypassEn
+  clkTile.io.RefClk := io.top.refClk
 
   io.clkRst.ucieClk := clkTile.io.DigitalClk
   val digitalRstSync = Module(new RstSync)

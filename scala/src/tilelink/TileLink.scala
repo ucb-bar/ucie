@@ -209,6 +209,72 @@ object UcieTLRegs {
   val rstStrobeCycles = 8
 }
 
+/** Clock source controls, on a clock of their own.
+  *
+  * These decide where the PHY's clocks come from, so they cannot sit in the
+  * register block that runs on one of those clocks: at power up that block has
+  * nothing to run on until these have already been decided, and a register that
+  * comes out of reset undefined takes the whole digital domain with it.
+  *
+  * `chipDigitalClk` is the chip's own digital clock, running before any of the
+  * PHY's exist. It clocks this block and nothing else here, which is why this
+  * is a block of its own rather than a clock domain bolted onto the main one:
+  * most registers genuinely belong on `ucieClk` with the logic they control.
+  *
+  * The selects need no synchronizer. They are settled during bring-up with the
+  * clocks they steer quiet, and a mux select has no reason to be synchronous to
+  * either side of the mux.
+  */
+class UcieClkRegs(
+    params: UcieTLParams,
+    beatBytes: Int
+)(implicit
+    p: Parameters
+) extends ClockSinkDomain(ClockSinkParameters()) {
+  val regionSize = 0x1000
+  val device = new SimpleDevice("ucie_clk_control", Seq("ucbbar,ucie-clk"))
+  val node = TLRegisterNode(
+    Seq(AddressSet(params.address + UcieClkRegs.offset, regionSize - 1)),
+    device,
+    "reg/control",
+    beatBytes = beatBytes
+  )
+
+  override lazy val module = new UcieClkRegsImpl
+  class UcieClkRegsImpl extends Impl {
+    val io = IO(new Bundle {
+      val digClkBypassEn = Output(Bool())
+      val txClkBypassEn = Output(Bool())
+    })
+
+    // Both bypass out of reset. The tile's PLL needs a reference and a
+    // frequency code before it is worth trusting, and a design that has been
+    // told neither still has to come up with a clock.
+    val (digClkBypassEn, txClkBypassEn) = withClockAndReset(clock, reset) {
+      (RegInit(true.B), RegInit(true.B))
+    }
+    io.digClkBypassEn := digClkBypassEn
+    io.txClkBypassEn := txClkBypassEn
+
+    val regmap: Seq[(Int, Seq[RegField])] = withClockAndReset(clock, reset) {
+      Seq(
+        RegField(1, digClkBypassEn, RegFieldDesc("digClkBypassEn", "")),
+        RegField(1, txClkBypassEn, RegFieldDesc("txClkBypassEn", ""))
+      ).zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) }
+    }
+
+    node.regmap(regmap: _*)
+  }
+}
+
+object UcieClkRegs {
+
+  /** Where this block sits above `UcieTLParams.address`. Clear of the main
+    * block, which runs to `ucieTLRegionSize` plus the UCIe digital region.
+    */
+  val offset = 0x10000
+}
+
 class UcieTLRegs(
     params: UcieTLParams,
     beatBytes: Int,
@@ -351,6 +417,8 @@ class UcieTLRegs(
       })))
       val rxctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new RxLaneDigitalCtlIO)
+        // No added delay out of reset; software trims from here.
+        w.Dctrl := 0.U
         w.zen := false.B
         w.zctl := 0.U
         w.vref_sel := 63.U
@@ -788,6 +856,11 @@ class UcieTL(
 
   // Main digital clock node.
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
+  // The chip's own digital clock. Runs before the PHY's do, which is what the
+  // clock source registers need. Taken in on a sink and handed to the clock
+  // register block through a source, as the UCIe digital clock is.
+  val chipDigitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
+  val chipClockSourceNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val ucieDigitalClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
 
   val ucieRegParams = UcieDigitalTopParams
@@ -847,7 +920,14 @@ class UcieTL(
       )
     )
   )
+  val clkRegs = LazyModule(new UcieClkRegs(params, beatBytes))
+  clkRegs.clockNode := chipClockSourceNode
+
+  // Attached separately rather than behind a crossbar here: `regNode` is a
+  // `TLRegisterNode` in the chiplet interface, so the two blocks come out as
+  // two nodes and whoever attaches them decides how to fan out.
   val regNode = regs.node
+  val clkRegNode = clkRegs.node
   regs.clockNode := ucieDigitalClockNode
 
   override lazy val module = new UcieTLImpl
@@ -856,13 +936,18 @@ class UcieTL(
     childReset := digitalClockNode.in(0)._1.reset
     override def provideImplicitClockToLazyChildren = true
 
-    val regmap = regs.module.regmap
+    // Both blocks, at their own bases, so generated collateral sees one map.
+    val regmap = regs.module.regmap ++ clkRegs.module.regmap.map {
+      case (off, fields) => (off + UcieClkRegs.offset) -> fields
+    }
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY
     val phy = Module(new Phy(params.numLanes)(params.includeDefaultModels))
     io.phy <> phy.io.top
     phy.io.clkRst.reset := digitalClockNode.in(0)._1.reset
+    chipClockSourceNode.out(0)._1.clock := chipDigitalClockNode.in(0)._1.clock
+    chipClockSourceNode.out(0)._1.reset := chipDigitalClockNode.in(0)._1.reset
     ucieDigitalClockNode.out(0)._1.clock := phy.io.clkRst.ucieClk
     ucieDigitalClockNode.out(0)._1.reset := phy.io.clkRst.ucieRst
     phy.io.regs <> regs.module.io.phy
@@ -885,6 +970,8 @@ class UcieTL(
     test.io.debug <> phy.io.debug
     phy.io.clkRst.txResetb := test.io.txResetb
     phy.io.clkRst.rxResetb := test.io.rxResetb
+    phy.io.clkRst.digClkBypassEn := clkRegs.module.io.digClkBypassEn
+    phy.io.clkRst.txClkBypassEn := clkRegs.module.io.txClkBypassEn
     phy.io.clkRst.txRst := test.io.txRst
     phy.io.clkRst.rxRst := test.io.rxRst
     test.io.regs <> regs.module.io.test
@@ -1372,8 +1459,14 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
           .zipWithIndex
       ) {
         ucie.digitalClockNode := sbus.fixedClockNode
+        // The clock source registers run on the chip's digital clock, which
+        // here is the same always running bus clock.
+        ucie.chipDigitalClockNode := sbus.fixedClockNode
         pbus.coupleTo(s"uciephytest{$n}") {
-          ucie.regNode := TLBuffer() := TLFragmenter(
+          val xbar = TLXbar()
+          ucie.regNode := xbar
+          ucie.clkRegNode := xbar
+          xbar := TLBuffer() := TLFragmenter(
             pbus.beatBytes,
             pbus.blockBytes
           ) := TLBuffer() := _
@@ -1428,7 +1521,8 @@ class WithUcieTLDefaultModels
     })
 
 class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
-  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  // Two sinks: the UCIe digital domain and the chip digital domain.
+  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
   val node = TLClientNode(
     Seq(
       TLMasterPortParameters.v1(
@@ -1447,7 +1541,11 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   val mbManagerNode = TLManagerNode(ucieTL.managerNode.portParams)
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.regNode := node
+  ucieTL.chipDigitalClockNode := clockNode
+  private val regXbar = TLXbar()
+  ucieTL.regNode := regXbar
+  ucieTL.clkRegNode := regXbar
+  regXbar := node
   ucieTL.managerNode := mbClientNode
   mbManagerNode := ucieTL.clientNode
 
@@ -1461,8 +1559,10 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   class Impl extends LazyModuleImp(this) {
     ucieTL.module.io := DontCare
     dontTouch(ucieTL.module.io)
-    clockNode.out(0)._1.clock := clock
-    clockNode.out(0)._1.reset := reset
+    for (o <- clockNode.out) {
+      o._1.clock := clock
+      o._1.reset := reset
+    }
     val regmap = ucieTL.module.regmap
   }
 }

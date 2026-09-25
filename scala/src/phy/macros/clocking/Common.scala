@@ -76,6 +76,13 @@ class ClockingTileIO extends Bundle {
   // at zero, which stops the clock reaching the TX lanes. DigitalClk is not
   // gated: the digital domain has to keep running to service the RX AFEs.
   val ClkGateEn = Input(Bool())
+  // Forwards `DigBypassClk` as the digital clock rather than the tile's own
+  // divided PLL output.
+  val DigBypassEn = Input(Bool())
+  // Forwards `BypassClk` to the lanes rather than the tile's mux output.
+  val TxBypassEn = Input(Bool())
+  // 100 MHz reference the PLL multiplies up to 8 GHz.
+  val RefClk = Input(Clock())
   val DigBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())
