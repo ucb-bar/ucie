@@ -27,7 +27,11 @@ import edu.berkeley.cs.uciedigital.phytest.{
   DataMode,
   TxTestState
 }
-import edu.berkeley.cs.uciedigital.phy.macros.{PadDriverCtlIO, TxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{
+  PadDriverCtlIO,
+  TxLane,
+  TxLaneCtlIO
+}
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -244,6 +248,146 @@ object Codegen {
   // TX tile at full driver strength with the equalizer branch off and no added
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
+
+  /** Bit position of `Dctrl` inside the packed `TxLaneCtlIO` word.
+    *
+    * A training sweep walks the delay line, so it needs to build one control
+    * word per tap. Emitting the position lets it do that at run time from
+    * [[enableTxCtl]] rather than needing a constant per tap, and taking the
+    * position from the Chisel type rather than writing it down means a field
+    * added to `TxLaneCtlIO` cannot silently move it.
+    */
+  val txCtlDelayLsb: BigInt = {
+    val oneTap = enableTxCtl ^
+      TxLaneCtlIO
+        .codes(driver = TxLane.DriverSegments, eq = 0, delay = 1)
+        .litValue
+    require(
+      oneTap.bitCount == 1,
+      s"one delay tap should differ from `full` in exactly one bit, got 0x${oneTap.toString(16)}"
+    )
+    BigInt(oneTap.lowestSetBit)
+  }
+
+  /** Seed both ends of a training run's LFSRs with this.
+    *
+    * Any nonzero value does; the RX scores what it receives against its own
+    * LFSR run from the same seed, so the two only have to agree.
+    */
+  val trainLfsrSeed: BigInt = BigInt("0123456789abcdef", 16)
+
+  /** Data lanes a training run sweeps, which is all of them.
+    *
+    * Every lane carries its own delay and reference codes and is scored from
+    * its own bit error counter, so one sweep trains the whole set: each point
+    * programs every lane to the same code and reads back one result per lane,
+    * and each lane then keeps whichever code its own scores liked. That matters
+    * because the clock distribution network hands every lane a different
+    * arrival time, so the lanes have no reason to agree on an answer.
+    */
+  def trainDataLanes(numLanes: Int): Int = numLanes
+
+  /** The valid lane, swept alongside the data lanes.
+    *
+    * Sweeping it is not free: the receiver frames every lane's comparison on
+    * the edge it sees here, so a valid code that is off by a UI throws off the
+    * framing for the whole set rather than just for one lane. That is what
+    * `rxBitErrorsEarly` and `rxBitErrorsLate` exist for -- they score the same
+    * capture framed a UI either side -- and scoring against all three is what
+    * lets a sweep tell "this lane's data is wrong" from "the whole capture was
+    * framed a UI late", which is recoverable.
+    */
+  def trainValidLane(numLanes: Int): Int = PhyTest.validLane(numLanes)
+
+  /** Lanes a training run scores: the data lanes, then valid. The track and
+    * forwarded-clock lanes are left where `setup_ucie` put them -- track
+    * carries nothing the mainband reads, and moving a clock lane's codes takes
+    * the sampling clock away from every lane at once.
+    */
+  def trainScoreLanes(numLanes: Int): Int = trainDataLanes(numLanes) + 1
+
+  /** Fine steps within one coarse phase position, and taps between them.
+    *
+    * A coarse position is half a main clock period -- 62.5 ps off an 8 GHz main
+    * clock -- and the global delay line covers that in 64 taps of 1 ps. Four
+    * steps of 16 taps walk it at 16 ps, which is coarse against a UI but enough
+    * to see an eye open and close, and cheap enough to repeat at every rate.
+    */
+  val trainEyeFinePoints: Int = 4
+  val trainEyeFineStep: Int = 16
+
+  /** TX division codes an eye sweep visits: /1, /2 and /4.
+    *
+    * Off an 8 GHz main clock those are 16, 8 and 4 GT/s. /8 is supported by the
+    * tile but doubles the sweep again for a rate that shows nothing new.
+    */
+  val trainEyeDivs: Int = 3
+
+  /** Points in the coarse sweep, and taps between them, on the global delay
+    * line.
+    *
+    * That line sits on the quadrature clock, which is what the forwarded clock
+    * lanes carry and therefore what the far side samples with, so moving it
+    * moves the sampling point against every lane at once. Its 64 taps of 1 ps
+    * are a shade over one UI at 16 GT/s, so a sweep of the whole range sees the
+    * eye open and close exactly once. Stepping 4 taps keeps that to 16 points
+    * at 4 ps resolution, which is fine against an eye tens of ps wide.
+    */
+  val trainGlobalCodes: Int = 16
+  val trainGlobalStep: Int = 4
+
+  /** Points in the per-lane trim sweep, and taps between them, on a lane's own
+    * delay line.
+    *
+    * Those lines are 32 taps of `DCDL_DELAY_STEP` (0.15625 ps), 5 ps end to
+    * end: enough to pull a lane back through the spread the clock tree gives
+    * it, and deliberately not enough to move it across a UI. That is the global
+    * line's job. Stepping 2 taps covers the range in 16 points.
+    */
+  val trainLocalCodes: Int = 16
+  val trainLocalStep: Int = 2
+
+  /** Reference codes to sweep, as `trainVrefCodes` steps of `trainVrefStep` up
+    * the ladder. `rxctl_<lane>_vrefSel` is 7 bits against an 8 bit ladder, so
+    * software can only reach the bottom half of the supply -- which is where
+    * the receiver's swing is, since the driver and the far termination divide
+    * it down.
+    */
+  val trainVrefCodes: Int = 16
+  val trainVrefStep: Int = 8
+
+  /** Packets per point of a training sweep. Long enough that a sampling point
+    * that has slipped a UI shows up as errors on about half the bits, short
+    * enough that a sweep is not the whole simulation.
+    */
+  val trainPackets: Int = 16
+
+  /** How far below the nominal count a re-framed error count has to fall before
+    * the capture counts as a slipped UI rather than as broken data.
+    *
+    * A slipped lane is usually sampling near the edge it slipped across, so it
+    * carries genuinely corrupted bits on top of the slip and the right framing
+    * does not reach zero -- measured at about a tenth of the nominal count one
+    * tap either side of the boundary, against a half that a wrong framing
+    * gives. Four separates those comfortably.
+    */
+  val trainSlipRatio: Int = 4
+
+  /** How many times `run_lfsr` reads back the packet count before giving up.
+    *
+    * This has to outlast the burst. A register round trip is longer than a
+    * packet, but the burst does not begin until the run's programming writes
+    * have all landed, so what the window must cover is the tail of those writes
+    * plus the burst behind them -- not the burst alone.
+    *
+    * Eight was enough only because the burst happened to finish before the
+    * first read back. Two further writes in `reset_fsms` delayed the burst past
+    * the end of that window, and every run then scored a partial count taken
+    * mid-burst: full packets sent, a fraction of them counted. It is still a
+    * bound on what a run that will never finish costs -- every code outside the
+    * eye during a sweep -- so it is raised only as far as it has to be.
+    */
+  val trainPollTries: Int = 16
 
   val ucieParams: UcieTLParams = UcieTLParams()
 
@@ -575,7 +719,23 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("defaultValid", Codegen.defaultValid),
         ("defaultTrack", Codegen.defaultTrack),
         ("enableDriverCtl", Codegen.enableDriverCtl),
-        ("enableTxCtl", Codegen.enableTxCtl)
+        ("enableTxCtl", Codegen.enableTxCtl),
+        ("txCtlDelayLsb", Codegen.txCtlDelayLsb),
+        ("trainLfsrSeed", Codegen.trainLfsrSeed),
+        ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
+        ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
+        ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
+        ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
+        ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
+        ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
+        ("trainGlobalCodes", BigInt(Codegen.trainGlobalCodes)),
+        ("trainGlobalStep", BigInt(Codegen.trainGlobalStep)),
+        ("trainLocalCodes", BigInt(Codegen.trainLocalCodes)),
+        ("trainLocalStep", BigInt(Codegen.trainLocalStep)),
+        ("trainVrefCodes", BigInt(Codegen.trainVrefCodes)),
+        ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
+        ("trainPackets", BigInt(Codegen.trainPackets)),
+        ("trainSlipRatio", BigInt(Codegen.trainSlipRatio))
       )
     ) {
       sb.append(
@@ -590,11 +750,20 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
+    // Datapath first, then the FSMs that feed it: `txRst`/`rxRst` flush the
+    // serdes handoff and the PHY side of the async queues, `txFsmRst`/
+    // `rxFsmRst` return the test FSMs and their counters to idle.
     body.append(
       formatWriteNamedReg("txRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("rxRst", f.formatLong(1))
+    )
+    body.append(
+      formatWriteNamedReg("txFsmRst", f.formatLong(1))
+    )
+    body.append(
+      formatWriteNamedReg("rxFsmRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("debugTxFsmRst", f.formatLong(1))
@@ -674,6 +843,278 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.toString
   }
 
+  /** Sets one lane's sampling point: full driver strength with `taps` of the
+    * tile's delay line enabled.
+    *
+    * The delay line sits on the tile's high speed clock, so delaying it moves
+    * when the lane puts a bit on the wire, which against a forwarded clock that
+    * has not moved is the same thing as moving where in the UI the far receiver
+    * samples. `Dctrl` is thermometer coded.
+    */
+  def formatSetTxDelayFn(): String = {
+    val body = new StringBuilder
+    val delayCode =
+      s"(${f.formatConstantRef("enableTxCtl")} | " +
+        s"(((${f.formatLong(1)} << taps) - ${f.formatLong(1)}) << " +
+        s"${f.formatConstantRef("txCtlDelayLsb")}))"
+    body.append(
+      f.formatFnCall(
+        "write_txctl",
+        args = Seq("lane", f.formatConstantRef("txctlTileOfs"), delayCode)
+      )
+    )
+    f.formatFn(
+      "set_tx_delay",
+      body.toString,
+      args = Seq(Arg("lane", Datatype.Long), Arg("taps", Datatype.Long))
+    )
+  }
+
+  /** Stops or starts the clock the clocking tile sends to the TX lanes.
+    *
+    * A delay code must only be changed with this off. The line's length moves
+    * under whatever edge is travelling through it, and the tile's divider
+    * counts what comes out the far end: shortening it by several taps at once
+    * costs an edge, the divider is left a count behind, and its word boundary
+    * sits a UI off the valid lane it is framed against. Nothing recovers that
+    * on its own -- the dividers hold their phase until something resets them.
+    */
+  def formatSetClkGateFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", "en"))
+    f.formatFn(
+      "set_clk_gate",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
+  }
+
+  /** Restarts every clock divider: the global ones and the one in each tile,
+    * both directions.
+    *
+    * `txDivRst` and `rxDivRst` are separate registers so a direction can be
+    * retimed on its own; this resets both, which is what a delay change wants,
+    * since gating the TX clock also stops the forwarded clock the RX dividers
+    * run on.
+    *
+    * Asserted and released as a level rather than strobed, because it is meant
+    * to be held across a window with the TX clock gated off: the tile dividers
+    * take it with no clock present, and all of them then restart on the first
+    * edge after the clock comes back, which is what puts them back in a known
+    * phase with each other.
+    */
+  def formatResetDividersFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("txDivRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
+    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
+    f.formatFn("reset_dividers", body.toString)
+  }
+
+  /** Points the main clock at a source and sets the TX division.
+    *
+    * The lane rate follows the division, so this is what a sweep changes to
+    * walk the link across the rates the part supports. The clock is gated
+    * across the change: the divider and the phase shifter both move, and an
+    * edge in flight through either is an edge a lane divider may miscount.
+    */
+  def formatSetMainClkFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("mainClkSel", "src"))
+    body.append(formatWriteNamedReg("txClkDiv", "div"))
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    f.formatFn(
+      "set_main_clk",
+      body.toString,
+      args = Seq(Arg("src", Datatype.Long), Arg("div", Datatype.Long))
+    )
+  }
+
+  /** Sets TXCLKQ's coarse phase, in main clock half cycles.
+    *
+    * Together with the global delay line this reaches any phase: the coarse
+    * step is half a main clock period, which is inside the line's 64 ps at
+    * every rate, so the two tile a whole UI with no gap. Below 16 GT/s the line
+    * alone cannot, which is what the shifter is for.
+    */
+  def formatSetTxPhaseFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("txClkPhase", "half_cycles"))
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    f.formatFn(
+      "set_tx_phase",
+      body.toString,
+      args = Seq(Arg("half_cycles", Datatype.Long))
+    )
+  }
+
+  /** Enables the PLLs and points the digital clock at a divided main clock.
+    *
+    * The digital domain has to keep running across this, so the ratio is set
+    * before the source is switched over.
+    */
+  def formatUseInternalClkFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("pll1En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll2En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll3En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("digClkDiv", "dig_div"))
+    body.append(formatWriteNamedReg("digClkBypassEn", f.formatLong(0)))
+    f.formatFn(
+      "use_internal_clk",
+      body.toString,
+      args = Seq(Arg("dig_div", Datatype.Long))
+    )
+  }
+
+  /** Stops or starts the recovered forwarded clock at the RX clock lanes.
+    *
+    * The gate is in the lanes themselves, so dropping it stops the clock before
+    * the distribution tree and none of the RX data lanes are clocked.
+    * Everything on the RX divided clock stops with it, the reset synchronizer
+    * and the PHY side of the async queue included, so a receiver is expected to
+    * be idle across the window rather than mid-burst.
+    */
+  def formatSetRxClkGateFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("rxClkGateEn", "en"))
+    f.formatFn(
+      "set_rx_clk_gate",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
+  }
+
+  /** Sets the global delay line, thermometer coded over `clkPhaseSel`.
+    *
+    * This is the coarse knob: it delays the quadrature clock, which is the one
+    * the forwarded clock lanes carry, so it moves where in the UI the far side
+    * samples every lane. A lane's own line only trims around whatever this
+    * picks.
+    */
+  def formatSetGlobalDelayFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      formatWriteNamedReg(
+        "clkPhaseSel",
+        s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})"
+      )
+    )
+    f.formatFn(
+      "set_global_delay",
+      body.toString,
+      args = Seq(Arg("taps", Datatype.Long))
+    )
+  }
+
+  /** Sets one lane's slicing reference, as a code up the tile's ladder. */
+  def formatSetRxVrefFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      f.formatFnCall(
+        "write_rxctl",
+        args = Seq("lane", f.formatConstantRef("rxctlVrefSelOfs"), "code")
+      )
+    )
+    f.formatFn(
+      "set_rx_vref",
+      body.toString,
+      args = Seq(Arg("lane", Datatype.Long), Arg("code", Datatype.Long))
+    )
+  }
+
+  /** Seeds both ends' LFSRs, so the receiver can score what it gets against the
+    * pattern it expects and count the bits that differ.
+    *
+    * Every lane is seeded, not just one under test: the receiver frames on the
+    * valid waveform, so the lanes that are not being trained have to stay
+    * readable for it to keep framing. The seed registers hold their value
+    * across a `reset_fsms`, which reseeds from them, so a sweep seeds once and
+    * then reruns as often as it likes.
+    */
+  def formatSeedLfsrsFn(): String = {
+    val seedLoop = new StringBuilder
+    seedLoop.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("txLfsrSeed")} + i * ${f.formatConstantRef("txLfsrSeedWidth")}",
+        f.formatConstantRef("trainLfsrSeed")
+      )
+    )
+    seedLoop.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("rxLfsrSeed")} + i * ${f.formatConstantRef("rxLfsrSeedWidth")}",
+        f.formatConstantRef("trainLfsrSeed")
+      )
+    )
+    f.formatFn(
+      "seed_lfsrs",
+      f.formatForLoop(
+        "i",
+        PhyTest.numTestLanes(params.numLanes),
+        seedLoop.toString
+      )
+    )
+  }
+
+  /** Runs `packets` packets of the LFSR pattern across the mainband and waits
+    * for the receiver to score them. Call `seed_lfsrs` first.
+    *
+    * The wait is bounded rather than a spin on `rxPacketsReceived`: a training
+    * sweep visits codes at which the lane receives nothing at all, and a spin
+    * would hang on the first of them instead of scoring it.
+    */
+  def formatRunLfsrFn(): String = {
+    val body = new StringBuilder
+    body.append(f.formatFnCall("reset_fsms"))
+
+    body.append(
+      formatWriteNamedReg(
+        "testTarget",
+        f.formatConstantRef("testTargetMainband")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeLfsr"))
+    )
+    body.append(
+      formatWriteNamedReg("txDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    // The receiver stops at `packets` too, rather than running on. Left
+    // counting, it would keep scoring the idle zeros a lane sends once the
+    // transmitter is done against the pattern its own LFSR carries on
+    // generating, and every point of a sweep would come back with the same
+    // handful of errors whether or not its code was any good.
+    body.append(
+      formatWriteNamedReg("rxDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    body.append(formatWriteNamedReg("rxPacketsToReceive", "packets"))
+    body.append(formatWriteNamedReg("txPacketsToSend", "packets"))
+    body.append(formatWriteNamedReg("txExecute", f.formatLong(1)))
+
+    val pollBody = new StringBuilder
+    pollBody.append(
+      f.formatReadReg(
+        "regDrv",
+        "r",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = true
+      )
+    )
+    pollBody.append(f.formatIfStmt("r >= packets", f.breakStmt()))
+    body.append(f.formatForLoop("w", Codegen.trainPollTries, pollBody.toString))
+
+    f.formatFn(
+      "run_lfsr",
+      body.toString,
+      args = Seq(Arg("packets", Datatype.Long))
+    )
+  }
+
   def formatSetupUcieFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
@@ -744,6 +1185,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg("debugTxctlTile", f.formatConstantRef("enableTxCtl"))
     )
+    // Put every divider -- the global ones and the one in each tile -- into a
+    // known phase with each other, once. After this the clock gate alone is
+    // enough: it is latched on the clock's low phase, so gating and ungating
+    // loses no edge and the dividers pick up exactly where they left off. A
+    // delay code only needs the clock quiet while the line length moves, not
+    // the dividers restarted.
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("reset_dividers"))
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
     body.append(f.formatFnCall("reset_fsms"))
     // Leave both bands under PhyTest; each test selects what it needs.
     body.append(
@@ -1215,7 +1665,18 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatResetFsmsFn())
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
+    sb.append(formatSetClkGateFn())
+    sb.append(formatSetMainClkFn())
+    sb.append(formatSetTxPhaseFn())
+    sb.append(formatUseInternalClkFn())
+    sb.append(formatSetRxClkGateFn())
+    sb.append(formatSetGlobalDelayFn())
+    sb.append(formatResetDividersFn())
+    sb.append(formatSetTxDelayFn())
+    sb.append(formatSetRxVrefFn())
     sb.append(formatSetupUcieFn())
+    sb.append(formatSeedLfsrsFn())
+    sb.append(formatRunLfsrFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatManualLoopbackFn())
@@ -1237,8 +1698,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 /** Generates a C header (`ucie.h`) that mirrors the SystemVerilog setup
   * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
   * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
-  * `reset_fsms`, and `setup_ucie`. RISC-V test programs can `#include` it to
-  * program the UCIe MMIO registers from C.
+  * `set_tx_delay`, `set_rx_vref`, `reset_fsms`, `setup_ucie`, `seed_lfsrs`, and
+  * `run_lfsr`. RISC-V test programs can `#include` it to program the UCIe MMIO
+  * registers from C, and the last four are enough to train a lane the way
+  * `TrainMainbandTestDriver` does in simulation.
   *
   * Run with one argument — the destination path: ./mill ucie.runMain
   * edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader \ software/ucie.h
@@ -1282,7 +1745,22 @@ object GenUcieHeader {
     sb.append("\n")
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
+    sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetMainClkFn())
+    sb.append(cg.formatSetTxPhaseFn())
+    sb.append(cg.formatUseInternalClkFn())
+    sb.append(cg.formatSetRxClkGateFn())
+    sb.append(cg.formatSetGlobalDelayFn())
+    sb.append(cg.formatResetDividersFn())
+    sb.append(cg.formatSetTxDelayFn())
+    sb.append("\n")
+    sb.append(cg.formatSetRxVrefFn())
+    sb.append("\n")
     sb.append(cg.formatSetupUcieFn())
+    sb.append("\n")
+    sb.append(cg.formatSeedLfsrsFn())
+    sb.append("\n")
+    sb.append(cg.formatRunLfsrFn())
     sb.append("\n#endif\n")
     sb.toString
   }

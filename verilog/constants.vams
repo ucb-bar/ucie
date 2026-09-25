@@ -58,8 +58,14 @@
 `define DCDL_CTRL_BITWIDTH 8
 // Digitally-controlled delay line delay offset (ps)
 `define DCDL_DELAY_OFS 10.0
-// Digitally-controlled delay line delay sep (ps)
-`define DCDL_DELAY_STEP 10.0
+// Digitally-controlled delay line delay sep (ps).
+//
+// This is the per-lane trim, not the coarse one. Its whole range is
+// `TX_DCDL_TAPS` steps, which at 0.15625 ps is 5 ps -- enough to pull a lane
+// back through the spread the clock tree gives it and no further. Moving the
+// sampling point across a UI is the global line's job, on the quadrature
+// clock, which covers 64 ps in 64 taps of 1 ps.
+`define DCDL_DELAY_STEP 0.15625
 // Clock distribution mean delay
 `define CLK_DIST_DELAY_MU 200e-12
 // Clock distribution std deviation
@@ -98,3 +104,29 @@
 `define TERMINATION_R_SEGMENT 1599
 // Off resistance of termination (Ohms)
 `define TERMINATION_R_OFF_SEGMENT 1000000
+
+// EYE MODELS
+// Knobs of the models in `verilog/models/eye`, the highest abstraction level.
+// That level exists to put an eye in front of the receiver and a threshold in
+// the middle of it, and these are the numbers that set both, so opening or
+// closing the eye is a one line change here.
+//
+// How long a driver takes to hand its output from one rail to the other (ps).
+// This is what closes the eye horizontally: a UI is `MIN_PERIOD`/2 = 62.5 ps at
+// 16 GT/s, so the default leaves roughly two thirds of a UI open. The value
+// matches the `tr`/`tf` of the digital-to-analog connect modules in
+// `xcelium/amscf.scs`, which is where `models/circuit` gets its edges from, so
+// the two levels present the receiver with the same edge rate.
+`define EYE_TX_SLEW 20.0
+// Propagation delay of the RX slicer, from the input crossing `vref` to its
+// output starting to move (ps).
+`define EYE_SLICER_DELAY 5.0
+// Output transition time of the RX slicer (ps).
+`define EYE_SLICER_SLEW 5.0
+// Output transition time of the eye-level delay line (ps). Same as the `t_slew`
+// the circuit-level cell defaults to, so the two levels put a lane's clock in
+// the same place.
+`define EYE_CLK_SLEW 20.0
+// Output transition time of the eye-level clock distribution network (ps). The
+// lane clocks land on logic nets, so this is what a connect module thresholds.
+`define EYE_CLK_DIST_SLEW 5.0

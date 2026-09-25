@@ -4,6 +4,14 @@ import chisel3._
 import chisel3.util._
 import chisel3.experimental.noPrefix
 
+object RxDataLane {
+
+  /** Taps on the RX lane's local delay line, thermometer coded. Same count as
+    * the TX tile's so the two trims are programmed the same way.
+    */
+  val DelayTaps = 32
+}
+
 class RxAfeIO extends Bundle {
   val aEn = Bool()
   val aPc = Bool()
@@ -13,6 +21,12 @@ class RxAfeIO extends Bundle {
 }
 
 class RxLaneCtlIO extends Bundle {
+
+  /** Delay taps on the sampling clock, thermometer coded as on the TX tile. A
+    * one enables its tap. This is the lane's local trim; it moves where in the
+    * UI this lane samples without touching any other lane.
+    */
+  val Dctrl = UInt(RxDataLane.DelayTaps.W)
   val zen = Bool()
   val zctl = UInt(5.W)
   val afe = new RxAfeIO
@@ -71,6 +85,38 @@ class RxDataLane(implicit includeDefaultModels: Boolean = false)
   ).asTypeOf(io.dout)
   io.divclk := verilogBlackBox.io.divclk
 
+  verilogBlackBox.io.Dctrl_0 := io.ctl.Dctrl(0)
+  verilogBlackBox.io.Dctrl_1 := io.ctl.Dctrl(1)
+  verilogBlackBox.io.Dctrl_2 := io.ctl.Dctrl(2)
+  verilogBlackBox.io.Dctrl_3 := io.ctl.Dctrl(3)
+  verilogBlackBox.io.Dctrl_4 := io.ctl.Dctrl(4)
+  verilogBlackBox.io.Dctrl_5 := io.ctl.Dctrl(5)
+  verilogBlackBox.io.Dctrl_6 := io.ctl.Dctrl(6)
+  verilogBlackBox.io.Dctrl_7 := io.ctl.Dctrl(7)
+  verilogBlackBox.io.Dctrl_8 := io.ctl.Dctrl(8)
+  verilogBlackBox.io.Dctrl_9 := io.ctl.Dctrl(9)
+  verilogBlackBox.io.Dctrl_10 := io.ctl.Dctrl(10)
+  verilogBlackBox.io.Dctrl_11 := io.ctl.Dctrl(11)
+  verilogBlackBox.io.Dctrl_12 := io.ctl.Dctrl(12)
+  verilogBlackBox.io.Dctrl_13 := io.ctl.Dctrl(13)
+  verilogBlackBox.io.Dctrl_14 := io.ctl.Dctrl(14)
+  verilogBlackBox.io.Dctrl_15 := io.ctl.Dctrl(15)
+  verilogBlackBox.io.Dctrl_16 := io.ctl.Dctrl(16)
+  verilogBlackBox.io.Dctrl_17 := io.ctl.Dctrl(17)
+  verilogBlackBox.io.Dctrl_18 := io.ctl.Dctrl(18)
+  verilogBlackBox.io.Dctrl_19 := io.ctl.Dctrl(19)
+  verilogBlackBox.io.Dctrl_20 := io.ctl.Dctrl(20)
+  verilogBlackBox.io.Dctrl_21 := io.ctl.Dctrl(21)
+  verilogBlackBox.io.Dctrl_22 := io.ctl.Dctrl(22)
+  verilogBlackBox.io.Dctrl_23 := io.ctl.Dctrl(23)
+  verilogBlackBox.io.Dctrl_24 := io.ctl.Dctrl(24)
+  verilogBlackBox.io.Dctrl_25 := io.ctl.Dctrl(25)
+  verilogBlackBox.io.Dctrl_26 := io.ctl.Dctrl(26)
+  verilogBlackBox.io.Dctrl_27 := io.ctl.Dctrl(27)
+  verilogBlackBox.io.Dctrl_28 := io.ctl.Dctrl(28)
+  verilogBlackBox.io.Dctrl_29 := io.ctl.Dctrl(29)
+  verilogBlackBox.io.Dctrl_30 := io.ctl.Dctrl(30)
+  verilogBlackBox.io.Dctrl_31 := io.ctl.Dctrl(31)
   verilogBlackBox.io.clk := io.clk
   verilogBlackBox.io.rstb := io.resetb
 
@@ -118,6 +164,38 @@ class VerilogRxDataLane(implicit includeDefaultModels: Boolean = false)
     with HasBlackBoxResource {
   val io = IO(new Bundle {
     val din = Input(Bool())
+    val Dctrl_0 = Input(Bool())
+    val Dctrl_1 = Input(Bool())
+    val Dctrl_2 = Input(Bool())
+    val Dctrl_3 = Input(Bool())
+    val Dctrl_4 = Input(Bool())
+    val Dctrl_5 = Input(Bool())
+    val Dctrl_6 = Input(Bool())
+    val Dctrl_7 = Input(Bool())
+    val Dctrl_8 = Input(Bool())
+    val Dctrl_9 = Input(Bool())
+    val Dctrl_10 = Input(Bool())
+    val Dctrl_11 = Input(Bool())
+    val Dctrl_12 = Input(Bool())
+    val Dctrl_13 = Input(Bool())
+    val Dctrl_14 = Input(Bool())
+    val Dctrl_15 = Input(Bool())
+    val Dctrl_16 = Input(Bool())
+    val Dctrl_17 = Input(Bool())
+    val Dctrl_18 = Input(Bool())
+    val Dctrl_19 = Input(Bool())
+    val Dctrl_20 = Input(Bool())
+    val Dctrl_21 = Input(Bool())
+    val Dctrl_22 = Input(Bool())
+    val Dctrl_23 = Input(Bool())
+    val Dctrl_24 = Input(Bool())
+    val Dctrl_25 = Input(Bool())
+    val Dctrl_26 = Input(Bool())
+    val Dctrl_27 = Input(Bool())
+    val Dctrl_28 = Input(Bool())
+    val Dctrl_29 = Input(Bool())
+    val Dctrl_30 = Input(Bool())
+    val Dctrl_31 = Input(Bool())
     val dout_0 = Output(Bool())
     val dout_1 = Output(Bool())
     val dout_2 = Output(Bool())
@@ -196,6 +274,13 @@ class VerilogRxDataLane(implicit includeDefaultModels: Boolean = false)
 }
 
 class RxClkLaneIO extends Bundle {
+
+  /** Active-high enable for the recovered clock leaving this lane. Low while
+    * the RX is not expected to receive: the lane stops handing a clock out, so
+    * the distribution tree behind it goes quiet and none of the data lanes are
+    * clocked.
+    */
+  val clkGateEn = Input(Bool())
   val clkin = Input(Clock())
   val clkout = Output(Clock())
   val ctl = Input(new RxLaneCtlIO)
@@ -207,6 +292,7 @@ class RxClkLane(implicit includeDefaultModels: Boolean = false)
 
   val verilogBlackBox = Module(new VerilogRxClkLane)
   verilogBlackBox.io.clkin := io.clkin
+  verilogBlackBox.io.clk_gate_en := io.clkGateEn
   io.clkout := verilogBlackBox.io.clkout
 
   verilogBlackBox.io.zen := io.ctl.zen
@@ -254,6 +340,7 @@ class VerilogRxClkLane(implicit includeDefaultModels: Boolean = false)
   val io = IO(new Bundle {
     val clkin = Input(Clock())
     val clkout = Output(Clock())
+    val clk_gate_en = Input(Bool())
     val zen = Input(Bool())
     val zctl_0 = Input(Bool())
     val zctl_1 = Input(Bool())

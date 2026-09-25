@@ -1,0 +1,55 @@
+// Eye-level digitally controlled delay line.
+//
+// A delay line moves an edge, so that is all this models: detect the input
+// crossing, regenerate the output a programmed delay later. Delay is
+// `delay_offset + delay_gain * dl_ctrl`, with `dl_ctrl` read as a binary
+// weighted code off its own electrical bus.
+//
+// The circuit-level model of the same cell adds the phase noise of the
+// inverter chain that implements the delay -- a white floor and a flicker
+// component, filtered and sampled onto each edge as jitter. Jitter is what
+// closes an eye over time rather than what opens it, so this level leaves it
+// out; run `models/circuit` (with transient noise enabled in Spectre) for a
+// number that accounts for it.
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module dcdl(clk_in, dl_ctrl, clk_out);
+    input clk_in; electrical clk_in;
+    input [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl; electrical [(`DCDL_CTRL_BITWIDTH-1):0] dl_ctrl;
+    output clk_out; electrical clk_out;
+
+    parameter real vdd = `VDD;
+    parameter real delay_gain = 1p; // delay per LSB of control word
+    parameter real delay_offset = 10p; // base delay
+    parameter real t_slew = `EYE_CLK_SLEW * 1p; // output transition time
+
+    real ctrl_value;
+    // `dl_ctrl` is a bus of electrical nets, and indexing one takes a genvar.
+    genvar i;
+    integer sign;
+
+    analog begin
+        // `cross` fires on a crossing and not on where the operating point
+        // started, so the initial solution sets the output level too.
+        @(initial_step) sign = (V(clk_in) > vdd / 2) ? 1 : 0;
+
+        // Convert the digital bus to a numeric value.
+        ctrl_value = 0;
+        for (i = 0; i < `DCDL_CTRL_BITWIDTH; i = i + 1) begin
+            ctrl_value = ctrl_value + (V(dl_ctrl[i]) > vdd / 2) * pow(2, i);
+        end
+
+        @(cross(V(clk_in) - vdd/2, 1)) sign = 1;
+        @(cross(V(clk_in) - vdd/2, -1)) sign = 0;
+
+        // The delay is measured to the middle of the output edge, so the ramp
+        // starts half a transition time early.
+        V(clk_out) <+ transition(
+            vdd * sign,
+            delay_offset + delay_gain * ctrl_value - t_slew / 2,
+            t_slew
+        );
+    end
+endmodule

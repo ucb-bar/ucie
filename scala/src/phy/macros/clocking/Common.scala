@@ -66,12 +66,53 @@ class ClkMux(implicit includeDefaultModels: Boolean = false)
 
 object ClockingTile {
   val phaseSelWidth = 64
-  val freqSelWidth = 3
+  val mainClkSelWidth = 2
+  val txClkDivWidth = 2
+  val txClkPhaseWidth = 4
+  val digClkDivWidth = 3
 }
 
 class ClockingTileIO extends Bundle {
+
+  /** Global delay line on TXCLKQ, thermometer coded, 1 ps a tap. */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
-  val FreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
+
+  /** Main clock source: 0 PLL1 (8 GHz), 1 PLL2 (12 GHz), 2 PLL3 (16 GHz), 3 the
+    * analog bypass pin.
+    */
+  val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
+
+  /** Per-PLL enables, so an unselected one can be powered down. */
+  val Pll1En = Input(Bool())
+  val Pll2En = Input(Bool())
+  val Pll3En = Input(Bool())
+
+  /** TX clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8. */
+  val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
+
+  /** TXCLKQ's shift from TXCLK, in main clock half cycles, 0 to 2*div-1. Half a
+    * main clock period a step, which is inside the global delay line's range at
+    * every rate, so coarse and fine together reach any phase.
+    */
+  val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
+
+  /** Digital clock division of the main clock: 0 /1, 1 /5, 2 /10, 3 /15, 4 /20
+    * -- the ratios that land 800 MHz from a 4, 8, 12 or 16 GHz main clock. The
+    * divider stops on its own whenever the bypass pin is selected.
+    */
+  val DigClkDiv = Input(UInt(ClockingTile.digClkDivWidth.W))
+
+  /** Takes the digital clock from the bypass pin rather than the divider. */
+  val DigClkBypassEn = Input(Bool())
+
+  /** Active-high enable for the TX clock outputs. Low holds TxClk and TxClkQ at
+    * zero, which stops the clock reaching the TX lanes. DigitalClk is not
+    * gated: the digital domain has to keep running to service the RX AFEs.
+    */
+  val ClkGateEn = Input(Bool())
+
+  /** 100 MHz reference the PLLs lock to. */
+  val RefClk = Input(Clock())
   val DigBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())

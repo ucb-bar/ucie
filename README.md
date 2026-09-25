@@ -63,11 +63,23 @@ Then, run the following from the `rs/` folder:
 cargo t
 ```
 
+That runs every bench against every abstraction level of the analog models. To
+iterate against the cheap one only:
+
+```bash
+cargo t eye
+```
+
 ## Organization
 
 Chisel RTL for all digital components can be found in the `scala/` directory.
 
-Verilog testbenches and AMS models can be found in the `verilog/` folder.
+Verilog testbenches and AMS models can be found in the `verilog/` folder. The
+analog PHY is modelled at more than one level of abstraction there --
+`verilog/models/eye` is the least that puts an eye in front of the receiver and
+so the least that can be trained against, `verilog/models/circuit` is the front
+end as it is built -- and `verilog/README.md` describes the levels, the contract
+they share, and how a simulation picks one.
 
 Rust code for orchestrating tests can be found in the `rs/` folder.
 

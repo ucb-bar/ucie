@@ -57,6 +57,38 @@ module rx_data_lane (
    input zctl_18,
    input zctl_19,
    input a_en,
+   input Dctrl_0,
+   input Dctrl_1,
+   input Dctrl_2,
+   input Dctrl_3,
+   input Dctrl_4,
+   input Dctrl_5,
+   input Dctrl_6,
+   input Dctrl_7,
+   input Dctrl_8,
+   input Dctrl_9,
+   input Dctrl_10,
+   input Dctrl_11,
+   input Dctrl_12,
+   input Dctrl_13,
+   input Dctrl_14,
+   input Dctrl_15,
+   input Dctrl_16,
+   input Dctrl_17,
+   input Dctrl_18,
+   input Dctrl_19,
+   input Dctrl_20,
+   input Dctrl_21,
+   input Dctrl_22,
+   input Dctrl_23,
+   input Dctrl_24,
+   input Dctrl_25,
+   input Dctrl_26,
+   input Dctrl_27,
+   input Dctrl_28,
+   input Dctrl_29,
+   input Dctrl_30,
+   input Dctrl_31,
    input a_pc,
    input b_en,
    input b_pc,
@@ -100,8 +132,42 @@ module rx_data_lane (
     vref_sel_5,
     vref_sel_6
   };
+  wire [31:0] Dctrl = {
+    Dctrl_31,
+    Dctrl_30,
+    Dctrl_29,
+    Dctrl_28,
+    Dctrl_27,
+    Dctrl_26,
+    Dctrl_25,
+    Dctrl_24,
+    Dctrl_23,
+    Dctrl_22,
+    Dctrl_21,
+    Dctrl_20,
+    Dctrl_19,
+    Dctrl_18,
+    Dctrl_17,
+    Dctrl_16,
+    Dctrl_15,
+    Dctrl_14,
+    Dctrl_13,
+    Dctrl_12,
+    Dctrl_11,
+    Dctrl_10,
+    Dctrl_9,
+    Dctrl_8,
+    Dctrl_7,
+    Dctrl_6,
+    Dctrl_5,
+    Dctrl_4,
+    Dctrl_3,
+    Dctrl_2,
+    Dctrl_1,
+    Dctrl_0
+  };
   rxdata_tile_intf intf();
-  assign intf.din = din;
+  assign intf.Dctrl = Dctrl;
   assign intf.clk = clk;
   assign intf.rstb = rstb;
   assign intf.zen = zen;
@@ -149,13 +215,15 @@ module rx_data_lane (
   assign dout_31 = intf.dout[31];
   assign divclk = intf.divclk;
   rxdata_tile tile(
-    .intf(intf)
+    .intf(intf),
+    .din(din)
   );
 endmodule
 
 module rx_clock_lane (
    input clkin,
    output clkout,
+   input clk_gate_en,
    input zen,
    input zctl_0,
    input zctl_1,
@@ -222,7 +290,7 @@ module rx_clock_lane (
     vref_sel_6
   };
   rxclk_tile_intf intf();
-  assign intf.clkin = clkin;
+  assign intf.clk_gate_en = clk_gate_en;
   assign clkout = intf.clkout;
   assign intf.zen = zen;
   assign intf.zctl = zctl;
@@ -235,13 +303,15 @@ module rx_clock_lane (
   assign intf.vdd = 1'b1;
   assign intf.vss = 1'b0;
   rxclk_tile tile(
-    .intf(intf)
+    .intf(intf),
+    .clkin(clkin)
   );
 endmodule
 
 interface rxdata_tile_intf;
-    wire din;
     logic clk;
+    // Delay taps on the sampling clock, thermometer coded as on the TX tile.
+    logic [2**`SERDES_STAGES-1:0] Dctrl;
     logic divclk;
     logic rstb;
     logic [2**`SERDES_STAGES-1:0] dout;
@@ -252,15 +322,21 @@ interface rxdata_tile_intf;
     wire vdd, vss;
 endinterface
 
+// As on the TX side, the bump is a pin rather than a member of
+// `rxdata_tile_intf`: a SystemVerilog interface cannot hold an electrical net,
+// and a bump routed through one arrives at the termination and the front end
+// through connect modules rather than as a shared analog node. See
+// `verilog/README.md`.
 module rxdata_tile(
-    rxdata_tile_intf intf
+    rxdata_tile_intf intf,
+    input din
 );
 
 wire vref;
 wire dout_afe;
 
 termination term(
-    .vin(intf.din),
+    .vin(din),
     .en(intf.zen),
     .zctl(intf.zctl),
     .vss(intf.vss)
@@ -275,7 +351,7 @@ rdac rdac(
 
 rx_afe afe(
     .vref(vref),
-    .din(intf.din),
+    .din(din),
     .a_en(intf.a_en),
     .a_pc(intf.a_pc),
     .b_en(intf.b_en),
@@ -286,12 +362,22 @@ rx_afe afe(
     .vss(intf.vss)
 );
 
+// Local delay line on the sampling clock, the RX counterpart of the TX
+// tile's. `Dctrl` is thermometer coded, so the delay follows the number of
+// taps enabled rather than the value of the bus.
+logic rxclkin;
+dcdl_simple rxdl(
+    .clk_in(intf.clk),
+    .dl_ctrl(`DCDL_CTRL_BITWIDTH'($countones(intf.Dctrl))),
+    .clk_out(rxclkin)
+);
+
 logic [`SERDES_STAGES-1:0] desclk;
-assign desclk[0] = intf.clk;
+assign desclk[0] = rxclkin;
 generate
     if (`SERDES_STAGES > 1) begin
         clkdiv clkdiv (
-            .clkin(intf.clk),
+            .clkin(rxclkin),
             .clkout(desclk[`SERDES_STAGES-1:1]),
             .rstb(intf.rstb)
         );
@@ -308,8 +394,12 @@ tree_des des(
 endmodule
 
 interface rxclk_tile_intf;
-    wire clkin;
     logic clkout;
+    // Active-high enable for the recovered clock leaving this lane. Low while
+    // the RX is not expected to receive: the lane stops handing a clock out,
+    // so the distribution tree behind it stops too and none of the data lanes
+    // are clocked.
+    logic clk_gate_en;
     logic zen;
     logic [`TERMINATION_CTL_BITS-1:0] zctl;
     logic a_en, a_pc, b_en, b_pc, sel_a;
@@ -318,13 +408,25 @@ interface rxclk_tile_intf;
 endinterface
 
 module rxclk_tile(
-    rxclk_tile_intf intf
+    rxclk_tile_intf intf,
+    input clkin
 );
+
+// The recovered clock, before this lane's gate.
+logic clkout_raw;
+
+// Latched on the clock's low phase, so enabling or disabling mid-cycle cannot
+// hand a runt to the tree and leave a lane's divider a count out.
+logic gate_en_latched;
+always @(*) begin
+    if (!clkout_raw) gate_en_latched = intf.clk_gate_en;
+end
+assign intf.clkout = clkout_raw & gate_en_latched;
 
 wire vref;
 
 termination term(
-    .vin(intf.clkin),
+    .vin(clkin),
     .en(intf.zen),
     .zctl(intf.zctl),
     .vss(intf.vss)
@@ -339,13 +441,13 @@ rdac rdac(
 
 rx_afe afe(
     .vref(vref),
-    .din(intf.clkin),
+    .din(clkin),
     .a_en(intf.a_en),
     .a_pc(intf.a_pc),
     .b_en(intf.b_en),
     .b_pc(intf.b_pc),
     .sel_a(intf.sel_a),
-    .dout(intf.clkout),
+    .dout(clkout_raw),
     .vdd(intf.vdd),
     .vss(intf.vss)
 );

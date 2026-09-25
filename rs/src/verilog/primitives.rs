@@ -1,24 +1,20 @@
-use const_format::concatcp;
-
-use crate::verilog::VERILOG_SRC_DIR;
-
-pub const PRIMITIVES_SV_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/primitives.sv");
-pub const PRIMITIVES_VAMS_SRC: &str = concatcp!(VERILOG_SRC_DIR, "/primitives.vams");
+//! Benches for the primitives the tiles and the analog models are built from.
+//!
+//! The digital ones -- the flop and the latches, with their setup and hold
+//! checks -- live in `verilog/common` and behave the same whatever level is
+//! compiled next to them, so they run at the cheapest level only. The analog
+//! ones exist because `models/circuit` builds its sampler out of them, so they
+//! only run there.
 
 #[cfg(test)]
 mod tests {
-    use std::fs::read_to_string;
-
     use anyhow::Result;
     use regex::Regex;
     use test_log::test;
 
-    use crate::{
-        tests::out_dir,
-        verilog::{
-            primitives::{PRIMITIVES_SV_SRC, PRIMITIVES_VAMS_SRC},
-            simulate,
-        },
+    use crate::verilog::{
+        Level,
+        harness::{expect_clean, run},
     };
 
     #[test]
@@ -38,9 +34,7 @@ mod tests {
             ",
         )
         .unwrap();
-        let work_dir = out_dir("dff");
-        simulate([PRIMITIVES_SV_SRC], "dff_tb", &work_dir)?;
-        let output = read_to_string(work_dir.join("xrun.out"))?;
+        let output = run(Level::Eye, "dff_tb")?;
         assert!(
             re.is_match(&output),
             "output should have one setup violation followed by a hold violation"
@@ -88,9 +82,7 @@ mod tests {
             ",
         )
         .unwrap();
-        let work_dir = out_dir("latch");
-        simulate([PRIMITIVES_SV_SRC], "latch_tb", &work_dir)?;
-        let output = read_to_string(work_dir.join("xrun.out"))?;
+        let output = run(Level::Eye, "latch_tb")?;
         assert!(
             re_p.is_match(&output),
             "output should have one setup violation followed by a hold violation for pos_latch"
@@ -108,41 +100,12 @@ mod tests {
     }
 
     #[test]
-    fn rdac() -> Result<()> {
-        let work_dir = out_dir("rdac");
-        simulate([PRIMITIVES_VAMS_SRC], "rdac_tb", &work_dir)?;
-        let output = read_to_string(work_dir.join("xrun.out"))?;
-        assert_eq!(
-            output.matches("Error").count(),
-            0,
-            "output should have no functionality errors"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn inv_selfbias() -> Result<()> {
-        let work_dir = out_dir("inv_selfbias");
-        simulate([PRIMITIVES_VAMS_SRC], "inv_selfbias_tb", &work_dir)?;
-        let output = read_to_string(work_dir.join("xrun.out"))?;
-        assert_eq!(
-            output.matches("Error").count(),
-            0,
-            "output should have no functionality errors"
-        );
-        Ok(())
+        expect_clean(Level::Circuit, "inv_selfbias_tb")
     }
 
     #[test]
     fn inv_discharge_cap() -> Result<()> {
-        let work_dir = out_dir("inv_discharge_cap");
-        simulate([PRIMITIVES_VAMS_SRC], "inv_discharge_cap_tb", &work_dir)?;
-        let output = read_to_string(work_dir.join("xrun.out"))?;
-        assert_eq!(
-            output.matches("Error").count(),
-            0,
-            "output should have no functionality errors"
-        );
-        Ok(())
+        expect_clean(Level::Circuit, "inv_discharge_cap_tb")
     }
 }
