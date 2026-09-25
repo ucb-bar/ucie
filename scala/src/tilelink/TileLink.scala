@@ -350,6 +350,9 @@ class UcieTLRegs(
         )
       )
       val clkGateEn = RegInit(true.B)
+      // The RX forwarded clock reaches the lanes out of reset; software drops
+      // this while the RX is not expected to receive.
+      val rxClkGateEn = RegInit(true.B)
       val txDivRst = RegInit(false.B)
       val rxDivRst = RegInit(false.B)
       val txRst = Wire(DecoupledIO(UInt(1.W)))
@@ -561,6 +564,7 @@ class UcieTLRegs(
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
       io.phy.clkGateEn := applyShift(clkGateEn)
+      io.phy.rxClkGateEn := applyShift(rxClkGateEn)
       io.test.txDivRst := applyShift(txDivRst)
       io.test.rxDivRst := applyShift(rxDivRst)
       io.test.txRst := applyShift(stretched(txRst.valid))
@@ -626,6 +630,7 @@ class UcieTLRegs(
         toRegFieldRw(txLfsrSeed(i), s"txLfsrSeed_$i")
       }) ++ Seq(
         toRegFieldRw(clkGateEn, "clkGateEn"),
+        toRegFieldRw(rxClkGateEn, "rxClkGateEn"),
         toRegFieldRw(txDivRst, "txDivRst"),
         toRegFieldRw(rxDivRst, "rxDivRst"),
         RegField.w(1, txRst, RegFieldDesc("txRst", "")),

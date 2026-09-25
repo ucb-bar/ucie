@@ -223,6 +223,7 @@ endmodule
 module rx_clock_lane (
    input clkin,
    output clkout,
+   input clk_gate_en,
    input zen,
    input zctl_0,
    input zctl_1,
@@ -289,6 +290,7 @@ module rx_clock_lane (
     vref_sel_6
   };
   rxclk_tile_intf intf();
+  assign intf.clk_gate_en = clk_gate_en;
   assign clkout = intf.clkout;
   assign intf.zen = zen;
   assign intf.zctl = zctl;
@@ -393,6 +395,11 @@ endmodule
 
 interface rxclk_tile_intf;
     logic clkout;
+    // Active-high enable for the recovered clock leaving this lane. Low while
+    // the RX is not expected to receive: the lane stops handing a clock out,
+    // so the distribution tree behind it stops too and none of the data lanes
+    // are clocked.
+    logic clk_gate_en;
     logic zen;
     logic [`TERMINATION_CTL_BITS-1:0] zctl;
     logic a_en, a_pc, b_en, b_pc, sel_a;
@@ -404,6 +411,17 @@ module rxclk_tile(
     rxclk_tile_intf intf,
     input clkin
 );
+
+// The recovered clock, before this lane's gate.
+logic clkout_raw;
+
+// Latched on the clock's low phase, so enabling or disabling mid-cycle cannot
+// hand a runt to the tree and leave a lane's divider a count out.
+logic gate_en_latched;
+always @(*) begin
+    if (!clkout_raw) gate_en_latched = intf.clk_gate_en;
+end
+assign intf.clkout = clkout_raw & gate_en_latched;
 
 wire vref;
 
@@ -429,7 +447,7 @@ rx_afe afe(
     .b_en(intf.b_en),
     .b_pc(intf.b_pc),
     .sel_a(intf.sel_a),
-    .dout(intf.clkout),
+    .dout(clkout_raw),
     .vdd(intf.vdd),
     .vss(intf.vss)
 );

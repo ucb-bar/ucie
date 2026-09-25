@@ -274,6 +274,13 @@ class VerilogRxDataLane(implicit includeDefaultModels: Boolean = false)
 }
 
 class RxClkLaneIO extends Bundle {
+
+  /** Active-high enable for the recovered clock leaving this lane. Low while
+    * the RX is not expected to receive: the lane stops handing a clock out, so
+    * the distribution tree behind it goes quiet and none of the data lanes are
+    * clocked.
+    */
+  val clkGateEn = Input(Bool())
   val clkin = Input(Clock())
   val clkout = Output(Clock())
   val ctl = Input(new RxLaneCtlIO)
@@ -285,6 +292,7 @@ class RxClkLane(implicit includeDefaultModels: Boolean = false)
 
   val verilogBlackBox = Module(new VerilogRxClkLane)
   verilogBlackBox.io.clkin := io.clkin
+  verilogBlackBox.io.clk_gate_en := io.clkGateEn
   io.clkout := verilogBlackBox.io.clkout
 
   verilogBlackBox.io.zen := io.ctl.zen
@@ -332,6 +340,7 @@ class VerilogRxClkLane(implicit includeDefaultModels: Boolean = false)
   val io = IO(new Bundle {
     val clkin = Input(Clock())
     val clkout = Output(Clock())
+    val clk_gate_en = Input(Bool())
     val zen = Input(Bool())
     val zctl_0 = Input(Bool())
     val zctl_1 = Input(Bool())

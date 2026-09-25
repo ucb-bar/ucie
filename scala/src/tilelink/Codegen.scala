@@ -892,6 +892,24 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     f.formatFn("reset_dividers", body.toString)
   }
 
+  /** Stops or starts the recovered forwarded clock at the RX clock lanes.
+    *
+    * The gate is in the lanes themselves, so dropping it stops the clock before
+    * the distribution tree and none of the RX data lanes are clocked.
+    * Everything on the RX divided clock stops with it, the reset synchronizer
+    * and the PHY side of the async queue included, so a receiver is expected to
+    * be idle across the window rather than mid-burst.
+    */
+  def formatSetRxClkGateFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("rxClkGateEn", "en"))
+    f.formatFn(
+      "set_rx_clk_gate",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
+  }
+
   /** Sets the global delay line, thermometer coded over `clkPhaseSel`.
     *
     * This is the coarse knob: it delays the quadrature clock, which is the one
@@ -1570,6 +1588,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetClkGateFn())
+    sb.append(formatSetRxClkGateFn())
     sb.append(formatSetGlobalDelayFn())
     sb.append(formatResetDividersFn())
     sb.append(formatSetTxDelayFn())
@@ -1646,6 +1665,7 @@ object GenUcieHeader {
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
     sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetRxClkGateFn())
     sb.append(cg.formatSetGlobalDelayFn())
     sb.append(cg.formatResetDividersFn())
     sb.append(cg.formatSetTxDelayFn())

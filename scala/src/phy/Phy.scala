@@ -276,6 +276,10 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // with this low, so that no edge is in flight while the line length moves
   // and no divider sees a runt.
   val clkGateEn = Input(Bool())
+  // Stops the recovered forwarded clock reaching the RX lanes. Low while the
+  // RX is not expected to receive, which keeps the whole tree quiet rather
+  // than clocking eighteen lanes that have nothing to sample.
+  val rxClkGateEn = Input(Bool())
 
   // RX CONTROL
   // Per-tile lane control, indexed exactly like `txctl`. The two
@@ -463,6 +467,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
       RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(Phy.clkPLane(numLanes)))
+    rxClkP.io.clkGateEn := io.regs.rxClkGateEn
     rxClkP.io.clkin := io.top.rxClkP
     // The forwarded clock arrives as a bump pair, but everything past the
     // clock lanes is single-ended, so the distribution network is driven from
@@ -474,6 +479,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
       RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(Phy.clkNLane(numLanes)))
+    rxClkN.io.clkGateEn := io.regs.rxClkGateEn
     rxClkN.io.clkin := io.top.rxClkN
 
     // Every lane that carries a word is the same: a deserializer, then a bit

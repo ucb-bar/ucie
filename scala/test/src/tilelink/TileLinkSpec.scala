@@ -697,6 +697,34 @@ begin : repro
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
   $display("REPRO code 12 reached from 32:    nominal errors %0d", nom);
 
+  // 3. The RX clock gate actually gates, and the receiver comes back after it.
+  // With the clock stopped at the clock lanes nothing downstream is clocked,
+  // so a burst sent across that window is not received at all. Ungating has to
+  // restore a receiver that counts every packet again -- everything on the RX
+  // divided clock stopped too, the reset synchronizer and the queue's PHY side
+  // among them, so coming back is the part worth checking.
+  set_rx_clk_gate(0);
+  run_lfsr(`TRAIN_PACKETS);
+  `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+  $display("REPRO rx clock gated:   tx sent %0d, rx received %0d", sent, got);
+  if (got != 0) begin
+    $display("REPRO FAIL: %0d packets received with the RX clock gated", got);
+    fails = fails + 1;
+  end
+
+  set_rx_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  run_lfsr(`TRAIN_PACKETS);
+  `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+  `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+  $display("REPRO rx clock ungated: tx sent %0d, rx received %0d", sent, got);
+  if (got != sent) begin
+    $display("REPRO FAIL: %0d of %0d packets after ungating the RX clock",
+             got, sent);
+    fails = fails + 1;
+  end
+
   if (fails != 0) $fatal(1, "%0d repro checks failed", fails);
   $display("TEST PASSED");
 end
@@ -867,11 +895,60 @@ begin : train
   $display("  global eye: %s  (%0d codes, code %0d)",
            row, run_len, trained_global);
 
+  // SWEEP 2: each lane's own trim, taken at the edge of the global eye.
+  //
+  // A lane's line spans 5 ps, far less than the eye, so at the middle of the
+  // eye every code reads clean and the sweep says nothing. At the edge it is
+  // the trim that decides, and lanes whose arm of the clock tree is long or
+  // short pick different codes -- which is the whole point of having the trim.
+  // With the skew model off every arm is identical and every lane lands on the
+  // same code, which is correct for that model rather than a failure.
+  //
+  // This runs before the reference is trained, on the reference sweep 1 was
+  // clean with. The eye closes in both directions at once, so at its edge the
+  // vertical margin is as thin as the horizontal one and a single step of the
+  // ladder is enough to read dirty -- which says nothing about the trim.
   set_clk_gate(0);
-  set_global_delay(trained_global);
+  set_global_delay(edge_global);
   set_clk_gate(1);
 
-  // SWEEP 2: what level each data lane slices against, at that sampling point.
+  for (int c = 0; c < `TRAIN_LOCAL_CODES; c++) begin
+    set_clk_gate(0);
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+      set_tx_delay(l, c * `TRAIN_LOCAL_STEP);
+    set_clk_gate(1);
+    run_lfsr(`TRAIN_PACKETS);
+    run_lfsr(`TRAIN_PACKETS);
+    score_lanes();
+    clean_nom = 0;
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+      local_score[l][c] = (lane_framing[l] == 0) ? 1 : 0;
+      if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
+    end
+    $display("  local %3d: %0d/%0d clean",
+             c * `TRAIN_LOCAL_STEP, clean_nom, `TRAIN_DATA_LANES);
+    report_framing();
+  end
+
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
+    longest_run(local_score[l], `TRAIN_LOCAL_CODES, run_start, run_len);
+    trained_local[l] = (run_start + run_len / 2) * `TRAIN_LOCAL_STEP;
+    if (l > 0 && trained_local[l] != trained_local[0])
+      distinct_local = distinct_local + 1;
+    row = "";
+    for (int c = 0; c < `TRAIN_LOCAL_CODES; c++)
+      row = {row, local_score[l][c] == 1 ? "#" : "."};
+    $display("  lane %2d trim: %s  (%0d codes, code %0d)",
+             l, row, run_len, trained_local[l]);
+  end
+
+  set_clk_gate(0);
+  set_global_delay(trained_global);
+  for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_local[l]);
+  set_clk_gate(1);
+
+  // SWEEP 3: what level each data lane slices against, at the sampling point
+  // and the trims the first two sweeps settled on.
   for (int i = 0; i < `TRAIN_VREF_CODES; i++) begin
     for (int l = 0; l < `TRAIN_DATA_LANES; l++)
       set_rx_vref(l, i * `TRAIN_VREF_STEP);
@@ -906,48 +983,6 @@ begin : train
   end
 
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_rx_vref(l, trained_vref[l]);
-
-  // SWEEP 3: each lane's own trim, taken at the edge of the global eye.
-  //
-  // A lane's line spans 5 ps, far less than the eye, so at the middle of the
-  // eye every code reads clean and the sweep says nothing. At the edge it is
-  // the trim that decides, and lanes whose arm of the clock tree is long or
-  // short pick different codes -- which is the whole point of having the trim.
-  // With the skew model off every arm is identical and every lane lands on the
-  // same code, which is correct for that model rather than a failure.
-  set_clk_gate(0);
-  set_global_delay(edge_global);
-  set_clk_gate(1);
-
-  for (int c = 0; c < `TRAIN_LOCAL_CODES; c++) begin
-    set_clk_gate(0);
-    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
-      set_tx_delay(l, c * `TRAIN_LOCAL_STEP);
-    set_clk_gate(1);
-    run_lfsr(`TRAIN_PACKETS);
-    run_lfsr(`TRAIN_PACKETS);
-    score_lanes();
-    clean_nom = 0;
-    for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-      local_score[l][c] = (lane_framing[l] == 0) ? 1 : 0;
-      if (lane_framing[l] == 0) clean_nom = clean_nom + 1;
-    end
-    $display("  local %3d: %0d/%0d clean",
-             c * `TRAIN_LOCAL_STEP, clean_nom, `TRAIN_DATA_LANES);
-    report_framing();
-  end
-
-  for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
-    longest_run(local_score[l], `TRAIN_LOCAL_CODES, run_start, run_len);
-    trained_local[l] = (run_start + run_len / 2) * `TRAIN_LOCAL_STEP;
-    if (l > 0 && trained_local[l] != trained_local[0])
-      distinct_local = distinct_local + 1;
-    row = "";
-    for (int c = 0; c < `TRAIN_LOCAL_CODES; c++)
-      row = {row, local_score[l][c] == 1 ? "#" : "."};
-    $display("  lane %2d trim: %s  (%0d codes, code %0d)",
-             l, row, run_len, trained_local[l]);
-  end
 
   // The link at the codes every lane picked for itself.
   $display("Trained:");
