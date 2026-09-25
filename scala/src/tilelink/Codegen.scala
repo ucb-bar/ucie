@@ -306,6 +306,23 @@ object Codegen {
     */
   def trainScoreLanes(numLanes: Int): Int = trainDataLanes(numLanes) + 1
 
+  /** Fine steps within one coarse phase position, and taps between them.
+    *
+    * A coarse position is half a main clock period -- 62.5 ps off an 8 GHz main
+    * clock -- and the global delay line covers that in 64 taps of 1 ps. Four
+    * steps of 16 taps walk it at 16 ps, which is coarse against a UI but enough
+    * to see an eye open and close, and cheap enough to repeat at every rate.
+    */
+  val trainEyeFinePoints: Int = 4
+  val trainEyeFineStep: Int = 16
+
+  /** TX division codes an eye sweep visits: /1, /2 and /4.
+    *
+    * Off an 8 GHz main clock those are 16, 8 and 4 GT/s. /8 is supported by the
+    * tile but doubles the sweep again for a rate that shows nothing new.
+    */
+  val trainEyeDivs: Int = 3
+
   /** Points in the coarse sweep, and taps between them, on the global delay
     * line.
     *
@@ -708,6 +725,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
         ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
+        ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
+        ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
+        ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
         ("trainGlobalCodes", BigInt(Codegen.trainGlobalCodes)),
         ("trainGlobalStep", BigInt(Codegen.trainGlobalStep)),
         ("trainLocalCodes", BigInt(Codegen.trainLocalCodes)),
@@ -890,6 +910,64 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
     body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
     f.formatFn("reset_dividers", body.toString)
+  }
+
+  /** Points the main clock at a source and sets the TX division.
+    *
+    * The lane rate follows the division, so this is what a sweep changes to
+    * walk the link across the rates the part supports. The clock is gated
+    * across the change: the divider and the phase shifter both move, and an
+    * edge in flight through either is an edge a lane divider may miscount.
+    */
+  def formatSetMainClkFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("mainClkSel", "src"))
+    body.append(formatWriteNamedReg("txClkDiv", "div"))
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    f.formatFn(
+      "set_main_clk",
+      body.toString,
+      args = Seq(Arg("src", Datatype.Long), Arg("div", Datatype.Long))
+    )
+  }
+
+  /** Sets TXCLKQ's coarse phase, in main clock half cycles.
+    *
+    * Together with the global delay line this reaches any phase: the coarse
+    * step is half a main clock period, which is inside the line's 64 ps at
+    * every rate, so the two tile a whole UI with no gap. Below 16 GT/s the line
+    * alone cannot, which is what the shifter is for.
+    */
+  def formatSetTxPhaseFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("txClkPhase", "half_cycles"))
+    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    f.formatFn(
+      "set_tx_phase",
+      body.toString,
+      args = Seq(Arg("half_cycles", Datatype.Long))
+    )
+  }
+
+  /** Enables the PLLs and points the digital clock at a divided main clock.
+    *
+    * The digital domain has to keep running across this, so the ratio is set
+    * before the source is switched over.
+    */
+  def formatUseInternalClkFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("pll1En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll2En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll3En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("digClkDiv", "dig_div"))
+    body.append(formatWriteNamedReg("digClkBypassEn", f.formatLong(0)))
+    f.formatFn(
+      "use_internal_clk",
+      body.toString,
+      args = Seq(Arg("dig_div", Datatype.Long))
+    )
   }
 
   /** Stops or starts the recovered forwarded clock at the RX clock lanes.
@@ -1588,6 +1666,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetClkGateFn())
+    sb.append(formatSetMainClkFn())
+    sb.append(formatSetTxPhaseFn())
+    sb.append(formatUseInternalClkFn())
     sb.append(formatSetRxClkGateFn())
     sb.append(formatSetGlobalDelayFn())
     sb.append(formatResetDividersFn())
@@ -1665,6 +1746,9 @@ object GenUcieHeader {
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
     sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetMainClkFn())
+    sb.append(cg.formatSetTxPhaseFn())
+    sb.append(cg.formatUseInternalClkFn())
     sb.append(cg.formatSetRxClkGateFn())
     sb.append(cg.formatSetGlobalDelayFn())
     sb.append(cg.formatResetDividersFn())

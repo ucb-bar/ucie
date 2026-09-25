@@ -190,12 +190,27 @@ class PhyClkRstIO extends Bundle {
   val txRst = Input(Bool())
   val rxRst = Input(Bool())
 
-  // Clock source selects. They decide where `ucieClk` comes from, so they are
-  // held in a register block on the chip's own digital clock rather than in
-  // the one that runs on `ucieClk`, and they arrive here rather than through
-  // `PhyRegsIO`.
+  // Clocking tile configuration. All of it decides where `ucieClk` comes
+  // from, or has to be settled before it exists, so it is held in a register
+  // block on the chip's own digital clock rather than in the one that runs on
+  // `ucieClk` -- and it arrives here rather than through `PhyRegsIO`.
+  val mainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
+  val pll1En = Input(Bool())
+  val pll2En = Input(Bool())
+  val pll3En = Input(Bool())
+  val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
+  val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
+  val digClkDiv = Input(UInt(ClockingTile.digClkDivWidth.W))
   val digClkBypassEn = Input(Bool())
-  val txClkBypassEn = Input(Bool())
+  // The global delay line on TXCLKQ.
+  val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
+  // Stops the clock reaching the TX lanes while low, so a delay code can be
+  // changed with no edge in flight.
+  val clkGateEn = Input(Bool())
+  // Stops the recovered forwarded clock at the RX clock lanes, which keeps
+  // the whole RX tree quiet rather than clocking lanes with nothing to
+  // sample.
+  val rxClkGateEn = Input(Bool())
 
   // UCIe digital clock (800 MHz).
   //
@@ -269,17 +284,6 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // Per-tile lane control, one entry per lane in the layout order described on
   // `Phy`. Each `shuffler` is a bit permutation within its own lane.
   val txctl = Input(Vec(numLanes + 4, new TxLaneDigitalCtlIO))
-  // Clocking tile control: phase code and frequency setting.
-  val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
-  val clkFreqSel = Input(UInt(ClockingTile.freqSelWidth.W))
-  // Stops the clock reaching the TX lanes while low. A delay code is changed
-  // with this low, so that no edge is in flight while the line length moves
-  // and no divider sees a runt.
-  val clkGateEn = Input(Bool())
-  // Stops the recovered forwarded clock reaching the RX lanes. Low while the
-  // RX is not expected to receive, which keeps the whole tree quiet rather
-  // than clocking eighteen lanes that have nothing to sample.
-  val rxClkGateEn = Input(Bool())
 
   // RX CONTROL
   // Per-tile lane control, indexed exactly like `txctl`. The two
@@ -319,11 +323,16 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   val clkTile = Module(new ClockingTile)
   clkTile.io.DigBypassClk := io.top.digitalBypassClk
   clkTile.io.BypassClk := bypassClkRx.io.Vout
-  clkTile.io.PhaseSel := io.regs.clkPhaseSel
-  clkTile.io.FreqSel := io.regs.clkFreqSel
-  clkTile.io.ClkGateEn := io.regs.clkGateEn
-  clkTile.io.DigBypassEn := io.clkRst.digClkBypassEn
-  clkTile.io.TxBypassEn := io.clkRst.txClkBypassEn
+  clkTile.io.PhaseSel := io.clkRst.clkPhaseSel
+  clkTile.io.MainClkSel := io.clkRst.mainClkSel
+  clkTile.io.Pll1En := io.clkRst.pll1En
+  clkTile.io.Pll2En := io.clkRst.pll2En
+  clkTile.io.Pll3En := io.clkRst.pll3En
+  clkTile.io.TxClkDiv := io.clkRst.txClkDiv
+  clkTile.io.TxClkPhase := io.clkRst.txClkPhase
+  clkTile.io.DigClkDiv := io.clkRst.digClkDiv
+  clkTile.io.ClkGateEn := io.clkRst.clkGateEn
+  clkTile.io.DigClkBypassEn := io.clkRst.digClkBypassEn
   clkTile.io.RefClk := io.top.refClk
 
   io.clkRst.ucieClk := clkTile.io.DigitalClk
@@ -467,7 +476,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
       RxAfeCtl.connect(rxClkP.io.ctl, io.regs.rxctl(Phy.clkPLane(numLanes)))
-    rxClkP.io.clkGateEn := io.regs.rxClkGateEn
+    rxClkP.io.clkGateEn := io.clkRst.rxClkGateEn
     rxClkP.io.clkin := io.top.rxClkP
     // The forwarded clock arrives as a bump pair, but everything past the
     // clock lanes is single-ended, so the distribution network is driven from
@@ -479,7 +488,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
       RxAfeCtl.connect(rxClkN.io.ctl, io.regs.rxctl(Phy.clkNLane(numLanes)))
-    rxClkN.io.clkGateEn := io.regs.rxClkGateEn
+    rxClkN.io.clkGateEn := io.clkRst.rxClkGateEn
     rxClkN.io.clkin := io.top.rxClkN
 
     // Every lane that carries a word is the same: a deserializer, then a bit

@@ -231,6 +231,19 @@ class UcieClkRegs(
 )(implicit
     p: Parameters
 ) extends ClockSinkDomain(ClockSinkParameters()) {
+  def toRegFieldRw[T <: Data](r: T, name: String): RegField = {
+    RegField(
+      r.getWidth,
+      r.asUInt,
+      RegWriteFn((valid, data) => {
+        when(valid) {
+          r := data.asTypeOf(r)
+        }
+        true.B
+      }),
+      Some(RegFieldDesc(name, ""))
+    )
+  }
   val regionSize = 0x1000
   val device = new SimpleDevice("ucie_clk_control", Seq("ucbbar,ucie-clk"))
   val node = TLRegisterNode(
@@ -243,23 +256,78 @@ class UcieClkRegs(
   override lazy val module = new UcieClkRegsImpl
   class UcieClkRegsImpl extends Impl {
     val io = IO(new Bundle {
+      val mainClkSel = Output(UInt(ClockingTile.mainClkSelWidth.W))
+      val pll1En = Output(Bool())
+      val pll2En = Output(Bool())
+      val pll3En = Output(Bool())
+      val txClkDiv = Output(UInt(ClockingTile.txClkDivWidth.W))
+      val txClkPhase = Output(UInt(ClockingTile.txClkPhaseWidth.W))
+      val digClkDiv = Output(UInt(ClockingTile.digClkDivWidth.W))
       val digClkBypassEn = Output(Bool())
-      val txClkBypassEn = Output(Bool())
+      val clkPhaseSel = Output(UInt(ClockingTile.phaseSelWidth.W))
+      val clkGateEn = Output(Bool())
+      val rxClkGateEn = Output(Bool())
     })
 
-    // Both bypass out of reset. The tile's PLL needs a reference and a
-    // frequency code before it is worth trusting, and a design that has been
-    // told neither still has to come up with a clock.
-    val (digClkBypassEn, txClkBypassEn) = withClockAndReset(clock, reset) {
-      (RegInit(true.B), RegInit(true.B))
-    }
+    // Reset defaults describe a part that has been told nothing: the digital
+    // clock on its bypass pin, the main clock on the analog bypass pin, no
+    // PLL running, no division, no phase, both clock gates open. That is a
+    // design a testbench can drive from its own two clocks without writing a
+    // register, which is how every test here starts.
+    val (
+      mainClkSel,
+      pll1En,
+      pll2En,
+      pll3En,
+      txClkDiv,
+      txClkPhase,
+      digClkDiv,
+      digClkBypassEn,
+      clkPhaseSel,
+      clkGateEn,
+      rxClkGateEn
+    ) =
+      withClockAndReset(clock, reset) {
+        (
+          RegInit(3.U(ClockingTile.mainClkSelWidth.W)),
+          RegInit(false.B),
+          RegInit(false.B),
+          RegInit(false.B),
+          RegInit(0.U(ClockingTile.txClkDivWidth.W)),
+          RegInit(0.U(ClockingTile.txClkPhaseWidth.W)),
+          RegInit(2.U(ClockingTile.digClkDivWidth.W)),
+          RegInit(true.B),
+          RegInit(0.U(ClockingTile.phaseSelWidth.W)),
+          RegInit(true.B),
+          RegInit(true.B)
+        )
+      }
+
+    io.mainClkSel := mainClkSel
+    io.pll1En := pll1En
+    io.pll2En := pll2En
+    io.pll3En := pll3En
+    io.txClkDiv := txClkDiv
+    io.txClkPhase := txClkPhase
+    io.digClkDiv := digClkDiv
     io.digClkBypassEn := digClkBypassEn
-    io.txClkBypassEn := txClkBypassEn
+    io.clkPhaseSel := clkPhaseSel
+    io.clkGateEn := clkGateEn
+    io.rxClkGateEn := rxClkGateEn
 
     val regmap: Seq[(Int, Seq[RegField])] = withClockAndReset(clock, reset) {
       Seq(
-        RegField(1, digClkBypassEn, RegFieldDesc("digClkBypassEn", "")),
-        RegField(1, txClkBypassEn, RegFieldDesc("txClkBypassEn", ""))
+        toRegFieldRw(mainClkSel, "mainClkSel"),
+        toRegFieldRw(pll1En, "pll1En"),
+        toRegFieldRw(pll2En, "pll2En"),
+        toRegFieldRw(pll3En, "pll3En"),
+        toRegFieldRw(txClkDiv, "txClkDiv"),
+        toRegFieldRw(txClkPhase, "txClkPhase"),
+        toRegFieldRw(digClkDiv, "digClkDiv"),
+        toRegFieldRw(digClkBypassEn, "digClkBypassEn"),
+        toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
+        toRegFieldRw(clkGateEn, "clkGateEn"),
+        toRegFieldRw(rxClkGateEn, "rxClkGateEn")
       ).zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) }
     }
 
@@ -349,10 +417,6 @@ class UcieTLRegs(
           )
         )
       )
-      val clkGateEn = RegInit(true.B)
-      // The RX forwarded clock reaches the lanes out of reset; software drops
-      // this while the RX is not expected to receive.
-      val rxClkGateEn = RegInit(true.B)
       val txDivRst = RegInit(false.B)
       val rxDivRst = RegInit(false.B)
       val txRst = Wire(DecoupledIO(UInt(1.W)))
@@ -388,8 +452,6 @@ class UcieTLRegs(
       val rxDataLane = RegInit(0.U(io.test.rxDataLane.getWidth.W))
       val rxDataOffset = RegInit(0.U(io.test.rxDataOffset.getWidth.W))
 
-      val clkPhaseSel = RegInit(0.U(ClockingTile.phaseSelWidth.W))
-      val clkFreqSel = RegInit(0.U(ClockingTile.freqSelWidth.W))
       // Physical lane carrying the valid signal in each direction. Reset to the
       // dedicated valid lane; see `PhyRegsIO` for the other select codes.
       val txValidLaneSel = RegInit(
@@ -563,8 +625,6 @@ class UcieTLRegs(
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
-      io.phy.clkGateEn := applyShift(clkGateEn)
-      io.phy.rxClkGateEn := applyShift(rxClkGateEn)
       io.test.txDivRst := applyShift(txDivRst)
       io.test.rxDivRst := applyShift(rxDivRst)
       io.test.txRst := applyShift(stretched(txRst.valid))
@@ -588,8 +648,6 @@ class UcieTLRegs(
       io.test.sb.txSend := applyShift(sbTxSend.valid)
       io.test.sb.rxPop := applyShift(sbRxPop.valid)
       io.test.sb.rxRst := applyShift(sbRxRst.valid)
-      io.phy.clkPhaseSel := applyShift(clkPhaseSel)
-      io.phy.clkFreqSel := applyShift(clkFreqSel)
       // Moving valid onto another lane is a test function, not something the
       // UCIe spec asks the link to do, so these go to PhyTest rather than to
       // the PHY.
@@ -629,8 +687,6 @@ class UcieTLRegs(
       ) ++ (0 until PhyTest.numTestLanes(params.numLanes)).map((i: Int) => {
         toRegFieldRw(txLfsrSeed(i), s"txLfsrSeed_$i")
       }) ++ Seq(
-        toRegFieldRw(clkGateEn, "clkGateEn"),
-        toRegFieldRw(rxClkGateEn, "rxClkGateEn"),
         toRegFieldRw(txDivRst, "txDivRst"),
         toRegFieldRw(rxDivRst, "rxDivRst"),
         RegField.w(1, txRst, RegFieldDesc("txRst", "")),
@@ -698,9 +754,7 @@ class UcieTLRegs(
         toRegFieldR(
           applyShift(io.test.rxDataChunk),
           "rxDataChunk"
-        ),
-        toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
-        toRegFieldRw(clkFreqSel, "clkFreqSel")
+        )
       ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).tile, s"txctl_${i}_tile")
@@ -975,8 +1029,17 @@ class UcieTL(
     test.io.debug <> phy.io.debug
     phy.io.clkRst.txResetb := test.io.txResetb
     phy.io.clkRst.rxResetb := test.io.rxResetb
+    phy.io.clkRst.mainClkSel := clkRegs.module.io.mainClkSel
+    phy.io.clkRst.pll1En := clkRegs.module.io.pll1En
+    phy.io.clkRst.pll2En := clkRegs.module.io.pll2En
+    phy.io.clkRst.pll3En := clkRegs.module.io.pll3En
+    phy.io.clkRst.txClkDiv := clkRegs.module.io.txClkDiv
+    phy.io.clkRst.txClkPhase := clkRegs.module.io.txClkPhase
+    phy.io.clkRst.digClkDiv := clkRegs.module.io.digClkDiv
     phy.io.clkRst.digClkBypassEn := clkRegs.module.io.digClkBypassEn
-    phy.io.clkRst.txClkBypassEn := clkRegs.module.io.txClkBypassEn
+    phy.io.clkRst.clkPhaseSel := clkRegs.module.io.clkPhaseSel
+    phy.io.clkRst.clkGateEn := clkRegs.module.io.clkGateEn
+    phy.io.clkRst.rxClkGateEn := clkRegs.module.io.rxClkGateEn
     phy.io.clkRst.txRst := test.io.txRst
     phy.io.clkRst.rxRst := test.io.rxRst
     test.io.regs <> regs.module.io.test

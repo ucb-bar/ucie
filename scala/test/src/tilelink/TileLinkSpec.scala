@@ -732,6 +732,111 @@ end
   )
 }
 
+/** Walks a coarse eye diagram at each of the rates the clocking tile can
+  * produce, and shows why the coarse phase shifter is needed to do it.
+  *
+  * The global delay line covers 64 ps. That is a whole UI at 16 GT/s and less
+  * than half of one at 8, so below the top rate the line alone cannot walk the
+  * sampling point across an eye -- it runs out of range partway. The tile's
+  * phase shifter moves TXCLKQ in main clock half cycles, 62.5 ps off an 8 GHz
+  * main clock, which is inside what the line covers; the two together tile any
+  * UI with no gap. This sweeps both: the shifter for the coarse position and
+  * the line within it.
+  *
+  * A point counts as open when every data lane reads clean on at least one of
+  * its three framings. Taking the best of the three is the point: at an
+  * arbitrary phase the receiver may frame a UI early or late, and the lowest of
+  * the counters is the lane's real error rate rather than an artifact of where
+  * the capture happened to start.
+  */
+class EyeDiagramTestDriver extends SVTestDriver {
+  setStimulus(
+    "EyeDiagramTestDriver",
+    """
+begin : eye
+  integer open_points, total_points;
+  integer clean_any;
+  integer coarse_positions;
+  string row;
+
+  setup_ucie();
+  seed_lfsrs();
+
+  $display("Coarse eye at each rate, main clock on the analog bypass pin");
+
+  for (int d = 0; d < `TRAIN_EYE_DIVS; d++) begin
+    // Division `d` is /1, /2, /4. The shifter spans 2*div half cycles, which
+    // is one period of the divided clock however far it has been divided.
+    coarse_positions = 2 << d;
+    set_main_clk(3, d);
+
+    row = "";
+    open_points = 0;
+    total_points = 0;
+    for (int c = 0; c < coarse_positions; c++) begin
+      set_tx_phase(c);
+      for (int fi = 0; fi < `TRAIN_EYE_FINE_POINTS; fi++) begin
+        set_clk_gate(0);
+        set_global_delay(fi * `TRAIN_EYE_FINE_STEP);
+        set_clk_gate(1);
+        run_lfsr(`TRAIN_PACKETS);
+        run_lfsr(`TRAIN_PACKETS);
+        score_lanes();
+        clean_any = 0;
+        for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+          if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+        row = {row, clean_any == `TRAIN_DATA_LANES ? "#" : "."};
+        if (clean_any == `TRAIN_DATA_LANES) open_points = open_points + 1;
+        total_points = total_points + 1;
+      end
+    end
+
+    $display("  /%0d (%0d coarse x %0d fine, %0d ps a step): %s  %0d/%0d open",
+             1 << d, coarse_positions, `TRAIN_EYE_FINE_POINTS,
+             `TRAIN_EYE_FINE_STEP, row, open_points, total_points);
+
+    // An eye that is open everywhere is not an eye, and one that is shut
+    // everywhere means the sweep never found the link. Either way the phase
+    // is not being resolved and the diagram says nothing.
+    assert(open_points > 0)
+      else $fatal(1, "Rate /%0d: no phase samples cleanly, so the sweep never found the eye",
+                  1 << d);
+    assert(open_points < total_points)
+      else $fatal(1, "Rate /%0d: every phase samples cleanly, so the eye is not being resolved",
+                  1 << d);
+  end
+
+  $display("TEST PASSED");
+end
+    """.trim,
+    moduleItems = """
+integer lane_framing[`TRAIN_SCORE_LANES];
+
+task automatic score_lanes();
+  begin
+    reg [63:0] packets;
+    reg [63:0] nominal;
+    reg [63:0] early;
+    reg [63:0] late;
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + l * `RX_BIT_ERRORS_WIDTH, nominal);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY + l * `RX_BIT_ERRORS_EARLY_WIDTH, early);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE + l * `RX_BIT_ERRORS_LATE_WIDTH, late);
+      if (packets < `TRAIN_PACKETS) lane_framing[l] = 4;
+      else if (nominal == 64'h0) lane_framing[l] = 0;
+      else if (early * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 1;
+      else if (late * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 2;
+      else lane_framing[l] = 3;
+    end
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  end
+endtask
+    """
+  )
+}
+
 class ManualSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "ManualSimpleTestDriver",
@@ -1404,6 +1509,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ResetReproTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_repro_the_reset_packet_shortfall",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    it(
+      "should measure a coarse eye at each rate using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new EyeDiagramTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_measure_a_coarse_eye_at_each_rate",
         amsLevel = Some(AmsLevel.Eye)
       )
     }
