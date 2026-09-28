@@ -70,6 +70,7 @@ object ClockingTile {
   val txClkDivWidth = 2
   val txClkPhaseWidth = 4
   val digClkDivWidth = 3
+  val sbClkDivWidth = 3
 }
 
 class ClockingTileIO extends Bundle {
@@ -96,14 +97,23 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** Digital clock division of the main clock: 0 /1, 1 /5, 2 /10, 3 /15, 4 /20
-    * -- the ratios that land 800 MHz from a 4, 8, 12 or 16 GHz main clock. The
-    * divider stops on its own whenever the bypass pin is selected.
+  /** Digital clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8, 4 /15 --
+    * the ratios that land a little over 1 GHz from an 8 or 16 GHz main clock.
+    * The divider stops on its own whenever the bypass pin is selected.
     */
   val DigClkDiv = Input(UInt(ClockingTile.digClkDivWidth.W))
 
   /** Takes the digital clock from the bypass pin rather than the divider. */
   val DigClkBypassEn = Input(Bool())
+
+  /** Sideband division of the main clock: 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The
+    * sideband runs at a rate the digital domain does not, so it divides the
+    * same main clock separately.
+    */
+  val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
+
+  /** Takes the sideband clock from its own bypass pin. */
+  val SbClkBypassEn = Input(Bool())
 
   /** Active-high enable for the TX clock outputs. Low holds TxClk and TxClkQ at
     * zero, which stops the clock reaching the TX lanes. DigitalClk is not
@@ -114,8 +124,10 @@ class ClockingTileIO extends Bundle {
   /** 100 MHz reference the PLLs lock to. */
   val RefClk = Input(Clock())
   val DigBypassClk = Input(Clock())
+  val SbBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
   val DigitalClk = Output(Clock())
+  val SbClk = Output(Clock())
   val TxClkQ = Output(Clock())
   val TxClk = Output(Clock())
 }

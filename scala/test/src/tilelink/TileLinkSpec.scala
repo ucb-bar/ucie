@@ -37,6 +37,7 @@ abstract class TestDriver extends ExtModule {
   val digitalClock = IO(Output(Clock()))
   val ucieBypassClock = IO(Output(Clock()))
   val ucieDigitalBypassClock = IO(Output(Clock()))
+  val ucieSidebandBypassClock = IO(Output(Clock()))
   // 100 MHz reference for the clocking tile's PLL. Unused while the tile is
   // bypassed, which is its reset default, but present so the generated path
   // can be exercised without rewiring the harness.
@@ -201,6 +202,7 @@ module ${name}(
   output reg digitalClock,
   output reg ucieBypassClock,
   output reg ucieDigitalBypassClock,
+  output reg ucieSidebandBypassClock,
   output reg ucieRefClock,
   output reg reset,
 
@@ -261,10 +263,13 @@ ${Codegen.indent(moduleItems)}
   initial digitalClock = 1'b0;
   initial ucieBypassClock = 1'b0;
   initial ucieDigitalBypassClock = 1'b0;
+  initial ucieSidebandBypassClock = 1'b0;
   initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #62.5 ucieBypassClock = ~ucieBypassClock;
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  // 800 MHz sideband bypass.
+  always #625 ucieSidebandBypassClock = ~ucieSidebandBypassClock;
   // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
   always #5000 ucieRefClock = ~ucieRefClock;
 
@@ -314,6 +319,7 @@ class SimTop[T <: SVTestDriver](
     )
     harness.io.ucieBypassClock := drv.ucieBypassClock
     harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+    harness.io.ucieSidebandBypassClock := drv.ucieSidebandBypassClock
     harness.io.ucieRefClock := drv.ucieRefClock
     harness.io.reg <> drv.tltReg
     harness.io.mb <> drv.tltMb
@@ -371,6 +377,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     val io = IO(new Bundle {
       val ucieBypassClock = Input(Clock())
       val ucieDigitalBypassClock = Input(Clock())
+      val ucieSidebandBypassClock = Input(Clock())
       val ucieRefClock = Input(Clock())
       val reg = new TLTesterIO(TestHarness.tltParams)
       val mb = new TLTesterIO(TestHarness.tltParams)
@@ -398,6 +405,9 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
     ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    // The sideband runs at its own rate; these tests drive it from the same
+    // 800 MHz source the digital bypass used to be.
+    ucieTL.module.io.phy.sidebandBypassClk := io.ucieSidebandBypassClock
     ucieTL.module.io.phy.refClk := io.ucieRefClock
   }
 }
@@ -418,10 +428,13 @@ module ScalaTestDriver(
   initial digitalClock = 1'b0;
   initial ucieBypassClock = 1'b0;
   initial ucieDigitalBypassClock = 1'b0;
+  initial ucieSidebandBypassClock = 1'b0;
   initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #62.5 ucieBypassClock = ~ucieBypassClock;
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  // 800 MHz sideband bypass.
+  always #625 ucieSidebandBypassClock = ~ucieSidebandBypassClock;
   // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
   always #5000 ucieRefClock = ~ucieRefClock;
 
@@ -501,6 +514,7 @@ class ScalaTestHarness(
     val io = IO(new Bundle {
       val ucieBypassClock = Input(Clock())
       val ucieDigitalBypassClock = Input(Clock())
+      val ucieSidebandBypassClock = Input(Clock())
       val ucieRefClock = Input(Clock())
       val finished = Output(Bool())
     })
@@ -541,6 +555,9 @@ class ScalaTestHarness(
     ucieTL.module.io.phy.sbRxData := ucieTL.module.io.phy.sbTxData
     ucieTL.module.io.phy.bypassClk := io.ucieBypassClock
     ucieTL.module.io.phy.digitalBypassClk := io.ucieDigitalBypassClock
+    // The sideband runs at its own rate; these tests drive it from the same
+    // 800 MHz source the digital bypass used to be.
+    ucieTL.module.io.phy.sidebandBypassClk := io.ucieSidebandBypassClock
     ucieTL.module.io.phy.refClk := io.ucieRefClock
   }
 }
@@ -621,6 +638,8 @@ begin : repro
   reg [63:0] sent;
   reg [63:0] got;
   reg [63:0] nom;
+  reg [63:0] erl;
+  reg [63:0] lat;
   integer i;
   integer fails;
   integer clean;
@@ -725,6 +744,46 @@ begin : repro
     fails = fails + 1;
   end
 
+  // 4. Does the link carry anything at half rate? The eye sweep finds nothing
+  // at /2, and the first thing to separate is a phase the sweep missed from a
+  // link that is not running at all. Packets sent against packets counted says
+  // which: a receiver seeing nothing is not a phase problem.
+  set_rx_clk_gate(1);
+  for (i = 0; i < 4; i++) begin
+    set_main_clk(3, 1);
+    set_tx_phase(i);
+    set_clk_gate(0);
+    set_global_delay(0);
+    set_clk_gate(1);
+    run_lfsr(`TRAIN_PACKETS);
+    run_lfsr(`TRAIN_PACKETS);
+    `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+    `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+    $display("REPRO /2 phase %0d: tx sent %0d, rx received %0d, nominal %0d",
+             i, sent, got, nom);
+    // Is the count still climbing after `run_lfsr` gave up? If it is, the
+    // poll window is simply too short for a burst that now takes twice as
+    // long; if it is not, the receiver stopped for some other reason.
+    if (i == 0) begin
+      for (int w = 0; w < 40; w++) begin
+        `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+        if (w % 8 == 7 || got >= `TRAIN_PACKETS)
+          $display("    after %0d more reads: rx received %0d", w + 1, got);
+        if (got >= `TRAIN_PACKETS) break;
+      end
+      `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS, nom);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY, erl);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE, lat);
+      `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+      $display("    settled: nominal %0d, early %0d, late %0d", nom, erl, lat);
+    end
+  end
+  set_main_clk(3, 0);
+
   if (fails != 0) $fatal(1, "%0d repro checks failed", fails);
   $display("TEST PASSED");
 end
@@ -781,6 +840,7 @@ begin : eye
         set_clk_gate(1);
         run_lfsr(`TRAIN_PACKETS);
         run_lfsr(`TRAIN_PACKETS);
+        wait_for_packets();
         score_lanes();
         clean_any = 0;
         for (int l = 0; l < `TRAIN_DATA_LANES; l++)
@@ -811,6 +871,25 @@ end
     """.trim,
     moduleItems = """
 integer lane_framing[`TRAIN_SCORE_LANES];
+
+// Waits for a burst to finish arriving.
+//
+// `run_lfsr` reads the packet count a fixed number of times and scores
+// whatever has landed. That bound was chosen against a burst at the top rate;
+// divide the TX clock and the same burst takes proportionally longer, so the
+// window expires mid-flight and every point reads short however good the
+// phase is. Measured at /2: the count was still climbing six reads after
+// `run_lfsr` returned. Waiting here keeps that out of the training sweep's
+// bound, which only ever runs at one rate.
+task automatic wait_for_packets();
+  reg [63:0] p;
+  begin
+    for (int w = 0; w < 64; w++) begin
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, p);
+      if (p >= `TRAIN_PACKETS) break;
+    end
+  end
+endtask
 
 task automatic score_lanes();
   begin

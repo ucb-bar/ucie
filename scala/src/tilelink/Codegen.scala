@@ -306,6 +306,16 @@ object Codegen {
     */
   def trainScoreLanes(numLanes: Int): Int = trainDataLanes(numLanes) + 1
 
+  /** Where each field sits in a rate table entry.
+    *
+    * Chisel packs a bundle's first field into the most significant bits, so
+    * these follow `ClkRateCfgIO`'s declaration order: main clock select, TX
+    * division, digital division, then the three PLL enables in the low bits.
+    */
+  val rateCfgMainClkSelLsb: Int = 8
+  val rateCfgTxClkDivLsb: Int = 6
+  val rateCfgDigClkDivLsb: Int = 3
+
   /** Fine steps within one coarse phase position, and taps between them.
     *
     * A coarse position is half a main clock period -- 62.5 ps off an 8 GHz main
@@ -725,6 +735,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
         ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
+        ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
+        ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
+        ("rateCfgDigClkDivLsb", BigInt(Codegen.rateCfgDigClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -910,6 +923,62 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
     body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
     f.formatFn("reset_dividers", body.toString)
+  }
+
+  /** Fills one entry of the rate translation table.
+    *
+    * The table turns the rate link training negotiates into the analog controls
+    * that realise it. It is software's to fill because how a part is clocked is
+    * a bringup question -- which PLL serves which rate, or whether a bypass pin
+    * does instead -- rather than something fixed in the RTL. An entry left at
+    * zero selects PLL1 with no PLL enabled, which is to say a rate the part has
+    * not been told how to reach.
+    *
+    * Fields are packed as the bundle declares them, most significant first:
+    * main clock select, TX division, digital division, then the three PLL
+    * enables.
+    */
+  def formatSetRateCfgFn(): String = {
+    val body = new StringBuilder
+    val packed =
+      s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
+        s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
+        s"(dig_div << ${f.formatConstantRef("rateCfgDigClkDivLsb")}) | " +
+        s"pll_en)"
+    body.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("rateCfg")} + rate * ${f.formatConstantRef("rateCfgWidth")}",
+        packed
+      )
+    )
+    f.formatFn(
+      "set_rate_cfg",
+      body.toString,
+      args = Seq(
+        Arg("rate", Datatype.Long),
+        Arg("main_sel", Datatype.Long),
+        Arg("tx_div", Datatype.Long),
+        Arg("dig_div", Datatype.Long),
+        Arg("pll_en", Datatype.Long)
+      )
+    )
+  }
+
+  /** Hands the analog clocking over to the rate table, or takes it back.
+    *
+    * With this low the direct registers are in charge, which is how a testbench
+    * drives the clocking by hand. With it high the table decides, indexed by
+    * whatever rate training has settled on.
+    */
+  def formatSetFreqSelAutoFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("freqSelAutoEn", "en"))
+    f.formatFn(
+      "set_freq_sel_auto",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
   }
 
   /** Points the main clock at a source and sets the TX division.
@@ -1666,6 +1735,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
     sb.append(formatSetClkGateFn())
+    sb.append(formatSetRateCfgFn())
+    sb.append(formatSetFreqSelAutoFn())
     sb.append(formatSetMainClkFn())
     sb.append(formatSetTxPhaseFn())
     sb.append(formatUseInternalClkFn())
@@ -1746,6 +1817,8 @@ object GenUcieHeader {
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
     sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetRateCfgFn())
+    sb.append(cg.formatSetFreqSelAutoFn())
     sb.append(cg.formatSetMainClkFn())
     sb.append(cg.formatSetTxPhaseFn())
     sb.append(cg.formatUseInternalClkFn())

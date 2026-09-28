@@ -16,10 +16,13 @@
 //   TXCLKQ       the same division, phase shifted by a whole number of main
 //                clock half cycles, then through the global delay line
 //   DigitalClk   the digital bypass pin, or the main clock divided by
-//                1, 5, 10, 15 or 20 -- the ratios that land 800 MHz from a
-//                4, 8, 12 or 16 GHz main clock. The divider stops whenever
-//                the bypass pin is selected, so there is nothing to disable
-//                by hand.
+//                1, 2, 4, 8 or 15 -- the ratios that land a little over 1 GHz
+//                from an 8 or 16 GHz main clock
+//   SbClk        the sideband bypass pin, or the main clock divided by
+//                1, 5, 10, 15 or 20, which is where 800 MHz comes from
+//
+// Each divider stops whenever its bypass pin is selected, so there is nothing
+// to disable by hand.
 //
 // The divider and the phase shifter are one circuit. A counter over main clock
 // half cycles, modulo twice the division ratio, gives every phase the divider
@@ -48,16 +51,24 @@ module clocking_tile(
   input [1:0] TxClkDiv,
   // TXCLKQ's lead over TXCLK, in main clock half cycles, 0 to 2*div-1.
   input [3:0] TxClkPhase,
-  // 0 /1, 1 /5, 2 /10, 3 /15, 4 /20.
+  // 0 /1, 1 /2, 2 /4, 3 /8, 4 /15. The ratios that land a little over 1 GHz
+  // from an 8 or 16 GHz main clock.
   input [2:0] DigClkDiv,
   // High takes the digital clock from the bypass pin instead of the divider.
   input DigClkBypassEn,
+  // 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The sideband runs at 800 MHz, which is a
+  // different ratio off the same main clock, so it gets its own divider.
+  input [2:0] SbClkDiv,
+  // High takes the sideband clock from its own bypass pin.
+  input SbClkBypassEn,
   // Active high enable for the TX clock outputs. DigitalClk is never gated.
   input ClkGateEn,
   input RefClk,
   input DigBypassClk,
+  input SbBypassClk,
   input BypassClk,
   output DigitalClk,
+  output SbClk,
   output TxClkQ,
   output TxClk
 );
@@ -129,9 +140,9 @@ module clocking_tile(
 
   // ---- Digital clock divider ----
   wire [5:0] dig_div = (DigClkDiv == 3'd0) ? 6'd1 :
-                       (DigClkDiv == 3'd1) ? 6'd5 :
-                       (DigClkDiv == 3'd2) ? 6'd10 :
-                       (DigClkDiv == 3'd3) ? 6'd15 : 6'd20;
+                       (DigClkDiv == 3'd1) ? 6'd2 :
+                       (DigClkDiv == 3'd2) ? 6'd4 :
+                       (DigClkDiv == 3'd3) ? 6'd8 : 6'd15;
 
   // The divider stops on its own when the digital clock is not coming from
   // it: nothing selects it, so nothing has to be told to switch it off.
@@ -146,6 +157,25 @@ module clocking_tile(
   wire dig_divided = dig_cnt < ((dig_div + 6'd1) >> 1);
 
   assign DigitalClk = DigClkBypassEn ? DigBypassClk : dig_divided;
+
+  // ---- Sideband clock divider ----
+  // Its own divider off the same main clock: the sideband runs at a rate the
+  // digital domain does not, and stops on its own when the bypass pin is
+  // selected.
+  wire [5:0] sb_div = (SbClkDiv == 3'd0) ? 6'd1 :
+                      (SbClkDiv == 3'd1) ? 6'd5 :
+                      (SbClkDiv == 3'd2) ? 6'd10 :
+                      (SbClkDiv == 3'd3) ? 6'd15 : 6'd20;
+
+  reg [5:0] sb_cnt = 6'd0;
+  always @(posedge main_clk) begin
+    if (SbClkBypassEn || (^sb_cnt === 1'bx) ||
+        (sb_cnt + 6'd1 >= sb_div)) sb_cnt <= 6'd0;
+    else sb_cnt <= sb_cnt + 6'd1;
+  end
+  wire sb_divided = sb_cnt < ((sb_div + 6'd1) >> 1);
+
+  assign SbClk = SbClkBypassEn ? SbBypassClk : sb_divided;
 
   // ---- Outputs ----
   // Latch the enable on each clock's low phase so that changing ClkGateEn
