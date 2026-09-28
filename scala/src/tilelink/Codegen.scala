@@ -462,8 +462,8 @@ object Codegen {
 
     reqs += write("debugTxctlTile", enableTxCtl)
 
-    reqs += write("txRst", 1)
-    reqs += write("rxRst", 1)
+    reqs += write("txDatapathRst", 1)
+    reqs += write("rxDatapathRst", 1)
     reqs += write("debugTxFsmRst", 1)
 
     reqs += write("controllerSel", ControllerSel.phytest.litValue)
@@ -763,14 +763,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
-    // Datapath first, then the FSMs that feed it: `txRst`/`rxRst` flush the
-    // serdes handoff and the PHY side of the async queues, `txFsmRst`/
-    // `rxFsmRst` return the test FSMs and their counters to idle.
+    // Datapath first, then the FSMs that feed it: `txDatapathRst` and
+    // `rxDatapathRst` flush the serdes handoff and the PHY side of the async
+    // queues, `txFsmRst`/`rxFsmRst` return the test FSMs and their counters to
+    // idle.
     body.append(
-      formatWriteNamedReg("txRst", f.formatLong(1))
+      formatWriteNamedReg("txDatapathRst", f.formatLong(1))
     )
     body.append(
-      formatWriteNamedReg("rxRst", f.formatLong(1))
+      formatWriteNamedReg("rxDatapathRst", f.formatLong(1))
     )
     body.append(
       formatWriteNamedReg("txFsmRst", f.formatLong(1))
@@ -905,10 +906,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   /** Restarts every clock divider: the global ones and the one in each tile,
     * both directions.
     *
-    * `txDivRst` and `rxDivRst` are separate registers so a direction can be
-    * retimed on its own; this resets both, which is what a delay change wants,
-    * since gating the TX clock also stops the forwarded clock the RX dividers
-    * run on.
+    * `txDividerRst` and `rxDividerRst` are separate registers so a direction
+    * can be retimed on its own; this resets both, which is what a delay change
+    * wants, since gating the TX clock also stops the forwarded clock the RX
+    * dividers run on.
     *
     * Asserted and released as a level rather than strobed, because it is meant
     * to be held across a window with the TX clock gated off: the tile dividers
@@ -918,10 +919,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     */
   def formatResetDividersFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("txDivRst", f.formatLong(1)))
-    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(1)))
-    body.append(formatWriteNamedReg("txDivRst", f.formatLong(0)))
-    body.append(formatWriteNamedReg("rxDivRst", f.formatLong(0)))
+    body.append(formatWriteNamedReg("txDividerRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("rxDividerRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("txDividerRst", f.formatLong(0)))
+    body.append(formatWriteNamedReg("rxDividerRst", f.formatLong(0)))
     f.formatFn("reset_dividers", body.toString)
   }
 

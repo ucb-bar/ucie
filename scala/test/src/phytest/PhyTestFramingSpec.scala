@@ -18,7 +18,7 @@ class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   // Sent on the valid lane every packet, and used as the RX's expected waveform.
   val validPattern = Input(UInt(Phy.SerdesRatio.W))
   // Must be pulsed after reset to load the seeds: the LFSRs' seed port only fires
-  // while `txRst`/`rxRst` is high, and during module reset the `RegInit`
+  // while a datapath reset is high, and during module reset the `RegInit`
   // value wins, so a bare reset leaves them at their elaboration-time state.
   val fsmRst = Input(Bool())
   val execute = Input(Bool())
@@ -68,8 +68,8 @@ class PhyTestLfsrLoopback(
   dut.io.regs.txClkP := 0.U
   dut.io.regs.txClkN := 0.U
   dut.io.regs.txExecute := io.execute
-  dut.io.regs.txRst := io.fsmRst
-  dut.io.regs.rxRst := io.fsmRst
+  dut.io.regs.txDatapathRst := io.fsmRst
+  dut.io.regs.rxDatapathRst := io.fsmRst
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.txPacketsToSend := 0.U
   dut.io.regs.rxPacketsToReceive := 0.U

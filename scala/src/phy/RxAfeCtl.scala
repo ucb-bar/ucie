@@ -3,7 +3,12 @@ package edu.berkeley.cs.uciedigital.phy
 import chisel3._
 import chisel3.util._
 import chisel3.experimental.BundleLiterals._
-import edu.berkeley.cs.uciedigital.phy.macros.{RxAfeIO, RxLaneCtlIO}
+import edu.berkeley.cs.uciedigital.phy.macros.{
+  RxAfeIO,
+  RxClkLane,
+  RxDataLane,
+  RxLaneCtlIO
+}
 
 object RxAfeCtlState extends ChiselEnum {
   val sA, sAbInit, sAbSel, sB, sBaInit, sBaSel = Value
@@ -29,6 +34,24 @@ object RxAfeCtl {
     ctl.io.opCycles := ctlIO.afeOpCycles
     ctl.io.overlapCycles := ctlIO.afeOverlapCycles
     lane.afe := ctl.io.afe
+    ctl
+  }
+
+  /** As above, driving a tile's pins rather than a control bundle. The tile is
+    * the analog macro itself, so its buses are one pin per bit; `connectCtl`
+    * is what spreads the bundle across them.
+    */
+  def connect(lane: RxDataLane, ctlIO: RxLaneDigitalCtlIO): RxAfeCtl = {
+    val laneCtl = Wire(new RxLaneCtlIO)
+    val ctl = connect(laneCtl, ctlIO)
+    lane.connectCtl(laneCtl)
+    ctl
+  }
+
+  def connect(lane: RxClkLane, ctlIO: RxLaneDigitalCtlIO): RxAfeCtl = {
+    val laneCtl = Wire(new RxLaneCtlIO)
+    val ctl = connect(laneCtl, ctlIO)
+    lane.connectCtl(laneCtl)
     ctl
   }
 }

@@ -118,12 +118,12 @@ class PhyTestRegsIO(
   // gated off and only then is the clock let back in; that is what restarts
   // all of them on a common edge. The tile dividers take it with no clock
   // present, which is the whole point of the sequence.
-  val txDivRst = Input(Bool())
+  val txDividerRst = Input(Bool())
   // Resets the TX datapath: the serdes handoff registers and the PHY side of
   // the async queue, all of which live on the TX divided clock. Synchronized
   // to that clock in the PHY, so it applies and releases cleanly. Does not
   // touch the FSM, and does not stop a clock divider.
-  val txRst = Input(Bool())
+  val txDatapathRst = Input(Bool())
   // Resets the TX FSM (i.e. resetting the number of bits sent to 0, reseeding the LFSR,
   // and stopping any in-progress transmissions).
   val txFsmRst = Input(Bool())
@@ -178,14 +178,14 @@ class PhyTestRegsIO(
   // `txValidLaneSel`, and selected independently of it: this die's
   // `rxValidLaneSel` has to match whatever the partner die transmits valid on.
   val rxValidLaneSel = Input(UInt(Phy.validLaneSelWidth(numLanes).W))
-  // The RX counterpart of `txDivRst`: the global RX divider and each RX
+  // The RX counterpart of `txDividerRst`: the global RX divider and each RX
   // tile's. Separate so one direction can be retimed without disturbing the
   // other.
-  val rxDivRst = Input(Bool())
+  val rxDividerRst = Input(Bool())
   // Resets the RX datapath: the deserializer handoff registers and the PHY
   // side of the async queue, both on the RX divided clock. Synchronized to
   // that clock in the PHY. Does not touch the FSM or any clock divider.
-  val rxRst = Input(Bool())
+  val rxDatapathRst = Input(Bool())
   // Resets the RX FSM (i.e. resetting the number of bits received and the offset within the output
   // buffer to 0).
   val rxFsmRst = Input(Bool())
@@ -293,10 +293,10 @@ class PhyTestIO(
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
   val debug = Flipped(new PhyDebugIO(numLanes))
-  val txResetb = Output(AsyncReset())
-  val rxResetb = Output(AsyncReset())
-  val txRst = Output(Bool())
-  val rxRst = Output(Bool())
+  val txDividerRstb = Output(AsyncReset())
+  val rxDividerRstb = Output(AsyncReset())
+  val txDatapathRst = Output(Bool())
+  val rxDatapathRst = Output(Bool())
 
   // BUMP INTERFACE
   // ====================
@@ -395,25 +395,26 @@ class PhyTest(
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
 
   // The clock dividers -- the global ones in the PHY and the one inside every
-  // tile -- come off the main reset and `divRst`, nothing else. They all
-  // release together, which is what fixes the phase between a tile's load edge
-  // and the divided clock words are handed over on. `txRst`/`rxRst` do not
-  // reach them, so a datapath restart leaves that phase alone.
+  // tile -- come off the main reset and the divider resets, nothing else. They
+  // all release together, which is what fixes the phase between a tile's load
+  // edge and the divided clock words are handed over on. The datapath resets
+  // do not reach them, so a datapath restart leaves that phase alone.
   //
-  // `divRst` exists for the case that phase has to be re-established: gate the
-  // TX clock, assert it, release it, then ungate. Every divider is reset with
-  // no clock present and restarts on the same first edge afterwards.
-  val phyTxRstb = (!(reset.asBool || io.regs.txDivRst)).asAsyncReset
-  val phyRxRstb = (!(reset.asBool || io.regs.rxDivRst)).asAsyncReset
-  io.txResetb := phyTxRstb
-  io.rxResetb := phyRxRstb
+  // The divider resets exist for the case that phase has to be re-established:
+  // gate the TX clock, assert one, release it, then ungate. Every divider is
+  // reset with no clock present and restarts on the same first edge
+  // afterwards.
+  val txDividerRstb = (!(reset.asBool || io.regs.txDividerRst)).asAsyncReset
+  val rxDividerRstb = (!(reset.asBool || io.regs.rxDividerRst)).asAsyncReset
+  io.txDividerRstb := txDividerRstb
+  io.rxDividerRstb := rxDividerRstb
 
-  // `txRst` restarts the TX and `rxRst` the RX. Neither stops a divider: they
-  // reset the logic on the divided clock, the async queue's PHY side included,
-  // while that clock keeps running, so a strobe actually flushes the datapath
-  // instead of freezing it.
-  io.txRst := io.regs.txRst
-  io.rxRst := io.regs.rxRst
+  // `txDatapathRst` restarts the TX and `rxDatapathRst` the RX. Neither stops a
+  // divider: they reset the logic on the divided clock, the async queue's PHY
+  // side included, while that clock keeps running, so a strobe actually
+  // flushes the datapath instead of freezing it.
+  io.txDatapathRst := io.regs.txDatapathRst
+  io.rxDatapathRst := io.regs.rxDatapathRst
 
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
@@ -481,9 +482,9 @@ class PhyTest(
   ): (DecoupledIO[UInt], TxLane) = {
     val lane = Module(new TxLane)
     lane.suggestName(name)
-    // The tile's divider reset is active high, `phyTxRstb` active low. Main
+    // The tile's divider reset is active high, `txDividerRstb` active low. Main
     // reset only, like every other divider.
-    lane.io.rst := (!phyTxRstb.asBool).asAsyncReset
+    lane.io.rst := (!txDividerRstb.asBool).asAsyncReset
     lane.io.clk := io.debug.txClk
     lane.io.ctl := ctl.tile
 
@@ -492,7 +493,7 @@ class PhyTest(
     // their words on.
     val divRstSync = Module(new RstSync)
     divRstSync.suggestName(s"${name}_div_rst_sync")
-    divRstSync.io.rstbAsync := !(reset.asBool || io.regs.txRst)
+    divRstSync.io.rstbAsync := !(reset.asBool || io.regs.txDatapathRst)
     divRstSync.io.clk := io.debug.txDivClk
 
     val fifo = Module(new AsyncQueue(UInt(Phy.SerdesRatio.W), queueParams))
@@ -619,21 +620,21 @@ class PhyTest(
 
   val rxLoopbackLane = Module(new RxDataLane)
   rxLoopbackLane.suggestName("rxloopback")
-  RxAfeCtl.connect(rxLoopbackLane.io.ctl, io.regs.loopbackRxctl)
+  RxAfeCtl.connect(rxLoopbackLane, io.regs.loopbackRxctl)
   rxLoopbackLane.io.din := txLoopbackLane.io.dout
   // Sampled with the clock that shifted the data out, the way a mainband RX
   // lane is sampled with the clock the partner die's TX forwarded.
   rxLoopbackLane.io.clk := io.debug.txClk
-  rxLoopbackLane.io.resetb := phyRxRstb
+  rxLoopbackLane.io.rstb := rxDividerRstb
 
   val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
   rxLoopbackShuffler.suggestName("rxloopback_shuffler")
-  rxLoopbackShuffler.io.din := rxLoopbackLane.io.dout
+  rxLoopbackShuffler.io.din := rxLoopbackLane.io.dout.asUInt
   rxLoopbackShuffler.io.permutation := io.regs.loopbackRxctl.shuffler
 
   val rxLoopbackRstSync = Module(new RstSync)
   rxLoopbackRstSync.suggestName("rxloopback_div_rst_sync")
-  rxLoopbackRstSync.io.rstbAsync := !(reset.asBool || io.regs.rxRst)
+  rxLoopbackRstSync.io.rstbAsync := !(reset.asBool || io.regs.rxDatapathRst)
   rxLoopbackRstSync.io.clk := rxLoopbackLane.io.divclk.asClock
 
   val rxLoopbackFifo = Module(
