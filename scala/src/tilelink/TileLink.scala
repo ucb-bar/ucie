@@ -279,6 +279,8 @@ class UcieClkRegs(
       val freqSel = Input(UInt(4.W))
       // Per-PLL lock out of the clocking tile, in `mainClkSel` order.
       val pllLock = Input(UInt(3.W))
+      // Holds the rest of the UCIe block in reset. See `ucieRstReq`.
+      val ucieRst = Output(Bool())
     })
 
     // Reset defaults describe a part that has been told nothing: the digital
@@ -309,7 +311,7 @@ class UcieClkRegs(
           RegInit(0.U(ClockingTile.txClkPhaseWidth.W)),
           RegInit(2.U(ClockingTile.digClkDivWidth.W)),
           RegInit(true.B),
-          RegInit(0.U(ClockingTile.phaseSelWidth.W)),
+          RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W)),
           RegInit(true.B),
           RegInit(true.B)
         )
@@ -443,6 +445,30 @@ class UcieClkRegs(
     // in the sequencer. Cleared by the sequencer once it has been acted on.
     val ungateReq = withClockAndReset(clock, reset) { RegInit(false.B) }
 
+    // Resets everything in the UCIe block except this register file.
+    //
+    // At chip reset the clocking is whatever the reset defaults describe,
+    // which need not be what the part is actually wired for -- so the rest of
+    // the block comes up on a clock it may have no business running on. This
+    // register is how software puts it back: configure the clocking here,
+    // where the registers survive because they run on the chip's own digital
+    // clock and reset, then assert and release this to start the rest of the
+    // block cleanly on the clock it now has.
+    //
+    // It reaches the PHY's root reset, so it takes the PHY, PhyTest, the UCIe
+    // controller, both register-facing FIFO ends and `UcieTLRegs` with it. The
+    // configuration in `UcieTLRegs` does not survive, which is why this comes
+    // before that block is set up rather than after.
+    //
+    // It is a bringup control, not something to reach for while the link is
+    // carrying traffic. `UcieTLRegs` sits behind the same crossbar this block
+    // does but in the reset's own domain, so a register access in flight to it
+    // when the reset lands never gets its response and wedges the crossbar;
+    // the mainband TileLink path crosses into that domain too. Assert it with
+    // both quiet. `setup_ucie` calls it first, before either has started.
+    val ucieRstReq = withClockAndReset(clock, reset) { RegInit(false.B) }
+    io.ucieRst := ucieRstReq
+
     val applyReq = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyBusy = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyCount = withClockAndReset(clock, reset) {
@@ -545,7 +571,8 @@ class UcieClkRegs(
         toRegFieldRw(ungateSrc, "clkCfgUngateSrc"),
         toRegFieldRw(ungateDelay, "clkCfgUngateDelay"),
         toRegFieldRw(ungateReq, "clkCfgUngateReq"),
-        toRegFieldR(pllLockSync, "pllLockObserved")
+        toRegFieldR(pllLockSync, "pllLockObserved"),
+        toRegFieldRw(ucieRstReq, "ucieRst")
       ).zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) } ++
         (0 until UcieClkRegs.rateCfgs).map { r =>
           ((UcieClkRegs.rateCfgBase + r) * 8) -> Seq(
@@ -618,6 +645,11 @@ object UcieClkRegs {
 
   /** Width of `clkCfgUngateDelay`, in cycles of this block's clock. */
   val ungateDelayWidth = 16
+
+  /** Every tap of the global delay line switched on, which is where it comes
+    * up: the longest code, not the shortest. Training moves it from there.
+    */
+  val maxPhaseSel = (BigInt(1) << ClockingTile.phaseSelWidth) - 1
 
   /** What `ClkUngateSrc.delay` counts out unless software says otherwise.
     * Sized to clear a PLL wake-up with room to spare at any plausible chip
@@ -1298,7 +1330,11 @@ class UcieTL(
     // PHY
     val phy = Module(new Phy(params.numLanes)(params.includeDefaultModels))
     io.phy <> phy.io.top
-    phy.io.clkRst.reset := digitalClockNode.in(0)._1.reset
+    // The block reset, plus the software one that outlives it. Assertion is
+    // asynchronous to every domain behind it and release is synchronized by
+    // the same reset synchronizers the block reset already goes through.
+    phy.io.clkRst.reset :=
+      digitalClockNode.in(0)._1.reset.asBool || clkRegs.module.io.ucieRst
     chipClockSourceNode.out(0)._1.clock := chipDigitalClockNode.in(0)._1.clock
     chipClockSourceNode.out(0)._1.reset := chipDigitalClockNode.in(0)._1.reset
     ucieDigitalClockNode.out(0)._1.clock := phy.io.clkRst.ucieClk

@@ -1037,6 +1037,24 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
+  /** Resets everything in the UCIe block except the clocking registers.
+    *
+    * The clocking registers run on the chip's own digital clock and reset, so
+    * they survive this and can be set up first -- which is the point. At chip
+    * reset the rest of the block comes up on whatever clocking the defaults
+    * describe, which need not be what the part is wired for; this is how
+    * software restarts it once the clocking is right.
+    *
+    * Everything in `UcieTLRegs` goes with it, so this belongs before that
+    * block is configured, not after.
+    */
+  def formatResetUcieFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("ucieRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("ucieRst", f.formatLong(0)))
+    f.formatFn("reset_ucie", body.toString)
+  }
+
   /** Opens the clock gate by hand, ending an apply that is still waiting.
     *
     * What `clkUngateSrcMmio` is for, and honoured whatever the source is: a
@@ -1257,6 +1275,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   def formatSetupUcieFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
+
+    // The clocking is left at its reset defaults here -- the analog bypass
+    // pin, no division -- which is what a testbench drives. Restart the rest
+    // of the block on it before configuring anything, so nothing below is
+    // written to a block that came up on clocking it should not have.
+    body.append(f.formatFnCall("reset_ucie"))
 
     {
       val loopBody = new StringBuilder
@@ -1810,6 +1834,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatApplyClkCfgFn())
     sb.append(formatSetUngateSrcFn())
     sb.append(formatReleaseClkGateFn())
+    sb.append(formatResetUcieFn())
     sb.append(formatSetMainClkFn())
     sb.append(formatSetTxPhaseFn())
     sb.append(formatUseInternalClkFn())
@@ -1895,6 +1920,7 @@ object GenUcieHeader {
     sb.append(cg.formatApplyClkCfgFn())
     sb.append(cg.formatSetUngateSrcFn())
     sb.append(cg.formatReleaseClkGateFn())
+    sb.append(cg.formatResetUcieFn())
     sb.append(cg.formatSetMainClkFn())
     sb.append(cg.formatSetTxPhaseFn())
     sb.append(cg.formatUseInternalClkFn())

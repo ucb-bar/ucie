@@ -51,6 +51,14 @@ abstract class TestDriver extends ExtModule {
 }
 
 abstract class SVTestDriver extends TestDriver {
+
+  /** Half period of the analog bypass clock, in ps. 62.5 is 8 GHz, which with
+    * no division is 16 GT/s -- the rate every test here ran at before there
+    * was a reason to pick another. A driver overrides it to sit the part at a
+    * different rate without touching the design's reset defaults.
+    */
+  def bypassHalfPeriodPs: Double = 62.5
+
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
@@ -266,7 +274,7 @@ ${Codegen.indent(moduleItems)}
   initial ucieSidebandBypassClock = 1'b0;
   initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
-  always #62.5 ucieBypassClock = ~ucieBypassClock;
+  always #${bypassHalfPeriodPs} ucieBypassClock = ~ucieBypassClock;
   always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
   // 800 MHz sideband bypass.
   always #625 ucieSidebandBypassClock = ~ucieSidebandBypassClock;
@@ -423,6 +431,8 @@ module ScalaTestDriver(
   output reg digitalClock,
   output reg ucieBypassClock,
   output reg ucieDigitalBypassClock,
+  output reg ucieSidebandBypassClock,
+  output reg ucieRefClock,
   output reg reset
 );
   initial digitalClock = 1'b0;
@@ -583,6 +593,8 @@ class ScalaSimTop[T <: ScalaTestDriver](
     )
     ucie_harness.io.ucieBypassClock := drv.ucieBypassClock
     ucie_harness.io.ucieDigitalBypassClock := drv.ucieDigitalBypassClock
+    ucie_harness.io.ucieSidebandBypassClock := drv.ucieSidebandBypassClock
+    ucie_harness.io.ucieRefClock := drv.ucieRefClock
   }
 }
 
@@ -808,6 +820,266 @@ end
   * the counters is the lane's real error rate rather than an artifact of where
   * the capture happened to start.
   */
+/** SystemVerilog shared by every driver that scores a sweep: the per-lane
+  * framing result, the task that reads it out of `PhyTest`, and the run
+  * length helper the eye reports use.
+  *
+  * One copy because these sweeps have to stay comparable -- a definition that
+  * drifted in one of them would quietly make its eye mean something else.
+  */
+object TestDriverItems {
+  val scoring: String = """
+// Which framing, if any, read clean for each scored lane at the last
+// measurement: 0 nominal, 1 a UI early, 2 a UI late, 3 real bit errors,
+// 4 the lane received nothing.
+integer lane_framing[`TRAIN_SCORE_LANES];
+
+// Reads every scored lane's three bit error counters under one counter pause.
+//
+// The three differ only in where the pattern is assumed to have started: the
+// receiver frames on the valid lane's edge, so a valid bit that was itself
+// mis-sampled leaves the whole capture a UI out of step and pins the nominal
+// count near half the bits received. Whichever framing reads zero is the one
+// that was right.
+task automatic score_lanes();
+  begin
+    reg [63:0] packets;
+    reg [63:0] nominal;
+    reg [63:0] early;
+    reg [63:0] late;
+    reg [63:0] sent;
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
+    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + l * `RX_BIT_ERRORS_WIDTH, nominal);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY + l * `RX_BIT_ERRORS_EARLY_WIDTH, early);
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE + l * `RX_BIT_ERRORS_LATE_WIDTH, late);
+      // A re-framed capture is recognised by its error count collapsing
+      // relative to the nominal one, not by reaching exactly zero. A lane that
+      // has slipped a UI is usually also sampling near the edge that it slipped
+      // across, so some of its bits are genuinely corrupted on top of the slip
+      // and no framing scores clean: at one tap either side of the boundary the
+      // right framing lands around a tenth of the nominal count, not at zero.
+      // Testing for zero bins that alongside a total failure and hides the very
+      // effect these counters exist to show.
+      if (packets < `TRAIN_PACKETS) lane_framing[l] = 4;
+      else if (nominal == 64'h0) lane_framing[l] = 0;
+      else if (early * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 1;
+      else if (late * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 2;
+      else lane_framing[l] = 3;
+      // A witness lane's raw counts. Classifying each framing as clean or not
+      // throws away the thing worth knowing: whether a framing that is not
+      // exactly zero is nonetheless far below the nominal count, which is what
+      // a one UI slip resolved by re-framing looks like.
+      if (l == 0) begin
+        // `TX_PACKETS_SENT` alongside the RX count: a shortfall that shows up
+        // on both is the transmitter not sending, one that shows up only here
+        // is the receiver not counting what was sent.
+        `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
+        $display("          lane 0: %0d packets (tx sent %0d), nominal %0d, early %0d, late %0d",
+                 packets, sent, nominal, early, late);
+      end
+    end
+    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
+  end
+endtask
+
+// One character per scored lane -- the data lanes, then valid last, so the
+// string is one longer than the counts the sweeps print. Shown only when a
+// point needed something other than the nominal framing or failed outright.
+// `.` nominal, `e` a UI early, `l` a UI late, `x` real errors, `-` nothing
+// received.
+task automatic report_framing();
+  begin
+    string marks;
+    bit interesting;
+    marks = "";
+    interesting = 1'b0;
+    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
+      case (lane_framing[l])
+        0: marks = {marks, "."};
+        1: begin marks = {marks, "e"}; interesting = 1'b1; end
+        2: begin marks = {marks, "l"}; interesting = 1'b1; end
+        3: begin marks = {marks, "x"}; interesting = 1'b1; end
+        default: begin marks = {marks, "-"}; interesting = 1'b1; end
+      endcase
+    end
+    if (interesting) $display("          framing: %s", marks);
+  end
+endtask
+
+// Longest run of consecutive clean codes in `score`, as a start index and a
+// length. That run is the eye, and its middle is the code to train to.
+task automatic longest_run(
+  input integer score[],
+  input integer n,
+  output integer start,
+  output integer len
+);
+  begin
+    integer run_start;
+    integer run_len;
+    start = 0;
+    len = 0;
+    run_start = 0;
+    run_len = 0;
+    for (int i = 0; i < n; i++) begin
+      if (score[i] == 1) begin
+        if (run_len == 0) run_start = i;
+        run_len = run_len + 1;
+      end else begin
+        run_len = 0;
+      end
+      if (run_len > len) begin
+        len = run_len;
+        start = run_start;
+      end
+    end
+  end
+endtask
+          """.trim
+}
+
+/** Coarse eye at 4 Gb/s with the quadrature the divider makes.
+  *
+  * The bypass pin runs at twice the main clock, so /2 lands TXCLK at 2 GHz and
+  * the lane at 4 Gb/s. Dividing by two gives the shifter a span of four main
+  * clock half cycles, and each of those is 125 ps -- half a UI at this rate --
+  * so the four coarse positions walk two whole UI on their own, and the global
+  * delay line only has to fill in between them.
+  */
+class EyeLowRateDividerTestDriver extends SVTestDriver {
+
+  /** 4 GHz: twice the 2 GHz main clock /2 produces. */
+  override def bypassHalfPeriodPs: Double = 125.0
+
+  setStimulus(
+    "EyeLowRateDividerTestDriver",
+    """
+begin : eye_lowrate_div
+  integer open_points, total_points;
+  integer clean_any;
+  string row;
+
+  setup_ucie();
+  seed_lfsrs();
+
+  // 4 GHz bypass /2 -> TXCLK 2 GHz -> 4 Gb/s a lane.
+  set_main_clk(3, 1);
+
+  $display("Coarse eye at 4 Gb/s, quadrature from the /2 divider");
+  $display("  4 coarse positions of 125 ps (half a UI), 8 fine of 8 ps");
+
+  row = "";
+  open_points = 0;
+  total_points = 0;
+  for (int c = 0; c < 4; c++) begin
+    set_tx_phase(c);
+    for (int fi = 0; fi < 8; fi++) begin
+      set_clk_gate(0);
+      set_global_delay(fi * 8);
+      set_clk_gate(1);
+      run_lfsr(`TRAIN_PACKETS);
+      run_lfsr(`TRAIN_PACKETS);
+      score_lanes();
+      clean_any = 0;
+      for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+        if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+      row = {row, clean_any == `TRAIN_DATA_LANES ? "#" : "."};
+      if (clean_any == `TRAIN_DATA_LANES) open_points = open_points + 1;
+      total_points = total_points + 1;
+    end
+  end
+
+  $display("  4 Gb/s, divider quadrature: %s  %0d/%0d open",
+           row, open_points, total_points);
+
+  // Two UI of travel, so an open stretch and a shut one both have to appear.
+  // All open or all shut means the phase is not being resolved at all.
+  assert(open_points > 0)
+    else $fatal(1, "4 Gb/s /2: nothing samples cleanly, so the sweep never found the eye");
+  assert(open_points < total_points)
+    else $fatal(1, "4 Gb/s /2: everything samples cleanly, so the eye is not being resolved");
+
+  $display("TEST PASSED");
+end
+    """.trim,
+    moduleItems = TestDriverItems.scoring
+  )
+}
+
+/** Coarse eye at 4 Gb/s with nothing but the global delay line.
+  *
+  * The bypass pin runs at the main clock, so /1 already puts the lane at
+  * 4 Gb/s and the divider has no quadrature to give -- a span of two half
+  * cycles is 0 and 180 degrees with nothing between. That leaves the global
+  * delay line as the only way to move the sampling point, and its 64 taps of
+  * 1 ps cover 64 ps against a 250 ps UI.
+  *
+  * So this is the case expected to fall short, and the test says so rather
+  * than pretending otherwise: it checks the link runs and reports how much of
+  * a UI the line reaches. It is the measurement that argues for the divider
+  * based shifter, which is why it is worth keeping.
+  */
+class EyeLowRateDelayTestDriver extends SVTestDriver {
+
+  /** 2 GHz: the main clock itself, undivided. */
+  override def bypassHalfPeriodPs: Double = 250.0
+
+  setStimulus(
+    "EyeLowRateDelayTestDriver",
+    """
+begin : eye_lowrate_delay
+  integer open_points, total_points;
+  integer clean_any;
+  string row;
+
+  setup_ucie();
+  seed_lfsrs();
+
+  // 2 GHz bypass /1 -> TXCLK 2 GHz -> 4 Gb/s a lane.
+  set_main_clk(3, 0);
+  // No coarse shift: the delay line is the whole of the sweep.
+  set_tx_phase(0);
+
+  $display("Coarse eye at 4 Gb/s, global delay line only, no quadrature");
+  $display("  16 fine positions of 4 ps: 64 ps against a 250 ps UI, about a quarter of one");
+
+  row = "";
+  open_points = 0;
+  total_points = 0;
+  for (int fi = 0; fi < 16; fi++) begin
+    set_clk_gate(0);
+    set_global_delay(fi * 4);
+    set_clk_gate(1);
+    run_lfsr(`TRAIN_PACKETS);
+    run_lfsr(`TRAIN_PACKETS);
+    score_lanes();
+    clean_any = 0;
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
+    row = {row, clean_any == `TRAIN_DATA_LANES ? "#" : "."};
+    if (clean_any == `TRAIN_DATA_LANES) open_points = open_points + 1;
+    total_points = total_points + 1;
+  end
+
+  $display("  4 Gb/s, delay line only: %s  %0d/%0d open", row, open_points, total_points);
+
+  // Only that the link runs somewhere in the line's reach. Whether the row is
+  // solid is the result, not a failure: 64 ps cannot walk a 250 ps UI, and a
+  // solid row is that limitation showing rather than a broken sweep.
+  assert(open_points > 0)
+    else $fatal(1, "4 Gb/s /1: nothing samples cleanly anywhere in the delay line's 64 ps");
+  if (open_points == total_points)
+    $display("  (solid: 64 ps never reaches an edge at this rate, so the divider based shifter is what covers the rest of the UI)");
+
+  $display("TEST PASSED");
+end
+    """.trim,
+    moduleItems = TestDriverItems.scoring
+  )
+}
+
 class EyeDiagramTestDriver extends SVTestDriver {
   setStimulus(
     "EyeDiagramTestDriver",
@@ -1202,116 +1474,7 @@ begin : train
   $display("TEST PASSED");
 end
           """.trim,
-    moduleItems = """
-// Which framing, if any, read clean for each scored lane at the last
-// measurement: 0 nominal, 1 a UI early, 2 a UI late, 3 real bit errors,
-// 4 the lane received nothing.
-integer lane_framing[`TRAIN_SCORE_LANES];
-
-// Reads every scored lane's three bit error counters under one counter pause.
-//
-// The three differ only in where the pattern is assumed to have started: the
-// receiver frames on the valid lane's edge, so a valid bit that was itself
-// mis-sampled leaves the whole capture a UI out of step and pins the nominal
-// count near half the bits received. Whichever framing reads zero is the one
-// that was right.
-task automatic score_lanes();
-  begin
-    reg [63:0] packets;
-    reg [63:0] nominal;
-    reg [63:0] early;
-    reg [63:0] late;
-    reg [63:0] sent;
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
-    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, packets);
-    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
-      `READ_UCIE(regDrv, `RX_BIT_ERRORS + l * `RX_BIT_ERRORS_WIDTH, nominal);
-      `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY + l * `RX_BIT_ERRORS_EARLY_WIDTH, early);
-      `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE + l * `RX_BIT_ERRORS_LATE_WIDTH, late);
-      // A re-framed capture is recognised by its error count collapsing
-      // relative to the nominal one, not by reaching exactly zero. A lane that
-      // has slipped a UI is usually also sampling near the edge that it slipped
-      // across, so some of its bits are genuinely corrupted on top of the slip
-      // and no framing scores clean: at one tap either side of the boundary the
-      // right framing lands around a tenth of the nominal count, not at zero.
-      // Testing for zero bins that alongside a total failure and hides the very
-      // effect these counters exist to show.
-      if (packets < `TRAIN_PACKETS) lane_framing[l] = 4;
-      else if (nominal == 64'h0) lane_framing[l] = 0;
-      else if (early * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 1;
-      else if (late * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 2;
-      else lane_framing[l] = 3;
-      // A witness lane's raw counts. Classifying each framing as clean or not
-      // throws away the thing worth knowing: whether a framing that is not
-      // exactly zero is nonetheless far below the nominal count, which is what
-      // a one UI slip resolved by re-framing looks like.
-      if (l == 0) begin
-        // `TX_PACKETS_SENT` alongside the RX count: a shortfall that shows up
-        // on both is the transmitter not sending, one that shows up only here
-        // is the receiver not counting what was sent.
-        `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
-        $display("          lane 0: %0d packets (tx sent %0d), nominal %0d, early %0d, late %0d",
-                 packets, sent, nominal, early, late);
-      end
-    end
-    `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
-  end
-endtask
-
-// One character per scored lane -- the data lanes, then valid last, so the
-// string is one longer than the counts the sweeps print. Shown only when a
-// point needed something other than the nominal framing or failed outright.
-// `.` nominal, `e` a UI early, `l` a UI late, `x` real errors, `-` nothing
-// received.
-task automatic report_framing();
-  begin
-    string marks;
-    bit interesting;
-    marks = "";
-    interesting = 1'b0;
-    for (int l = 0; l < `TRAIN_SCORE_LANES; l++) begin
-      case (lane_framing[l])
-        0: marks = {marks, "."};
-        1: begin marks = {marks, "e"}; interesting = 1'b1; end
-        2: begin marks = {marks, "l"}; interesting = 1'b1; end
-        3: begin marks = {marks, "x"}; interesting = 1'b1; end
-        default: begin marks = {marks, "-"}; interesting = 1'b1; end
-      endcase
-    end
-    if (interesting) $display("          framing: %s", marks);
-  end
-endtask
-
-// Longest run of consecutive clean codes in `score`, as a start index and a
-// length. That run is the eye, and its middle is the code to train to.
-task automatic longest_run(
-  input integer score[],
-  input integer n,
-  output integer start,
-  output integer len
-);
-  begin
-    integer run_start;
-    integer run_len;
-    start = 0;
-    len = 0;
-    run_start = 0;
-    run_len = 0;
-    for (int i = 0; i < n; i++) begin
-      if (score[i] == 1) begin
-        if (run_len == 0) run_start = i;
-        run_len = run_len + 1;
-      end else begin
-        run_len = 0;
-      end
-      if (run_len > len) begin
-        len = run_len;
-        start = run_start;
-      end
-    end
-  end
-endtask
-          """.trim
+    moduleItems = TestDriverItems.scoring
   )
 }
 
@@ -1601,6 +1764,32 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new EyeDiagramTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_measure_a_coarse_eye_at_each_rate",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    it(
+      "should measure a 4 Gbps eye with divider quadrature using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new EyeLowRateDividerTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_measure_a_4Gbps_eye_divider_quadrature",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    it(
+      "should measure a 4 Gbps eye with the delay line only using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new EyeLowRateDelayTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_measure_a_4Gbps_eye_delay_line_only",
         amsLevel = Some(AmsLevel.Eye)
       )
     }
