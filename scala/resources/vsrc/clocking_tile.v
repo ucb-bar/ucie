@@ -5,9 +5,9 @@
 //   off chip   RefClk          100 MHz, what the PLLs lock to
 //              BypassClk       the analog bypass clock, up to 12 GHz
 //              DigBypassClk    the digital bypass clock, 800 MHz
-//   on chip    pll1            8 GHz    ) each individually enabled, so an
-//              pll2            12 GHz   ) unselected one can be powered down
-//              pll3            16 GHz   )
+//   on chip    pll8            8 GHz    ) named for their output; each is
+//              pll12           12 GHz   ) individually enabled, so an
+//              pll16           16 GHz   ) unselected one can be powered down
 //
 // and derives from them:
 //
@@ -42,11 +42,11 @@
 module clocking_tile(
   // Global delay line on TXCLKQ, thermometer coded, 1 ps a tap.
   input [63:0] PhaseSel,
-  // 0 pll1 (8 GHz), 1 pll2 (12 GHz), 2 pll3 (16 GHz), 3 analog bypass pin.
+  // 0 pll8, 1 pll12, 2 pll16, 3 the analog bypass pin.
   input [1:0] MainClkSel,
-  input Pll1En,
-  input Pll2En,
-  input Pll3En,
+  input Pll8En,
+  input Pll12En,
+  input Pll16En,
   // 0 /1, 1 /2, 2 /4, 3 /8.
   input [1:0] TxClkDiv,
   // TXCLKQ's lead over TXCLK, in main clock half cycles, 0 to 2*div-1.
@@ -67,6 +67,11 @@ module clocking_tile(
   input DigBypassClk,
   input SbBypassClk,
   input BypassClk,
+  // High once a PLL has settled after being enabled. Low while it is off, and
+  // low from the moment it is enabled until it has had its wake-up time.
+  output Pll8Lock,
+  output Pll12Lock,
+  output Pll16Lock,
   output DigitalClk,
   output SbClk,
   output TxClkQ,
@@ -77,6 +82,10 @@ module clocking_tile(
   localparam real HALF_12G = 41.66667;
   localparam real HALF_16G = 31.25;
   localparam real PHASE_TAP_PS = 1.0;
+  // How long a PLL takes to settle once enabled. Short next to a real one so
+  // that a rate sweep does not dominate a run, long enough that an apply that
+  // ungates without waiting is visibly wrong.
+  parameter real PLL_LOCK_PS = 1000000.0;   // 1 us
 
   // ---- Three PLLs, each locking a half period to the reference ----
   real ref_last = -1.0;
@@ -86,24 +95,55 @@ module clocking_tile(
     ref_last = $realtime;
   end
 
-  reg pll1 = 1'b0, pll2 = 1'b0, pll3 = 1'b0;
+  reg pll8 = 1'b0, pll12 = 1'b0, pll16 = 1'b0;
   always begin
-    if (!Pll1En) @(Pll1En);
-    else #(ref_period / 160.0) pll1 = ~pll1;   // x80
+    if (!Pll8En) @(Pll8En);
+    else #(ref_period / 160.0) pll8 = ~pll8;   // x80
   end
   always begin
-    if (!Pll2En) @(Pll2En);
-    else #(ref_period / 240.0) pll2 = ~pll2;   // x120
+    if (!Pll12En) @(Pll12En);
+    else #(ref_period / 240.0) pll12 = ~pll12;   // x120
   end
   always begin
-    if (!Pll3En) @(Pll3En);
-    else #(ref_period / 320.0) pll3 = ~pll3;   // x160
+    if (!Pll16En) @(Pll16En);
+    else #(ref_period / 320.0) pll16 = ~pll16;   // x160
   end
 
+  // ---- Lock ----
+  // A PLL reports lock `PLL_LOCK_PS` after being enabled and drops it the
+  // instant it is switched off. Losing lock while running is not modelled;
+  // what this is for is the wake-up wait, which is the one an apply has to
+  // hold the clock gate across.
+  //
+  // The blocking delay also holds off a re-trigger, so an enable that is
+  // withdrawn mid wake-up resolves to whatever `PllNEn` reads by then, which
+  // is zero.
+  reg pll8Locked = 1'b0;
+  always @(posedge Pll8En) begin
+    #(PLL_LOCK_PS) pll8Locked = Pll8En;
+  end
+  always @(negedge Pll8En) pll8Locked = 1'b0;
+
+  reg pll12Locked = 1'b0;
+  always @(posedge Pll12En) begin
+    #(PLL_LOCK_PS) pll12Locked = Pll12En;
+  end
+  always @(negedge Pll12En) pll12Locked = 1'b0;
+
+  reg pll16Locked = 1'b0;
+  always @(posedge Pll16En) begin
+    #(PLL_LOCK_PS) pll16Locked = Pll16En;
+  end
+  always @(negedge Pll16En) pll16Locked = 1'b0;
+
+  assign Pll8Lock = pll8Locked;
+  assign Pll12Lock = pll12Locked;
+  assign Pll16Lock = pll16Locked;
+
   // ---- Main clock ----
-  wire main_clk = (MainClkSel == 2'd0) ? pll1 :
-                  (MainClkSel == 2'd1) ? pll2 :
-                  (MainClkSel == 2'd2) ? pll3 : BypassClk;
+  wire main_clk = (MainClkSel == 2'd0) ? pll8 :
+                  (MainClkSel == 2'd1) ? pll12 :
+                  (MainClkSel == 2'd2) ? pll16 : BypassClk;
 
   // ---- Main clock divider and phase shifter ----
   // Continuous assignments rather than an `always @(*)`: these have to be

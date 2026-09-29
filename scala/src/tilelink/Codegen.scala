@@ -399,6 +399,11 @@ object Codegen {
     */
   val trainPollTries: Int = 16
 
+  /** Reads of `clkCfgBusy` an apply is given to finish. Has to cover the
+    * ungate wait, which is a PLL wake-up rather than a handful of cycles.
+    */
+  val applyPollTries: Int = 256
+
   val ucieParams: UcieTLParams = UcieTLParams()
 
   /** Elaborates UcieTL with `params` and returns its register map.
@@ -748,7 +753,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainVrefCodes", BigInt(Codegen.trainVrefCodes)),
         ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
         ("trainPackets", BigInt(Codegen.trainPackets)),
-        ("trainSlipRatio", BigInt(Codegen.trainSlipRatio))
+        ("trainSlipRatio", BigInt(Codegen.trainSlipRatio)),
+        ("clkUngateSrcPllLock", ClkUngateSrc.pllLock.litValue),
+        ("clkUngateSrcMmio", ClkUngateSrc.mmio.litValue),
+        ("clkUngateSrcDelay", ClkUngateSrc.delay.litValue)
       )
     ) {
       sb.append(
@@ -932,7 +940,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * that realise it. It is software's to fill because how a part is clocked is
     * a bringup question -- which PLL serves which rate, or whether a bypass pin
     * does instead -- rather than something fixed in the RTL. An entry left at
-    * zero selects PLL1 with no PLL enabled, which is to say a rate the part has
+    * zero selects PLL8 with no PLL enabled, which is to say a rate the part has
     * not been told how to reach.
     *
     * Fields are packed as the bundle declares them, most significant first:
@@ -982,19 +990,79 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
+  /** Hands a written configuration to the tile.
+    *
+    * Nothing written above reaches the clocking tile on its own: the registers
+    * are a shadow copy, and this is what moves them across. The sequencer shuts
+    * the clock gate, switches under it, waits out the new source's wake-up, and
+    * lets the clocks back out -- so a caller neither gates nor waits by hand.
+    *
+    * Polls `clkCfgBusy` rather than counting, because the wait is as long as
+    * the selected PLL takes to lock.
+    */
+  def formatApplyClkCfgFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkCfgApply", f.formatLong(1)))
+    val pollBody = new StringBuilder
+    pollBody.append(
+      f.formatReadReg(
+        "regDrv",
+        "busy",
+        f.formatConstantRef("clkCfgBusy"),
+        declareVar = true
+      )
+    )
+    pollBody.append(f.formatIfStmt("busy == 0", f.breakStmt()))
+    body.append(f.formatForLoop("w", Codegen.applyPollTries, pollBody.toString))
+    f.formatFn("apply_clk_cfg", body.toString)
+  }
+
+  /** Picks what releases the clock gate at the end of an apply.
+    *
+    * `clkUngateSrcPllLock` opens the gate as soon as the PLL `mainClkSel`
+    * names reports lock -- and at once if the analog bypass pin is selected,
+    * which has no lock to report. `clkUngateSrcDelay` holds it for `delay`
+    * cycles of the register block's clock instead, for a part whose lock is
+    * not trustworthy or not wired. `clkUngateSrcMmio` holds it until
+    * `release_clk_gate` is called. `delay` is ignored by the other two.
+    */
+  def formatSetUngateSrcFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkCfgUngateSrc", "src"))
+    body.append(formatWriteNamedReg("clkCfgUngateDelay", "delay"))
+    f.formatFn(
+      "set_ungate_src",
+      body.toString,
+      args = Seq(Arg("src", Datatype.Long), Arg("delay", Datatype.Long))
+    )
+  }
+
+  /** Opens the clock gate by hand, ending an apply that is still waiting.
+    *
+    * What `clkUngateSrcMmio` is for, and honoured whatever the source is: a
+    * PLL that will not lock or a delay set longer than intended can be
+    * recovered from without the sequencer carrying a hidden timeout.
+    */
+  def formatReleaseClkGateFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkCfgUngateReq", f.formatLong(1)))
+    f.formatFn("release_clk_gate", body.toString)
+  }
+
   /** Points the main clock at a source and sets the TX division.
     *
     * The lane rate follows the division, so this is what a sweep changes to
-    * walk the link across the rates the part supports. The clock is gated
-    * across the change: the divider and the phase shifter both move, and an
-    * edge in flight through either is an edge a lane divider may miscount.
+    * walk the link across the rates the part supports. The apply gates the
+    * clock across the change -- the divider and the phase shifter both move,
+    * and an edge in flight through either is an edge a lane divider may
+    * miscount -- and holds it shut until the new source has settled.
     */
   def formatSetMainClkFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
     body.append(formatWriteNamedReg("mainClkSel", "src"))
     body.append(formatWriteNamedReg("txClkDiv", "div"))
     body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "set_main_clk",
       body.toString,
@@ -1028,11 +1096,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("pll1En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("pll2En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("pll3En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll8En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll12En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("pll16En", f.formatLong(1)))
     body.append(formatWriteNamedReg("digClkDiv", "dig_div"))
     body.append(formatWriteNamedReg("digClkBypassEn", f.formatLong(0)))
+    body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "use_internal_clk",
       body.toString,
@@ -1738,6 +1807,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetClkGateFn())
     sb.append(formatSetRateCfgFn())
     sb.append(formatSetFreqSelAutoFn())
+    sb.append(formatApplyClkCfgFn())
+    sb.append(formatSetUngateSrcFn())
+    sb.append(formatReleaseClkGateFn())
     sb.append(formatSetMainClkFn())
     sb.append(formatSetTxPhaseFn())
     sb.append(formatUseInternalClkFn())
@@ -1820,6 +1892,9 @@ object GenUcieHeader {
     sb.append(cg.formatSetClkGateFn())
     sb.append(cg.formatSetRateCfgFn())
     sb.append(cg.formatSetFreqSelAutoFn())
+    sb.append(cg.formatApplyClkCfgFn())
+    sb.append(cg.formatSetUngateSrcFn())
+    sb.append(cg.formatReleaseClkGateFn())
     sb.append(cg.formatSetMainClkFn())
     sb.append(cg.formatSetTxPhaseFn())
     sb.append(cg.formatUseInternalClkFn())

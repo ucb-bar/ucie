@@ -197,9 +197,9 @@ class PhyClkRstIO extends Bundle {
   // block on the chip's own digital clock rather than in the one that runs on
   // `ucieClk` -- and it arrives here rather than through `PhyRegsIO`.
   val mainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
-  val pll1En = Input(Bool())
-  val pll2En = Input(Bool())
-  val pll3En = Input(Bool())
+  val pll8En = Input(Bool())
+  val pll12En = Input(Bool())
+  val pll16En = Input(Bool())
   val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
   val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
   val digClkDiv = Input(UInt(ClockingTile.digClkDivWidth.W))
@@ -218,6 +218,13 @@ class PhyClkRstIO extends Bundle {
   // the whole RX tree quiet rather than clocking lanes with nothing to
   // sample.
   val rxClkGateEn = Input(Bool())
+
+  // Per-PLL lock, straight out of the clocking tile. The register block waits
+  // on whichever one `mainClkSel` names before it lets a new configuration's
+  // clocks out.
+  val pll8Lock = Output(Bool())
+  val pll12Lock = Output(Bool())
+  val pll16Lock = Output(Bool())
 
   // UCIe digital clock (800 MHz).
   //
@@ -339,9 +346,9 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.BypassClk := bypassClkRx.io.Vout
   clkTile.io.PhaseSel := io.clkRst.clkPhaseSel
   clkTile.io.MainClkSel := io.clkRst.mainClkSel
-  clkTile.io.Pll1En := io.clkRst.pll1En
-  clkTile.io.Pll2En := io.clkRst.pll2En
-  clkTile.io.Pll3En := io.clkRst.pll3En
+  clkTile.io.Pll8En := io.clkRst.pll8En
+  clkTile.io.Pll12En := io.clkRst.pll12En
+  clkTile.io.Pll16En := io.clkRst.pll16En
   clkTile.io.TxClkDiv := io.clkRst.txClkDiv
   clkTile.io.TxClkPhase := io.clkRst.txClkPhase
   clkTile.io.DigClkDiv := io.clkRst.digClkDiv
@@ -351,6 +358,10 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbBypassClk := io.top.sidebandBypassClk
   clkTile.io.RefClk := io.top.refClk
+
+  io.clkRst.pll8Lock := clkTile.io.Pll8Lock
+  io.clkRst.pll12Lock := clkTile.io.Pll12Lock
+  io.clkRst.pll16Lock := clkTile.io.Pll16Lock
 
   io.clkRst.ucieClk := clkTile.io.DigitalClk
   io.clkRst.sbClk := clkTile.io.SbClk

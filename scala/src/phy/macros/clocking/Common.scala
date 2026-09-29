@@ -78,15 +78,23 @@ class ClockingTileIO extends Bundle {
   /** Global delay line on TXCLKQ, thermometer coded, 1 ps a tap. */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
 
-  /** Main clock source: 0 PLL1 (8 GHz), 1 PLL2 (12 GHz), 2 PLL3 (16 GHz), 3 the
-    * analog bypass pin.
+  /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL16, 3 the analog bypass pin.
+    * Each PLL is named for the clock it puts out, in GHz.
     */
   val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
 
   /** Per-PLL enables, so an unselected one can be powered down. */
-  val Pll1En = Input(Bool())
-  val Pll2En = Input(Bool())
-  val Pll3En = Input(Bool())
+  val Pll8En = Input(Bool())
+  val Pll12En = Input(Bool())
+  val Pll16En = Input(Bool())
+
+  /** Per-PLL lock. Low while a PLL is off and from the moment it is enabled
+    * until it has settled, so a configuration apply has something to hold the
+    * clock gate across rather than counting out a guess.
+    */
+  val Pll8Lock = Output(Bool())
+  val Pll12Lock = Output(Bool())
+  val Pll16Lock = Output(Bool())
 
   /** TX clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8. */
   val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
