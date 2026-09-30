@@ -2,8 +2,7 @@ package edu.berkeley.cs.uciedigital.phy.macros
 
 import chisel3._
 import chisel3.util._
-import chisel3.experimental.noPrefix
-
+import edu.berkeley.cs.uciedigital.phy.Phy
 
 object RxDataLane {
 
@@ -11,9 +10,6 @@ object RxDataLane {
     * the TX tile's so the two trims are programmed the same way.
     */
   val DelayTaps = 32
-
-  /** Bits the deserializer hands over at once. */
-  val SerdesRatio = 32
 
   /** Termination control pins on the macro. */
   val TerminationBits = 20
@@ -76,20 +72,21 @@ class RxLaneCtlIO extends Bundle {
   val vref_sel = UInt(7.W)
 }
 
-/** One UCIe RX data tile: termination, the reference ladder, the sampling
-  * front end, a local delay line on the sampling clock, and the 1:32
-  * deserializer.
+/** One UCIe RX data tile: termination, the reference ladder, the sampling front
+  * end, a local delay line on the sampling clock, and the 1:32 deserializer.
   *
   * This is the macro itself rather than a wrapper around it. Its buses are
-  * `Vec`s because the macro splits them into one pin per bit, and a `Vec`
-  * emits exactly that naming.
+  * `Vec`s because the macro splits them into one pin per bit, and a `Vec` emits
+  * exactly that naming.
   */
 class RxDataLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
     val din = Input(Bool())
-    val dout = Output(Vec(RxDataLane.SerdesRatio, Bool()))
+    // The deserializer hands over exactly what the serializer sent, so this
+    // is the link's ratio rather than a number of its own.
+    val dout = Output(Vec(Phy.SerdesRatio, Bool()))
     val divclk = Output(Bool())
     val clk = Input(Clock())
     val rstb = Input(AsyncReset())

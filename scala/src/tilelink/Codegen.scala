@@ -399,20 +399,20 @@ object Codegen {
     */
   val trainPollTries: Int = 16
 
-  /** Reads of `clkCfgBusy` an apply is given to finish. Has to cover the
-    * ungate wait, which is a PLL wake-up rather than a handful of cycles.
+  /** Reads of `clkCfgBusy` an apply is given to finish. Has to cover the ungate
+    * wait, which is a PLL wake-up rather than a handful of cycles.
     */
   val applyPollTries: Int = 256
 
-  /** Words the RX must have handled after a datapath reset before
-    * transmission starts.
+  /** Words the RX must have handled after a datapath reset before transmission
+    * starts.
     *
-    * A fixed delay is the wrong shape here: `rxDatapathRst` is released
-    * through a synchronizer clocked by the RX divided clock, so the release
-    * costs a fixed number of *that* clock's cycles and takes proportionally
-    * longer at every division. Waiting on the count of words the RX has
-    * actually handled is the same condition at every rate, and costs only as
-    * long as it needs to.
+    * A fixed delay is the wrong shape here: `rxDatapathRst` is released through
+    * a synchronizer clocked by the RX divided clock, so the release costs a
+    * fixed number of *that* clock's cycles and takes proportionally longer at
+    * every division. Waiting on the count of words the RX has actually handled
+    * is the same condition at every rate, and costs only as long as it needs
+    * to.
     */
   val rxSettleWords: Int = 4
 
@@ -1036,11 +1036,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   /** Picks what releases the clock gate at the end of an apply.
     *
-    * `clkUngateSrcPllLock` opens the gate as soon as the PLL `mainClkSel`
-    * names reports lock -- and at once if the analog bypass pin is selected,
-    * which has no lock to report. `clkUngateSrcDelay` holds it for `delay`
-    * cycles of the register block's clock instead, for a part whose lock is
-    * not trustworthy or not wired. `clkUngateSrcMmio` holds it until
+    * `clkUngateSrcPllLock` opens the gate as soon as the PLL `mainClkSel` names
+    * reports lock -- and at once if the analog bypass pin is selected, which
+    * has no lock to report. `clkUngateSrcDelay` holds it for `delay` cycles of
+    * the register block's clock instead, for a part whose lock is not
+    * trustworthy or not wired. `clkUngateSrcMmio` holds it until
     * `release_clk_gate` is called. `delay` is ignored by the other two.
     */
   def formatSetUngateSrcFn(): String = {
@@ -1062,8 +1062,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * describe, which need not be what the part is wired for; this is how
     * software restarts it once the clocking is right.
     *
-    * Everything in `UcieTLRegs` goes with it, so this belongs before that
-    * block is configured, not after.
+    * Everything in `UcieTLRegs` goes with it, so this belongs before that block
+    * is configured, not after.
     */
   def formatResetUcieFn(): String = {
     val body = new StringBuilder
@@ -1074,9 +1074,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   /** Opens the clock gate by hand, ending an apply that is still waiting.
     *
-    * What `clkUngateSrcMmio` is for, and honoured whatever the source is: a
-    * PLL that will not lock or a delay set longer than intended can be
-    * recovered from without the sequencer carrying a hidden timeout.
+    * What `clkUngateSrcMmio` is for, and honoured whatever the source is: a PLL
+    * that will not lock or a delay set longer than intended can be recovered
+    * from without the sequencer carrying a hidden timeout.
     */
   def formatReleaseClkGateFn(): String = {
     val body = new StringBuilder

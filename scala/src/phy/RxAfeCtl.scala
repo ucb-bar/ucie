@@ -38,8 +38,8 @@ object RxAfeCtl {
   }
 
   /** As above, driving a tile's pins rather than a control bundle. The tile is
-    * the analog macro itself, so its buses are one pin per bit; `connectCtl`
-    * is what spreads the bundle across them.
+    * the analog macro itself, so its buses are one pin per bit; `connectCtl` is
+    * what spreads the bundle across them.
     */
   def connect(lane: RxDataLane, ctlIO: RxLaneDigitalCtlIO): RxAfeCtl = {
     val laneCtl = Wire(new RxLaneCtlIO)

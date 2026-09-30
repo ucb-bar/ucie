@@ -71,7 +71,7 @@ module sw(p, n, s);
     electrical p, n;
 
     analog begin
-	    I(p, n) <+ V(p, n) / (R_ON  + (R_OFF - R_ON) * (1 - transition(s, 0, `T_RISE_FALL_DEFAULT * 1p)));
+        I(p, n) <+ V(p, n) / (R_ON  + (R_OFF - R_ON) * (1 - transition(s, 0, `T_RISE_FALL_DEFAULT * 1p)));
     end
 endmodule
 

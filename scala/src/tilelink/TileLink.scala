@@ -203,9 +203,9 @@ class UcieTLRegsIO(
 
 object UcieTLRegs {
 
-  /** Cycles the `txDatapathRst` and `rxDatapathRst` strobes are held for
-    * after a register write, counted in the UCIe digital clock the register
-    * block and PhyTest share.
+  /** Cycles the `txDatapathRst` and `rxDatapathRst` strobes are held for after
+    * a register write, counted in the UCIe digital clock the register block and
+    * PhyTest share.
     */
   val rstStrobeCycles = 8
 }
@@ -549,7 +549,7 @@ class UcieClkRegs(
     io.rxClkGateEn := rxClkGateEn
 
     val regmap: Seq[(Int, Seq[RegField])] = withClockAndReset(clock, reset) {
-      Seq(
+      val scalars = Seq(
         toRegFieldRw(mainClkSel, "mainClkSel"),
         toRegFieldRw(pll8En, "pll8En"),
         toRegFieldRw(pll12En, "pll12En"),
@@ -573,7 +573,19 @@ class UcieClkRegs(
         toRegFieldRw(ungateReq, "clkCfgUngateReq"),
         toRegFieldR(pllLockSync, "pllLockObserved"),
         toRegFieldRw(ucieRstReq, "ucieRst")
-      ).zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) } ++
+      )
+      // The table sits at a fixed slot so that adding a scalar does not move
+      // every entry -- which means adding one too many silently lands on top
+      // of `rateCfg_0` instead. This has overlapped once before; fail
+      // elaboration rather than hand out a map with two registers at one
+      // address.
+      require(
+        scalars.length <= UcieClkRegs.rateCfgBase,
+        s"UcieClkRegs has ${scalars.length} scalar registers but the rate " +
+          s"table starts at slot ${UcieClkRegs.rateCfgBase}; raise " +
+          "`rateCfgBase` (and regenerate collateral) or drop a scalar."
+      )
+      scalars.zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) } ++
         (0 until UcieClkRegs.rateCfgs).map { r =>
           ((UcieClkRegs.rateCfgBase + r) * 8) -> Seq(
             toRegFieldRw(rateCfg(r), s"rateCfg_$r")
@@ -591,8 +603,8 @@ class UcieClkRegs(
   * the sampling phase is a training result rather than a property of the rate,
   * so it stays in its own register.
   */
-/** Phases of a clock configuration apply: shut the gate, switch under it,
-  * wait out the new source's wake-up, then let the clocks back out.
+/** Phases of a clock configuration apply: shut the gate, switch under it, wait
+  * out the new source's wake-up, then let the clocks back out.
   */
 object ClkApplyPhase extends ChiselEnum {
   val idle, gateIn, ungateWait, gateOut = Value
@@ -600,8 +612,8 @@ object ClkApplyPhase extends ChiselEnum {
 
 /** What ends the clock gate at the end of an apply.
   *
-  * The gate has to stay shut across a newly enabled PLL's wake-up, which is
-  * far longer than the few cycles the gate itself needs, and how long that is
+  * The gate has to stay shut across a newly enabled PLL's wake-up, which is far
+  * longer than the few cycles the gate itself needs, and how long that is
   * depends on the part. So the release is a choice rather than a constant.
   */
 object ClkUngateSrc extends ChiselEnum {
@@ -617,8 +629,8 @@ object ClkUngateSrc extends ChiselEnum {
     */
   val mmio = Value(1.U(2.W))
 
-  /** `clkCfgUngateDelay` cycles of this block's clock, counted from the
-    * switch. For a part whose lock is not trustworthy, or not wired.
+  /** `clkCfgUngateDelay` cycles of this block's clock, counted from the switch.
+    * For a part whose lock is not trustworthy, or not wired.
     */
   val delay = Value(2.U(2.W))
 }
@@ -637,9 +649,9 @@ object UcieClkRegs {
   /** Rates the translation table holds, one per `SpeedMode` code. */
   val rateCfgs = 8
 
-  /** Cycles the gate is held before the configuration moves, and again after
-    * it is let back out. Covers the gate reaching the slowest clock the tile
-    * can produce; it has nothing to do with a PLL waking up.
+  /** Cycles the gate is held before the configuration moves, and again after it
+    * is let back out. Covers the gate reaching the slowest clock the tile can
+    * produce; it has nothing to do with a PLL waking up.
     */
   val gateDwell = 4
 
@@ -651,9 +663,9 @@ object UcieClkRegs {
     */
   val maxPhaseSel = (BigInt(1) << ClockingTile.phaseSelWidth) - 1
 
-  /** What `ClkUngateSrc.delay` counts out unless software says otherwise.
-    * Sized to clear a PLL wake-up with room to spare at any plausible chip
-    * digital clock rather than to be tight at one.
+  /** What `ClkUngateSrc.delay` counts out unless software says otherwise. Sized
+    * to clear a PLL wake-up with room to spare at any plausible chip digital
+    * clock rather than to be tight at one.
     */
   val defaultUngateDelay = 1024
 

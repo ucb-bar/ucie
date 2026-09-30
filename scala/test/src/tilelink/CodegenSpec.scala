@@ -174,8 +174,12 @@ class CodegenSpec extends AnyFunSpec {
     it("should format reset_fsms as a base-relative MMIO function") {
       val result = codegen.formatResetFsmsFn()
       assert(result.contains("static inline void reset_fsms(uintptr_t base)"))
-      assert(result.contains("reg_write64(base + UCIE_TX_DATAPATH_RST, 0x1ULL);"))
-      assert(result.contains("reg_write64(base + UCIE_RX_DATAPATH_RST, 0x1ULL);"))
+      assert(
+        result.contains("reg_write64(base + UCIE_TX_DATAPATH_RST, 0x1ULL);")
+      )
+      assert(
+        result.contains("reg_write64(base + UCIE_RX_DATAPATH_RST, 0x1ULL);")
+      )
       assert(
         result.contains("reg_write64(base + UCIE_DEBUG_TX_FSM_RST, 0x1ULL);")
       )

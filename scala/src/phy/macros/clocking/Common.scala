@@ -78,8 +78,8 @@ class ClockingTileIO extends Bundle {
   /** Global delay line on TXCLKQ, thermometer coded, 1 ps a tap. */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
 
-  /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL16, 3 the analog bypass pin.
-    * Each PLL is named for the clock it puts out, in GHz.
+  /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL16, 3 the analog bypass pin. Each
+    * PLL is named for the clock it puts out, in GHz.
     */
   val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
 

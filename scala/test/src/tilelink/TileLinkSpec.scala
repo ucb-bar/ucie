@@ -53,8 +53,8 @@ abstract class TestDriver extends ExtModule {
 abstract class SVTestDriver extends TestDriver {
 
   /** Half period of the analog bypass clock, in ps. 62.5 is 8 GHz, which with
-    * no division is 16 GT/s -- the rate every test here ran at before there
-    * was a reason to pick another. A driver overrides it to sit the part at a
+    * no division is 16 GT/s -- the rate every test here ran at before there was
+    * a reason to pick another. A driver overrides it to sit the part at a
     * different rate without touching the design's reset defaults.
     */
   def bypassHalfPeriodPs: Double = 62.5
@@ -821,8 +821,8 @@ end
   * the capture happened to start.
   */
 /** SystemVerilog shared by every driver that scores a sweep: the per-lane
-  * framing result, the task that reads it out of `PhyTest`, and the run
-  * length helper the eye reports use.
+  * framing result, the task that reads it out of `PhyTest`, and the run length
+  * helper the eye reports use.
   *
   * One copy because these sweeps have to stay comparable -- a definition that
   * drifted in one of them would quietly make its eye mean something else.
@@ -1051,16 +1051,16 @@ end
 
 /** Coarse eye at 4 Gb/s with nothing but the global delay line.
   *
-  * The bypass pin runs at the main clock, so /1 already puts the lane at
-  * 4 Gb/s and the divider has no quadrature to give -- a span of two half
-  * cycles is 0 and 180 degrees with nothing between. That leaves the global
-  * delay line as the only way to move the sampling point, and its 64 taps of
-  * 1 ps cover 64 ps against a 250 ps UI.
+  * The bypass pin runs at the main clock, so /1 already puts the lane at 4 Gb/s
+  * and the divider has no quadrature to give -- a span of two half cycles is 0
+  * and 180 degrees with nothing between. That leaves the global delay line as
+  * the only way to move the sampling point, and its 64 taps of 1 ps cover 64 ps
+  * against a 250 ps UI.
   *
-  * So this is the case expected to fall short, and the test says so rather
-  * than pretending otherwise: it checks the link runs and reports how much of
-  * a UI the line reaches. It is the measurement that argues for the divider
-  * based shifter, which is why it is worth keeping.
+  * So this is the case expected to fall short, and the test says so rather than
+  * pretending otherwise: it checks the link runs and reports how much of a UI
+  * the line reaches. It is the measurement that argues for the divider based
+  * shifter, which is why it is worth keeping.
   */
 class EyeLowRateDelayTestDriver extends SVTestDriver {
 
@@ -1129,45 +1129,55 @@ end
 /** Why the coarse eye reads nothing at /2, asked directly.
   *
   * The eye sweep reports open points and nothing else, so a rate that scores
-  * shut everywhere cannot be told apart from a rate whose packets never
-  * arrive. This runs the same two rates and prints what actually came back at
-  * each phase: packets counted against packets sent, and the framing each lane
-  * resolved to. A link that is merely mis-sampled counts its packets and
-  * scores them dirty; a link that is not running counts nothing.
+  * shut everywhere cannot be told apart from a rate whose packets never arrive.
+  * This runs the same two rates and prints what actually came back at each
+  * phase: packets counted against packets sent, and the framing each lane
+  * resolved to. A link that is merely mis-sampled counts its packets and scores
+  * them dirty; a link that is not running counts nothing.
   *
   * Cut down to a handful of bursts so it answers in minutes rather than the
   * twenty the full sweep takes.
   */
-class Div2ProbeTestDriver extends SVTestDriver {
+/** The link carries clean traffic at every clock division.
+  *
+  * A burst, a datapath reset release and a queue drain all take proportionally
+  * longer at each division, so anything in the harness that waits a fixed
+  * number of iterations is correct at the top rate and short below it. Two such
+  * waits have already done this: the RX datapath settle, whose release is
+  * synchronized to the divided clock, and `wait_for_packets`. Both presented
+  * the same way -- a link that is actually fine reading as broken, either as a
+  * short receive scored like a dead lane, or as an RX that missed the
+  * idle-to-valid transition and aligned mid-pattern.
+  *
+  * The eye sweeps would catch that eventually, but they take twenty minutes a
+  * rate and report only open-point counts, which cannot tell a mis-sampled link
+  * from one that received nothing. This asks the direct question at each
+  * division in a few minutes: did every packet arrive, and was it clean.
+  */
+class RateSweepTestDriver extends SVTestDriver {
   setStimulus(
-    "Div2ProbeTestDriver",
+    "RateSweepTestDriver",
     """
-begin : div2_probe
+begin : rate_sweep
   setup_ucie();
   seed_lfsrs();
 
-  $display("=== /1 (the rate that works) ===");
-  set_main_clk(3, 0);
-  set_tx_phase(0);
-  set_clk_gate(0);
-  set_global_delay(32);
-  set_clk_gate(1);
-  run_lfsr(`TRAIN_PACKETS);
-  // Let the burst finish before the next run's reset_fsms lands. Without this
-  // the second run restarts recording mid-stream at rates where the burst
-  // outlasts run_lfsr's fixed poll window, and the RX aligns on a mid-pattern
-  // word instead of the idle-to-valid transition.
-  wait_for_packets();
-  run_lfsr(`TRAIN_PACKETS);
-  wait_for_packets();
-  score_lanes();
-  report_framing();
-  dump_words("/1");
+  $display("Traffic at each clock division");
+  check_rate("/1", 0);
+  check_rate("/2", 1);
+  check_rate("/4", 2);
 
-  $display("=== /2 at every coarse phase ===");
-  set_main_clk(3, 1);
-  for (int c = 0; c < 4; c++) begin
-    set_tx_phase(c);
+  $display("TEST PASSED");
+end
+    """.trim,
+    moduleItems = TestDriverItems.scoring + """
+
+// One division: run a burst and require every packet to arrive clean.
+task automatic check_rate(input string label, input integer div);
+  reg [63:0] got, idlew;
+  begin
+    set_main_clk(3, div);
+    set_tx_phase(0);
     set_clk_gate(0);
     set_global_delay(32);
     set_clk_gate(1);
@@ -1176,84 +1186,26 @@ begin : div2_probe
     run_lfsr(`TRAIN_PACKETS);
     wait_for_packets();
     score_lanes();
-    $display("  phase %0d:", c);
-    report_framing();
-    if (c == 0) dump_words("/2 phase 0");
-  end
-
-  // Same burst twice at one setting: words that differ run to run point at a
-  // sampling problem, words that repeat point at a fixed misalignment.
-  run_lfsr(`TRAIN_PACKETS);
-  // Let the burst finish before the next run's reset_fsms lands. Without this
-  // the second run restarts recording mid-stream at rates where the burst
-  // outlasts run_lfsr's fixed poll window, and the RX aligns on a mid-pattern
-  // word instead of the idle-to-valid transition.
-  wait_for_packets();
-  run_lfsr(`TRAIN_PACKETS);
-  wait_for_packets();
-  dump_words("/2 phase 3, repeat");
-
-  // /4 is the case the settle margin did not rescue. Same questions asked of
-  // it: is the RX handing words over at all, and what does it align on.
-  $display("=== /4 ===");
-  set_main_clk(3, 2);
-  set_tx_phase(0);
-  set_clk_gate(0);
-  set_global_delay(32);
-  set_clk_gate(1);
-  run_lfsr(`TRAIN_PACKETS);
-  wait_for_packets();
-  run_lfsr(`TRAIN_PACKETS);
-  wait_for_packets();
-  score_lanes();
-  report_framing();
-  dump_words("/4");
-
-  $display("TEST PASSED");
-end
-    """.trim,
-    moduleItems = TestDriverItems.scoring + """
-
-// Prints the first few words the RX captured on lane 0. The capture SRAM holds
-// exactly the packets `rxPacketsReceived` counted, so this is what the
-// deserializer actually handed over -- not what the scoring made of it.
-task automatic dump_lane(input string tag, input integer lane);
-  reg [63:0] w;
-  string row;
-  begin
-    row = "";
-    `WRITE_UCIE(regDrv, `RX_DATA_LANE, lane);
-    for (int o = 0; o < 8; o++) begin
-      `WRITE_UCIE(regDrv, `RX_DATA_OFFSET, o);
-      `READ_UCIE(regDrv, `RX_DATA_CHUNK, w);
-      row = {row, $sformatf("%08x ", w[31:0])};
-    end
-    $display("  [%s] lane %0d: %s", tag, lane, row);
-  end
-endtask
-
-// What the word alignment actually resolved to. The capture is applied after
-// the shift, so a rotated capture cannot be told apart from a stream that
-// arrived rotated without these.
-// Read against `rxPacketsReceived`, which `report_framing` already prints:
-// neither advancing is a dead receive path, this advancing with no packets is
-// a link that never saw valid, packets advancing is a working link.
-task automatic dump_align(input string tag);
-  reg [63:0] idlew;
-  begin
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+    // Idle words handled before the burst. Zero here means the RX was not
+    // presenting words when transmission began, which is what a settle that
+    // is too short at this division looks like.
     `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, idlew);
-    $display("  [%s] rx: idleWords=%0d", tag, idlew[7:0]);
-  end
-endtask
+    $display("  %s: %0d/%0d packets, idleWords=%0d",
+             label, got[31:0], `TRAIN_PACKETS, idlew[31:0]);
+    report_framing();
 
-// Lane 0 carries an LFSR word; the valid lane carries the framing waveform the
-// RX aligns on. If valid is being captured twice over, the data lanes are
-// wrong for a reason that has nothing to do with the data path.
-task automatic dump_words(input string tag);
-  begin
-    dump_align(tag);
-    dump_lane(tag, 0);
-    dump_lane(tag, `TRAIN_VALID_LANE);
+    // A short receive is scored as framing 4, the same code as a dead lane, so
+    // check the count separately or a wait that gave up early reads as a
+    // broken link.
+    assert(got >= `TRAIN_PACKETS)
+      else $fatal(1, "%s: %0d of %0d packets arrived -- a wait sized at the top rate is short here",
+                  label, got[31:0], `TRAIN_PACKETS);
+
+    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+      assert(lane_framing[l] == 0)
+        else $fatal(1, "%s: lane %0d is not nominally clean (framing code %0d)",
+                    label, l, lane_framing[l]);
   end
 endtask
 """
@@ -1757,7 +1709,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     // restart does not touch. Without that split, asserting the reset would
     // wipe the configuration it was asserted to make use of, and there would
     // be no way to bring the block up on a clock the defaults do not describe.
-    it("should reset the UCIe block without losing the clocking configuration") {
+    it(
+      "should reset the UCIe block without losing the clocking configuration"
+    ) {
       implicit val p = Parameters.empty
       implicit val simulator =
         verilator(verilatorSettings = Utils.verilatorSettings)
@@ -1831,7 +1785,8 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         val blockReg = rd(ucieClk, "txDataChunkIn0")
         assert(
           blockReg == 0,
-          s"ucieRst left the block's register file alone (txDataChunkIn0 = 0x${blockReg.toString(16)}), " +
+          s"ucieRst left the block's register file alone (txDataChunkIn0 = 0x${blockReg
+              .toString(16)}), " +
             "so it is not reaching the block it is supposed to restart"
         )
         // The clocking configuration did not, so the block comes back up on
@@ -2066,14 +2021,14 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     }
 
     it(
-      "should probe what the link does at /2 using Xcelium with PHY analog models"
+      "should carry clean traffic at every clock division using Xcelium with PHY analog models"
     ) {
       implicit val p = Parameters.empty
       implicit val includeDefaultModels = false
       Utils.simulate(
-        new SimTop(new Div2ProbeTestDriver),
+        new SimTop(new RateSweepTestDriver),
         Utils.writeXrunSimScript,
-        Utils.buildRoot / "UcieTL_should_probe_div2",
+        Utils.buildRoot / "UcieTL_should_carry_traffic_at_each_division",
         amsLevel = Some(AmsLevel.Eye)
       )
     }
