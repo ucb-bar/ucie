@@ -1075,6 +1075,10 @@ class UcieTLRegs(
           applyShift(io.test.rxSignature),
           "rxSignature"
         ),
+        toRegFieldR(
+          applyShift(io.test.rxIdleWordsObserved),
+          "rxIdleWordsObserved"
+        ),
         toRegFieldRw(rxDataLane, "rxDataLane"),
         toRegFieldRw(rxDataOffset, "rxDataOffset"),
         toRegFieldR(

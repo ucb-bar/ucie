@@ -834,6 +834,42 @@ object TestDriverItems {
 // 4 the lane received nothing.
 integer lane_framing[`TRAIN_SCORE_LANES];
 
+// Waits for a burst to finish arriving.
+//
+// `run_lfsr` reads the packet count a fixed number of times and scores
+// whatever has landed. That bound was chosen against a burst at the top rate;
+// divide the TX clock and the same burst takes proportionally longer, so the
+// window expires mid-flight and every point reads short however good the
+// phase is. Measured at /2: the count was still climbing six reads after
+// `run_lfsr` returned.
+task automatic wait_for_packets();
+  reg [63:0] p, prev;
+  int stalls;
+  begin
+    prev = 64'hffffffffffffffff;
+    stalls = 0;
+    // Wait while packets are still arriving, not for a fixed number of reads.
+    // A burst takes proportionally longer at every division, so any constant
+    // bound is right at one rate and short at the next -- at /4 a 64-read
+    // bound returned with 7 of 16 packets in, and `score_lanes` marks a short
+    // receive as framing 4, which reads exactly like a dead lane. Giving up
+    // only once the count has genuinely stopped moving is the same condition
+    // at every rate.
+    for (int w = 0; w < 1024; w++) begin
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, p);
+      if (p >= `TRAIN_PACKETS) break;
+      // Only a stall *after* packets have started counts. `p` sitting at zero
+      // means the burst has not reached us yet, which at a divided rate takes
+      // longer than any small number of reads -- treating that as "stopped"
+      // abandons the wait before the first packet ever lands.
+      if (p == prev && p > 0) stalls = stalls + 1;
+      else stalls = 0;
+      prev = p;
+      if (stalls >= 32) break;
+    end
+  end
+endtask
+
 // Reads every scored lane's three bit error counters under one counter pause.
 //
 // The three differ only in where the pattern is assumed to have started: the
@@ -981,6 +1017,11 @@ begin : eye_lowrate_div
       set_clk_gate(1);
       run_lfsr(`TRAIN_PACKETS);
       run_lfsr(`TRAIN_PACKETS);
+      // The burst takes four times as long at 4 Gb/s as at
+      // 16 GT/s, so `run_lfsr`'s own poll window expires before
+      // the packets land. Without this wait every point scores
+      // as "received nothing" and the row reads solid shut.
+      wait_for_packets();
       score_lanes();
       clean_any = 0;
       for (int l = 0; l < `TRAIN_DATA_LANES; l++)
@@ -1054,6 +1095,11 @@ begin : eye_lowrate_delay
     set_clk_gate(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
+    // The burst takes four times as long at 4 Gb/s as at
+    // 16 GT/s, so `run_lfsr`'s own poll window expires before
+    // the packets land. Without this wait every point scores
+    // as "received nothing" and the row reads solid shut.
+    wait_for_packets();
     score_lanes();
     clean_any = 0;
     for (int l = 0; l < `TRAIN_DATA_LANES; l++)
@@ -1077,6 +1123,140 @@ begin : eye_lowrate_delay
 end
     """.trim,
     moduleItems = TestDriverItems.scoring
+  )
+}
+
+/** Why the coarse eye reads nothing at /2, asked directly.
+  *
+  * The eye sweep reports open points and nothing else, so a rate that scores
+  * shut everywhere cannot be told apart from a rate whose packets never
+  * arrive. This runs the same two rates and prints what actually came back at
+  * each phase: packets counted against packets sent, and the framing each lane
+  * resolved to. A link that is merely mis-sampled counts its packets and
+  * scores them dirty; a link that is not running counts nothing.
+  *
+  * Cut down to a handful of bursts so it answers in minutes rather than the
+  * twenty the full sweep takes.
+  */
+class Div2ProbeTestDriver extends SVTestDriver {
+  setStimulus(
+    "Div2ProbeTestDriver",
+    """
+begin : div2_probe
+  setup_ucie();
+  seed_lfsrs();
+
+  $display("=== /1 (the rate that works) ===");
+  set_main_clk(3, 0);
+  set_tx_phase(0);
+  set_clk_gate(0);
+  set_global_delay(32);
+  set_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  // Let the burst finish before the next run's reset_fsms lands. Without this
+  // the second run restarts recording mid-stream at rates where the burst
+  // outlasts run_lfsr's fixed poll window, and the RX aligns on a mid-pattern
+  // word instead of the idle-to-valid transition.
+  wait_for_packets();
+  run_lfsr(`TRAIN_PACKETS);
+  wait_for_packets();
+  score_lanes();
+  report_framing();
+  dump_words("/1");
+
+  $display("=== /2 at every coarse phase ===");
+  set_main_clk(3, 1);
+  for (int c = 0; c < 4; c++) begin
+    set_tx_phase(c);
+    set_clk_gate(0);
+    set_global_delay(32);
+    set_clk_gate(1);
+    run_lfsr(`TRAIN_PACKETS);
+    wait_for_packets();
+    run_lfsr(`TRAIN_PACKETS);
+    wait_for_packets();
+    score_lanes();
+    $display("  phase %0d:", c);
+    report_framing();
+    if (c == 0) dump_words("/2 phase 0");
+  end
+
+  // Same burst twice at one setting: words that differ run to run point at a
+  // sampling problem, words that repeat point at a fixed misalignment.
+  run_lfsr(`TRAIN_PACKETS);
+  // Let the burst finish before the next run's reset_fsms lands. Without this
+  // the second run restarts recording mid-stream at rates where the burst
+  // outlasts run_lfsr's fixed poll window, and the RX aligns on a mid-pattern
+  // word instead of the idle-to-valid transition.
+  wait_for_packets();
+  run_lfsr(`TRAIN_PACKETS);
+  wait_for_packets();
+  dump_words("/2 phase 3, repeat");
+
+  // /4 is the case the settle margin did not rescue. Same questions asked of
+  // it: is the RX handing words over at all, and what does it align on.
+  $display("=== /4 ===");
+  set_main_clk(3, 2);
+  set_tx_phase(0);
+  set_clk_gate(0);
+  set_global_delay(32);
+  set_clk_gate(1);
+  run_lfsr(`TRAIN_PACKETS);
+  wait_for_packets();
+  run_lfsr(`TRAIN_PACKETS);
+  wait_for_packets();
+  score_lanes();
+  report_framing();
+  dump_words("/4");
+
+  $display("TEST PASSED");
+end
+    """.trim,
+    moduleItems = TestDriverItems.scoring + """
+
+// Prints the first few words the RX captured on lane 0. The capture SRAM holds
+// exactly the packets `rxPacketsReceived` counted, so this is what the
+// deserializer actually handed over -- not what the scoring made of it.
+task automatic dump_lane(input string tag, input integer lane);
+  reg [63:0] w;
+  string row;
+  begin
+    row = "";
+    `WRITE_UCIE(regDrv, `RX_DATA_LANE, lane);
+    for (int o = 0; o < 8; o++) begin
+      `WRITE_UCIE(regDrv, `RX_DATA_OFFSET, o);
+      `READ_UCIE(regDrv, `RX_DATA_CHUNK, w);
+      row = {row, $sformatf("%08x ", w[31:0])};
+    end
+    $display("  [%s] lane %0d: %s", tag, lane, row);
+  end
+endtask
+
+// What the word alignment actually resolved to. The capture is applied after
+// the shift, so a rotated capture cannot be told apart from a stream that
+// arrived rotated without these.
+// Read against `rxPacketsReceived`, which `report_framing` already prints:
+// neither advancing is a dead receive path, this advancing with no packets is
+// a link that never saw valid, packets advancing is a working link.
+task automatic dump_align(input string tag);
+  reg [63:0] idlew;
+  begin
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, idlew);
+    $display("  [%s] rx: idleWords=%0d", tag, idlew[7:0]);
+  end
+endtask
+
+// Lane 0 carries an LFSR word; the valid lane carries the framing waveform the
+// RX aligns on. If valid is being captured twice over, the data lanes are
+// wrong for a reason that has nothing to do with the data path.
+task automatic dump_words(input string tag);
+  begin
+    dump_align(tag);
+    dump_lane(tag, 0);
+    dump_lane(tag, `TRAIN_VALID_LANE);
+  end
+endtask
+"""
   )
 }
 
@@ -1154,11 +1334,29 @@ integer lane_framing[`TRAIN_SCORE_LANES];
 // `run_lfsr` returned. Waiting here keeps that out of the training sweep's
 // bound, which only ever runs at one rate.
 task automatic wait_for_packets();
-  reg [63:0] p;
+  reg [63:0] p, prev;
+  int stalls;
   begin
-    for (int w = 0; w < 64; w++) begin
+    prev = 64'hffffffffffffffff;
+    stalls = 0;
+    // Wait while packets are still arriving, not for a fixed number of reads.
+    // A burst takes proportionally longer at every division, so any constant
+    // bound is right at one rate and short at the next -- at /4 a 64-read
+    // bound returned with 7 of 16 packets in, and `score_lanes` marks a short
+    // receive as framing 4, which reads exactly like a dead lane. Giving up
+    // only once the count has genuinely stopped moving is the same condition
+    // at every rate.
+    for (int w = 0; w < 1024; w++) begin
       `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, p);
       if (p >= `TRAIN_PACKETS) break;
+      // Only a stall *after* packets have started counts. `p` sitting at zero
+      // means the burst has not reached us yet, which at a divided rate takes
+      // longer than any small number of reads -- treating that as "stopped"
+      // abandons the wait before the first packet ever lands.
+      if (p == prev && p > 0) stalls = stalls + 1;
+      else stalls = 0;
+      prev = p;
+      if (stalls >= 32) break;
     end
   end
 endtask
@@ -1549,6 +1747,105 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
+    // What `ucieRst` is for, shown by what it does and does not reach.
+    //
+    // At chip reset the clocking is whatever the reset defaults describe,
+    // which need not be what the part is wired for, so the rest of the block
+    // comes up on a clock it may have no business running on. The way out is
+    // to configure the clocking first and then restart everything else -- and
+    // that only works because the clocking registers sit in a domain the
+    // restart does not touch. Without that split, asserting the reset would
+    // wipe the configuration it was asserted to make use of, and there would
+    // be no way to bring the block up on a clock the defaults do not describe.
+    it("should reset the UCIe block without losing the clocking configuration") {
+      implicit val p = Parameters.empty
+      implicit val simulator =
+        verilator(verilatorSettings = Utils.verilatorSettings)
+      implicit val testingDirectory = new HasTestingDirectory {
+        override def getDirectory =
+          (Utils.buildRoot / "UcieTL_should_reset_ucie_keeping_clock_cfg").toNIO
+      }
+      val dut = LazyModule(new TestHarness())
+      simulate(dut.module) { c =>
+        // Two domains: the block runs on the digital bypass clock, the
+        // clocking registers on the chip's own, which here is the harness
+        // clock. Both have to be stepped, and which one carries an access
+        // depends on which block it lands in.
+        val ucieClk = c.io.ucieDigitalBypassClock
+        c.reset.poke(true.B)
+        ucieClk.step(cycles = 5)
+        c.clock.step(cycles = 5)
+        c.reset.poke(false.B)
+        ucieClk.step(cycles = 5)
+        c.clock.step(cycles = 5)
+
+        def addr(name: String): BigInt =
+          BigInt(0x200000L) +
+            (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
+
+        // `TLTesterIO.op` asserts `req.valid` and never drops it, so the
+        // trailing step inside write/read reissues the last request with the
+        // address still poked. On one clock the duplicate is identical and
+        // harmless; interleaving two clocks lets it land against the other
+        // domain and the responses come back a transaction out of step. Park
+        // the request between accesses so each one stands alone.
+        def quiesce(): Unit = {
+          c.io.reg.req.valid.poke(false.B)
+          c.clock.step(2)
+          ucieClk.step(2)
+        }
+        def wr(clk: Clock, name: String, v: BigInt): Unit = {
+          c.io.reg.write(clk, addr(name).U, v.U)
+          quiesce()
+        }
+        def rd(clk: Clock, name: String): BigInt = {
+          val v = c.io.reg.read(clk, addr(name).U).litValue
+          quiesce()
+          v
+        }
+
+        // One register either side of the boundary, each holding a value that
+        // is not its reset value.
+        wr(ucieClk, "txDataChunkIn0", BigInt("deadbeef", 16))
+        wr(c.clock, "txClkPhase", 3)
+        assert(
+          rd(ucieClk, "txDataChunkIn0") == BigInt("deadbeef", 16),
+          "the block register did not take its value before the reset"
+        )
+        assert(
+          rd(c.clock, "txClkPhase") == 3,
+          "the clocking register did not take its value before the reset"
+        )
+
+        // Assert and release. Both writes go to the clocking block, which is
+        // the point: the register that commands the reset has to live where
+        // the reset cannot reach it, or nothing could release it.
+        wr(c.clock, "ucieRst", 1)
+        c.clock.step(cycles = 5)
+        ucieClk.step(cycles = 5)
+        wr(c.clock, "ucieRst", 0)
+        c.clock.step(cycles = 10)
+        ucieClk.step(cycles = 20)
+
+        // The block restarted: its register file is back at reset values.
+        val blockReg = rd(ucieClk, "txDataChunkIn0")
+        assert(
+          blockReg == 0,
+          s"ucieRst left the block's register file alone (txDataChunkIn0 = 0x${blockReg.toString(16)}), " +
+            "so it is not reaching the block it is supposed to restart"
+        )
+        // The clocking configuration did not, so the block comes back up on
+        // the clocking software set rather than on the reset defaults.
+        val clkReg = rd(c.clock, "txClkPhase")
+        assert(
+          clkReg == 3,
+          s"ucieRst cleared the clocking configuration (txClkPhase 3 -> $clkReg), " +
+            "so configuring the clocks and then restarting the block is impossible"
+        )
+        println("[TEST] Success")
+      }
+    }
+
     it("should be able to read/write MMIO registers using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
@@ -1764,6 +2061,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new EyeDiagramTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_measure_a_coarse_eye_at_each_rate",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    it(
+      "should probe what the link does at /2 using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new Div2ProbeTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_probe_div2",
         amsLevel = Some(AmsLevel.Eye)
       )
     }

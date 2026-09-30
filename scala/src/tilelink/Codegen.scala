@@ -404,6 +404,23 @@ object Codegen {
     */
   val applyPollTries: Int = 256
 
+  /** Words the RX must have handled after a datapath reset before
+    * transmission starts.
+    *
+    * A fixed delay is the wrong shape here: `rxDatapathRst` is released
+    * through a synchronizer clocked by the RX divided clock, so the release
+    * costs a fixed number of *that* clock's cycles and takes proportionally
+    * longer at every division. Waiting on the count of words the RX has
+    * actually handled is the same condition at every rate, and costs only as
+    * long as it needs to.
+    */
+  val rxSettleWords: Int = 4
+
+  /** Polls allowed while waiting for that. Generous: a division the part does
+    * not otherwise exercise should still clear it.
+    */
+  val rxSettleTries: Int = 64
+
   val ucieParams: UcieTLParams = UcieTLParams()
 
   /** Elaborates UcieTL with `params` and returns its register map.
@@ -1228,6 +1245,29 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   def formatRunLfsrFn(): String = {
     val body = new StringBuilder
     body.append(f.formatFnCall("reset_fsms"))
+    // Let the RX datapath actually come back before the TX starts.
+    //
+    // `rxDatapathRst` is released through a synchronizer clocked by the RX
+    // divided clock, so the release takes a fixed number of *that* clock's
+    // cycles -- which is twice as long in real time at /2 and four times at
+    // /4. The gap to `tx_execute` below is a fixed number of register writes
+    // and does not scale, so at divided rates the burst can begin before the
+    // RX is handing words over at all. It then never sees the idle-to-valid
+    // transition, aligns on a mid-pattern word, and every lane reads dirty at
+    // every phase. Idle reads are the portable way to wait here.
+    val settle = new StringBuilder
+    settle.append(
+      f.formatReadReg(
+        "regDrv",
+        "settle_w",
+        f.formatConstantRef("rxIdleWordsObserved"),
+        declareVar = true
+      )
+    )
+    settle.append(
+      f.formatIfStmt(s"settle_w >= ${Codegen.rxSettleWords}", f.breakStmt())
+    )
+    body.append(f.formatForLoop("s", Codegen.rxSettleTries, settle.toString))
 
     body.append(
       formatWriteNamedReg(
@@ -1835,12 +1875,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetUngateSrcFn())
     sb.append(formatReleaseClkGateFn())
     sb.append(formatResetUcieFn())
+    sb.append(formatResetDividersFn())
     sb.append(formatSetMainClkFn())
     sb.append(formatSetTxPhaseFn())
     sb.append(formatUseInternalClkFn())
     sb.append(formatSetRxClkGateFn())
     sb.append(formatSetGlobalDelayFn())
-    sb.append(formatResetDividersFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
     sb.append(formatSetupUcieFn())
@@ -1921,12 +1961,12 @@ object GenUcieHeader {
     sb.append(cg.formatSetUngateSrcFn())
     sb.append(cg.formatReleaseClkGateFn())
     sb.append(cg.formatResetUcieFn())
+    sb.append(cg.formatResetDividersFn())
     sb.append(cg.formatSetMainClkFn())
     sb.append(cg.formatSetTxPhaseFn())
     sb.append(cg.formatUseInternalClkFn())
     sb.append(cg.formatSetRxClkGateFn())
     sb.append(cg.formatSetGlobalDelayFn())
-    sb.append(cg.formatResetDividersFn())
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")
     sb.append(cg.formatSetRxVrefFn())

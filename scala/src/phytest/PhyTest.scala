@@ -220,6 +220,22 @@ class PhyTestRegsIO(
   // RX capture SRAM. Covers exactly the packets counted by `rxPacketsReceived`, so
   // read the two under `rxPauseCounters`.
   val rxSignature = Output(UInt(32.W))
+  // Idle words the RX has handled since the FSM reset, free running and
+  // wrapping.
+  //
+  // Read it twice: a value that moves means the receive path is clocked and
+  // words are still arriving, a value that sits still means they are not.
+  // Immediately after `rxFsmRst` it also reads as a count from zero, which is
+  // what the settle poll uses -- stuck at zero there means the RX was not
+  // presenting words when transmission began, which points at the recovered
+  // clock or the reset path. Read against
+  // `rxPacketsReceived` it separates the three cases that otherwise all look
+  // like "bit errors everywhere": neither advancing is a dead receive path;
+  // this advancing with no packets is a link that never saw valid; packets
+  // advancing is a working link. `run_lfsr` also waits on it, because a reset
+  // released through a synchronizer on the divided clock takes proportionally
+  // longer at every division and no fixed delay covers every rate.
+  val rxIdleWordsObserved = Output(UInt(8.W))
   // Data chunk lane in output buffer.
   val rxDataLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
   // Data chunk offset in output buffer.
@@ -855,7 +871,7 @@ class PhyTest(
   io.regs.rxBitErrors := rxBitErrorsOutput(PhyTest.NominalFraming)
   io.regs.rxBitErrorsEarly := rxBitErrorsOutput(PhyTest.EarlyFraming)
   io.regs.rxBitErrorsLate := rxBitErrorsOutput(PhyTest.LateFraming)
-  io.regs.rxSignature := rxSignatureOutput
+    io.regs.rxSignature := rxSignatureOutput
   io.regs.rxDataChunk := 0.U
   for (i <- 0 until numSrams) {
     when(i.U === io.regs.rxDataLane >> 2.U) {
@@ -1071,6 +1087,8 @@ class PhyTest(
 
   // Dumb RX logic (starts recording as soon as valid goes high and never stops)
   val recordingStarted = withReset(rxReset) { RegInit(false.B) }
+  val rxIdleWordsReg = withReset(rxReset) { RegInit(0.U(8.W)) }
+  io.regs.rxIdleWordsObserved := rxIdleWordsReg
   val startRecording = Wire(Bool())
   val startIdx = Wire(UInt(log2Ceil(Phy.SerdesRatio).W))
   startRecording := false.B
@@ -1116,6 +1134,15 @@ class PhyTest(
       }
     }
 
+    // Free running, deliberately not saturating. The absolute value is not
+    // the point -- it wraps in well under a microsecond at the top rate -- but
+    // the *movement* is: read it twice and a changed value means idle words
+    // are still arriving, while a value that sits still means they are not. A
+    // saturated counter cannot say that, because pegged and stopped look the
+    // same.
+    when(!recordingStarted && !startRecording) {
+      rxIdleWordsReg := rxIdleWordsReg + 1.U
+    }
     recordingStarted := recordingStarted || startRecording
 
     when(!recordingStarted && !startRecording) {
