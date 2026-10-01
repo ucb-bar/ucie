@@ -84,12 +84,10 @@ module txdata_tile (
     output D2D_TX
 );
 
-    // `Dctrl` is thermometer coded, so the delay follows the number of taps
-    // enabled rather than the value of the bus.
     logic clkin;
-    dcdl_simple dl(
+    local_delayline dl(
         .clk_in(intf.CK),
-        .dl_ctrl(`DCDL_CTRL_BITWIDTH'($countones(intf.Dctrl))),
+        .dl_ctrl(intf.Dctrl),
         .clk_out(clkin)
     );
 
@@ -190,26 +188,6 @@ module sb_driver_tile (
         .vss(intf.vss)
     );
 endmodule
-
-// Delay line on a tile's high speed clock: `DCDL_DELAY_OFS` plus `dl_ctrl`
-// steps of `DCDL_DELAY_STEP`, in ps.
-//
-// Transport delay, not inertial. A continuous assignment would be inertial and
-// would swallow every pulse shorter than the delay it is set to, which past
-// about five taps is every pulse a 16 GT/s clock has -- the line would not
-// delay the clock, it would stop it. A code change of more than half a clock
-// period in one write can still reorder edges, so software steps this.
-module dcdl_simple(
-    input logic clk_in,
-    input logic [`DCDL_CTRL_BITWIDTH-1:0] dl_ctrl,
-    output logic clk_out
-);
-
-    initial clk_out = 1'b0;
-    always @(clk_in)
-        clk_out <= #(dl_ctrl * `DCDL_DELAY_STEP + `DCDL_DELAY_OFS) clk_in;
-endmodule
-
 
 // 2:1 double data rate serializer, shared by the mainband serializer tree and
 // the sideband bump drivers.

@@ -252,13 +252,22 @@ ${
           val defaultModels = Seq(
             "ucie_clk_dist_network.sv",
             "ucie_clk_div4.v",
-            "clkmux.v",
+            "debug_clkmux.v",
             "clocking_tile.v",
             "clock_receiver.v",
             "IO_ESD.v",
             "ucie_esd_routable.v",
             "ucie_rst_sync.v"
           )
+          // These are filenames, so a rename elsewhere leaves a dangling entry
+          // that only shows up as `*SE,FILEMIS` once a simulator runs -- past
+          // compile, scalafmt and every CI step. Fail here instead.
+          defaultModels.foreach { m =>
+            require(
+              os.exists(defaultVsrcDir / m),
+              s"`defaultModels` names $m, which is not in $defaultVsrcDir"
+            )
+          }
           Seq(
             disciplines,
             constants,

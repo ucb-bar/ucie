@@ -1,4 +1,4 @@
-module clkmux(
+module debug_clkmux(
   input Vin_0,
   input Vin_1,
   input Vin_2,

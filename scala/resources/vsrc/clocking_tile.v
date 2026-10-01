@@ -33,14 +33,14 @@
 //
 // Those positions are half a main clock period apart, which is what lets a
 // sweep tile a whole UI at any rate: 62.5 ps at 8 GHz, 41.7 at 12, 31.25 at
-// 16, all inside the 64 ps the global delay line covers. Without the shifter
+// 16, all inside the range the global delay line covers. Without the shifter
 // the delay line alone falls short of a UI below 16 GT/s.
 //
 // At division 1 the counter has only two positions, 0 and 180 degrees. There
 // is no quadrature to be had from a divider that is not dividing, but 180 is
 // enough to walk an eye at the top rate.
 module clocking_tile(
-  // Global delay line on TXCLKQ, thermometer coded, 1 ps a tap.
+  // Global delay line on TXCLKQ, thermometer coded.
   input [63:0] PhaseSel,
   // 0 pll8, 1 pll12, 2 pll16, 3 the analog bypass pin.
   input [1:0] MainClkSel,
@@ -81,7 +81,7 @@ module clocking_tile(
   localparam real HALF_8G  = 62.5;
   localparam real HALF_12G = 41.66667;
   localparam real HALF_16G = 31.25;
-  localparam real PHASE_TAP_PS = 1.0;
+  localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
   // ungates without waiting is visibly wrong.

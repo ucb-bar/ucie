@@ -40,10 +40,10 @@ class ClkMux(implicit includeDefaultModels: Boolean = false)
     with HasBlackBoxResource {
   val io = IO(new ClkMuxIO)
 
-  override val desiredName = "clkmux"
+  override val desiredName = "debug_clkmux"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/clkmux.v")
+    addResource("/vsrc/debug_clkmux.v")
   }
 
   // Passes `ins(sel)`, returning the muxed clock. Inputs past the end of `ins`
@@ -75,7 +75,7 @@ object ClockingTile {
 
 class ClockingTileIO extends Bundle {
 
-  /** Global delay line on TXCLKQ, thermometer coded, 1 ps a tap. */
+  /** Global delay line on TXCLKQ, thermometer coded. */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
 
   /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL16, 3 the analog bypass pin. Each

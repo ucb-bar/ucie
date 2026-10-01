@@ -1103,7 +1103,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   /** Sets TXCLKQ's coarse phase, in main clock half cycles.
     *
     * Together with the global delay line this reaches any phase: the coarse
-    * step is half a main clock period, which is inside the line's 64 ps at
+    * step is half a main clock period, which is inside the line's range at
     * every rate, so the two tile a whole UI with no gap. Below 16 GT/s the line
     * alone cannot, which is what the shifter is for.
     */

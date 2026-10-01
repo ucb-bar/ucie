@@ -1172,40 +1172,57 @@ end
     """.trim,
     moduleItems = TestDriverItems.scoring + """
 
-// One division: run a burst and require every packet to arrive clean.
+// One division: find a sampling point where the whole burst arrives clean.
+//
+// The point is not pinned, because where the eye sits depends on the delay
+// line geometry -- a change to a step or an offset moves it, and a test that
+// asserts cleanliness at one hardcoded code reports that as a broken link.
+// What has to hold at every division is that *some* point works.
 task automatic check_rate(input string label, input integer div);
   reg [63:0] got, idlew;
+  integer clean_lanes;
+  integer clean_at;
   begin
     set_main_clk(3, div);
     set_tx_phase(0);
-    set_clk_gate(0);
-    set_global_delay(32);
-    set_clk_gate(1);
-    run_lfsr(`TRAIN_PACKETS);
-    wait_for_packets();
-    run_lfsr(`TRAIN_PACKETS);
-    wait_for_packets();
-    score_lanes();
-    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
-    // Idle words handled before the burst. Zero here means the RX was not
-    // presenting words when transmission began, which is what a settle that
-    // is too short at this division looks like.
-    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, idlew);
-    $display("  %s: %0d/%0d packets, idleWords=%0d",
-             label, got[31:0], `TRAIN_PACKETS, idlew[31:0]);
-    report_framing();
+    clean_at = -1;
 
-    // A short receive is scored as framing 4, the same code as a dead lane, so
-    // check the count separately or a wait that gave up early reads as a
-    // broken link.
-    assert(got >= `TRAIN_PACKETS)
-      else $fatal(1, "%s: %0d of %0d packets arrived -- a wait sized at the top rate is short here",
-                  label, got[31:0], `TRAIN_PACKETS);
+    for (int t = 0; t < 4; t++) begin
+      set_clk_gate(0);
+      set_global_delay(t * 16);
+      set_clk_gate(1);
+      run_lfsr(`TRAIN_PACKETS);
+      wait_for_packets();
+      run_lfsr(`TRAIN_PACKETS);
+      wait_for_packets();
+      score_lanes();
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
+      // Zero idle words means the RX was not presenting words when
+      // transmission began -- what a settle too short for this division looks
+      // like. Checked at every point, since it does not depend on the phase.
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, idlew);
 
-    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
-      assert(lane_framing[l] == 0)
-        else $fatal(1, "%s: lane %0d is not nominally clean (framing code %0d)",
-                    label, l, lane_framing[l]);
+      clean_lanes = 0;
+      for (int l = 0; l < `TRAIN_DATA_LANES; l++)
+        if (lane_framing[l] == 0) clean_lanes = clean_lanes + 1;
+      $display("  %s tap %0d: %0d/%0d packets, %0d/%0d lanes clean, idleWords=%0d",
+               label, t * 16, got[31:0], `TRAIN_PACKETS,
+               clean_lanes, `TRAIN_DATA_LANES, idlew[31:0]);
+
+      // A short receive scores as framing 4, the same code as a dead lane, so
+      // the count is checked separately: a wait that gave up early would
+      // otherwise read as a broken link at every point.
+      assert(got >= `TRAIN_PACKETS)
+        else $fatal(1, "%s: %0d of %0d packets arrived at tap %0d -- a wait sized at the top rate is short here",
+                    label, got[31:0], `TRAIN_PACKETS, t * 16);
+
+      if (clean_lanes == `TRAIN_DATA_LANES && clean_at < 0) clean_at = t * 16;
+    end
+
+    assert(clean_at >= 0)
+      else $fatal(1, "%s: no sampling point in the global delay line's range carries a clean burst",
+                  label);
+    $display("  %s: clean at tap %0d", label, clean_at);
   end
 endtask
 """

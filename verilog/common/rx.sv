@@ -362,13 +362,11 @@ rx_afe afe(
     .vss(intf.vss)
 );
 
-// Local delay line on the sampling clock, the RX counterpart of the TX
-// tile's. `Dctrl` is thermometer coded, so the delay follows the number of
-// taps enabled rather than the value of the bus.
+// Local delay line on the sampling clock, the RX counterpart of the TX tile's.
 logic rxclkin;
-dcdl_simple rxdl(
+local_delayline rxdl(
     .clk_in(intf.clk),
-    .dl_ctrl(`DCDL_CTRL_BITWIDTH'($countones(intf.Dctrl))),
+    .dl_ctrl(intf.Dctrl),
     .clk_out(rxclkin)
 );
 
