@@ -69,9 +69,11 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
     c.io.regs.txValidLaneSel.poke(Phy.defaultValidLaneSel(numLanes).U)
     c.io.regs.rxValidLaneSel.poke(Phy.defaultValidLaneSel(numLanes).U)
     c.io.regs.rxDataMode.poke(DataMode.infinite)
-    c.io.regs.rxRst.poke(false.B)
+    c.io.regs.rxDatapathRst.poke(false.B)
+    c.io.regs.rxFsmRst.poke(false.B)
     c.io.regs.rxPauseCounters.poke(false.B)
-    c.io.regs.txRst.poke(false.B)
+    c.io.regs.txDatapathRst.poke(false.B)
+    c.io.regs.txFsmRst.poke(false.B)
     c.io.regs.txExecute.poke(false.B)
     c.io.regs.txDataChunkIn.valid.poke(false.B)
     c.io.rx.valid.poke(false.B)
@@ -79,10 +81,15 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
   }
 
   // Clears the signature and the RX alignment so the next run starts fresh.
+  // The signature and the packet count belong to the RX FSM, so it is
+  // `rxFsmRst` that clears them; the datapath reset goes with them to flush
+  // the deserializer handoff the same run would otherwise inherit.
   def resetRx(c: PhyTest): Unit = {
-    c.io.regs.rxRst.poke(true.B)
+    c.io.regs.rxFsmRst.poke(true.B)
+    c.io.regs.rxDatapathRst.poke(true.B)
     c.clock.step()
-    c.io.regs.rxRst.poke(false.B)
+    c.io.regs.rxFsmRst.poke(false.B)
+    c.io.regs.rxDatapathRst.poke(false.B)
     c.clock.step(outputDelay)
   }
 
@@ -110,8 +117,11 @@ class PhyTestSignatureSpec extends AnyFunSpec with ChiselSim {
   // Resets the RX, runs `packets` through it, and returns the signature.
   def run(c: PhyTest, packets: Seq[RxPacket]): BigInt = {
     resetRx(c)
-    assert(signature(c) == 0, "signature should clear on rxRst")
-    assert(packetsReceived(c) == 0, "packet count should clear on rxRst")
+    assert(signature(c) == 0, "signature should clear on rxFsmRst")
+    assert(
+      packetsReceived(c) == 0,
+      "packet count should clear on rxFsmRst"
+    )
     drive(c, packets)
     c.clock.step(outputDelay)
     signature(c)
