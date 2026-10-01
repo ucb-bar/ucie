@@ -118,7 +118,11 @@ class RDIController(sbParams: SidebandParams) extends Module {
         activeReaderClients <= 1.U,
         "FATAL: Multiple RDI sideband subclients asserted RX ready in the same cycle"
       )
-      when(currentState === RDIState.active) {
+      // A prerequisite for entering ACTIVE, not an invariant across it.
+      when(
+        (currentState === RDIState.active) &&
+          !RegNext(currentState === RDIState.active, false.B)
+      ) {
         assert(
           activeBringupReady,
           "FATAL: RDI ACTIVE requires wake and clock prerequisites to be complete"
@@ -130,19 +134,29 @@ class RDIController(sbParams: SidebandParams) extends Module {
           "FATAL: pl_inband_pres assertion in RESET must be covered by the clock handshake"
         )
       }
-      when(mustHoldClocksUntilStateChanges) {
+      when(
+        mustHoldClocksUntilStateChanges && RegNext(
+          mustHoldClocksUntilStateChanges,
+          false.B
+        )
+      ) {
         assert(
           clockRequester.io.rdi.plClkReq,
           "FATAL: pl_clk_req must remain asserted while leaving RESET/PM states"
         )
       }
-      when(rdiStateMachine.io.sidebandBusy) {
+      when(
+        rdiStateMachine.io.sidebandBusy && RegNext(
+          rdiStateMachine.io.sidebandBusy,
+          false.B
+        )
+      ) {
         assert(
           clockRequester.io.rdi.plClkReq,
           "FATAL: Sideband traffic to the Adapter must be covered by the clock handshake"
         )
       }
-      when(io.cfgSidebandActive) {
+      when(io.cfgSidebandActive && RegNext(io.cfgSidebandActive, false.B)) {
         assert(
           clockRequester.io.rdi.plClkReq,
           "FATAL: RDI cfg sideband activity must be covered by the clock handshake"
