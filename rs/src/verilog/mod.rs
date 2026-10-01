@@ -171,42 +171,11 @@ pub fn simulate(
     Ok(())
 }
 
-/// Defines one `#[test]` per abstraction level, each running `$tb` and failing
-/// on any error the bench printed.
-///
-/// Benches written against the model contract in `verilog/README.md` have to
-/// hold at every level, and this is what makes that a test rather than a claim.
-/// A new level needs an arm here as well as a variant on [`Level`]: a macro
-/// cannot walk [`Level::ALL`] to name the functions it generates.
+/// Shared support for the per-module `tests` mods: both levels of a bench are
+/// run the same way, so the running and the checking live here rather than
+/// being written out once per module.
 #[cfg(test)]
-macro_rules! bench_at_every_level {
-    ($($name:ident => $tb:expr),* $(,)?) => {
-        $(
-            mod $name {
-                use anyhow::Result;
-                use test_log::test;
-
-                use crate::verilog::{Level, harness::expect_clean};
-
-                #[test]
-                fn eye() -> Result<()> {
-                    expect_clean(Level::Eye, $tb)
-                }
-
-                #[test]
-                fn circuit() -> Result<()> {
-                    expect_clean(Level::Circuit, $tb)
-                }
-            }
-        )*
-    };
-}
-
-#[cfg(test)]
-pub(crate) use bench_at_every_level;
-
-#[cfg(test)]
-pub(crate) mod harness {
+pub(crate) mod tests {
     use std::fs::read_to_string;
 
     use anyhow::Result;

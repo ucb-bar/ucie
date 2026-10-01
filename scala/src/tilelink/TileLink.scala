@@ -213,18 +213,14 @@ object UcieTLRegs {
 /** Clock source controls, on a clock of their own.
   *
   * These decide where the PHY's clocks come from, so they cannot sit in the
-  * register block that runs on one of those clocks: at power up that block has
-  * nothing to run on until these have already been decided, and a register that
-  * comes out of reset undefined takes the whole digital domain with it.
+  * block that runs on one of those clocks: at power up it has nothing to run on
+  * until these are decided. `chipDigitalClk` is the chip's own digital clock,
+  * running before any of the PHY's exist, and it clocks this block alone -- a
+  * separate block rather than a domain bolted onto the main one, because most
+  * registers do belong on `ucieClk` with the logic they control.
   *
-  * `chipDigitalClk` is the chip's own digital clock, running before any of the
-  * PHY's exist. It clocks this block and nothing else here, which is why this
-  * is a block of its own rather than a clock domain bolted onto the main one:
-  * most registers genuinely belong on `ucieClk` with the logic they control.
-  *
-  * The selects need no synchronizer. They are settled during bring-up with the
-  * clocks they steer quiet, and a mux select has no reason to be synchronous to
-  * either side of the mux.
+  * The selects need no synchronizer: they settle during bring-up with the
+  * clocks they steer quiet.
   */
 class UcieClkRegs(
     params: UcieTLParams,
@@ -368,24 +364,14 @@ class UcieClkRegs(
         )
       }
 
-    // Applying a new clock configuration.
+    // The copy the tile runs on. Everything above is what software wrote;
+    // nothing reaches the tile until an apply moves it here, and it only moves
+    // while the clocks are gated.
     //
-    // Everything above is what software has written; nothing downstream sees
-    // it until an apply. Changing a divider or a mux under a running clock
-    // hands the domains behind it a runt or a half period, so the sequence is
-    // to gate first, switch, then let the clocks back out -- the same order a
-    // divider reset follows, and for the same reason.
-    //
-    // The gate covers all three derived clocks, not only the digital one: the
-    // main clock select moves what every divider is counting, so the TX and
-    // sideband clocks are as exposed as the digital clock is.
-    // The live copy the tile actually runs on. It only moves while the clocks
-    // are gated, which is the whole point of the sequence.
-    // The live copy comes out of reset describing the same part the shadow
-    // registers do: on the analog bypass pin with no PLL running. Zero would
-    // name PLL8 with that PLL switched off, which is a dead main clock and no
-    // TX clock at all -- and the digital domain would not notice, because it
-    // is on its own bypass pin.
+    // It resets to the same part the shadow registers describe: the analog
+    // bypass pin, no PLL. Zero would select PLL8 with that PLL off -- a dead
+    // main clock, and the digital domain on its own bypass pin would not
+    // notice.
     val live = withClockAndReset(clock, reset) {
       RegInit(
         (new ClkRateCfgIO).Lit(
@@ -445,30 +431,23 @@ class UcieClkRegs(
     // in the sequencer. Cleared by the sequencer once it has been acted on.
     val ungateReq = withClockAndReset(clock, reset) { RegInit(false.B) }
 
-    // Resets everything in the UCIe block except this register file.
+    // Resets the UCIe block -- PHY, PhyTest, the controller, the queue ends and
+    // `UcieTLRegs` -- but not this register file, which runs on the chip's own
+    // clock and reset. That split is the point: configure the clocking here,
+    // then restart everything else on it. `UcieTLRegs` does not survive, so
+    // this goes before that block is set up.
     //
-    // At chip reset the clocking is whatever the reset defaults describe,
-    // which need not be what the part is actually wired for -- so the rest of
-    // the block comes up on a clock it may have no business running on. This
-    // register is how software puts it back: configure the clocking here,
-    // where the registers survive because they run on the chip's own digital
-    // clock and reset, then assert and release this to start the rest of the
-    // block cleanly on the clock it now has.
-    //
-    // It reaches the PHY's root reset, so it takes the PHY, PhyTest, the UCIe
-    // controller, both register-facing FIFO ends and `UcieTLRegs` with it. The
-    // configuration in `UcieTLRegs` does not survive, which is why this comes
-    // before that block is set up rather than after.
-    //
-    // It is a bringup control, not something to reach for while the link is
-    // carrying traffic. `UcieTLRegs` sits behind the same crossbar this block
-    // does but in the reset's own domain, so a register access in flight to it
-    // when the reset lands never gets its response and wedges the crossbar;
-    // the mainband TileLink path crosses into that domain too. Assert it with
-    // both quiet. `setup_ucie` calls it first, before either has started.
+    // Bringup only. An access in flight to `UcieTLRegs`, or mainband traffic,
+    // is in the reset's domain and behind the same crossbar, so a response
+    // lost to the reset wedges it. `setup_ucie` asserts this first, with both
+    // quiet.
     val ucieRstReq = withClockAndReset(clock, reset) { RegInit(false.B) }
     io.ucieRst := ucieRstReq
 
+    // Applying a configuration: gate, switch under the gate, let the clocks
+    // back out. Changing a mux or a divider under a running clock hands the
+    // domains behind it a runt. The gate covers all three derived clocks --
+    // the main clock select moves what every divider counts.
     val applyReq = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyBusy = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyCount = withClockAndReset(clock, reset) {

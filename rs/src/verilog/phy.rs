@@ -12,7 +12,7 @@ mod tests {
     use anyhow::Result;
     use test_log::test;
 
-    use crate::verilog::{Level, harness::expect_clean};
+    use crate::verilog::{Level, tests::expect_clean};
 
     #[test]
     fn eye() -> Result<()> {

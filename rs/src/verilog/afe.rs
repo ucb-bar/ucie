@@ -24,7 +24,7 @@ mod tests {
     use test_log::test;
 
     use super::CONTRACT_CELLS;
-    use crate::verilog::{Level, model_src_files};
+    use crate::verilog::{Level, model_src_files, tests::expect_clean};
 
     /// A level that is missing a cell fails to elaborate against a testbench
     /// that instantiates it, which is a confusing way to find out. This says so
@@ -49,13 +49,78 @@ mod tests {
         Ok(())
     }
 
-    crate::verilog::bench_at_every_level! {
-        rdac => "rdac_tb",
-        pad_driver_data => "pad_driver_data_tb",
-        pad_driver_impedance => "pad_driver_impedance_tb",
-        tx_tile_driver_data => "tx_tile_driver_data_tb",
-        tx_tile_driver_impedance => "tx_tile_driver_impedance_tb",
-        rx_afe => "rx_afe_tb",
-        termination => "termination_tb",
+    // Benches written against the model contract in `verilog/README.md`
+    // have to hold at every level, so each runs at both. The level is in
+    // the test name rather than a module around it, which keeps
+    // `cargo test eye` selecting the fast half.
+
+    #[test]
+    fn rdac_eye() -> Result<()> {
+        expect_clean(Level::Eye, "rdac_tb")
+    }
+
+    #[test]
+    fn rdac_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "rdac_tb")
+    }
+
+    #[test]
+    fn pad_driver_data_eye() -> Result<()> {
+        expect_clean(Level::Eye, "pad_driver_data_tb")
+    }
+
+    #[test]
+    fn pad_driver_data_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "pad_driver_data_tb")
+    }
+
+    #[test]
+    fn pad_driver_impedance_eye() -> Result<()> {
+        expect_clean(Level::Eye, "pad_driver_impedance_tb")
+    }
+
+    #[test]
+    fn pad_driver_impedance_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "pad_driver_impedance_tb")
+    }
+
+    #[test]
+    fn tx_tile_driver_data_eye() -> Result<()> {
+        expect_clean(Level::Eye, "tx_tile_driver_data_tb")
+    }
+
+    #[test]
+    fn tx_tile_driver_data_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "tx_tile_driver_data_tb")
+    }
+
+    #[test]
+    fn tx_tile_driver_impedance_eye() -> Result<()> {
+        expect_clean(Level::Eye, "tx_tile_driver_impedance_tb")
+    }
+
+    #[test]
+    fn tx_tile_driver_impedance_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "tx_tile_driver_impedance_tb")
+    }
+
+    #[test]
+    fn rx_afe_eye() -> Result<()> {
+        expect_clean(Level::Eye, "rx_afe_tb")
+    }
+
+    #[test]
+    fn rx_afe_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "rx_afe_tb")
+    }
+
+    #[test]
+    fn termination_eye() -> Result<()> {
+        expect_clean(Level::Eye, "termination_tb")
+    }
+
+    #[test]
+    fn termination_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "termination_tb")
     }
 }

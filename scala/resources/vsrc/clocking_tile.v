@@ -21,8 +21,8 @@
 //   SbClk        the sideband bypass pin, or the main clock divided by
 //                1, 5, 10, 15 or 20, which is where 800 MHz comes from
 //
-// Each divider stops whenever its bypass pin is selected, so there is nothing
-// to disable by hand.
+// A divider is held at zero while its bypass pin is selected, so deselecting
+// one starts a fresh period rather than landing mid-count.
 //
 // The divider and the phase shifter are one circuit. A counter over main clock
 // half cycles, modulo twice the division ratio, gives every phase the divider
@@ -184,8 +184,8 @@ module clocking_tile(
                        (DigClkDiv == 3'd2) ? 6'd4 :
                        (DigClkDiv == 3'd3) ? 6'd8 : 6'd15;
 
-  // The divider stops on its own when the digital clock is not coming from
-  // it: nothing selects it, so nothing has to be told to switch it off.
+  // Held at zero while the bypass pin is selected, so switching back to the
+  // divider starts a fresh period.
   reg [5:0] dig_cnt = 6'd0;
   always @(posedge main_clk) begin
     if (DigClkBypassEn || (^dig_cnt === 1'bx) ||
@@ -200,8 +200,7 @@ module clocking_tile(
 
   // ---- Sideband clock divider ----
   // Its own divider off the same main clock: the sideband runs at a rate the
-  // digital domain does not, and stops on its own when the bypass pin is
-  // selected.
+  // digital domain does not.
   wire [5:0] sb_div = (SbClkDiv == 3'd0) ? 6'd1 :
                       (SbClkDiv == 3'd1) ? 6'd5 :
                       (SbClkDiv == 3'd2) ? 6'd10 :

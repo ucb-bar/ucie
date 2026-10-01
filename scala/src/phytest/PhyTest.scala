@@ -220,22 +220,16 @@ class PhyTestRegsIO(
   // RX capture SRAM. Covers exactly the packets counted by `rxPacketsReceived`, so
   // read the two under `rxPauseCounters`.
   val rxSignature = Output(UInt(32.W))
-  // Idle words the RX has handled since the FSM reset. Free running; 32 bits
-  // is about 8 s at the top rate, so it neither saturates nor wraps within
-  // any realistic read.
+  // Idle words the RX has handled since the FSM reset, free running.
   //
   // Read it twice: a value that moves means the receive path is clocked and
-  // words are still arriving, a value that sits still means they are not.
-  // Immediately after `rxFsmRst` it is also a count from zero, which is what
-  // the settle poll uses -- stuck at zero there means the RX was not
-  // presenting words when transmission began, which points at the recovered
-  // clock or the reset path. Read against
-  // `rxPacketsReceived` it separates the three cases that otherwise all look
-  // like "bit errors everywhere": neither advancing is a dead receive path;
-  // this advancing with no packets is a link that never saw valid; packets
-  // advancing is a working link. `run_lfsr` also waits on it, because a reset
-  // released through a synchronizer on the divided clock takes proportionally
-  // longer at every division and no fixed delay covers every rate.
+  // words are arriving. Read against `rxPacketsReceived` it separates three
+  // cases that otherwise all look like "bit errors everywhere" -- neither
+  // advancing is a dead receive path, this advancing with no packets never saw
+  // valid, both advancing is a working link.
+  //
+  // `run_lfsr` waits on it too: the datapath reset releases through a
+  // synchronizer on the divided clock, so no fixed delay covers every rate.
   val rxIdleWordsObserved = Output(UInt(32.W))
   // Data chunk lane in output buffer.
   val rxDataLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
@@ -453,16 +447,14 @@ class PhyTest(
 
   // OBSERVATION BUMPS
   //
-  // The PHY hands over raw nets and nothing else; picking what to watch and
-  // driving a pad with it happens here, so the PHY carries only link RTL.
+  // The PHY hands over raw nets; picking what to watch and driving a pad with
+  // it happens here, so the PHY carries only link RTL.
   //
-  // The `clkMux` bump watches whichever clock `clkMuxSel` indexes out of this
-  // list. The cell takes `ClkMux.numInputs`, so there is room to bring more
-  // clocks out here later; until then the rest of its inputs are tied off and
-  // selecting one leaves every pass gate open. The `rxData` bump watches any
-  // bit of any RX lane's deserialized word; those words sit in the RX divided
-  // clock domain, but nothing here samples them, so the selects are the only
-  // thing crossing and they are quasi-static configuration.
+  // `clkMux` watches whichever clock `clkMuxSel` indexes out of this list; the
+  // cell takes `ClkMux.numInputs`, and selecting a tied-off input leaves every
+  // pass gate open. `rxData` watches any bit of any RX lane's word. Those
+  // words are in the RX divided clock domain but nothing here samples them, so
+  // only the selects cross and they are quasi-static.
   val clkMuxIns = Seq(io.debug.sbTxClk, io.debug.txDivClk)
   val clkMux = Module(new ClkMux)
   val clkMuxOut = clkMux.connect(clkMuxIns, io.regs.clkMuxSel)

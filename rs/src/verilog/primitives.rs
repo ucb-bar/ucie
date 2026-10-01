@@ -14,7 +14,7 @@ mod tests {
 
     use crate::verilog::{
         Level,
-        harness::{expect_clean, run},
+        tests::{expect_clean, run},
     };
 
     #[test]

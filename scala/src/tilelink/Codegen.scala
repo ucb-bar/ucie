@@ -385,17 +385,12 @@ object Codegen {
 
   /** How many times `run_lfsr` reads back the packet count before giving up.
     *
-    * This has to outlast the burst. A register round trip is longer than a
-    * packet, but the burst does not begin until the run's programming writes
-    * have all landed, so what the window must cover is the tail of those writes
-    * plus the burst behind them -- not the burst alone.
-    *
-    * Eight was enough only because the burst happened to finish before the
-    * first read back. Two further writes in `reset_fsms` delayed the burst past
-    * the end of that window, and every run then scored a partial count taken
-    * mid-burst: full packets sent, a fraction of them counted. It is still a
-    * bound on what a run that will never finish costs -- every code outside the
-    * eye during a sweep -- so it is raised only as far as it has to be.
+    * The window covers the tail of the run's programming writes plus the burst
+    * behind them, not the burst alone. Eight only worked because the burst
+    * happened to finish before the first read back; two extra writes in
+    * `reset_fsms` pushed it past the window and every run scored a partial
+    * count. It also bounds what a run that never finishes costs -- every code
+    * outside the eye during a sweep -- so raise it only as far as needed.
     */
   val trainPollTries: Int = 16
 

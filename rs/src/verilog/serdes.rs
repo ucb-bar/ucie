@@ -11,7 +11,7 @@ mod tests {
     use anyhow::Result;
     use test_log::test;
 
-    use crate::verilog::{Level, harness::run};
+    use crate::verilog::{Level, tests::run};
 
     #[test]
     fn ser21() -> Result<()> {
