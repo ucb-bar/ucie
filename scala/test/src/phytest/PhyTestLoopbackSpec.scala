@@ -45,8 +45,9 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
 
   val laneClk = RegInit(false.B)
   laneClk := !laneClk
-  dut.io.debug.txClk := laneClk.asClock
-  dut.io.debug.rxClk := false.B.asClock
+  dut.io.debug.testTxLaneClk.foreach(_ := laneClk.asClock)
+  dut.io.debug.testTxPadClk := laneClk.asClock
+  dut.io.debug.testRxPadClk := false.B.asClock
   // The tile no longer brings out its own divided clock, so the harness
   // supplies the one the tester hands words over on. Like the PHY's global TX
   // divider it is held by the same reset as the lane serdes, so the two come up

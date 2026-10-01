@@ -7,7 +7,20 @@ module ucie_clk_dist_network(
 
     input rxClk,
     output [19:0] txLaneClk,
-    output [17:0] rxLaneClk
+    output [17:0] rxLaneClk,
+
+    // The tester's lanes (TX data debug, loopback TX, loopback RX) and its two
+    // clock observation pad drivers.
+    output [2:0] testTxLaneClk,
+    output testTxPadClk,
+    output testRxPadClk,
+
+    // The clocking tile's bypass clocks: the clock receiver's restored clock,
+    // and the digital bypass clock off its bump.
+    input bypassClk,
+    input digitalBypassClk,
+    output tileBypassClk,
+    output tileDigitalBypassClk
 );
     // Lane map for numLanes = 16: 0..15 data, 16 valid, 17 track, 18 and 19 the
     // two forwarded-clock lanes. The clock lanes run off the quadrature phase so
@@ -24,7 +37,14 @@ module ucie_clk_dist_network(
         end
     endgenerate
 
+    assign testTxLaneClk = {3{txClk}};
+    assign testTxPadClk = txClk;
+
     assign rxClkDivClk = rxClk;
+    assign testRxPadClk = rxClk;
+
+    assign tileBypassClk = bypassClk;
+    assign tileDigitalBypassClk = digitalBypassClk;
     generate
         for (genvar i = 0; i < 18; i++) begin
             assign rxLaneClk[i] = rxClk;
