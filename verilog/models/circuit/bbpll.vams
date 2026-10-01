@@ -231,9 +231,9 @@ endmodule
 module model_BBPD(clk_ref, clk_fb, early, late);
 
     input clk_ref, clk_fb;
-	electrical clk_ref, clk_fb;
+    electrical clk_ref, clk_fb;
     output early, late;
-	electrical early, late;
+    electrical early, late;
 
     parameter real vdd = 0.75;
     parameter real t_rise = 5p;

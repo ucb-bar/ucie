@@ -39,14 +39,18 @@ module tx_lane (
   reg [31:0] shiftReg;
   reg [7:0] wakeCtr;
   wire awake = (wakeCtr >= WAKE_CYCLES);
-  always @(posedge RST_async) begin
-    divClock <= 1'b0;
-    ctr <= 3'b1;
-    shiftReg <= 32'b0;
-    wakeCtr <= 8'b0;
-  end
-  always @(posedge CK) begin
-    if (!RST_async) begin
+  // `RST_async` is asynchronous in the full sense: it must clear the divider
+  // with no clock present. Delay codes are changed by gating CK off, holding
+  // this reset, releasing it, and only then letting CK run again, so that
+  // every tile's divider restarts on the same first edge. A reset that needed
+  // an edge of its own would never be applied in that window.
+  always @(posedge CK or posedge RST_async) begin
+    if (RST_async) begin
+      divClock <= 1'b0;
+      ctr <= 3'b1;
+      shiftReg <= 32'b0;
+      wakeCtr <= 8'b0;
+    end else begin
       if (!awake) wakeCtr <= wakeCtr + 1'b1;
       ctr <= ctr + 1'b1;
       shiftReg <= shiftReg >> 1'b1;
@@ -93,9 +97,11 @@ module tx_lane (
   end
   // Second half of the DDR serializer: the tile takes a single-ended clock
   // and makes its own complement internally, so the falling edge here is
-  // what the second serializer phase keys off.
-  always @(negedge CK) begin
-    shiftReg <= shiftReg >> 1'b1;
+  // what the second serializer phase keys off. Held off while reset, so the
+  // two halves agree on the shift register's state coming out of it.
+  always @(negedge CK or posedge RST_async) begin
+    if (RST_async) shiftReg <= 32'b0;
+    else shiftReg <= shiftReg >> 1'b1;
   end
 
   // `ENP` is active low and `ENN` active high, so the driver is off when every

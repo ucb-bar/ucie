@@ -23,20 +23,23 @@
 #
 # ============================================================================
 
+# Paths. `constants.vams` is shared by every abstraction level and so sits above
+# the circuit-level models these benches are written against.
+TB_DIR := ..
+VAMS_DIR := ../..
+SHARED_DIR := ../../../..
+
 # Xcelium command and options
 XRUN := xrun
 XRUN_OPTS := -64bit \
              -timescale 1ps/1fs \
              -xmlibdirname worklib \
              -access +rwc \
-             -amsconnrules ConnRules_full_fast
-
-# Paths
-TB_DIR := ..
-VAMS_DIR := ../..
+             -amsconnrules ConnRules_full_fast \
+             -incdir $(SHARED_DIR)
 
 # Source files
-CONSTANTS := $(VAMS_DIR)/constants.vams
+CONSTANTS := $(SHARED_DIR)/constants.vams
 BBPLL_SRC := $(VAMS_DIR)/bbpll.vams
 DCDL_SRC := $(VAMS_DIR)/dcdl.vams
 S2D_SRC := $(VAMS_DIR)/s2d.vams

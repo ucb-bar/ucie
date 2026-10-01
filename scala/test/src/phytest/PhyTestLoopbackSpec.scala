@@ -20,7 +20,7 @@ import edu.berkeley.cs.uciedigital.phy.Phy
 class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     extends Module {
   val io = IO(new Bundle {
-    // Active low hold on the lane serdes, driven onto `txRst`/`rxRst`.
+    // Active low hold on the lane serdes, driven onto the datapath resets.
     val serdesRstb = Input(Bool())
     val fsmRst = Input(Bool())
     val execute = Input(Bool())
@@ -76,8 +76,8 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.txManualRepeatPeriod := io.repeatPeriod
   dut.io.regs.txPacketsToSend := 0.U
   dut.io.regs.rxPacketsToReceive := 0.U
-  dut.io.regs.txRst := io.fsmRst || !io.serdesRstb
-  dut.io.regs.rxRst := io.fsmRst || !io.serdesRstb
+  dut.io.regs.txDatapathRst := io.fsmRst || !io.serdesRstb
+  dut.io.regs.rxDatapathRst := io.fsmRst || !io.serdesRstb
   dut.io.regs.txExecute := io.execute
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.txDataChunkIn.valid := io.writeChunk

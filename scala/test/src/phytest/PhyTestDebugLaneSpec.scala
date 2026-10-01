@@ -24,7 +24,7 @@ class PhyTestDebugLaneHarness(
     shuffle: Int => Int = Phy.treeBitOrder
 ) extends Module {
   val io = IO(new Bundle {
-    // Active low hold on the lane serdes, driven onto `txRst`/`rxRst`.
+    // Active low hold on the lane serdes, driven onto the datapath resets.
     val serdesRstb = Input(Bool())
     val data = Input(Vec(16, UInt(64.W)))
     val repeatPeriod = Input(UInt(6.W))
@@ -67,10 +67,10 @@ class PhyTestDebugLaneHarness(
   dut.io.regs.testTarget := TestTarget.mainband
   dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
-  dut.io.regs.txRst := !io.serdesRstb
+  dut.io.regs.txDatapathRst := !io.serdesRstb
   dut.io.regs.txExecute := false.B
   dut.io.regs.txDataChunkIn.valid := false.B
-  dut.io.regs.rxRst := !io.serdesRstb
+  dut.io.regs.rxDatapathRst := !io.serdesRstb
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.sb.txSend := false.B
   dut.io.regs.sb.rxPop := false.B

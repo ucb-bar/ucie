@@ -1,0 +1,53 @@
+// Eye-level clock distribution network: one clock in, `LANES` copies out, each
+// arriving at its own time.
+//
+// The static per-lane delay spread is kept, because lane-to-lane skew is
+// exactly what per-lane deskew training exists to take out, and a network that
+// handed every lane the same edge would make that training look free. Delays
+// are drawn once per elaboration from N(`propagation_delay_mu`,
+// `propagation_delay_sigma`).
+//
+// What `models/circuit` adds is the network's phase noise -- a white floor and
+// a flicker component, common to every lane since they share a root -- sampled
+// onto each edge as jitter. As in `models/eye/dcdl.vams`, jitter closes an eye
+// rather than opening one, so it is left to the lower level.
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module clocking_distribution_model(clk_in, clk_out);
+    input clk_in; electrical clk_in;
+    output [15:0] clk_out; electrical [15:0] clk_out;
+
+    parameter real vdd = `VDD;
+    parameter real propagation_delay_mu = 198p;
+    parameter real propagation_delay_sigma = 541f;
+    parameter real t_slew = `EYE_CLK_DIST_SLEW * 1p;
+
+    real lane_delay[0:15];
+    integer sign;
+    integer seed;
+    integer i;
+
+    genvar j;
+
+    analog begin
+        @(initial_step) begin
+            seed = $random + $abstime * 1e12;
+            // `cross` fires on a crossing and not on where the operating point
+            // started, so the initial solution sets the output level too.
+            sign = (V(clk_in) > vdd / 2) ? 1 : 0;
+            for (i = 0; i < 16; i = i + 1) begin
+                lane_delay[i] = propagation_delay_mu
+                    + propagation_delay_sigma * $rdist_normal(seed, 0, 1);
+            end
+        end
+
+        @(cross(V(clk_in) - vdd/2, 1)) sign = 1;
+        @(cross(V(clk_in) - vdd/2, -1)) sign = 0;
+
+        for (j = 0; j < 16; j = j + 1) begin
+            V(clk_out[j]) <+ transition(vdd * sign, lane_delay[j], t_slew);
+        end
+    end
+endmodule
