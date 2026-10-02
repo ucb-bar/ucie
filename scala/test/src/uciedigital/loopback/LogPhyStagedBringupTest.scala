@@ -142,9 +142,9 @@ class LogPhyStagedBringupTest extends AnyFunSpec with ChiselSim {
     climbTo(h, LTState.sACTIVE, sidebandCycles)
   }
 
-  /** What an Adapter does once it sees pl_inband_pres (spec 10.1.6 Step 2):
-    * ask for Active. The RDI leaves Reset only on that request, the NOP having
-    * been presented since cold start (spec 10.3.3.1).
+  /** What an Adapter does once it sees pl_inband_pres (spec 10.1.6 Step 2): ask
+    * for Active. The RDI leaves Reset only on that request, the NOP having been
+    * presented since cold start (spec 10.3.3.1).
     */
   private def requestActive(h: LogPhyLoopbackHarness): Unit =
     for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)

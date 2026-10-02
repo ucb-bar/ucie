@@ -186,7 +186,11 @@ class MultiModulePhy(
        advertised to the remote Link partner during MBINIT.PARAM. Bypassed, the
        Module is the only one of its Link, which spec 5.7.3.4 names M0 (Table
        5-28's x1 pairings). */
-    phy.io.ctrl.localPhyParamSettings.bits.moduleId := Mux(bypassed, 0.U, m.U(2.W))
+    phy.io.ctrl.localPhyParamSettings.bits.moduleId := Mux(
+      bypassed,
+      0.U,
+      m.U(2.W)
+    )
 
     io.analog(m) <> phy.io.analog
 
@@ -232,10 +236,10 @@ object MultiModulePhy {
       field := 0.U.asTypeOf(field)
     }
 
-  /** Connects a Module's RDI to whichever upper port is in use: the MMPL's
-    * port for the Module, or the Module's own RDI while bypassed. What the
-    * Module drives goes to both, and its own port reads idle while it is not
-    * in use; what the Module takes comes from the port in use alone.
+  /** Connects a Module's RDI to whichever upper port is in use: the MMPL's port
+    * for the Module, or the Module's own RDI while bypassed. What the Module
+    * drives goes to both, and its own port reads idle while it is not in use;
+    * what the Module takes comes from the port in use alone.
     */
   private def steerModuleRdi(
       module: Rdi,
