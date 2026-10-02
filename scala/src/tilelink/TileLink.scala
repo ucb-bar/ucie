@@ -77,7 +77,13 @@ case class UcieTLParams(
     // Names the emitted module (see `moduleSuffix`). Instances that share an id
     // share a SystemVerilog module; give an instance its own id to harden it
     // separately in physical design.
-    moduleId: Int = 0
+    moduleId: Int = 0,
+    // Which netlist the PHY's lane clock distribution network is: the
+    // behavioral model, or the buffered tree the analog IP's clock DEF places
+    // for this instance's bump field orientation. The tree is physical, so an
+    // instance that uses one should have a `moduleId` of its own.
+    clkDistLayout: edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout =
+      edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
@@ -1314,7 +1320,11 @@ class UcieTL(
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY
-    val phy = Module(new Phy(params.numLanes)(params.includeDefaultModels))
+    val phy = Module(
+      new Phy(params.numLanes, params.clkDistLayout)(
+        params.includeDefaultModels
+      )
+    )
     io.phy <> phy.io.top
     // The block reset, plus the software one that outlives it. Assertion is
     // asynchronous to every domain behind it and release is synchronized by
