@@ -329,6 +329,11 @@ class SidebandLinkNodeTest
     it("asserts desTimedout when a packet stalls mid-stream") {
       simulate(mkNode(timeout = 200)) { c =>
         c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
+        // The quiet link after reset frames the stream, so what follows is a
+        // real packet stalling, not the tail of one joined part-way.
+        c.io.rxIn.bits.poke(0.U)
+        c.io.rxIn.fwClock.poke(false.B)
+        c.clock.step(16)
         val msg = withParity(mkMsg(reqResp, 1))
         for (i <- 0 until 30) {
           driveBit(c, (msg >> i) & 1)
@@ -337,6 +342,33 @@ class SidebandLinkNodeTest
         c.io.rxIn.fwClock.poke(false.B)
         c.clock.step(230)
         c.io.err.desTimedout.expect(true.B)
+      }
+    }
+
+    it("drops a chunk it came out of reset part-way through") {
+      /* The partner was already sending when this receiver left reset -- it
+         left RESET first and started SBINIT -- so the first edges are the tail
+         of a chunk. The 32 UI gap after it (spec 4.1.5) frames the stream, and
+         the next packet arrives whole instead of shifted. */
+      simulate(mkNode()) { c =>
+        c.io.ctrl.rxMode.poke(SBRxTxMode.PACKET)
+        val tail = withParity(mkMsg(reqResp, 2))
+        for (i <- 20 until 64) driveBit(c, (tail >> i) & 1)
+        c.io.rxIn.bits.poke(0.U)
+        c.io.rxIn.fwClock.poke(false.B)
+        c.clock.step(32)
+        val msg = withParity(mkMsg(reqResp, 1))
+        feedRxSerial(c, msg)
+        c.io.rxOut.ready.poke(true.B)
+        var guard = 0
+        while (!c.io.rxOut.valid.peek().litToBoolean && guard < 50) {
+          c.clock.step()
+          guard += 1
+        }
+        c.io.rxOut.valid.expect(true.B)
+        assert(c.io.rxOut.bits.peek().litValue == msg, "framed on the gap")
+        c.io.err.sbParityErr.expect(false.B)
+        c.io.err.desTimedout.expect(false.B)
       }
     }
 

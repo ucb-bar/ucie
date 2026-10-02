@@ -395,14 +395,19 @@ class AdapterSMTest extends AnyFunSpec with ChiselSim {
         waitForState(c, RDIState.linkError)
         c.io.fdi_pl_inband_pres.expect(false.B)
 
-        // RX is still up, so the adapter stays in linkError: that is where the
-        // Active request from the protocol layer gets forwarded to RDI.
+        // The Active request from the protocol layer is forwarded to RDI, which
+        // is how the Adapter asks RDI to leave LinkError (spec 10.3.3.7).
         c.io.fdi_lp_state_req.poke(RDIStateReq.active)
         c.clock.step(2)
         c.io.rdi_lp_state_req.expect(RDIStateReq.active)
 
-        // Dropping RX satisfies the exit condition and the adapter re-inits.
+        // LinkError is left from the bottom up (spec 3.5): the Adapter LSM
+        // stays there while RDI does, even with RX down ...
         c.io.fdi_lp_rx_active_sts.poke(false.B)
+        c.clock.step(8)
+        c.io.fdi_pl_state_sts.expect(RDIState.linkError)
+        // ... and follows RDI once it has gone to Reset.
+        c.io.rdi_pl_state_sts.poke(RDIState.reset)
         waitForState(c, RDIState.reset)
       }
     }
@@ -522,9 +527,12 @@ class AdapterSMTest extends AnyFunSpec with ChiselSim {
 
         // Recovering re-runs link init from the beginning: the capability
         // advertisement is sent again. Leaving linkError needs an Active
-        // request from the protocol layer while RX is down.
+        // request from the protocol layer while RX is down, and RDI to have
+        // left LinkError first.
         c.io.fdi_lp_rx_active_sts.poke(false.B)
         c.io.fdi_lp_state_req.poke(RDIStateReq.active)
+        c.clock.step(2)
+        c.io.rdi_pl_state_sts.poke(RDIState.reset)
         waitForState(c, RDIState.reset)
         c.io.rdi_pl_state_sts.poke(RDIState.active)
         expectSbAndAccept(c, SideBandMessage.ADV_CAP)
@@ -568,12 +576,29 @@ class AdapterSMTest extends AnyFunSpec with ChiselSim {
         ackStall(c)
         waitForState(c, RDIState.retrain)
 
-        // Retraining completes: the PHY is back in Active and the protocol
-        // layer is ready again, so the adapter should resume Active.
         c.io.linkmgmt_stalldone.poke(false.B)
-        c.io.rdi_pl_state_sts.poke(RDIState.active)
+        // Spec 10.3.3.4: the protocol layer asks for Active with NOP -> Active,
+        // and only then does the adapter ask RDI, the same way.
+        c.io.fdi_lp_state_req.poke(RDIStateReq.nop)
+        c.clock.step(4)
+        c.io.rdi_lp_state_req.expect(RDIStateReq.nop, "not asked for yet")
         c.io.fdi_lp_state_req.poke(RDIStateReq.active)
+        waitUntil(c)(
+          c.io.rdi_lp_state_req.peek().litValue == RDIStateReq.active.litValue
+        )
+        c.io.fdi_pl_state_sts.expect(RDIState.retrain, "RDI is not back yet")
+
+        // RDI is back in Active; then the Active Entry handshake with the
+        // remote Adapter (spec 10.2.8, "for every entry to Active state").
+        c.io.rdi_pl_state_sts.poke(RDIState.active)
+        expectSbAndAccept(c, SideBandMessage.REQ_ACTIVE)
+        rcvSb(c, SideBandMessage.REQ_ACTIVE)
+        waitUntil(c)(c.io.fdi_pl_rx_active_req.peek().litToBoolean)
+        c.io.fdi_pl_state_sts.expect(RDIState.retrain, "no Rsp.Active yet")
         c.io.fdi_lp_rx_active_sts.poke(true.B)
+        expectSbAndAccept(c, SideBandMessage.RSP_ACTIVE)
+        c.io.fdi_pl_state_sts.expect(RDIState.retrain, "none received yet")
+        rcvSb(c, SideBandMessage.RSP_ACTIVE)
         waitForState(c, RDIState.active, maxCycles = 80)
       }
     }

@@ -256,6 +256,9 @@ class PatternReader(afeParams: AfeParams) extends Module {
 
   val patternTypeReg = RegInit(PatternSelect.CLKREPAIR)
   val comparisonModeReg = RegInit(ComparisonMode.PERLANE)
+  // The Lane map the test ran against, so a result held for the requester
+  // does not move if the map is updated while it waits.
+  val laneMapReg = RegInit(0.U(afeParams.mbLanes.W))
   val doConsecutiveCountReg = RegInit(false.B)
   // Holds the error threshold, or (in consecutive mode) the required number of
   // consecutive clean iterations.
@@ -288,6 +291,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
         state := sDetect
         patternTypeReg := io.interfaceIo.req.bits.patternType
         comparisonModeReg := io.interfaceIo.req.bits.comparisonMode
+        laneMapReg := laneMap
         doConsecutiveCountReg := io.interfaceIo.req.bits.doConsecutiveCount
         patternCounterReg.foreach(x => x := 0.U)
         iterDirtyReg.foreach(x => x := false.B)
@@ -339,13 +343,15 @@ class PatternReader(afeParams: AfeParams) extends Module {
   // ==========================================================================
   // Comparison datapath (stage 1)
   // ==========================================================================
-  val logicalLane = VecInit(Seq.tabulate(afeParams.mbLanes) { i =>
-    PatternLaneMap.activeLaneIndex(
-      io.interfaceIo.remoteFuncLanes,
-      i,
-      afeParams.mbLanes
-    )
-  })
+  /* The reference for a Lane is that Lane's own, degraded or not. Spec 4.2.1
+     gives every logical Lane a fixed Lane ID ({0...15} for a x16 Standard
+     Package Module), and a Table 4-9 Lane map only says which of those Lanes
+     carry traffic; it does not renumber them. PatternWriter transmits Lane i's
+     own Per Lane ID and LFSR on Lane i, so a reference shifted down for the
+     upper maps (010b, 101b) failed every functional Lane of the upper half --
+     a Module that degraded away from a fault in its lower Lanes could never
+     pass the next point test. */
+  val logicalLane = VecInit(Seq.tabulate(afeParams.mbLanes)(_.U))
   val remotePattern = Wire(Vec(afeParams.mbLanes, UInt(serRatio.W)))
   val localPattern = Wire(Vec(afeParams.mbLanes, UInt(serRatio.W)))
   remotePattern.foreach(_ := 0.U)
@@ -589,12 +595,27 @@ class PatternReader(afeParams: AfeParams) extends Module {
   // ==========================================================================
   // Outputs
   // ==========================================================================
+  /* A data Lane outside the remote functional-Lane map is one this Receiver
+     has disabled, so it cannot have detected the pattern: it reports failed,
+     in error-count mode as well as consecutive mode. That is how a partner
+     still transmitting on a wider Lane map learns where this Receiver
+     listens -- spec 4.5.3.3.6 and 4.5.3.4.13 leave its Transmitter to be
+     narrowed by the next point test failing on those Lanes -- and a
+     Transmitter already on a narrower map ignores results for the Lanes it
+     does not drive. */
+  val laneMappedPattern =
+    (comparisonModeReg === ComparisonMode.PERLANE) &&
+      ((patternTypeReg === PatternSelect.PERLANEID) ||
+        (patternTypeReg === PatternSelect.LFSR))
+  val perLaneStatus = VecInit(Seq.tabulate(afeParams.mbLanes) { i =>
+    patternCompStatus(i) && (!laneMappedPattern || laneMapReg(i))
+  })
   io.interfaceIo.resp.bits.perLaneStatusBits.zipWithIndex.foreach {
     case (res, i) =>
-      res := patternCompStatus(i)
+      res := perLaneStatus(i)
   }
   // Only meaningful in aggregate mode; in perlane mode read perLaneStatusBits.
-  io.interfaceIo.resp.bits.aggregateStatus := patternCompStatus(0)
+  io.interfaceIo.resp.bits.aggregateStatus := perLaneStatus(0)
 
   io.rxLfsrCtrl.increment := counterEn && (patternTypeReg === PatternSelect.LFSR)
   io.rxLfsrCtrl.resetLfsr :=

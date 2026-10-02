@@ -133,6 +133,19 @@ class PHYParamExchangeIO extends Bundle {
   the operational modules", which no single Module can see, so the MMPL derives
   it from every Module's width and feeds it to the resolver directly.
  */
+/*
+  A Module's training retry episode (LinkTrainingSM): whether one is running,
+  whether this die started it, and how many retries it has used of how many.
+  The MMPL hands one to a Module it restores, so that a multi-module Link keeps
+  one retry count and escalates as one Link.
+ */
+class TrainingEpisode extends Bundle {
+  val active = Bool()
+  val local = Bool()
+  val retries = UInt(16.W)
+  val retryMax = UInt(16.W)
+}
+
 class MmplLinkSpeedReport extends Bundle {
   val sentDone = Bool()
   val sentRepair = Bool()
@@ -176,21 +189,45 @@ class MmplModuleCtrlIO extends Bundle {
      rather than retraining on its own, until the whole Link retrains from
      RESET and the MMPL restores it. */
   val moduleDisabled = Output(Bool())
+  /* One-cycle pulse when the MMPL takes back a Module it had disabled or found
+     failed, which it does only once the whole Link is in RESET. The Module
+     drops the training episode, retry count, fatal flags, timeout and trigger
+     levels it carried while it was out, so it starts the next training in the
+     same state as its siblings rather than on stale ones. */
+  val restart = Output(Bool())
+  /* The retry episode a restarting Module takes up in place of its own, which
+     belongs to a training the Link has moved on from: the Link's, when the
+     Module is restored after the whole Link failed and is retrying, and none
+     (inactive) after a training the rest of the Link finished without it. */
+  val restartEpisode = Output(new TrainingEpisode())
+  /* Another operational Module of the Link has started training (it is in
+     SBINIT). A Module sitting in RESET joins it, so every Module of the Link
+     leaves RESET on one Link-level trigger instead of on its own. */
+  val joinResetExit = Output(Bool())
+  /* The RDI state machine in charge of this Module is the MMPL's hosted one
+     (spec 3.5), not the Module's own. Only a Module built with
+     RdiStateMachineHome.Selectable has a choice; the others must be told what
+     they were built for. */
+  val rdiHosted = Output(Bool())
 
   /** Drives the directives for a Link with no MMPL above it. */
   def tieOffSingleModule(): Unit = {
     multiModule := false.B
+    rdiHosted := false.B
     resolution.valid := false.B
     resolution.bits := MmplResolution.none
     commonRetrainEncoding.valid := false.B
     commonRetrainEncoding.bits := 0.U
     moduleDisabled := false.B
+    restart := false.B
+    restartEpisode := 0.U.asTypeOf(new TrainingEpisode())
+    joinResetExit := false.B
   }
 }
 
 /*
-  A Module that does not own an RDI state machine exposes this so the block above
-  it can host one on its behalf.
+  A Module whose RDI state machine can live above it exposes this so the block
+  above can host one on its behalf.
 
   Spec 3.5: "The Adapter data path and RDI data width can be extended for
   multi-module configurations; however, there is a single RDI state machine for
@@ -204,8 +241,13 @@ class LogicalPhyRdiHostIO(sbParams: SidebandParams) extends Bundle {
   // What this Module contributes to the hosted state machine.
   val ltsmState = Output(LTState())
   val doRdiBringup = Output(Bool())
-  val trainingTimeout = Output(Bool())
+  // This Module escalates to RDI LinkError (LinkTrainingSM.forceRdiLinkError).
+  val internalLinkError = Output(Bool())
   val validFramingError = Output(Bool())
+  // A software retrain waiting in ACTIVE for the RDI to go to Retrain.
+  val swRetrainRequest = Output(Bool())
+  // No mainband transmit word is part-way through its beats.
+  val txIdle = Output(Bool())
   val cfgSidebandActive = Output(Bool())
   val plPhyInRecenter = Output(Bool())
   val clocksUngatedAndStable = Output(Bool())

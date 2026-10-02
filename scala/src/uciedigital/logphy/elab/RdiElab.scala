@@ -31,7 +31,10 @@ object MainRDIClockHandshakeRequester extends App {
 
 object MainRDIController extends App {
   ChiselStage.emitSystemVerilogFile(
-    new RDIController(new SidebandParams()),
+    new RDIController(
+      new SidebandParams(),
+      LinkTrainingSM.linkErrorResidencyCycles(None)
+    ),
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",
@@ -57,7 +60,10 @@ object MainRDIStallRequester extends App {
 
 object MainRDIStateMachine extends App {
   ChiselStage.emitSystemVerilogFile(
-    new RDIStateMachine(new SidebandParams()),
+    new RDIStateMachine(
+      new SidebandParams(),
+      LinkTrainingSM.linkErrorResidencyCycles(None)
+    ),
     args = Array("-td", "./generatedVerilog/logphy"),
     firtoolOpts = Array(
       "-O=debug",

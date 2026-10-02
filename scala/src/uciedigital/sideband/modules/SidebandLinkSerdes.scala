@@ -266,9 +266,24 @@ class SidebandLinkDeserializer(
   rxQueue.io.deq_clock := clock
   rxQueue.io.deq_reset := reset.asBool
 
+  /* Words are framed by counting forwarded-clock edges, so a receiver that
+     comes out of reset while its partner is part-way through a chunk -- the
+     partner left RESET first and started SBINIT -- counts from the middle of
+     it, and misframes every packet after. The serializer leaves 32 UI with no
+     forwarded clock after every 64-bit chunk (spec 4.1.5), and the first gap
+     that finds the count off a chunk boundary means exactly that: drop the
+     partial chunk. Inside a 128-bit message the gap comes on the boundary, and
+     is left alone. The reset is asynchronous because nothing clocks the
+     forwarded domain during the gap; it is raised from a register, well inside
+     it. */
+  val resync = Wire(Bool())
+
   // Assemble the serial bits and enqueue the complete word on the final bit
   // in the forwarded clock domain.
-  val idleStatus = withClockAndReset(negFwClock, reset.asAsyncReset) {
+  val (idleStatus, chunkBoundary, activity) = withClockAndReset(
+    negFwClock,
+    (reset.asBool || resync).asAsyncReset
+  ) {
     val counter = RegInit(0.U(log2Ceil(msgW).W))
     val maxBits = RegInit((msgW - 1).U(log2Ceil(msgW).W))
     val dataReg = RegInit(0.U(msgW.W))
@@ -297,8 +312,42 @@ class SidebandLinkDeserializer(
     // Register before the CDC to the local domain: the comparator output can
     // glitch while the counter transitions, and the async local clock could
     // sample the glitch.
-    RegNext(counter === 0.U, true.B)
+    val toggle = RegInit(false.B)
+    toggle := !toggle
+    // Where the count stands after this edge, since no edge follows in a gap.
+    val nextCounter = Mux(recvDone, 0.U, counter + 1.U)
+    (
+      RegNext(counter === 0.U, true.B),
+      RegNext(nextCounter(5, 0) === 0.U, true.B),
+      toggle
+    )
   }
+
+  // Local-domain view of the gap: no forwarded-clock edge for a while.
+  val gapCycles = 8
+  val activitySync = RegNext(RegNext(activity, false.B), false.B)
+  val activityPrev = RegNext(activitySync, false.B)
+  val chunkBoundarySync =
+    RegNext(RegNext(chunkBoundary, true.B), true.B) // 2-FF sync
+  val quietCycles = RegInit(0.U(log2Ceil(gapCycles + 1).W))
+  when(activitySync =/= activityPrev) {
+    quietCycles := 0.U
+  }.elsewhen(quietCycles =/= gapCycles.U) {
+    quietCycles := quietCycles + 1.U
+  }
+  // Once, as the gap is recognised: the count then stands where the last edge
+  // left it. Held for as long as the link stays quiet, the check would also
+  // catch the first edge of the next chunk, before that edge had reached
+  // quietCycles, and throw the chunk's first bit away.
+  val gapStarts = (quietCycles === (gapCycles - 1).U) &&
+    (activitySync === activityPrev)
+  /* Only until the first gap since reset, which is what frames the stream: a
+     partial chunk before it is the receiver having joined part-way, and is
+     dropped. After it, a chunk that stops part-way really is a stalled packet,
+     and is left for desTimedout to report as before. */
+  val framed = RegInit(false.B)
+  when(gapStarts) { framed := true.B }
+  resync := RegNext(gapStarts && !framed && !chunkBoundarySync, false.B)
 
   io.out.valid := rxQueue.io.deq.valid
   io.out.bits := rxQueue.io.deq.bits

@@ -15,6 +15,10 @@ import org.scalatest.funspec.AnyFunSpec
   *     failure pattern on a four-Module Standard Package Link, and
   *   - the three worked examples of spec 4.7.1.2.
   *
+  * Table 5-29 counts failed Module-pairs, whichever way each one left -- by
+  * failing before it reported or through a disable arc of Figure 4-48 -- so its
+  * columns are also driven through every mix of those routes.
+  *
   * Those are literal readings of the spec, so a reference model that drifted
   * towards the RTL cannot make them pass. The exhaustive sweeps then use a
   * model for coverage of the combinations the spec does not tabulate.
@@ -85,105 +89,98 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   // ==========================================================================
   private case class Outcome(link: String, nextEnable: Seq[Boolean])
 
-  /** Spec 5.7.3.4.1: the surviving set after disabling `doomed`.
+  /** One trip through the decision diamonds of Figure 4-48.
     *
-    * Rule 1 keeps everything that did not fail. Rule 2 is the only sacrificial
-    * disable there is, and it applies solely when exactly one Module of a full
-    * four-Module Link failed -- Table 5-29 shows no `x (d)` marker in either
-    * the two-fail or the three-fail columns.
+    * `txLanes` and `rxLanes` are the Lanes each Module drives and receives on.
+    * Spec 4.7.1.2.1's "lower ... from the rest of the operational modules" is
+    * relative to whichever Modules are still in the Link on this pass, in
+    * either direction, so the widest is recomputed here rather than fixed once.
     */
-  private def survivorsOf(
-      active: Seq[Boolean],
-      doomed: Seq[Boolean],
-      numModules: Int
-  ): Seq[Boolean] = {
-    val perHalf = if (numModules == 1) 1 else numModules / 2
-    val halfRule =
-      numModules == 4 && active.count(identity) == 4 &&
-        doomed.count(identity) == 1
-    def halfOf(m: Int) = {
-      val h = m / perHalf
-      (h * perHalf) until ((h + 1) * perHalf)
-    }
-    (0 until numModules).map { m =>
-      active(m) && !doomed(m) &&
-      !(halfRule && halfOf(m).exists(doomed(_)))
-    }
-  }
-
-  /** One trip through the decision diamonds of Figure 4-48. */
   private def decideOnce(
       reports: Seq[Report],
-      laneCounts: Seq[Int],
-      active: Seq[Boolean],
+      txLanes: Seq[Int],
+      rxLanes: Seq[Int],
+      active: Set[Int],
       speedGTs: Int,
-      numModules: Int,
       standard: Boolean
-  ): (String, Seq[Boolean]) = {
+  ): (String, Set[Int]) = {
     val ladder = speeds.map(_._2)
     val idx = ladder.indexOf(speedGTs)
     val nextLower = if (idx == 0) 0 else ladder(idx - 1)
-    val none = Seq.fill(numModules)(false)
 
-    /* Spec 4.7.1.2.1's "lower ... from the rest of the operational modules" is
-       relative to whichever Modules are still in the Link on this pass, so the
-       widest is recomputed here rather than fixed once. */
-    val widest =
-      (0 until numModules).map(m => if (active(m)) laneCounts(m) else 0).max
-    val widthReq = (0 until numModules).map { m =>
-      active(m) &&
-      (reports(m).sentRepair || reports(m).recvdRepair ||
-        laneCounts(m) < widest)
+    val widestTx = active.map(txLanes).max
+    val widestRx = active.map(rxLanes).max
+    val widthReq = active.filter { m =>
+      reports(m).sentRepair || reports(m).recvdRepair ||
+      txLanes(m) < widestTx || rxLanes(m) < widestRx
     }
-    val speedReq = (0 until numModules).map { m =>
-      active(m) &&
-      (reports(m).sentSpeedDegrade || reports(m).recvdSpeedDegrade)
+    val speedReq = active.filter { m =>
+      reports(m).sentSpeedDegrade || reports(m).recvdSpeedDegrade
     }
-    val numActive = active.count(identity)
-    val numWidth = widthReq.count(identity)
 
-    if (!widthReq.exists(identity) && !speedReq.exists(identity))
-      ("done", none)
-    else if (!speedReq.exists(identity)) {
-      if (!standard) ("repair", none)
-      else if (2 * numWidth > numActive) {
+    if (widthReq.isEmpty && speedReq.isEmpty) ("done", Set.empty)
+    else if (speedReq.isEmpty) {
+      if (!standard) ("repair", Set.empty)
+      else if (2 * widthReq.size > active.size) {
         // Rule 1.b's pseudo code.
-        if (speedGTs == 4) ("repair", none)
-        else if (2 * nextLower > speedGTs) ("speedDegrade", none)
-        else ("repair", none)
+        if (speedGTs == 4) ("repair", Set.empty)
+        else if (2 * nextLower > speedGTs) ("speedDegrade", Set.empty)
+        else ("repair", Set.empty)
       } else ("disable", widthReq) // Rule 1.a
     } else if (speedGTs / 2 > nextLower) ("disable", speedReq)
-    else ("speedDegrade", none)
+    else ("speedDegrade", Set.empty)
   }
 
-  /** The whole chart including the loop back through connector 1. */
+  /** The whole chart including the loop back through connector 1, with spec
+    * 5.7.3.4.1 applied to the resolution as a whole.
+    *
+    * The Modules that failed before reporting are simply not in the first set.
+    * Each disable arc shrinks the set and goes round again. Once the chart
+    * stops disabling, rule 2 is decided exactly once: a Link that started with
+    * four Modules and settled on three loses the other Module of the missing
+    * one's half, and the chart runs again on the pair left -- the partner may
+    * have been the one asking for something. Rule 1 needs nothing further: the
+    * chart never leaves three Modules any other way.
+    */
   private def model(
       reports: Seq[Report],
-      laneCounts: Seq[Int],
       enable: Seq[Boolean],
       speedGTs: Int,
       numModules: Int,
-      standard: Boolean = true
+      standard: Boolean = true,
+      failed: Seq[Boolean] = Seq.empty,
+      txLanes: Seq[Int] = Seq.empty,
+      rxLanes: Seq[Int] = Seq.empty
   ): Outcome = {
     if ((0 until numModules).exists(m => enable(m) && reports(m).phyRetrain))
       return Outcome("phyRetrain", enable)
 
-    var active = enable
-    var result: Option[Outcome] = None
-    var guard = 0
-    while (result.isEmpty && guard < numModules + 1) {
-      guard += 1
-      val (link, doomed) =
-        decideOnce(reports, laneCounts, active, speedGTs, numModules, standard)
-      if (link != "disable") result = Some(Outcome(link, active))
-      else {
-        val survivors = survivorsOf(active, doomed, numModules)
-        if (!survivors.exists(identity))
-          result = Some(Outcome("trainError", Seq.fill(numModules)(false)))
-        else active = survivors
-      }
-    }
-    result.getOrElse(Outcome("trainError", Seq.fill(numModules)(false)))
+    val fail = if (failed.isEmpty) Seq.fill(numModules)(false) else failed
+    val tx =
+      if (txLanes.isEmpty) Seq.fill(numModules)(fullWidthLanes) else txLanes
+    val rx =
+      if (rxLanes.isEmpty) Seq.fill(numModules)(fullWidthLanes) else rxLanes
+    val startedFull = numModules == 4 && enable.forall(identity)
+    val trainError = Outcome("trainError", Seq.fill(numModules)(false))
+    def asSeq(set: Set[Int]) = (0 until numModules).map(set.contains)
+
+    // Every step either settles or strictly shrinks the set, so this ends.
+    @annotation.tailrec
+    def resolve(active: Set[Int]): Outcome =
+      if (active.isEmpty) trainError
+      else
+        decideOnce(reports, tx, rx, active, speedGTs, standard) match {
+          case ("disable", doomed) =>
+            val left = active -- doomed
+            if (left.isEmpty) trainError else resolve(left)
+          case (link, _) =>
+            if (startedFull && active.size == 3) {
+              val missing = (0 until 4).filterNot(active).head
+              resolve(active - (missing ^ 1))
+            } else Outcome(link, asSeq(active))
+        }
+
+    resolve((0 until numModules).filter(m => enable(m) && !fail(m)).toSet)
   }
 
   // ==========================================================================
@@ -237,15 +234,36 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
       enable: Seq[Boolean],
       speed: SpeedMode.Type,
       numModules: Int,
-      narrower: Seq[Boolean] = Seq.empty
+      narrower: Seq[Boolean] = Seq.empty,
+      rxNarrower: Seq[Boolean] = Seq.empty,
+      failed: Seq[Boolean] = Seq.empty,
+      txLanes: Seq[Int] = Seq.empty,
+      rxLanes: Seq[Int] = Seq.empty,
+      staleFailedReports: Boolean = false
   ): Outcome = {
     val narrow =
       if (narrower.isEmpty) Seq.fill(numModules)(false) else narrower
+    val rxNarrow =
+      if (rxNarrower.isEmpty) Seq.fill(numModules)(false) else rxNarrower
+    val fail = if (failed.isEmpty) Seq.fill(numModules)(false) else failed
+    val tx =
+      if (txLanes.isEmpty) narrow.map(laneCountFor) else txLanes
+    val rx =
+      if (rxLanes.isEmpty) rxNarrow.map(laneCountFor) else rxLanes
     c.io.currentSpeed.poke(speed)
     for (m <- 0 until numModules) {
       c.io.enable(m).poke(enable(m).B)
-      c.io.activeLanes(m).poke(laneCountFor(narrow(m)).U)
-      driveReport(c.io.reports(m), reports(m), enable(m))
+      c.io.activeLanes(m).poke(tx(m).U)
+      c.io.activeRxLanes(m).poke(rx(m).U)
+      c.io.failed(m).poke((enable(m) && fail(m)).B)
+      /* A Module that fell out of training has normally withdrawn its report;
+         `staleFailedReports` leaves whatever it last said on the port, which
+         the resolver must ignore just the same. */
+      driveReport(
+        c.io.reports(m),
+        reports(m),
+        enable(m) && (!fail(m) || staleFailedReports)
+      )
     }
     /* The block is combinational, but a Chisel `assert` only samples on a clock
        edge -- without a step the whole Verification layer never evaluates and
@@ -259,6 +277,168 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
       resolutionName(c.io.linkResolution.peek().litValue),
       (0 until numModules).map(m => c.io.nextEnable(m).peek().litToBoolean)
     )
+  }
+
+  private def moduleResolutions(
+      c: MmplLinkSpeedResolver,
+      numModules: Int
+  ): Seq[String] =
+    (0 until numModules).map(m =>
+      resolutionName(c.io.moduleResolution(m).peek().litValue)
+    )
+
+  /** Everything one die's resolution is a function of. */
+  private case class Stimulus(
+      reports: Seq[Report],
+      enable: Seq[Boolean],
+      failed: Seq[Boolean],
+      txLanes: Seq[Int],
+      rxLanes: Seq[Int],
+      speed: SpeedMode.Type,
+      gts: Int
+  ) {
+    def numModules: Int = reports.length
+
+    /** The same Link seen from the other die. `pairing(m)` is the remote Module
+      * Partner of local Module m (spec Tables 5-27 / 5-28). The partner sent
+      * what m received and vice versa, drives what m receives on, and is
+      * enabled and failed together with m -- a failure is of a Module-pair.
+      */
+    def fromRemote(pairing: Seq[Int]): Stimulus = {
+      val local = pairing.indices.map(j => pairing.indexOf(j))
+      Stimulus(
+        local.map(reports(_).mirrored),
+        local.map(enable),
+        local.map(failed),
+        local.map(rxLanes),
+        local.map(txLanes),
+        speed,
+        gts
+      )
+    }
+
+    def expected: Outcome =
+      model(
+        reports,
+        enable,
+        gts,
+        numModules,
+        failed = failed,
+        txLanes = txLanes,
+        rxLanes = rxLanes
+      )
+
+    override def toString: String = {
+      val mods = (0 until numModules).map { m =>
+        val tag =
+          if (!enable(m)) "off"
+          else if (failed(m)) "failed"
+          else
+            alphabet
+              .collectFirst {
+                case (name, r) if r == reports(m) => name
+              }
+              .getOrElse(reports(m).toString)
+        s"M$m:$tag tx${txLanes(m)} rx${rxLanes(m)}"
+      }
+      s"${gts}GT/s [${mods.mkString(" | ")}]"
+    }
+  }
+
+  private def run(
+      c: MmplLinkSpeedResolver,
+      st: Stimulus,
+      staleFailedReports: Boolean = false
+  ): (Outcome, Seq[String]) = {
+    val out = apply(
+      c,
+      st.reports,
+      st.enable,
+      st.speed,
+      st.numModules,
+      failed = st.failed,
+      txLanes = st.txLanes,
+      rxLanes = st.rxLanes,
+      staleFailedReports = staleFailedReports
+    )
+    (out, moduleResolutions(c, st.numModules))
+  }
+
+  /** Standard Die Rotate pairing for x4 to x4 (Table 5-27): M0-M2, M1-M3. It
+    * maps each half along the Die Edge onto the other die's opposite half,
+    * which is what makes rule 2's "same half" the same pair on both die.
+    */
+  private val dieRotate4 = Seq(2, 3, 0, 1)
+  private val dieRotate2 = Seq(1, 0)
+
+  /** Every x4 to x4 pairing Table 5-27 lists: identity (Mirrored Die Rotate
+    * Option 1), Standard Die Rotate, and Mirrored Die Rotate Option 2 for x4
+    * Stacked (M0-M1, M2-M3), which keeps each half on its own side.
+    */
+  private val pairings4 =
+    Seq(Seq(0, 1, 2, 3), dieRotate4, Seq(1, 0, 3, 2))
+
+  /** Both die, fed the same Link from either end, must direct every Module-pair
+    * the same way, or the Step 5d cross-check takes the Link to TRAINERROR.
+    */
+  private def checkDieSymmetry(
+      c: MmplLinkSpeedResolver,
+      st: Stimulus,
+      local: (Outcome, Seq[String]),
+      pairing: Seq[Int],
+      context: String
+  ): Unit = {
+    val (out, mods) = local
+    val (rOut, rMods) = run(c, st.fromRemote(pairing))
+    assert(
+      rOut.link == out.link,
+      s"$context: local resolved ${out.link}, remote ${rOut.link}"
+    )
+    for (m <- 0 until st.numModules) {
+      val p = pairing(m)
+      assert(
+        rOut.nextEnable(p) == out.nextEnable(m) && rMods(p) == mods(m),
+        s"$context: local M$m ${mods(m)}/${out.nextEnable(m)} but its " +
+          s"partner M$p ${rMods(p)}/${rOut.nextEnable(p)}"
+      )
+    }
+  }
+
+  /** Spec 5.7.3.4.1 read directly off the stimulus, independent of the model.
+    *
+    * A Module that failed never survives. A Module with nothing against it --
+    * it did not fail, asked for nothing, and is full width in both directions
+    * among the Modules that trained -- can only leave as rule 2's padding: at
+    * most one of them, only on a Link that started with four Modules, and only
+    * together with the other Module of its half.
+    */
+  private def checkDegradeRules(
+      st: Stimulus,
+      out: Outcome,
+      context: String
+  ): Unit = {
+    if (out.link == "trainError" || out.link == "phyRetrain") return
+    val n = st.numModules
+    val trained = (0 until n).filter(m => st.enable(m) && !st.failed(m))
+    val widestTx = trained.map(st.txLanes).max
+    val widestRx = trained.map(st.rxLanes).max
+    for (m <- 0 until n if st.failed(m) && st.enable(m)) {
+      assert(!out.nextEnable(m), s"$context: failed Module $m survived")
+    }
+    val removedBlameless = trained.filter { m =>
+      !out.nextEnable(m) && !st.reports(m).errored &&
+      st.txLanes(m) == widestTx && st.rxLanes(m) == widestRx
+    }
+    assert(
+      removedBlameless.size <= 1,
+      s"$context: disabled Modules $removedBlameless that nothing was wrong with"
+    )
+    removedBlameless.foreach { m =>
+      assert(
+        n == 4 && st.enable.forall(identity) && !out.nextEnable(m ^ 1),
+        s"$context: Module $m was disabled without its half failing"
+      )
+    }
   }
 
   /** Spec-level checks that hold whatever the reference model says. */
@@ -683,6 +863,8 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         for (m <- 0 until 4) {
           c.io.enable(m).poke(true.B)
           c.io.activeLanes(m).poke(fullWidthLanes.U)
+          c.io.activeRxLanes(m).poke(fullWidthLanes.U)
+          c.io.failed(m).poke(false.B)
         }
         // Only M2 has anything to say, and it is heading for PHYRETRAIN.
         driveReport(c.io.reports(0), clean, valid = false)
@@ -718,6 +900,8 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         for (m <- 0 until 4) {
           c.io.enable(m).poke(true.B)
           c.io.activeLanes(m).poke(fullWidthLanes.U)
+          c.io.activeRxLanes(m).poke(fullWidthLanes.U)
+          c.io.failed(m).poke(false.B)
           driveReport(c.io.reports(m), clean, valid = m != 3)
         }
         assert(
@@ -728,38 +912,502 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         assert(c.io.resolved.peek().litToBoolean, "did not resolve")
       }
     }
+
+    it("judges narrowness on both directions, the same way from both die") {
+      /* A Module's two directions can leave MBINIT.REPAIRMB at different
+         widths, and each die's receive width is the other die's transmit
+         width. Judged on transmit alone, die A would see nothing narrow while
+         die B saw its Module 0 narrow, direct a different response, and the
+         Step 5d mismatch would take the Link to TRAINERROR. Identity pairing,
+         so die B's Module m is die A's Module m seen from the other end. */
+      val two = MmplParams(numModules = 2)
+      simulate(new MmplLinkSpeedResolver(two)) { c =>
+        for (
+          (name, txA, rxA) <- Seq(
+            (
+              "one Module narrow in one direction",
+              Seq(false, false),
+              Seq(true, false)
+            ),
+            (
+              "the Modules narrow in opposite directions",
+              Seq(false, true),
+              Seq(true, false)
+            )
+          );
+          speed <- Seq(SpeedMode.speed8, SpeedMode.speed16)
+        ) {
+          val onA = apply(
+            c,
+            Seq(clean, clean),
+            Seq(true, true),
+            speed,
+            2,
+            narrower = txA,
+            rxNarrower = rxA
+          )
+          val onB = apply(
+            c,
+            Seq(clean.mirrored, clean.mirrored),
+            Seq(true, true),
+            speed,
+            2,
+            narrower = rxA,
+            rxNarrower = txA
+          )
+          assert(
+            onA == onB,
+            s"$name at $speed: die A resolved $onA, die B $onB"
+          )
+          assert(
+            onA.link != "done" || onA.nextEnable.contains(false),
+            s"$name at $speed: a narrow Module was missed: $onA"
+          )
+        }
+        // Mixed widths on different Modules must never reach LINKINIT as-is:
+        // the receive gather reads one Lane code for every Module.
+        val mixed = apply(
+          c,
+          Seq(clean, clean),
+          Seq(true, true),
+          SpeedMode.speed8,
+          2,
+          narrower = Seq(false, true),
+          rxNarrower = Seq(true, false)
+        )
+        assert(mixed.link == "repair", s"expected a width degrade, got $mixed")
+      }
+    }
+
+    it("disables a Module that failed to train and resolves the rest") {
+      /* Spec 4.7.1: "if any module failed to train, the MMPL must ensure that
+         the multi-module configuration degrades to the next permitted
+         configuration". Module 0 never reported; the others did. It counts as
+         reported, and is disabled with the other Module of its half. */
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        c.io.currentSpeed.poke(SpeedMode.speed16)
+        for (m <- 0 until 4) {
+          c.io.enable(m).poke(true.B)
+          c.io.activeLanes(m).poke(fullWidthLanes.U)
+          c.io.activeRxLanes(m).poke(fullWidthLanes.U)
+          c.io.failed(m).poke((m == 0).B)
+          driveReport(c.io.reports(m), clean, valid = m != 0)
+        }
+        c.clock.step()
+        assert(
+          c.io.resolved.peek().litToBoolean,
+          "the failed Module blocked it"
+        )
+        assert(resolutionName(c.io.linkResolution.peek().litValue) == "done")
+        assert(
+          (0 until 4)
+            .filter(c.io.nextEnable(_).peek().litToBoolean) == Seq(2, 3),
+          "expected Modules 2 and 3 to carry on"
+        )
+        for (m <- 0 until 2) {
+          assert(
+            resolutionName(c.io.moduleResolution(m).peek().litValue) ==
+              "disableModule",
+            s"Module $m should be disabled"
+          )
+        }
+
+        // With nothing left to carry the Link, it is a training error.
+        for (m <- 0 until 4) c.io.failed(m).poke(true.B)
+        for (m <- 0 until 4) driveReport(c.io.reports(m), clean, valid = false)
+        c.clock.step()
+        assert(
+          resolutionName(c.io.linkResolution.peek().litValue) == "trainError"
+        )
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Rule 2 decided once, over every way a Module-pair leaves
+  // ==========================================================================
+  /* Spec 4.7.1: "if any module failed to train, the MMPL must ensure that the
+     multi-module configuration degrades to the next permitted configuration".
+     A pair can leave the Link three ways -- failing before it reports, a
+     speed degrade request at 4 GT/s where there is no lower speed, or a
+     minority width degrade request -- and Table 5-29 counts failed pairs, not
+     the route each took. So whichever mix of routes takes a column's pairs
+     out, the survivors must be the column's. Padding the first lone Module to
+     leave, before the rest have been seen, gets every mixed two- and
+     three-fail column wrong. */
+  private def stimulus4(
+      reports: Seq[Report],
+      speed: SpeedMode.Type,
+      gts: Int,
+      failed: Set[Int] = Set.empty
+  ): Stimulus = Stimulus(
+    reports,
+    Seq.fill(4)(true),
+    (0 until 4).map(failed),
+    Seq.fill(4)(fullWidthLanes),
+    Seq.fill(4)(fullWidthLanes),
+    speed,
+    gts
+  )
+
+  private def survivorSet(out: Outcome): Set[Int] =
+    out.nextEnable.indices.filter(out.nextEnable(_)).toSet
+
+  /** Every way of picking one element from each of `choices`, in order. */
+  private def cartesian[A](choices: Seq[Seq[A]]): Seq[Seq[A]] =
+    choices.foldLeft(Seq(Seq.empty[A])) { (acc, options) =>
+      acc.flatMap(prefix => options.map(prefix :+ _))
+    }
+
+  private val routeKinds = Seq("failed", "speed", "width")
+
+  describe("MmplLinkSpeedResolver with Modules that failed before reporting") {
+    val params = MmplParams(numModules = 4)
+
+    /** One directed case: M`failed` fell out of training, the rest report as
+      * given; `expected` is the Table 5-29 survivor set, all proceeding to
+      * LINKINIT.
+      */
+    def expectSurvivors(
+        c: MmplLinkSpeedResolver,
+        st: Stimulus,
+        expected: Set[Int],
+        context: String,
+        link: String = "done"
+    ): Unit = {
+      val local = run(c, st)
+      val (out, mods) = local
+      assert(out.link == link, s"$context: expected $link, got ${out.link}")
+      assert(
+        survivorSet(out) == expected,
+        s"$context: Table 5-29 requires survivors $expected, got " +
+          s"${survivorSet(out)}"
+      )
+      for (m <- 0 until 4) {
+        val want = if (expected(m)) link else "disableModule"
+        assert(mods(m) == want, s"$context: Module $m was told ${mods(m)}")
+      }
+      assert(out == st.expected, s"$context: model says ${st.expected}")
+      checkProperties(c, out, st.enable, 4, context)
+      checkDegradeRules(st, out, context)
+      checkDieSymmetry(c, st, local, dieRotate4, context)
+    }
+
+    it("keeps {M1, M3} when M0 failed and M2 cannot degrade from 4 GT/s") {
+      // Two pairs failed, M0 before reporting and M2 on the HMLS/2 > CMLS Yes
+      // arc: Table 5-29's 2-fail M0,M2 column. Padding M0 on its own first
+      // took M1 as well and left {M3}.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(clean, clean, sentSpeedReq, clean),
+            SpeedMode.speed4,
+            4,
+            failed = Set(0)
+          ),
+          Set(1, 3),
+          "M0 failed, M2 speed degrade at 4 GT/s"
+        )
+      }
+    }
+
+    it("keeps {M1, M2} when M0 failed and M3 asks for a width degrade") {
+      // One of the three trained Modules asks, which is not a majority, so
+      // Rule 1.a disables it: Table 5-29's 2-fail M0,M3 column.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(clean, clean, clean, sentRepairReq),
+            SpeedMode.speed8,
+            8,
+            failed = Set(0)
+          ),
+          Set(1, 2),
+          "M0 failed, M3 width degrade at 8 GT/s"
+        )
+      }
+    }
+
+    it("keeps the one-Module Link {M1} when M0 failed and M2, M3 cannot") {
+      // Three pairs failed, rule 1.a.iii. Padding M0 first left nothing to
+      // take M2 and M3 out of and ended in TRAINERROR.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(clean, clean, sentSpeedReq, recvdSpeedReq),
+            SpeedMode.speed4,
+            4,
+            failed = Set(0)
+          ),
+          Set(1),
+          "M0 failed, M2 and M3 speed degrade at 4 GT/s"
+        )
+      }
+    }
+
+    it("keeps {M1, M3} when M0 and M2 both failed before reporting") {
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq.fill(4)(clean),
+            SpeedMode.speed16,
+            16,
+            failed = Set(0, 2)
+          ),
+          Set(1, 3),
+          "M0 and M2 failed"
+        )
+      }
+    }
+
+    it("pads a lone failure before reporting with its same-half partner") {
+      // Rule 2 proper: M0 is the only pair that failed.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(Seq.fill(4)(clean), SpeedMode.speed16, 16, failed = Set(0)),
+          Set(2, 3),
+          "M0 failed alone"
+        )
+      }
+    }
+
+    it("decides rule 2 across the flow chart's own passes too") {
+      /* At 4 GT/s M0 asks for a speed degrade and M2 for a width degrade. The
+         speed arc disables M0 and goes round connector 1; on the three left,
+         M2 is a minority and is disabled too. Two pairs failed, so Table 5-29
+         keeps {M1, M3} -- padding M0 when it left alone took M1 and left
+         {M3}. */
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(sentSpeedReq, clean, sentRepairReq, clean),
+            SpeedMode.speed4,
+            4
+          ),
+          Set(1, 3),
+          "M0 speed degrade, M2 width degrade at 4 GT/s"
+        )
+      }
+    }
+
+    it("re-runs the flow chart once rule 2 has taken the partner") {
+      /* M0 failed and M1 asks for a speed degrade at 16 GT/s. On the three
+         trained Modules the chart settles on a speed degrade, but three is not
+         a permitted count: rule 2 takes M1, and on {M2, M3} nothing is wrong,
+         so they go to LINKINIT rather than degrading speed for a Module that
+         is no longer in the Link. */
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(clean, sentSpeedReq, clean, clean),
+            SpeedMode.speed16,
+            16,
+            failed = Set(0)
+          ),
+          Set(2, 3),
+          "M0 failed, M1 speed degrade at 16 GT/s"
+        )
+        // And the survivors' own request still counts once they are the pair.
+        expectSurvivors(
+          c,
+          stimulus4(
+            Seq(clean, clean, recvdSpeedReq, clean),
+            SpeedMode.speed16,
+            16,
+            failed = Set(0)
+          ),
+          Set(2, 3),
+          "M0 failed, M2 speed degrade at 16 GT/s",
+          link = "speedDegrade"
+        )
+      }
+    }
+
+    it("runs the chart again on the pair rule 2 leaves, down to one Module") {
+      /* The longest chain four Modules allow, one Module per pass. At 4 GT/s
+         M0 asks for a speed degrade, M2 and M3 left MBINIT.REPAIRMB at x8 and
+         M2 also asks for a width degrade:
+           1. the speed arc disables M0;
+           2. on {M1, M2, M3} two of three are narrower than M1, a majority, so
+              the chart settles on a width degrade -- but three Modules is not a
+              permitted count, and rule 2 takes M1;
+           3. on {M2, M3} both are x8, so only M2's own request is left, a
+              minority, and it is disabled;
+           4. M3 alone is clean and proceeds.
+         So the resolver needs one pass per Module, and the answer has to be
+         read from the pass that settled rather than from wherever the chain
+         happens to stop. */
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        val st = Stimulus(
+          Seq(sentSpeedReq, clean, sentRepairReq, clean),
+          Seq.fill(4)(true),
+          Seq.fill(4)(false),
+          Seq(fullWidthLanes, fullWidthLanes, degradedLanes, degradedLanes),
+          Seq.fill(4)(fullWidthLanes),
+          SpeedMode.speed4,
+          4
+        )
+        val local = run(c, st)
+        val (out, _) = local
+        assert(
+          out == Outcome("done", Seq(false, false, false, true)),
+          s"expected M3 to carry on alone, got $out"
+        )
+        assert(out == st.expected, s"model says ${st.expected}")
+        checkProperties(c, out, st.enable, 4, "four-pass chain")
+        checkDegradeRules(st, out, "four-pass chain")
+        checkDieSymmetry(c, st, local, dieRotate4, "four-pass chain")
+      }
+    }
+
+    it("never pads a Link that did not start with four Modules") {
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        // Two-Module Links an earlier resolution left, straddling the halves or
+        // not, and a lone failure before reporting on each.
+        for (
+          (enabled, fails) <- Seq(
+            (Set(2, 3), 2),
+            (Set(0, 1), 1),
+            (Set(1, 3), 3),
+            (Set(0, 2), 0)
+          )
+        ) {
+          val st = Stimulus(
+            Seq.fill(4)(clean),
+            (0 until 4).map(enabled),
+            (0 until 4).map(_ == fails),
+            Seq.fill(4)(fullWidthLanes),
+            Seq.fill(4)(fullWidthLanes),
+            SpeedMode.speed16,
+            16
+          )
+          val context = s"enabled $enabled, M$fails failed"
+          val (out, _) = run(c, st)
+          assert(out.link == "done", s"$context: got ${out.link}")
+          assert(
+            survivorSet(out) == enabled - fails,
+            s"$context: expected ${enabled - fails}, got ${survivorSet(out)}"
+          )
+          checkDegradeRules(st, out, context)
+        }
+      }
+    }
+
+    it("ignores what a Module that failed last said") {
+      // A stale report on the port of a failed Module must not steer the rest.
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        for ((name, r) <- alphabet) {
+          val st = stimulus4(
+            Seq(r, clean, clean, clean),
+            SpeedMode.speed4,
+            4,
+            failed = Set(0)
+          )
+          val (out, _) = run(c, st, staleFailedReports = true)
+          assert(
+            out == Outcome("done", Seq(false, false, true, true)),
+            s"M0 failed with a stale '$name': got $out"
+          )
+        }
+      }
+    }
+
+    it("reaches every Table 5-29 column by any mix of failure routes") {
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        for ((column, pairs, expected) <- table5_29 ++ table5_29ThreeFail) {
+          val ordered = pairs.toSeq.sorted
+          // Each failed pair either fails before reporting, or is disabled by
+          // the chart -- on the speed arc at 4 GT/s, or the width arc at 16
+          // GT/s when the requests are a minority of the Modules that trained.
+          for (routes <- cartesian(ordered.map(_ => routeKinds))) {
+            val route = ordered.zip(routes).toMap
+            val failed = pairs.filter(route(_) == "failed")
+            val bySpeed = pairs.filter(route(_) == "speed")
+            val byWidth = pairs.filter(route(_) == "width")
+            val trained = 4 - failed.size
+            val usable =
+              (bySpeed.isEmpty || byWidth.isEmpty) &&
+                (byWidth.isEmpty || 2 * byWidth.size <= trained)
+            if (usable) {
+              val (speed, gts) =
+                if (byWidth.nonEmpty) (SpeedMode.speed16, 16)
+                else (SpeedMode.speed4, 4)
+              val reports = (0 until 4).map { m =>
+                if (bySpeed(m)) sentSpeedReq
+                else if (byWidth(m)) recvdRepairReq
+                else clean
+              }
+              expectSurvivors(
+                c,
+                stimulus4(reports, speed, gts, failed = failed),
+                expected,
+                s"$column: failed $failed, speed $bySpeed, width $byWidth"
+              )
+            }
+          }
+        }
+      }
+    }
   }
 
   // ==========================================================================
   // Exhaustive enumeration
   // ==========================================================================
-  private def combinations(numModules: Int): Seq[Seq[(String, Report)]] =
-    Seq.fill(numModules)(alphabet).foldLeft(Seq(Seq.empty[(String, Report)])) {
-      (acc, syms) => acc.flatMap(prefix => syms.map(prefix :+ _))
-    }
+  private def combinations(
+      numModules: Int,
+      symbols: Seq[(String, Report)] = alphabet
+  ): Seq[Seq[(String, Report)]] =
+    cartesian(Seq.fill(numModules)(symbols))
+
+  /** The report alphabet plus a Module that fell out of training before it
+    * reported. Its report is never looked at.
+    */
+  private val failedSymbol = "failed"
+  private val alphabetWithFailure = alphabet :+ (failedSymbol -> clean)
+
+  private def stimulusOf(
+      combo: Seq[(String, Report)],
+      enable: Seq[Boolean],
+      speed: SpeedMode.Type,
+      gts: Int
+  ): Stimulus = Stimulus(
+    combo.map(_._2),
+    enable,
+    combo.map(_._1 == failedSymbol),
+    Seq.fill(combo.size)(fullWidthLanes),
+    Seq.fill(combo.size)(fullWidthLanes),
+    speed,
+    gts
+  )
 
   describe("MmplLinkSpeedResolver exhaustively, two modules") {
     val numModules = 2
     val params = MmplParams(numModules = numModules)
-    val noneNarrow = Seq.fill(numModules)(fullWidthLanes)
 
     it("matches the reference model at every Link speed") {
       simulate(new MmplLinkSpeedResolver(params)) { c =>
         val enable = Seq.fill(numModules)(true)
         for {
           (speed, gts) <- speeds
-          combo <- combinations(numModules)
+          combo <- combinations(numModules, alphabetWithFailure)
         } {
-          val reports = combo.map(_._2)
-          val context =
-            s"${gts}GT/s [${combo.map(_._1).mkString(" | ")}]"
-          val out = apply(c, reports, enable, speed, numModules)
-          val expected = model(reports, noneNarrow, enable, gts, numModules)
+          val st = stimulusOf(combo, enable, speed, gts)
+          val context = st.toString
+          val (out, _) = run(c, st)
+          val expected = st.expected
           assert(
             out == expected,
             s"$context: got $out, model says $expected"
           )
           checkProperties(c, out, enable, numModules, context)
+          checkDegradeRules(st, out, context)
         }
       }
     }
@@ -771,17 +1419,11 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
         val enable = Seq.fill(numModules)(true)
         for {
           (speed, gts) <- speeds
-          combo <- combinations(numModules)
+          combo <- combinations(numModules, alphabetWithFailure)
+          pairing <- Seq(Seq(0, 1), dieRotate2)
         } {
-          val reports = combo.map(_._2)
-          val local = apply(c, reports, enable, speed, numModules)
-          val remote =
-            apply(c, reports.map(_.mirrored), enable, speed, numModules)
-          assert(
-            local == remote,
-            s"${gts}GT/s [${combo.map(_._1).mkString(" | ")}]: " +
-              s"local resolved $local, remote resolved $remote"
-          )
+          val st = stimulusOf(combo, enable, speed, gts)
+          checkDieSymmetry(c, st, run(c, st), pairing, s"$st via $pairing")
         }
       }
     }
@@ -790,53 +1432,107 @@ class MmplLinkSpeedResolverTest extends AnyFunSpec with ChiselSim {
   describe("MmplLinkSpeedResolver exhaustively, four modules") {
     val numModules = 4
     val params = MmplParams(numModules = numModules)
-    val noneNarrow = Seq.fill(numModules)(fullWidthLanes)
     // 4 GT/s exercises the base case, 8 GT/s the width-over-speed comparison,
     // and 16 GT/s the speed degrade.
     val sampledSpeeds = speeds.filter { case (_, gts) =>
       Seq(4, 8, 16).contains(gts)
     }
 
-    it("matches the reference model and stays mirror consistent") {
+    it("matches the reference model and stays consistent across the die") {
+      // Every report and failure pattern, checked against the model, against
+      // spec 5.7.3.4.1 read directly, and from the other die under every
+      // x4 to x4 pairing of Table 5-27.
       simulate(new MmplLinkSpeedResolver(params)) { c =>
         val enable = Seq.fill(numModules)(true)
         for {
           (speed, gts) <- sampledSpeeds
-          combo <- combinations(numModules)
+          combo <- combinations(numModules, alphabetWithFailure)
         } {
-          val reports = combo.map(_._2)
-          val context = s"${gts}GT/s [${combo.map(_._1).mkString(" | ")}]"
-          val out = apply(c, reports, enable, speed, numModules)
+          val st = stimulusOf(combo, enable, speed, gts)
+          val context = st.toString
+          val local = run(c, st)
+          val (out, _) = local
           assert(
-            out == model(reports, noneNarrow, enable, gts, numModules),
-            s"$context: got $out"
+            out == st.expected,
+            s"$context: got $out, model says ${st.expected}"
           )
           checkProperties(c, out, enable, numModules, context)
-
-          val mirrored =
-            apply(c, reports.map(_.mirrored), enable, speed, numModules)
-          assert(mirrored == out, s"$context: mirror gave $mirrored, not $out")
+          checkDegradeRules(st, out, context)
+          for (pairing <- pairings4)
+            checkDieSymmetry(c, st, local, pairing, s"$context via $pairing")
         }
       }
     }
 
     it("resolves from an already degraded two-module configuration") {
       simulate(new MmplLinkSpeedResolver(params)) { c =>
-        // M0 and M1 were disabled by an earlier resolution.
-        val enable = Seq(false, false, true, true)
+        // An earlier resolution left one half, or a pair straddling them.
         for {
-          (speed, gts) <- sampledSpeeds
-          combo <- combinations(numModules)
-        } {
-          val reports = combo.map(_._2)
-          val context =
-            s"${gts}GT/s degraded [${combo.map(_._1).mkString(" | ")}]"
-          val out = apply(c, reports, enable, speed, numModules)
-          assert(
-            out == model(reports, noneNarrow, enable, gts, numModules),
-            s"$context: got $out"
+          enable <- Seq(
+            Seq(false, false, true, true),
+            Seq(false, true, true, false)
           )
+          (speed, gts) <- sampledSpeeds
+          combo <- combinations(numModules, alphabetWithFailure)
+        } {
+          val st = stimulusOf(combo, enable, speed, gts)
+          val context = s"degraded ${enable.mkString(",")} $st"
+          val local = run(c, st)
+          val (out, _) = local
+          assert(out == st.expected, s"$context: got $out")
           checkProperties(c, out, enable, numModules, context)
+          checkDegradeRules(st, out, context)
+          checkDieSymmetry(c, st, local, dieRotate4, context)
+        }
+      }
+    }
+
+    it("matches the reference model on random widths, failures and Links") {
+      /* The sweeps above keep every Module at full width. Here the Lane
+         counts vary per direction, so "narrower than the rest" appears and
+         disappears as the set shrinks, alongside failures before reporting,
+         stale reports on failed Modules and the Links an earlier resolution
+         leaves. Seeded, so a failure reproduces. */
+      val rng = new scala.util.Random(0x5729)
+      val enables: Seq[Set[Int]] = Seq(
+        Set(0, 1, 2, 3),
+        Set(0, 1, 2, 3),
+        Set(0, 1, 2, 3),
+        Set(0, 1, 2, 3),
+        Set(0, 1),
+        Set(2, 3),
+        Set(0, 2),
+        Set(1, 3),
+        Set(0, 3),
+        Set(1, 2),
+        Set(0),
+        Set(3)
+      )
+      val laneChoices = Seq(16, 16, 8, 4)
+      simulate(new MmplLinkSpeedResolver(params)) { c =>
+        for (_ <- 0 until 4000) {
+          val enabled = enables(rng.nextInt(enables.size))
+          val (speed, gts) = speeds(rng.nextInt(speeds.size))
+          val st = Stimulus(
+            Seq.fill(numModules)(alphabet(rng.nextInt(alphabet.size))._2),
+            (0 until numModules).map(enabled),
+            Seq.fill(numModules)(rng.nextInt(5) == 0),
+            Seq.fill(numModules)(laneChoices(rng.nextInt(laneChoices.size))),
+            Seq.fill(numModules)(laneChoices(rng.nextInt(laneChoices.size))),
+            speed,
+            gts
+          )
+          val context = st.toString
+          val local = run(c, st, staleFailedReports = rng.nextBoolean())
+          val (out, _) = local
+          assert(
+            out == st.expected,
+            s"$context: got $out, model says ${st.expected}"
+          )
+          checkProperties(c, out, st.enable, numModules, context)
+          checkDegradeRules(st, out, context)
+          val pairing = pairings4(rng.nextInt(pairings4.size))
+          checkDieSymmetry(c, st, local, pairing, s"$context via $pairing")
         }
       }
     }

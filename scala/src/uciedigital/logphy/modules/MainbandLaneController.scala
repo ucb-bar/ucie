@@ -53,6 +53,18 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
       // Lanes 0 to 7. The narrower codes name their Lanes explicitly and read
       // the same either way.
       val interpretBy8Lane = Input(Bool())
+      // Drops a latched Valid framing error. Driven while the LTSM is out of
+      // ACTIVE, so the error survives until retrain has taken the Link out of
+      // ACTIVE and no longer than that.
+      val clearFramingError = Input(Bool())
+      /* Drops a transmit or receive word part-way through its beats. Driven
+         while the LTSM is out of ACTIVE: a Module that leaves ACTIVE mid-word
+         otherwise carries the stale beat into the next Active period, and every
+         later word -- on a multi-module Link, every later aggregate word --
+         comes out shifted by it. */
+      val clearBeats = Input(Bool())
+      // No transmit word is part-way through its beats.
+      val txIdle = Output(Bool())
     }
   })
 
@@ -157,7 +169,9 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   }
 
   // Beat counter logic
-  when(txStart && !txLastBeat) {
+  when(io.ctrl.clearBeats) {
+    txBeatCtr := 0.U
+  }.elsewhen(txStart && !txLastBeat) {
     txBeatCtr := 1.U
   }.elsewhen(txBusy && io.mbLanes.tx.ready) {
     txBeatCtr := Mux(
@@ -166,6 +180,7 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
       txBeatCtr + 1.U
     ) // short circuit to 0 for no latency tx
   }
+  io.ctrl.txIdle := !txBusy
 
   // Use the incoming data on lpData, so that there's no latency by using the latched data
   val txEffectiveData = Mux(txBusy, txDataReg, io.rdi.tx.lpData)
@@ -225,7 +240,9 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   val rxLastBeat = rxBeatCtr === (numRxBeats - 1.U)
   val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready
 
-  when(rxAccepting) {
+  when(io.ctrl.clearBeats) {
+    rxBeatCtr := 0.U
+  }.elsewhen(rxAccepting) {
     rxBeatCtr := Mux(rxLastBeat, 0.U, rxBeatCtr + 1.U)
   }
 
@@ -275,8 +292,14 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   // Valid-framing error detection
   val rxValidBits = rxBundle.valid
   val currentFramingError = io.mbLanes.rx.valid && (rxValidBits =/= validFrame)
+  /* Spec 4.5.3.7.2: a Valid framing error is recovered by PHY retrain, so the
+     latch has to let go once retrain has taken the Link out of ACTIVE. Never
+     clearing it left the error asserted on every later return to ACTIVE, and
+     the Module suppressed pl_valid for good. */
   val stickyError = RegInit(false.B)
-  when(currentFramingError) {
+  when(io.ctrl.clearFramingError) {
+    stickyError := false.B
+  }.elsewhen(currentFramingError) {
     stickyError := true.B
   }
   io.ctrl.validFramingError := currentFramingError || stickyError

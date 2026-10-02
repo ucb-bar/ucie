@@ -60,8 +60,14 @@ class D2DMainbandModule(
 
   // Stall Control
   val txStallStateReg = RegInit(D2DMainbandTxStallState.running)
-  val txStallRequested =
-    io.state.mainbandStallReq && (io.state.d2dState === RDIState.active)
+  /* Every pl_stallreq is answered, whatever state the Adapter is in. Spec 10.3.2
+     makes the handshake four-phase -- pl_stallreq falls "only when lp_stallack
+     is asserted" -- and requires it "when exiting Active state to Retrain, PM,
+     LinkReset or Disabled", which the Adapter asks RDI for only once its own
+     LSM has left Active (spec 3.5). Answering only in Active left those exits,
+     and a stall caught by LinkError, waiting for lp_stallack for ever. Outside
+     Active the transmit path is idle, so the stall completes at once. */
+  val txStallRequested = io.state.mainbandStallReq
   val txBufferEmpty = !dataBuffSntFillReg
 
   val stallBlocksFdiIngress =
@@ -70,7 +76,10 @@ class D2DMainbandModule(
 
   val txBeatSentToRdi =
     io.rdi.plTrdy && dataBuffSntFillReg && !stallBlocksRdiTx
-  val txDrainComplete = txBufferEmpty || txBeatSentToRdi
+  // Spec 10.3.3.7: in LinkError "It is required for the upper layer to
+  // internally clean up the data path", so a beat still held there is dropped.
+  val txDrainComplete = txBufferEmpty || txBeatSentToRdi ||
+    (io.state.d2dState === RDIState.linkError)
 
   switch(txStallStateReg) {
     is(D2DMainbandTxStallState.running) {
@@ -120,6 +129,10 @@ class D2DMainbandModule(
     }.otherwise {
       dataBuffSntFillReg := false.B
     }
+  }
+  // The beat LinkError caught is dropped, not sent once the Link is back.
+  when(io.state.d2dState === RDIState.linkError) {
+    dataBuffSntFillReg := false.B
   }
 
   // RX Control
