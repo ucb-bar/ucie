@@ -37,6 +37,26 @@ class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
   // Every lane clock is single-ended; each TX tile makes its own complement.
   val txLaneClk = Output(Vec(numLanes + 4, Clock()))
   val rxLaneClk = Output(Vec(numLanes + 2, Clock()))
+
+  // MBINIT.REPAIRCLK sampling clock, fanned out to just the three lanes that
+  // stage measures, in `ClkDistNetwork.repairLanes` order. Its own small net
+  // rather than an entry on the RX tree: the trained RX datapath's loading and
+  // skew should not move for a clock that runs during one training stage.
+  val repairClk = Input(Clock())
+  val repairLaneClk = Output(Vec(ClkDistNetwork.repairLanes, Clock()))
+  val repairClkDivClk = Output(Clock())
+}
+
+object ClkDistNetwork {
+
+  /** Lanes the repair net reaches, and the order every per-lane repair vector
+    * in the PHY and the register map uses: 0 clkP, 1 clkN, 2 track. Same order
+    * as the three status bits MBINIT.REPAIRCLK reports over the sideband.
+    */
+  val repairLanes = 3
+  val repairClkP = 0
+  val repairClkN = 1
+  val repairTrack = 2
 }
 
 class ClkDistNetwork(implicit includeDefaultModels: Boolean = false)
@@ -51,6 +71,11 @@ class ClkDistNetwork(implicit includeDefaultModels: Boolean = false)
   verilogBlackBox.io.rxClk := io.rxClk
   io.txLaneClk := verilogBlackBox.io.txLaneClk.asTypeOf(io.txLaneClk)
   io.rxLaneClk := verilogBlackBox.io.rxLaneClk.asTypeOf(io.rxLaneClk)
+  verilogBlackBox.io.repairClk := io.repairClk
+  io.repairLaneClk := verilogBlackBox.io.repairLaneClk.asTypeOf(
+    io.repairLaneClk
+  )
+  io.repairClkDivClk := verilogBlackBox.io.repairClkDivClk
 }
 
 class VerilogClkDistNetwork(implicit includeDefaultModels: Boolean = false)
@@ -66,6 +91,10 @@ class VerilogClkDistNetwork(implicit includeDefaultModels: Boolean = false)
     val rxClk = Input(Clock())
     val txLaneClk = Output(UInt(20.W))
     val rxLaneClk = Output(UInt(18.W))
+
+    val repairClk = Input(Clock())
+    val repairLaneClk = Output(UInt(ClkDistNetwork.repairLanes.W))
+    val repairClkDivClk = Output(Clock())
   })
 
   override val desiredName = "ucie_clk_dist_network"

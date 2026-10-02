@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.util.experimental.BoringUtils
 import edu.berkeley.cs.uciedigital.d2dadapter.{D2DAdapter, LinkInitState}
@@ -187,6 +188,8 @@ class UcieDigitalLoopbackHarness(
 
     phy.analog.status.pllLock := true.B
     phy.analog.status.clocksUngatedAndStable := true.B
+    // No PHY here, so the measurement is stubbed. See `ClkRepairStub`.
+    ClkRepairStub(phy.analog.repairStatus, phy.analog.ctrl.repairClkEn)
 
     // The whole stack in two lines, as UcieDigitalTop wires it. Driving any FDI
     // signal here as well would win by last connect and make the protocol layer

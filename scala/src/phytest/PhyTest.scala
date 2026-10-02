@@ -138,10 +138,23 @@ class PhyTestRegsIO(
   val txManualRepeatPeriod = Input(UInt((bufferDepthPerLane - 5 + 1).W))
   // The number of packets to send during transmission.
   val txPacketsToSend = Input(UInt(bitCounterWidth.W))
-  // Clock P signal value.
-  val txClkP = Input(UInt(32.W))
-  // Clock P signal.
-  val txClkN = Input(UInt(32.W))
+  // The word sequence each forwarded-clock lane repeats, and how many of the
+  // three entries are in it.
+  //
+  // Three because MBINIT.REPAIRCLK's clock repair pattern is 48 bits and a
+  // lane word is 32: their least common multiple is 96, so the lane repeats
+  // every three words. A period of one with entry zero holding the usual
+  // alternating word is a plain forwarded clock, which is what these come up
+  // as, so the default behaviour is unchanged.
+  val txClkP = Input(Vec(PhyTest.ClkPatternWords, UInt(32.W)))
+  val txClkN = Input(Vec(PhyTest.ClkPatternWords, UInt(32.W)))
+  val txClkPatternPeriod = Input(UInt(log2Ceil(PhyTest.ClkPatternWords + 1).W))
+  // Sends the forwarded-clock pattern on the track lane too, which is what
+  // MBINIT.REPAIRCLK does -- `PatternWriter` puts the clock repair word on
+  // clkP, clkN and track alike. Lets a REPAIRCLK measurement be set up without
+  // a transmit burst, since the measurement is a window on the receiver rather
+  // than a run on the transmitter.
+  val txClkPatternOnTrack = Input(Bool())
   // Valid signal.
   val txValid = Input(UInt(32.W))
   // Physical lane the valid waveform goes out on, so that a broken dedicated
@@ -356,6 +369,33 @@ object PhyTest {
     * UI late. See `rxBitErrorsEarly` in [[PhyTestRegsIO]].
     */
   val NumFramings = 3
+
+  /** Words in a forwarded-clock lane's repeating pattern.
+    *
+    * Three: MBINIT.REPAIRCLK's clock repair pattern is 48 bits and a lane word
+    * is [[Phy.SerdesRatio]], so the lane repeats every `lcm(48, 32) / 32 = 3`
+    * words. Every other pattern a clock lane sends divides into one word and
+    * uses a period of one.
+    */
+  val ClkPatternWords = 3
+
+  /** The 48 bit clock repair pattern as the three lane words that carry it, in
+    * wire order -- 32 UI alternating, then 16 UI low. Index 0 goes out first.
+    *
+    * Here rather than in a test driver because the pattern is the PHY's
+    * contract with the far side, and `PatternWriter` builds the same bits for
+    * the trained path.
+    */
+  val ClkRepairWords: Seq[BigInt] = {
+    val pattern = BigInt("000055555555", 16)
+    val width = 48
+    Seq.tabulate(ClkPatternWords) { w =>
+      (0 until Phy.SerdesRatio).foldLeft(BigInt(0)) { case (acc, b) =>
+        val bit = (pattern >> ((w * Phy.SerdesRatio + b) % width)) & 1
+        acc | (bit << b)
+      }
+    }
+  }
   val NominalFraming = 0
   val EarlyFraming = 1
   val LateFraming = 2
@@ -884,8 +924,20 @@ class PhyTest(
   io.tx.valid := mbManual
 
   // The forwarded-clock lanes carry a fixed pattern rather than a test one.
-  io.tx.bits.clkp := io.regs.txClkP
-  io.tx.bits.clkn := io.regs.txClkN
+  //
+  // The phase advances per word handed over rather than per word sent, which
+  // is the same thing once the crossing to the PHY has filled: it backpressures
+  // at the serializer's rate, so one enqueue is one word on the wire. Where the
+  // sequence happens to start does not matter to the far side -- REPAIRCLK
+  // scores the shape of what arrives, not its alignment -- so a restart of the
+  // TX datapath cannot desynchronise the measurement.
+  val txClkPatternPhase = RegInit(0.U(log2Ceil(PhyTest.ClkPatternWords).W))
+  when(io.tx.fire) {
+    val next = txClkPatternPhase + 1.U
+    txClkPatternPhase := Mux(next >= io.regs.txClkPatternPeriod, 0.U, next)
+  }
+  io.tx.bits.clkp := io.regs.txClkP(txClkPatternPhase)
+  io.tx.bits.clkn := io.regs.txClkN(txClkPatternPhase)
 
   // Unlike `io.tx.valid`, only true when data is valid.
   val tx_valid = Wire(Bool())
@@ -1036,6 +1088,13 @@ class PhyTest(
   }
   when(io.regs.txValidLaneSel === Phy.trackValidLaneSel(numLanes).U) {
     io.tx.bits.track := io.tx.bits.valid
+  }
+
+  // Last, so a REPAIRCLK setup wins over a valid lane moved onto track: the
+  // two have no reason to be asked for together, and this one needs the lane
+  // to be carrying the clock repair pattern for the far side to score it.
+  when(io.regs.txClkPatternOnTrack) {
+    io.tx.bits.track := io.regs.txClkP(txClkPatternPhase)
   }
 
   // RX logic

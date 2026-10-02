@@ -58,6 +58,7 @@ class PhyControlSignalTranslator(afeParams: AfeParams) extends Module {
       val clockPhaseSelect = Input(UInt(afeParams.clockPhaseSelBitWidth.W))
       val doElectricalIdleTx = Input(Bool())
       val doElectricalIdleRx = Input(Bool())
+      val repairClkEn = Input(Bool())
     }
 
     val fromPhy = Input(new PhyStatusFromPhyIO())
@@ -85,4 +86,5 @@ class PhyControlSignalTranslator(afeParams: AfeParams) extends Module {
   io.toPhy.clockPhaseSelect := io.fromDigital.clockPhaseSelect
   io.toPhy.doElectricalIdleTx := io.fromDigital.doElectricalIdleTx
   io.toPhy.doElectricalIdleRx := io.fromDigital.doElectricalIdleRx
+  io.toPhy.repairClkEn := io.fromDigital.repairClkEn
 }

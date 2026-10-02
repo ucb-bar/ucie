@@ -7,7 +7,15 @@ module ucie_clk_dist_network(
 
     input rxClk,
     output [19:0] txLaneClk,
-    output [17:0] rxLaneClk
+    output [17:0] rxLaneClk,
+
+    // MBINIT.REPAIRCLK sampling clock, fanned out to just the three lanes that
+    // stage measures: 0 clkP, 1 clkN, 2 track. Its own small net rather than an
+    // entry on the RX tree, so the trained RX datapath's loading and skew are
+    // untouched by a clock that only runs during one training stage.
+    input repairClk,
+    output [2:0] repairLaneClk,
+    output repairClkDivClk
 );
     // Lane map for numLanes = 16: 0..15 data, 16 valid, 17 track, 18 and 19 the
     // two forwarded-clock lanes. The clock lanes run off the quadrature phase so
@@ -86,9 +94,18 @@ module ucie_clk_dist_network(
     endgenerate
 `endif
 
+    // Three arms is a fanout at any abstraction level, so the repair net takes
+    // the same plain assignment whether or not the skew model is on.
+    generate
+        for (genvar i = 0; i < 3; i++) begin
+            assign repairLaneClk[i] = repairClk;
+        end
+    endgenerate
+
     // The divider clocks take the tree's nominal delay and none of its spread,
     // so the global dividers sit in the middle of the lane spread rather than
     // at one edge of it.
     assign txClkDivClk = txClk;
     assign rxClkDivClk = rxClk;
+    assign repairClkDivClk = repairClk;
 endmodule

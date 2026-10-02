@@ -25,7 +25,11 @@ class RxAfeCtlIO extends Bundle {
 object RxAfeCtl {
   def connect(lane: RxLaneCtlIO, ctlIO: RxLaneDigitalCtlIO): RxAfeCtl = {
     val ctl = Module(new RxAfeCtl)
-    lane.Dctrl := ctlIO.Dctrl
+    // `delay` is a count of taps and the pins want a thermometer code, the
+    // same split the TX side has. Without this the RX delay line is not
+    // reachable from software at all: `Dctrl` has no register behind it and
+    // `rxctl_<lane>_rxDelay` would drive nothing.
+    lane.Dctrl := ctlIO.Dctrl | RxDataLane.thermometer(ctlIO.delay)
     lane.zen := ctlIO.zen
     lane.zctl := ctlIO.zctl
     lane.vref_sel := ctlIO.vref_sel
