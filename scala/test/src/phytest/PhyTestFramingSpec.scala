@@ -86,8 +86,9 @@ class PhyTestLfsrLoopback(
   dut.io.regs.sb.rxRst := false.B
   // Only the debug bumps and the tester's own lanes watch these, and this test
   // exercises neither.
-  dut.io.debug.txClk := false.B.asClock
-  dut.io.debug.rxClk := false.B.asClock
+  dut.io.debug.testTxLaneClk.foreach(_ := false.B.asClock)
+  dut.io.debug.testTxPadClk := false.B.asClock
+  dut.io.debug.testRxPadClk := false.B.asClock
   dut.io.debug.txDivClk := false.B.asClock
   dut.io.debug.sbTxClk := false.B.asClock
   dut.io.debug.rxData := DontCare
