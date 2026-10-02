@@ -10,8 +10,8 @@ import org.scalatest.funspec.AnyFunSpec
   *
   * At x8 a 64-byte word takes two beats. A Module that leaves ACTIVE part-way
   * through one must not carry the stale beat into the next Active period, or
-  * every later word -- behind the MMPL, every later aggregate word -- comes
-  * out shifted by it.
+  * every later word -- behind the MMPL, every later aggregate word -- comes out
+  * shifted by it.
   */
 class MainbandLaneControllerTest extends AnyFunSpec with ChiselSim {
   private val afe = AfeParams()
