@@ -175,8 +175,20 @@ module clocking_tile(
   real phase_delay;
   always @(*) phase_delay = phase_taps * PHASE_TAP_PS;
 
+  // The quadrature clock is gated before the delay line, on its undelayed low
+  // phase, so it carries exactly the edges TxClk's gate lets through, only
+  // later. Gating after the line latched off `q_delayed`, which settles a
+  // step after `tx_q_raw`: a ClkGateEn change on a clock edge could then open
+  // the Q gate an edge before the I gate, and the clock lanes' serializers
+  // counted one edge more than the data lanes', shifting their framing.
+  reg txClkQEn;
+  always @(*) begin
+    if (!tx_q_raw) txClkQEn = ClkGateEn;
+  end
+  wire tx_q_gated = tx_q_raw & txClkQEn;
+
   reg q_delayed = 1'b0;
-  always @(tx_q_raw) q_delayed <= #(phase_delay) tx_q_raw;
+  always @(tx_q_gated) q_delayed <= #(phase_delay) tx_q_gated;
 
   // ---- Digital clock divider ----
   wire [5:0] dig_div = (DigClkDiv == 3'd0) ? 6'd1 :
@@ -219,16 +231,13 @@ module clocking_tile(
   // ---- Outputs ----
   // Latch the enable on each clock's low phase so that changing ClkGateEn
   // mid-cycle cannot chop a pulse short. A runt here would reach the lane
-  // dividers as a real edge and defeat the point of gating.
+  // dividers as a real edge and defeat the point of gating. TxClkQ's gate
+  // sits ahead of the global delay line; see `txClkQEn`.
   reg txClkEn;
-  reg txClkQEn;
   always @(*) begin
     if (!tx_i_raw) txClkEn = ClkGateEn;
   end
-  always @(*) begin
-    if (!q_delayed) txClkQEn = ClkGateEn;
-  end
 
   assign TxClk = tx_i_raw & txClkEn;
-  assign TxClkQ = q_delayed & txClkQEn;
+  assign TxClkQ = q_delayed;
 endmodule
