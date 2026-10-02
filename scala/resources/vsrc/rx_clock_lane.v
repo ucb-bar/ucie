@@ -1,6 +1,7 @@
 module rx_clock_lane (
    input clkin,
    output clkout,
+   input clk_gate_en,
    input zen,
    input zctl_0,
    input zctl_1,
@@ -35,5 +36,13 @@ module rx_clock_lane (
    input vref_sel_5,
    input vref_sel_6
 );
-  assign clkout = clkin;
+  // Active-high enable for the recovered clock leaving this lane. Low stops
+  // the clock reaching the distribution tree, and so none of the data lanes
+  // are clocked. Latched on the low phase so toggling it leaves no runt.
+  wire clkout_raw = clkin;
+  reg gate_en_latched;
+  always @(*) begin
+    if (!clkout_raw) gate_en_latched = clk_gate_en;
+  end
+  assign clkout = clkout_raw & gate_en_latched;
 endmodule

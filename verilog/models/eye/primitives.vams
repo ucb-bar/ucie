@@ -1,0 +1,22 @@
+// Eye-level analog primitives.
+//
+// The only one this level needs is the reference ladder, because `vref` is
+// half of what the level exists to model. `models/circuit` has the rest -- the
+// inverter, the capacitor and the switch its sampler is built from -- and none
+// of them appear here, because nothing at this level is built out of anything.
+
+// Reference ladder feeding a lane's slicer. An ideal divider: `sel` of
+// `2**RDAC_SEL_BITS` steps between the supplies, no ladder resistance and no
+// settling. What the circuit level would add is the impedance the ladder
+// presents and the time it takes a code change to arrive.
+module rdac(out, sel, vdd, vss);
+    output out;
+    input [`RDAC_SEL_BITS-1:0] sel;
+    inout vdd, vss;
+
+    electrical out, vdd, vss;
+
+    analog begin
+        V(out, vss) <+ V(vdd, vss) * transition(sel, 0, `T_RISE_FALL_DEFAULT * 1p) / (2 ** `RDAC_SEL_BITS);
+    end
+endmodule

@@ -32,6 +32,15 @@ class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams)
     extends Bundle {
   val mainbandLink = new MainbandLaneIO(afeParams)
   val sidebandLink = new SidebandPhyLinkIO(sbParams.sbLinkWidth)
+
+  /** What link training asks of the PHY macro: the negotiated rate, the
+    * sampling phase, the per-lane enables, electrical idle.
+    *
+    * Only `freqSel` is consumed today, by the clocking configuration registers,
+    * which translate it into the analog controls that realise the rate. The
+    * rest reaches this port and no further.
+    */
+  val ctrl = Output(new PhyControlToPhyIO(afeParams))
 }
 
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
@@ -145,9 +154,11 @@ class UcieDigitalTop(
       r.module.io.linkErrorIrq.foreach(dontTouch(_))
     }
 
-    // TODO: PHY macro control/status is owned by the analog register file, not the UCIe block.
+    // TODO: PHY macro status is owned by the analog register file, not the
+    // UCIe block. Both of these are still asserted rather than observed, so
+    // training believes a PLL is locked whether or not one is even enabled.
     logicalPhy.io.analog.status.pllLock := true.B
     logicalPhy.io.analog.status.clocksUngatedAndStable := true.B
-    dontTouch(logicalPhy.io.analog.ctrl)
+    io.phyFacingIo.ctrl := logicalPhy.io.analog.ctrl
   }
 }

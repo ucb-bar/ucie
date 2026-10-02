@@ -129,6 +129,7 @@ class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
     phy.sbRxData := DontCare
     phy.bypassClk := false.B.asClock
     phy.digitalBypassClk := false.B.asClock
+    phy.sidebandBypassClk := false.B.asClock
   }
 
   // Bypass and reference clocks should be connected at top level
@@ -199,11 +200,461 @@ class UcieTLRegsIO(
 
 object UcieTLRegs {
 
-  /** Cycles the `txRst` and `rxRst` strobes are held for after a register
-    * write, counted in the UCIe digital clock the register block and PhyTest
-    * share.
+  /** Cycles the `txDatapathRst` and `rxDatapathRst` strobes are held for after
+    * a register write, counted in the UCIe digital clock the register block and
+    * PhyTest share.
     */
   val rstStrobeCycles = 8
+}
+
+/** Clock source controls, on a clock of their own.
+  *
+  * These decide where the PHY's clocks come from, so they cannot sit in the
+  * block that runs on one of those clocks: at power up it has nothing to run on
+  * until these are decided. `chipDigitalClk` is the chip's own digital clock,
+  * running before any of the PHY's exist, and it clocks this block alone -- a
+  * separate block rather than a domain bolted onto the main one, because most
+  * registers do belong on `ucieClk` with the logic they control.
+  *
+  * The selects need no synchronizer: they settle during bring-up with the
+  * clocks they steer quiet.
+  */
+class UcieClkRegs(
+    params: UcieTLParams,
+    beatBytes: Int
+)(implicit
+    p: Parameters
+) extends ClockSinkDomain(ClockSinkParameters()) {
+  def toRegFieldRw[T <: Data](r: T, name: String): RegField = {
+    RegField(
+      r.getWidth,
+      r.asUInt,
+      RegWriteFn((valid, data) => {
+        when(valid) {
+          r := data.asTypeOf(r)
+        }
+        true.B
+      }),
+      Some(RegFieldDesc(name, ""))
+    )
+  }
+  def toRegFieldR[T <: Data](r: T, name: String): RegField = {
+    RegField.r(r.getWidth, r.asUInt, RegFieldDesc(name, ""))
+  }
+  val regionSize = 0x1000
+  val device = new SimpleDevice("ucie_clk_control", Seq("ucbbar,ucie-clk"))
+  val node = TLRegisterNode(
+    Seq(AddressSet(params.address + UcieClkRegs.offset, regionSize - 1)),
+    device,
+    "reg/control",
+    beatBytes = beatBytes
+  )
+
+  override lazy val module = new UcieClkRegsImpl
+  class UcieClkRegsImpl extends Impl {
+    val io = IO(new Bundle {
+      val mainClkSel = Output(UInt(ClockingTile.mainClkSelWidth.W))
+      val pll8En = Output(Bool())
+      val pll12En = Output(Bool())
+      val pll16En = Output(Bool())
+      val txClkDiv = Output(UInt(ClockingTile.txClkDivWidth.W))
+      val txClkPhase = Output(UInt(ClockingTile.txClkPhaseWidth.W))
+      val digClkDiv = Output(UInt(ClockingTile.digClkDivWidth.W))
+      val digClkBypassEn = Output(Bool())
+      val sbClkDiv = Output(UInt(ClockingTile.sbClkDivWidth.W))
+      val sbClkBypassEn = Output(Bool())
+      val rxClkFromTxQ = Output(Bool())
+      val clkPhaseSel = Output(UInt(ClockingTile.phaseSelWidth.W))
+      val clkGateEn = Output(Bool())
+      val rxClkGateEn = Output(Bool())
+      // The rate link training has negotiated, from the UCIe controller. It
+      // is produced on `ucieClk`, which this block does not run on.
+      val freqSel = Input(UInt(4.W))
+      // Per-PLL lock out of the clocking tile, in `mainClkSel` order.
+      val pllLock = Input(UInt(3.W))
+      // Holds the rest of the UCIe block in reset. See `ucieRstReq`.
+      val ucieRst = Output(Bool())
+    })
+
+    // Reset defaults describe a part that has been told nothing: the digital
+    // clock on its bypass pin, the main clock on the analog bypass pin, no
+    // PLL running, no division, no phase, both clock gates open. That is a
+    // design a testbench can drive from its own two clocks without writing a
+    // register, which is how every test here starts.
+    val (
+      mainClkSel,
+      pll8En,
+      pll12En,
+      pll16En,
+      txClkDiv,
+      txClkPhase,
+      digClkDiv,
+      digClkBypassEn,
+      clkPhaseSel,
+      clkGateEn,
+      rxClkGateEn
+    ) =
+      withClockAndReset(clock, reset) {
+        (
+          RegInit(3.U(ClockingTile.mainClkSelWidth.W)),
+          RegInit(false.B),
+          RegInit(false.B),
+          RegInit(false.B),
+          RegInit(0.U(ClockingTile.txClkDivWidth.W)),
+          RegInit(0.U(ClockingTile.txClkPhaseWidth.W)),
+          RegInit(2.U(ClockingTile.digClkDivWidth.W)),
+          RegInit(true.B),
+          RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W)),
+          RegInit(true.B),
+          RegInit(true.B)
+        )
+      }
+
+    // Translation table: what to program for each rate the controller can
+    // negotiate. Software fills it during bringup, because how the PHY is
+    // clocked is not fixed -- a part may end up on its PLLs or on a bypass
+    // pin, and which PLL serves which rate is a board and bringup question
+    // rather than something to bake into the RTL.
+    val rateCfg = withClockAndReset(clock, reset) {
+      RegInit(
+        VecInit(
+          Seq.fill(UcieClkRegs.rateCfgs)(0.U.asTypeOf(new ClkRateCfgIO))
+        )
+      )
+    }
+    // Low leaves the direct registers in charge, which is how a testbench or
+    // a bringup script drives the clocking by hand. High hands it to the
+    // table, indexed by whatever rate training has settled on.
+    val freqSelAutoEn = withClockAndReset(clock, reset) { RegInit(false.B) }
+
+    // `freqSel` crosses from `ucieClk`. Two flops a bit: it is a held
+    // configuration value that changes once per rate negotiation, not a
+    // pulse, so the only exposure is a cycle of skew between bits while it
+    // settles -- and the table is only consulted once the controller has
+    // stopped moving it.
+    val freqSelSync = withClockAndReset(clock, reset) {
+      val stage0 = RegInit(0.U(4.W))
+      val stage1 = RegInit(0.U(4.W))
+      stage0 := io.freqSel
+      stage1 := stage0
+      stage1
+    }
+    val selected = rateCfg(freqSelSync(2, 0))
+
+    // Lock crosses from the tile's own timing rather than any clock here, so
+    // it gets the same two flops. It is a level that settles once per wake-up,
+    // not a pulse, so nothing is lost to the delay.
+    val pllLockSync = withClockAndReset(clock, reset) {
+      val stage0 = RegInit(0.U(3.W))
+      val stage1 = RegInit(0.U(3.W))
+      stage0 := io.pllLock
+      stage1 := stage0
+      stage1
+    }
+    // Two more selects, held like the rest.
+    val (sbClkDiv, sbClkBypassEn, rxClkFromTxQ) =
+      withClockAndReset(clock, reset) {
+        (
+          RegInit(2.U(ClockingTile.sbClkDivWidth.W)),
+          RegInit(true.B),
+          RegInit(false.B)
+        )
+      }
+
+    // The copy the tile runs on. Everything above is what software wrote;
+    // nothing reaches the tile until an apply moves it here, and it only moves
+    // while the clocks are gated.
+    //
+    // It resets to the same part the shadow registers describe: the analog
+    // bypass pin, no PLL. Zero would select PLL8 with that PLL off -- a dead
+    // main clock, and the digital domain on its own bypass pin would not
+    // notice.
+    val live = withClockAndReset(clock, reset) {
+      RegInit(
+        (new ClkRateCfgIO).Lit(
+          _.mainClkSel -> 3.U,
+          _.txClkDiv -> 0.U,
+          _.digClkDiv -> 2.U,
+          _.pll8En -> false.B,
+          _.pll12En -> false.B,
+          _.pll16En -> false.B
+        )
+      )
+    }
+    val liveSbDiv = withClockAndReset(clock, reset) {
+      RegInit(2.U(ClockingTile.sbClkDivWidth.W))
+    }
+    val liveSbBypass = withClockAndReset(clock, reset) { RegInit(true.B) }
+    val liveDigBypass = withClockAndReset(clock, reset) { RegInit(true.B) }
+
+    val pending = Wire(new ClkRateCfgIO)
+    pending.mainClkSel := Mux(freqSelAutoEn, selected.mainClkSel, mainClkSel)
+    pending.txClkDiv := Mux(freqSelAutoEn, selected.txClkDiv, txClkDiv)
+    pending.digClkDiv := Mux(freqSelAutoEn, selected.digClkDiv, digClkDiv)
+    pending.pll8En := Mux(freqSelAutoEn, selected.pll8En, pll8En)
+    pending.pll12En := Mux(freqSelAutoEn, selected.pll12En, pll12En)
+    pending.pll16En := Mux(freqSelAutoEn, selected.pll16En, pll16En)
+
+    // Which lock the gate waits on. Decided here rather than in the clocking
+    // tile: the tile reports each PLL's lock raw and knows nothing about what
+    // is selected, so a macro that leaves an unselected PLL's pin undriven --
+    // or that has no pin to drive at all on the bypass path -- cannot feed a
+    // stale value or an X into the wait.
+    //
+    // Hence a table with every selector spelled out rather than an index into
+    // the lock vector. Selector 3 is the analog bypass pin, which has no lock
+    // to report and counts as ready; that is the default, so a selector the
+    // tile grows later fails safe the same way rather than indexing off the
+    // end of the vector.
+    val mainClkLocked = MuxLookup(live.mainClkSel, true.B)(
+      Seq(
+        0.U -> pllLockSync(0),
+        1.U -> pllLockSync(1),
+        2.U -> pllLockSync(2)
+      )
+    )
+
+    // What ends the gate once the new configuration is in, and the delay the
+    // `delay` source counts out.
+    val ungateSrc = withClockAndReset(clock, reset) {
+      RegInit(ClkUngateSrc.pllLock)
+    }
+    val ungateDelay = withClockAndReset(clock, reset) {
+      RegInit(UcieClkRegs.defaultUngateDelay.U(UcieClkRegs.ungateDelayWidth.W))
+    }
+    // Written to release the gate by hand. Honoured whatever the source is, so
+    // a condition that never arrives -- a PLL that will not lock, a delay set
+    // longer than intended -- can be recovered from without a hidden timeout
+    // in the sequencer. Cleared by the sequencer once it has been acted on.
+    val ungateReq = withClockAndReset(clock, reset) { RegInit(false.B) }
+
+    // Resets the UCIe block -- PHY, PhyTest, the controller, the queue ends and
+    // `UcieTLRegs` -- but not this register file, which runs on the chip's own
+    // clock and reset. That split is the point: configure the clocking here,
+    // then restart everything else on it. `UcieTLRegs` does not survive, so
+    // this goes before that block is set up.
+    //
+    // Bringup only. An access in flight to `UcieTLRegs`, or mainband traffic,
+    // is in the reset's domain and behind the same crossbar, so a response
+    // lost to the reset wedges it. `setup_ucie` asserts this first, with both
+    // quiet.
+    val ucieRstReq = withClockAndReset(clock, reset) { RegInit(false.B) }
+    io.ucieRst := ucieRstReq
+
+    // Applying a configuration: gate, switch under the gate, let the clocks
+    // back out. Changing a mux or a divider under a running clock hands the
+    // domains behind it a runt. The gate covers all three derived clocks --
+    // the main clock select moves what every divider counts.
+    val applyReq = withClockAndReset(clock, reset) { RegInit(false.B) }
+    val applyBusy = withClockAndReset(clock, reset) { RegInit(false.B) }
+    val applyCount = withClockAndReset(clock, reset) {
+      RegInit(0.U(UcieClkRegs.ungateDelayWidth.W))
+    }
+    val cfgGate = withClockAndReset(clock, reset) { RegInit(false.B) }
+    val applyPhase = withClockAndReset(clock, reset) {
+      RegInit(ClkApplyPhase.idle)
+    }
+
+    // `>=` rather than `===` so that a delay shortened mid-wait still ends it,
+    // and a delay of zero releases the gate the cycle it is reached.
+    val ungateOk = ungateReq || MuxLookup(ungateSrc, false.B)(
+      Seq(
+        ClkUngateSrc.pllLock -> mainClkLocked,
+        ClkUngateSrc.delay -> (applyCount >= ungateDelay)
+      )
+    )
+
+    withClockAndReset(clock, reset) {
+      switch(applyPhase) {
+        is(ClkApplyPhase.idle) {
+          when(applyReq) {
+            applyBusy := true.B
+            cfgGate := true.B
+            applyCount := 0.U
+            applyPhase := ClkApplyPhase.gateIn
+          }
+        }
+        is(ClkApplyPhase.gateIn) {
+          // Long enough for the gate to have taken on the slowest clock the
+          // tile can produce before anything moves.
+          applyCount := applyCount + 1.U
+          when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
+            live := pending
+            liveSbDiv := sbClkDiv
+            liveSbBypass := sbClkBypassEn
+            liveDigBypass := digClkBypassEn
+            applyCount := 0.U
+            applyPhase := ClkApplyPhase.ungateWait
+          }
+        }
+        is(ClkApplyPhase.ungateWait) {
+          applyCount := applyCount + 1.U
+          when(ungateOk) {
+            ungateReq := false.B
+            cfgGate := false.B
+            applyCount := 0.U
+            applyPhase := ClkApplyPhase.gateOut
+          }
+        }
+        is(ClkApplyPhase.gateOut) {
+          // The same dwell on the way out, so the clocks are back before
+          // software is told the apply is done.
+          applyCount := applyCount + 1.U
+          when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
+            applyBusy := false.B
+            applyReq := false.B
+            applyPhase := ClkApplyPhase.idle
+          }
+        }
+      }
+    }
+
+    io.mainClkSel := live.mainClkSel
+    io.pll8En := live.pll8En
+    io.pll12En := live.pll12En
+    io.pll16En := live.pll16En
+    io.txClkDiv := live.txClkDiv
+    io.txClkPhase := txClkPhase
+    io.digClkDiv := live.digClkDiv
+    io.digClkBypassEn := liveDigBypass
+    io.sbClkDiv := liveSbDiv
+    io.sbClkBypassEn := liveSbBypass
+    io.rxClkFromTxQ := rxClkFromTxQ
+    io.clkPhaseSel := clkPhaseSel
+    io.clkGateEn := clkGateEn && !cfgGate
+    io.rxClkGateEn := rxClkGateEn
+
+    val regmap: Seq[(Int, Seq[RegField])] = withClockAndReset(clock, reset) {
+      val scalars = Seq(
+        toRegFieldRw(mainClkSel, "mainClkSel"),
+        toRegFieldRw(pll8En, "pll8En"),
+        toRegFieldRw(pll12En, "pll12En"),
+        toRegFieldRw(pll16En, "pll16En"),
+        toRegFieldRw(txClkDiv, "txClkDiv"),
+        toRegFieldRw(txClkPhase, "txClkPhase"),
+        toRegFieldRw(digClkDiv, "digClkDiv"),
+        toRegFieldRw(digClkBypassEn, "digClkBypassEn"),
+        toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
+        toRegFieldRw(clkGateEn, "clkGateEn"),
+        toRegFieldRw(rxClkGateEn, "rxClkGateEn"),
+        toRegFieldRw(freqSelAutoEn, "freqSelAutoEn"),
+        toRegFieldR(freqSelSync, "freqSelObserved"),
+        toRegFieldRw(sbClkDiv, "sbClkDiv"),
+        toRegFieldRw(sbClkBypassEn, "sbClkBypassEn"),
+        toRegFieldRw(rxClkFromTxQ, "rxClkFromTxQ"),
+        toRegFieldRw(applyReq, "clkCfgApply"),
+        toRegFieldR(applyBusy, "clkCfgBusy"),
+        toRegFieldRw(ungateSrc, "clkCfgUngateSrc"),
+        toRegFieldRw(ungateDelay, "clkCfgUngateDelay"),
+        toRegFieldRw(ungateReq, "clkCfgUngateReq"),
+        toRegFieldR(pllLockSync, "pllLockObserved"),
+        toRegFieldRw(ucieRstReq, "ucieRst")
+      )
+      // The table sits at a fixed slot so that adding a scalar does not move
+      // every entry -- which means adding one too many silently lands on top
+      // of `rateCfg_0` instead. This has overlapped once before; fail
+      // elaboration rather than hand out a map with two registers at one
+      // address.
+      require(
+        scalars.length <= UcieClkRegs.rateCfgBase,
+        s"UcieClkRegs has ${scalars.length} scalar registers but the rate " +
+          s"table starts at slot ${UcieClkRegs.rateCfgBase}; raise " +
+          "`rateCfgBase` (and regenerate collateral) or drop a scalar."
+      )
+      scalars.zipWithIndex.map { case (f, i) => (i * 8) -> Seq(f) } ++
+        (0 until UcieClkRegs.rateCfgs).map { r =>
+          ((UcieClkRegs.rateCfgBase + r) * 8) -> Seq(
+            toRegFieldRw(rateCfg(r), s"rateCfg_$r")
+          )
+        }
+    }
+
+    node.regmap(regmap: _*)
+  }
+}
+
+/** One rate's worth of analog clocking configuration.
+  *
+  * Everything that decides what the lanes run at, and nothing that does not:
+  * the sampling phase is a training result rather than a property of the rate,
+  * so it stays in its own register.
+  */
+/** Phases of a clock configuration apply: shut the gate, switch under it, wait
+  * out the new source's wake-up, then let the clocks back out.
+  */
+object ClkApplyPhase extends ChiselEnum {
+  val idle, gateIn, ungateWait, gateOut = Value
+}
+
+/** What ends the clock gate at the end of an apply.
+  *
+  * The gate has to stay shut across a newly enabled PLL's wake-up, which is far
+  * longer than the few cycles the gate itself needs, and how long that is
+  * depends on the part. So the release is a choice rather than a constant.
+  */
+object ClkUngateSrc extends ChiselEnum {
+
+  /** Lock from whichever PLL `mainClkSel` names. The analog bypass pin has no
+    * lock to report and counts as ready the moment it is selected.
+    */
+  val pllLock = Value(0.U(2.W))
+
+  /** Nothing automatic: the gate stays shut until software writes
+    * `clkCfgUngateReq`. For a bringup that wants to look at the clock before
+    * the lanes see it.
+    */
+  val mmio = Value(1.U(2.W))
+
+  /** `clkCfgUngateDelay` cycles of this block's clock, counted from the switch.
+    * For a part whose lock is not trustworthy, or not wired.
+    */
+  val delay = Value(2.U(2.W))
+}
+
+class ClkRateCfgIO extends Bundle {
+  val mainClkSel = UInt(ClockingTile.mainClkSelWidth.W)
+  val txClkDiv = UInt(ClockingTile.txClkDivWidth.W)
+  val digClkDiv = UInt(ClockingTile.digClkDivWidth.W)
+  val pll8En = Bool()
+  val pll12En = Bool()
+  val pll16En = Bool()
+}
+
+object UcieClkRegs {
+
+  /** Rates the translation table holds, one per `SpeedMode` code. */
+  val rateCfgs = 8
+
+  /** Cycles the gate is held before the configuration moves, and again after it
+    * is let back out. Covers the gate reaching the slowest clock the tile can
+    * produce; it has nothing to do with a PLL waking up.
+    */
+  val gateDwell = 4
+
+  /** Width of `clkCfgUngateDelay`, in cycles of this block's clock. */
+  val ungateDelayWidth = 16
+
+  /** Every tap of the global delay line switched on, which is where it comes
+    * up: the longest code, not the shortest. Training moves it from there.
+    */
+  val maxPhaseSel = (BigInt(1) << ClockingTile.phaseSelWidth) - 1
+
+  /** What `ClkUngateSrc.delay` counts out unless software says otherwise. Sized
+    * to clear a PLL wake-up with room to spare at any plausible chip digital
+    * clock rather than to be tight at one.
+    */
+  val defaultUngateDelay = 1024
+
+  /** Which 8-byte slot the table starts at, clear of the scalar registers above
+    * it. Fixed rather than counted so that adding a scalar does not silently
+    * move every table entry.
+    */
+  val rateCfgBase = 32
+
+  /** Where this block sits above `UcieTLParams.address`. Clear of the main
+    * block, which runs to `ucieTLRegionSize` plus the UCIe digital region.
+    */
+  val offset = 0x10000
 }
 
 class UcieTLRegs(
@@ -280,7 +731,10 @@ class UcieTLRegs(
           )
         )
       )
-      val txRst = Wire(DecoupledIO(UInt(1.W)))
+      val txDividerRst = RegInit(false.B)
+      val rxDividerRst = RegInit(false.B)
+      val txDatapathRst = Wire(DecoupledIO(UInt(1.W)))
+      val txFsmRst = Wire(DecoupledIO(UInt(1.W)))
       val txExecute = Wire(DecoupledIO(UInt(1.W)))
       val txWriteChunk = Wire(DecoupledIO(UInt(1.W)))
       val txManualRepeatPeriod =
@@ -304,15 +758,14 @@ class UcieTLRegs(
         )
       )
       val rxLfsrValid = RegInit(0.U(32.W))
-      val rxRst = Wire(DecoupledIO(UInt(1.W)))
+      val rxDatapathRst = Wire(DecoupledIO(UInt(1.W)))
+      val rxFsmRst = Wire(DecoupledIO(UInt(1.W)))
       val rxPacketsToReceive =
         RegInit(0.U(io.test.rxPacketsToReceive.getWidth.W))
       val rxPauseCounters = RegInit(0.U(1.W))
       val rxDataLane = RegInit(0.U(io.test.rxDataLane.getWidth.W))
       val rxDataOffset = RegInit(0.U(io.test.rxDataOffset.getWidth.W))
 
-      val clkPhaseSel = RegInit(0.U(ClockingTile.phaseSelWidth.W))
-      val clkFreqSel = RegInit(0.U(ClockingTile.freqSelWidth.W))
       // Physical lane carrying the valid signal in each direction. Reset to the
       // dedicated valid lane; see `PhyRegsIO` for the other select codes.
       val txValidLaneSel = RegInit(
@@ -343,6 +796,8 @@ class UcieTLRegs(
       })))
       val rxctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new RxLaneDigitalCtlIO)
+        // No added delay out of reset; software trims from here.
+        w.Dctrl := 0.U
         w.zen := false.B
         w.zctl := 0.U
         w.vref_sel := 63.U
@@ -439,14 +894,17 @@ class UcieTLRegs(
       val sbTlRxOverflow =
         RegNext(RegNext(io.sbTlRxOverflow, false.B), false.B)
 
-      txRst.ready := true.B
+      txDatapathRst.ready := true.B
+      txFsmRst.ready := true.B
       txExecute.ready := true.B
       txWriteChunk.ready := true.B
-      rxRst.ready := true.B
+      rxDatapathRst.ready := true.B
+      rxFsmRst.ready := true.B
 
       // Holds a one-cycle register write out for `UcieTLRegs.rstStrobeCycles`
-      // cycles. `txRst`/`rxRst` reach the lane serializers and deserializers as
-      // well as the test FSMs, so a single-cycle strobe is uncomfortably short.
+      // cycles. The datapath resets cross into a divided clock domain a
+      // quarter the rate of this one and `txFsmRst`/`rxFsmRst` into the UCIe
+      // clock domain, so a single-cycle strobe is uncomfortably short.
       def stretched(pulse: Bool): Bool = {
         val remaining =
           RegInit(0.U(log2Ceil(UcieTLRegs.rstStrobeCycles).W))
@@ -481,7 +939,10 @@ class UcieTLRegs(
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
-      io.test.txRst := applyShift(stretched(txRst.valid))
+      io.test.txDividerRst := applyShift(txDividerRst)
+      io.test.rxDividerRst := applyShift(rxDividerRst)
+      io.test.txDatapathRst := applyShift(stretched(txDatapathRst.valid))
+      io.test.txFsmRst := applyShift(stretched(txFsmRst.valid))
       io.test.txExecute := applyShift(txExecute.valid)
       io.test.txManualRepeatPeriod := applyShift(txManualRepeatPeriod)
       io.test.txPacketsToSend := applyShift(txPacketsToSend)
@@ -491,7 +952,8 @@ class UcieTLRegs(
       io.test.rxDataMode := applyShift(rxDataMode)
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
       io.test.rxLfsrValid := applyShift(rxLfsrValid)
-      io.test.rxRst := applyShift(stretched(rxRst.valid))
+      io.test.rxDatapathRst := applyShift(stretched(rxDatapathRst.valid))
+      io.test.rxFsmRst := applyShift(stretched(rxFsmRst.valid))
       io.test.rxPacketsToReceive := applyShift(rxPacketsToReceive)
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
@@ -500,8 +962,6 @@ class UcieTLRegs(
       io.test.sb.txSend := applyShift(sbTxSend.valid)
       io.test.sb.rxPop := applyShift(sbRxPop.valid)
       io.test.sb.rxRst := applyShift(sbRxRst.valid)
-      io.phy.clkPhaseSel := applyShift(clkPhaseSel)
-      io.phy.clkFreqSel := applyShift(clkFreqSel)
       // Moving valid onto another lane is a test function, not something the
       // UCIe spec asks the link to do, so these go to PhyTest rather than to
       // the PHY.
@@ -541,7 +1001,10 @@ class UcieTLRegs(
       ) ++ (0 until PhyTest.numTestLanes(params.numLanes)).map((i: Int) => {
         toRegFieldRw(txLfsrSeed(i), s"txLfsrSeed_$i")
       }) ++ Seq(
-        RegField.w(1, txRst, RegFieldDesc("txRst", "")),
+        toRegFieldRw(txDividerRst, "txDividerRst"),
+        toRegFieldRw(rxDividerRst, "rxDividerRst"),
+        RegField.w(1, txDatapathRst, RegFieldDesc("txDatapathRst", "")),
+        RegField.w(1, txFsmRst, RegFieldDesc("txFsmRst", "")),
         RegField.w(1, txExecute, RegFieldDesc("txExecute", "")),
         RegField.w(1, txWriteChunk, RegFieldDesc("txWriteChunk", "")),
         toRegFieldR(
@@ -588,7 +1051,8 @@ class UcieTLRegs(
           s"rxBitErrorsLate_$i"
         )
       }) ++ Seq(
-        RegField.w(1, rxRst, RegFieldDesc("rxRst", "")),
+        RegField.w(1, rxDatapathRst, RegFieldDesc("rxDatapathRst", "")),
+        RegField.w(1, rxFsmRst, RegFieldDesc("rxFsmRst", "")),
         toRegFieldRw(rxPacketsToReceive, "rxPacketsToReceive"),
         toRegFieldRw(rxPauseCounters, "rxPauseCounters"),
         toRegFieldR(
@@ -599,14 +1063,16 @@ class UcieTLRegs(
           applyShift(io.test.rxSignature),
           "rxSignature"
         ),
+        toRegFieldR(
+          applyShift(io.test.rxIdleWordsObserved),
+          "rxIdleWordsObserved"
+        ),
         toRegFieldRw(rxDataLane, "rxDataLane"),
         toRegFieldRw(rxDataOffset, "rxDataOffset"),
         toRegFieldR(
           applyShift(io.test.rxDataChunk),
           "rxDataChunk"
-        ),
-        toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
-        toRegFieldRw(clkFreqSel, "clkFreqSel")
+        )
       ) ++ (0 until params.numLanes + 5).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(txctl(i).tile, s"txctl_${i}_tile")
@@ -767,6 +1233,11 @@ class UcieTL(
 
   // Main digital clock node.
   val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
+  // The chip's own digital clock. Runs before the PHY's do, which is what the
+  // clock source registers need. Taken in on a sink and handed to the clock
+  // register block through a source, as the UCIe digital clock is.
+  val chipDigitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
+  val chipClockSourceNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val ucieDigitalClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
 
   val ucieRegParams = UcieDigitalTopParams
@@ -826,7 +1297,14 @@ class UcieTL(
       )
     )
   )
+  val clkRegs = LazyModule(new UcieClkRegs(params, beatBytes))
+  clkRegs.clockNode := chipClockSourceNode
+
+  // Attached separately rather than behind a crossbar here: `regNode` is a
+  // `TLRegisterNode` in the chiplet interface, so the two blocks come out as
+  // two nodes and whoever attaches them decides how to fan out.
   val regNode = regs.node
+  val clkRegNode = clkRegs.node
   regs.clockNode := ucieDigitalClockNode
 
   override lazy val module = new UcieTLImpl
@@ -835,7 +1313,10 @@ class UcieTL(
     childReset := digitalClockNode.in(0)._1.reset
     override def provideImplicitClockToLazyChildren = true
 
-    val regmap = regs.module.regmap
+    // Both blocks, at their own bases, so generated collateral sees one map.
+    val regmap = regs.module.regmap ++ clkRegs.module.regmap.map {
+      case (off, fields) => (off + UcieClkRegs.offset) -> fields
+    }
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY
@@ -845,7 +1326,13 @@ class UcieTL(
       )
     )
     io.phy <> phy.io.top
-    phy.io.clkRst.reset := digitalClockNode.in(0)._1.reset
+    // The block reset, plus the software one that outlives it. Assertion is
+    // asynchronous to every domain behind it and release is synchronized by
+    // the same reset synchronizers the block reset already goes through.
+    phy.io.clkRst.reset :=
+      digitalClockNode.in(0)._1.reset.asBool || clkRegs.module.io.ucieRst
+    chipClockSourceNode.out(0)._1.clock := chipDigitalClockNode.in(0)._1.clock
+    chipClockSourceNode.out(0)._1.reset := chipDigitalClockNode.in(0)._1.reset
     ucieDigitalClockNode.out(0)._1.clock := phy.io.clkRst.ucieClk
     ucieDigitalClockNode.out(0)._1.reset := phy.io.clkRst.ucieRst
     phy.io.regs <> regs.module.io.phy
@@ -866,8 +1353,24 @@ class UcieTL(
     }
     io.debug <> test.io.bumps
     test.io.debug <> phy.io.debug
-    phy.io.clkRst.txResetb := test.io.txResetb
-    phy.io.clkRst.rxResetb := test.io.rxResetb
+    phy.io.clkRst.txDividerRstb := test.io.txDividerRstb
+    phy.io.clkRst.rxDividerRstb := test.io.rxDividerRstb
+    phy.io.clkRst.mainClkSel := clkRegs.module.io.mainClkSel
+    phy.io.clkRst.pll8En := clkRegs.module.io.pll8En
+    phy.io.clkRst.pll12En := clkRegs.module.io.pll12En
+    phy.io.clkRst.pll16En := clkRegs.module.io.pll16En
+    phy.io.clkRst.txClkDiv := clkRegs.module.io.txClkDiv
+    phy.io.clkRst.txClkPhase := clkRegs.module.io.txClkPhase
+    phy.io.clkRst.digClkDiv := clkRegs.module.io.digClkDiv
+    phy.io.clkRst.digClkBypassEn := clkRegs.module.io.digClkBypassEn
+    phy.io.clkRst.sbClkDiv := clkRegs.module.io.sbClkDiv
+    phy.io.clkRst.sbClkBypassEn := clkRegs.module.io.sbClkBypassEn
+    phy.io.clkRst.rxClkFromTxQ := clkRegs.module.io.rxClkFromTxQ
+    phy.io.clkRst.clkPhaseSel := clkRegs.module.io.clkPhaseSel
+    phy.io.clkRst.clkGateEn := clkRegs.module.io.clkGateEn
+    phy.io.clkRst.rxClkGateEn := clkRegs.module.io.rxClkGateEn
+    phy.io.clkRst.txDatapathRst := test.io.txDatapathRst
+    phy.io.clkRst.rxDatapathRst := test.io.rxDatapathRst
     test.io.regs <> regs.module.io.test
 
     // One controller select, plus a per-band mode that only means anything
@@ -885,7 +1388,7 @@ class UcieTL(
     txTestFifo.io.enq_clock := phy.io.clkRst.ucieClk
     txTestFifo.io.enq_reset := phy.io.clkRst.ucieRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
-    txTestFifo.io.deq_reset := phy.io.clkRst.txDivRst
+    txTestFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
     // TODO: should deq ready be synchronous to deq clock?
     // txTestFifo crosses both the phytest and ucie mainband tx signals to the PHY.
     txTestFifo.io.deq.ready := !selMbTl
@@ -895,7 +1398,7 @@ class UcieTL(
     rxTestFifo.io.enq.bits := phy.io.rx
     rxTestFifo.io.enq.valid := !selMbTl
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
-    rxTestFifo.io.enq_reset := phy.io.clkRst.rxDivRst
+    rxTestFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
     rxTestFifo.io.deq_clock := phy.io.clkRst.ucieClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.ucieRst
 
@@ -903,6 +1406,17 @@ class UcieTL(
       withClockAndReset(phy.io.clkRst.ucieClk, phy.io.clkRst.ucieRst) {
         ucieDigitalLazy.module
       }
+    // The rate training negotiated, translated by the table in the clock
+    // register block into the analog controls that realise it. Which entry
+    // means what is software's to decide, so a change in how the part is
+    // clocked during bringup does not need an RTL change.
+    clkRegs.module.io.freqSel := ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
+    // In `mainClkSel` order, so the block can index it with that selector.
+    clkRegs.module.io.pllLock := Cat(
+      phy.io.clkRst.pll16Lock,
+      phy.io.clkRst.pll12Lock,
+      phy.io.clkRst.pll8Lock
+    )
     ucieDigital.io.regBlockIo.foreach { rb => regs.module.ucieBlockIo <> rb }
     ucieDigital.io.ctrl <> regs.module.io.ucieCtrl
     // phyFacing TX: mux PhyTest vs ucieDigital into txTestFifo.enq (both ucieClk).
@@ -1167,7 +1681,7 @@ class UcieTL(
       txTlFifo.io.enq_clock := childClock
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
-      txTlFifo.io.deq_reset := phy.io.clkRst.txDivRst
+      txTlFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
       txTlFifo.io.deq.ready := selMbTl
 
       val rxTlFifo =
@@ -1176,7 +1690,7 @@ class UcieTL(
       rxTlFifo.io.enq.bits := phy.io.rx
       rxTlFifo.io.enq.valid := selMbTl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
-      rxTlFifo.io.enq_reset := phy.io.clkRst.rxDivRst
+      rxTlFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
       rxTlFifo.io.deq <> validFramer.io.phy
       rxTlFifo.io.deq_clock := childClock
       rxTlFifo.io.deq_reset := childReset
@@ -1353,8 +1867,14 @@ trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
           .zipWithIndex
       ) {
         ucie.digitalClockNode := sbus.fixedClockNode
+        // The clock source registers run on the chip's digital clock, which
+        // here is the same always running bus clock.
+        ucie.chipDigitalClockNode := sbus.fixedClockNode
         pbus.coupleTo(s"uciephytest{$n}") {
-          ucie.regNode := TLBuffer() := TLFragmenter(
+          val xbar = TLXbar()
+          ucie.regNode := xbar
+          ucie.clkRegNode := xbar
+          xbar := TLBuffer() := TLFragmenter(
             pbus.beatBytes,
             pbus.blockBytes
           ) := TLBuffer() := _
@@ -1408,7 +1928,8 @@ class WithUcieTLDefaultModels
     })
 
 class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
-  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
+  // Two sinks: the UCIe digital domain and the chip digital domain.
+  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
   val node = TLClientNode(
     Seq(
       TLMasterPortParameters.v1(
@@ -1427,7 +1948,11 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   val mbManagerNode = TLManagerNode(ucieTL.managerNode.portParams)
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.regNode := node
+  ucieTL.chipDigitalClockNode := clockNode
+  private val regXbar = TLXbar()
+  ucieTL.regNode := regXbar
+  ucieTL.clkRegNode := regXbar
+  regXbar := node
   ucieTL.managerNode := mbClientNode
   mbManagerNode := ucieTL.clientNode
 
@@ -1441,8 +1966,10 @@ class RTLHarness(ucie: => UcieTL)(implicit p: Parameters) extends LazyModule {
   class Impl extends LazyModuleImp(this) {
     ucieTL.module.io := DontCare
     dontTouch(ucieTL.module.io)
-    clockNode.out(0)._1.clock := clock
-    clockNode.out(0)._1.reset := reset
+    for (o <- clockNode.out) {
+      o._1.clock := clock
+      o._1.reset := reset
+    }
     val regmap = ucieTL.module.regmap
   }
 }
