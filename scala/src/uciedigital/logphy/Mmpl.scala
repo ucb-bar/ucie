@@ -47,10 +47,22 @@ object MmplResolveState extends ChiselEnum {
   val idle, directing = Value
 }
 
+/* One Module's receive slice as it waits for its siblings: the data, and
+   whether the Module flagged a Valid framing error on it (Table 10-1 pl_error).
+   The error has to travel with the slice so it reaches the Adapter with the
+   aggregate word it belongs to. */
+class MmplRxSlice(bits: Int) extends Bundle {
+  val data = UInt(bits.W)
+  val err = Bool()
+}
+
 class Mmpl(
     params: MmplParams = MmplParams(),
     rdiParams: RdiParams = RdiParams(64, 32),
-    sbParams: SidebandParams = new SidebandParams()
+    sbParams: SidebandParams = new SidebandParams(),
+    // Spec 10.3.3.7's 16 ms minimum LinkError residency, for the hosted RDI
+    // state machine; it follows the Modules' residency timeout override.
+    linkErrorResidencyCycles: Int = LinkTrainingSM.linkErrorResidencyCycles(None)
 ) extends Module {
   private val n = params.numModules
   private val bytesPerModule = params.bytesPerModule
@@ -108,6 +120,12 @@ class Mmpl(
   private val someModuleEnabled = moduleEnable.reduce(_ || _)
   private val numActive = PopCount(moduleEnable)
 
+  /* A stall still waiting for lp_stallack when the hosted RDI went to
+     LinkError: pl_trdy lets the Adapter drain, and what it hands over is
+     dropped (RDIController.stallDrain). Driven by the hosted RDI state machine
+     below, read by the transmit path above it. */
+  private val stallDrain = WireDefault(false.B)
+
   // Set by the sideband cfg path below when the MMPL itself has a packet or a
   // credit in flight on the Adapter's bus; read by the hosted RDI state machine
   // above it, so it has to be declared before either.
@@ -118,14 +136,61 @@ class Mmpl(
   // above it, so declared here.
   private val leavingByDirective = WireDefault(VecInit(Seq.fill(n)(false.B)))
 
+  /* Enabled Modules that fell out of training on their own -- to TRAINERROR in
+     MBINIT, say -- before the resolver heard from them. Spec 4.7.1: "if any
+     module failed to train, the MMPL must ensure that the multi-module
+     configuration degrades to the next permitted configuration". Written by
+     the resolution logic below: a failed Module is held in RESET and resolved
+     as one that must be disabled, instead of leaving its siblings waiting in
+     MBTRAIN.LINKSPEED for a report that never comes. */
+  private val failedReg = RegInit(VecInit(Seq.fill(n)(false.B)))
+  /* Modules falling out of training this cycle, ahead of failedReg catching
+     up, so the hosted RDI state machine never sees them for even a cycle -- it
+     latches pl_inband_pres low on TRAINERROR. Driven by the resolution logic
+     below. */
+  private val fellOut = WireDefault(VecInit(Seq.fill(n)(false.B)))
+  // Enabled and still training or up.
+  private val operational = VecInit((0 until n).map { m =>
+    moduleEnable(m) && !failedReg(m) && !fellOut(m)
+  })
+  private val someOperational = operational.reduce(_ || _)
+  /* What the hosted RDI state machine answers to: the operational Modules, or
+     every enabled one once none is left, so that a Link whose Modules have all
+     failed still reaches LinkError instead of going quiet. */
+  private val rdiMember = VecInit((0 until n).map { m =>
+    Mux(someOperational, operational(m), moduleEnable(m))
+  })
+  private val someRdiMember = rdiMember.reduce(_ || _)
+  private def anyRdiMember(pred: Int => Bool): Bool =
+    (0 until n).map(m => rdiMember(m) && pred(m)).reduce(_ || _)
+  private def allRdiMember(pred: Int => Bool): Bool =
+    (0 until n).map(m => !rdiMember(m) || pred(m)).reduce(_ && _)
+
+  /* Where the Link's own sideband traffic -- {LinkMgmt.RDI.*} and register
+     access -- may start. Spec 4.7.1.1 names "the numerically least Module ID
+     whose LTSM is not in RESET or SBINIT". A Module in TRAINERROR, one the
+     directive now being applied is disabling, and one that failed are passed
+     over as well: each is on its way to RESET, whose sideband reset destroys
+     whatever it is still holding -- the packets, and with them the lp_cfg
+     credits the Adapter spent on them. The remote die takes these packets on
+     any Module ID ("A packet sent on a given Module ID could be received on a
+     different Module ID"), so the next Module up serves just as well. */
+  private val sbTrafficEligible = VecInit((0 until n).map { m =>
+    operational(m) && !leavingByDirective(m) &&
+    (ltStates(m) =/= LTState.sRESET) && (ltStates(m) =/= LTState.sSBINIT) &&
+    (ltStates(m) =/= LTState.sTRAINERROR)
+  })
+
   /** Reads a per-Module signal from the numerically least operational Module.
     * Every Module of a multi-module Link runs at the same width and speed (spec
-    * 4.7.1), so any operational Module speaks for the Link -- but a disabled
-    * one does not, because its status stops tracking the Link.
+    * 4.7.1), so any operational Module speaks for the Link -- but a disabled or
+    * failed one does not, because its status stops tracking the Link (a failed
+    * Module sitting in RESET reads 4 GT/s and full width).
     */
   private def fromLeastEnabled[T <: Data](select: Int => T): T =
     PriorityMux(
-      (0 until n).map(m => moduleEnable(m) -> select(m)) :+
+      (0 until n).map(m => operational(m) -> select(m)) ++
+        (0 until n).map(m => moduleEnable(m) -> select(m)) :+
         (true.B -> select(0))
     )
 
@@ -205,8 +270,8 @@ class Mmpl(
   // Feed the latched word while beats remain, otherwise whatever the Adapter is
   // presenting, so a single-beat transfer costs no extra cycle.
   private val txWord = Mux(txHold, txDataReg, io.rdi.lpData)
-  private val txFeeding =
-    txHold || (io.rdi.lpValid && io.rdi.lpIrdy && someModuleEnabled)
+  private val txFeeding = !stallDrain &&
+    (txHold || (io.rdi.lpValid && io.rdi.lpIrdy && someModuleEnabled))
   private val txFire = txFeeding && allModulesTrdy
   private val txLastBeat = txBeat === (beatsPerWord - 1.U)
 
@@ -225,7 +290,11 @@ class Mmpl(
   swizzle.io.tx.lpData := txWord
 
   // pl_trdy accepts a new aggregate word only when no beats are outstanding.
-  io.rdi.plTrdy := allModulesTrdy && !txHold && someModuleEnabled
+  io.rdi.plTrdy := Mux(
+    stallDrain,
+    true.B,
+    allModulesTrdy && !txHold && someModuleEnabled
+  )
 
   // ==========================================================================
   // Receive
@@ -235,11 +304,21 @@ class Mmpl(
   // Modules of a Link can be staggered, and pl_valid has no backpressure
   // (spec 10.1.4), so the depth here is the whole skew budget.
   private val clearBeatState = WireDefault(false.B)
+  // Receive half of clearBeatState on its own, for the framing error path
+  // below: nothing about a receive error touches the transmit beats.
+  private val clearRxState = WireDefault(false.B)
+
+  /* Set once a Valid framing error has gone up.
+     Table 10-1: "Once pl_error is asserted, pl_valid should not be asserted
+     (without pl_error assertion in the same cycle) until the state status has
+     transitioned to Active after completing a successful Retrain entry and
+     exit." Cleared where the RDI state is known, below. */
+  private val rxErrLatched = RegInit(false.B)
 
   private val rxSlices = Seq.tabulate(n) { m =>
     val q = Module(
       new Queue(
-        UInt(moduleBits.W),
+        new MmplRxSlice(moduleBits),
         params.rxAlignDepth,
         pipe = true,
         flow = true,
@@ -247,15 +326,29 @@ class Mmpl(
       )
     )
     q.suggestName(s"rxSliceQueue_$m")
-    q.io.enq.valid := io.modules(m).rdi.plValid && moduleEnable(m)
-    q.io.enq.bits := io.modules(m).rdi.plData
+    val mod = io.modules(m).rdi
+    /* A Module raises pl_error with, or ahead of, the corrupted slice and then
+       withholds pl_valid until retrain (LogicalPhy). Its siblings keep
+       delivering, and with any skew between them the aggregate word that slice
+       belongs to completes cycles later -- so the error rides through this
+       queue with the slice instead of being ORed onto the RDI as it happens,
+       which put it beside an older, good word and let the corrupted one through
+       clean. When the error comes without a slice (the Module squashed the
+       corrupted one), an empty one stands in so the beat it belonged to still
+       carries the error. */
+    val errSeen = RegNext(mod.plError, false.B)
+    val errRise = mod.plError && !errSeen && !rxErrLatched
+    q.io.enq.valid :=
+      (mod.plValid || errRise) && moduleEnable(m) && !rxErrLatched
+    q.io.enq.bits.data := mod.plData
+    q.io.enq.bits.err := errRise
     /* Modules can deliver unequal numbers of beats -- one suppresses pl_valid
        after a framing error, they leave ACTIVE on different cycles, or one is
        disabled mid-stream -- and anything left behind would other-wise sit in
        the queue and re-emerge as a slice from k beats ago, silently offsetting
        that Module's contribution to every later word. Discard the partial word
        instead, on the same edge the Module set changes. */
-    q.io.flush.foreach(_ := clearBeatState)
+    q.io.flush.foreach(_ := clearBeatState || clearRxState)
     q
   }
 
@@ -268,13 +361,17 @@ class Mmpl(
 
   for (m <- 0 until n) {
     rxSlices(m).io.deq.ready := rxFire && moduleEnable(m)
-    swizzle.io.rx.moduleData(m) := rxSlices(m).io.deq.bits
+    swizzle.io.rx.moduleData(m) := rxSlices(m).io.deq.bits.data
   }
   swizzle.io.ctrl.rxBeat := rxBeat
 
   // Beats occupy disjoint aggregate bytes, so accumulating is an OR.
   private val rxGathered =
     swizzle.io.rx.plData | Mux(rxBeat === 0.U, 0.U, rxAccum)
+  // A slice of the beat going up now was corrupted.
+  private val rxBeatErr =
+    rxFire && anyEnabled(rxSlices(_).io.deq.bits.err)
+  private val rxWordDone = rxFire && rxLastBeat
 
   when(rxFire) {
     when(rxLastBeat) {
@@ -286,6 +383,22 @@ class Mmpl(
     }
   }
 
+  /* The error goes up on the beat that carries it, not with the end of its
+     word. The Module that flagged it withholds pl_valid until retrain, so once
+     a word takes several beats (Figure 4-46) the rest of that word never comes:
+     waiting for it lost pl_error altogether and overflowed the siblings'
+     queues. Table 10-1 lets the Physical Layer "squash the pl_valid internally
+     for the corrupted data" as long as the error "reaches the Adapter before or
+     at the same time as the corrupted data", so a word the error lands in
+     part-way is dropped and pl_error goes up on its own; on the last beat the
+     word is whole and goes up with it. Either way nothing after it reaches the
+     Adapter until retrain: whatever the siblings are still holding, or deliver
+     in the meantime, is discarded rather than left to overflow their queues. */
+  when(rxBeatErr) {
+    rxErrLatched := true.B
+    clearRxState := true.B
+  }
+
   /* A resolution can change the Module count, and with it how many beats an
      aggregate word takes, so a word part-way through cannot be finished to a
      shape it was not built for. Driven where moduleEnable is written, and
@@ -295,6 +408,8 @@ class Mmpl(
   when(clearBeatState) {
     txBeat := 0.U
     txHold := false.B
+  }
+  when(clearBeatState || clearRxState) {
     rxBeat := 0.U
     rxAccum := 0.U
   }
@@ -308,7 +423,9 @@ class Mmpl(
   // state back. A one-module Link keeps the machine inside its LogicalPhy, so
   // there the aggregate is that Module's own status.
   private val hostedRdi =
-    Option.when(params.isMultiModule)(Module(new RDIController(sbParams)))
+    Option.when(params.isMultiModule)(
+      Module(new RDIController(sbParams, linkErrorResidencyCycles))
+    )
 
   private val aggState = WireDefault(RDIState.reset)
   private val aggInbandPres = WireDefault(false.B)
@@ -324,38 +441,54 @@ class Mmpl(
       ctrl.io.rdi.lpWakeReq := io.rdi.lpWakeReq
       ctrl.io.rdi.lpClkAck := io.rdi.lpClkAck
       ctrl.io.rdi.lpStallAck := io.rdi.lpStallAck
+      ctrl.io.rdi.lpLinkError := io.rdi.lpLinkError
+      // Spec 4.7.1.1 again: the Link's own messages need an eligible Module.
+      ctrl.io.sbLinkDown := !sbTrafficEligible.asUInt.orR
 
       // The Link is only ready to bring RDI up once every operational Module is,
-      // and any one Module failing or needing clocks speaks for the Link.
+      // and any one Module failing or needing clocks speaks for the Link. A
+      // Module that failed to train speaks for nothing while the rest can still
+      // degrade around it: its timeout would take the Link to LinkError. Nor
+      // does one the directive now being applied is disabling, which can time
+      // out in its exchange or its TRAINERROR handshake on the way out.
       ctrl.io.doRdiBringup :=
-        someModuleEnabled && allEnabled(m => hosts(m).doRdiBringup)
-      ctrl.io.trainingTimeout := anyEnabled(m => hosts(m).trainingTimeout)
-      ctrl.io.validFramingError := anyEnabled(m => hosts(m).validFramingError)
+        someRdiMember && allRdiMember(m => hosts(m).doRdiBringup)
+      ctrl.io.internalLinkError := anyRdiMember(m =>
+        hosts(m).internalLinkError && !leavingByDirective(m)
+      )
+      // Spec 3.5: one RDI for the Link, so a Module's software retrain is a
+      // retrain of the whole Link, through that RDI.
+      ctrl.io.internalRetrainReq := anyRdiMember(hosts(_).swRetrainRequest)
+      // Nothing may be left in flight when the RDI leaves Active: neither the
+      // rest of an aggregate word spreading over successive beats, nor a slice
+      // part-way through a Module's Lanes.
+      ctrl.io.txDrained := !txHold && allRdiMember(hosts(_).txIdle)
+      ctrl.io.validFramingError := anyRdiMember(m => hosts(m).validFramingError)
       ctrl.io.cfgSidebandActive :=
         anyEnabled(m => hosts(m).cfgSidebandActive) || cfgSidebandBusy
-      ctrl.io.plPhyInRecenter := anyEnabled(m => hosts(m).plPhyInRecenter)
+      ctrl.io.plPhyInRecenter := anyRdiMember(m => hosts(m).plPhyInRecenter)
       ctrl.io.clocksUngatedAndStable :=
-        someModuleEnabled && allEnabled(m => hosts(m).clocksUngatedAndStable)
+        someRdiMember && allRdiMember(m => hosts(m).clocksUngatedAndStable)
 
       // The state machine keys off LINKINIT and ACTIVE to raise inband presence
       // and force bring-up, so it must not see either until every operational
       // Module has got there.
       val ltsmForRdi = WireDefault(LTState.sRESET)
       when(
-        someModuleEnabled && allEnabled(m =>
+        someRdiMember && allRdiMember(m =>
           hosts(m).ltsmState === LTState.sACTIVE
         )
       ) {
         ltsmForRdi := LTState.sACTIVE
       }.elsewhen(
-        someModuleEnabled && allEnabled(m =>
+        someRdiMember && allRdiMember(m =>
           (hosts(m).ltsmState === LTState.sLINKINIT) ||
             (hosts(m).ltsmState === LTState.sACTIVE)
         )
       ) {
         ltsmForRdi := LTState.sLINKINIT
       }.elsewhen(
-        anyEnabled(m =>
+        anyRdiMember(m =>
           (hosts(m).ltsmState === LTState.sTRAINERROR) &&
             !leavingByDirective(m)
         )
@@ -366,7 +499,7 @@ class Mmpl(
            RDIController would otherwise drop pl_inband_pres, which Table 10-1
            requires to stay high until the Link is down. */
         ltsmForRdi := LTState.sTRAINERROR
-      }.elsewhen(!allEnabled(m => hosts(m).ltsmState === LTState.sRESET)) {
+      }.elsewhen(!allRdiMember(m => hosts(m).ltsmState === LTState.sRESET)) {
         // Somewhere in the middle of training: not RESET, not up yet.
         ltsmForRdi := LTState.sMBTRAIN
       }
@@ -378,12 +511,9 @@ class Mmpl(
       }
 
       // Spec 4.7.1.1: {LinkMgmt.RDI.*} is a Table 7-8 message, so it goes out on
-      // the sideband of the numerically least Module ID whose LTSM is not in
-      // RESET or SBINIT -- the same Module the cfg path uses.
-      val rdiSbEligible = (0 until n).map { m =>
-        moduleEnable(m) && (ltStates(m) =/= LTState.sRESET) &&
-        (ltStates(m) =/= LTState.sSBINIT)
-      }
+      // the sideband of the numerically least eligible Module -- the same one
+      // the cfg path uses (see sbTrafficEligible).
+      val rdiSbEligible = (0 until n).map(sbTrafficEligible(_))
       val rdiSbSelect = PriorityEncoderOH(rdiSbEligible)
       for (m <- 0 until n) {
         hosts(m).sbLaneIo.tx.valid := ctrl.io.sbLaneIo.tx.valid && rdiSbSelect(
@@ -420,6 +550,7 @@ class Mmpl(
       }
 
       aggState := ctrl.io.rdi.plStateSts
+      stallDrain := ctrl.io.stallDrain
       aggInbandPres := ctrl.io.rdi.plInbandPres
       aggStallReq := ctrl.io.rdi.plStallReq
       aggClkReq := ctrl.io.rdi.plClkReq
@@ -435,7 +566,13 @@ class Mmpl(
       aggWakeAck := io.modules(0).rdi.plWakeAck
   }
 
-  private val aggActive = aggState === RDIState.active
+  /* Up is Active or Active.PMNAK. Spec 10.3: "Because Active.PMNAK is a
+     sub-state of Active, all rules that apply for Active are also applicable
+     for Active.PMNAK" -- the Modules stay ACTIVE and keep delivering through
+     it, and with L1/L2 unimplemented every PM request lands here. */
+  private val aggUp =
+    (aggState === RDIState.active) || (aggState === RDIState.activePmNak)
+  private val wasUp = RegNext(aggUp, false.B)
 
   // Total width across all active Modules (spec 10.1 pl_lnk_cfg). The LinkWidth
   // encoding is a log2 ladder, so doubling the Module count adds one.
@@ -451,11 +588,19 @@ class Mmpl(
   private val (aggWidth, aggWidthEncoded) = LinkWidth.safe(aggWidthCode(2, 0))
   private val aggWidthValid = aggWidthInRange && aggWidthEncoded
 
-  /* Each LogicalPhy withholds a new slice unless the RDI is Active, and
-     `leftActive` below flushes anything still queued on the cycle the Link
-     leaves ACTIVE, so a gather can only ever complete from slices of the
-     current Active period. */
-  io.rdi.plValid := rxFire && rxLastBeat
+  /* Each LogicalPhy delivers slices only while its LTSM is ACTIVE, and the
+     flush below discards anything still queued when the Link leaves Active, so
+     a gather can only ever complete from slices of the current Active period.
+
+     A Valid framing error goes up as pl_error on the beat that carries it --
+     with its word, if that beat completes one -- and after it nothing goes up
+     until the Link is back in Active. pl_error is only permitted while the RDI
+     is Active (Table 10-1), so a corrupted word that completes outside it is
+     dropped instead. */
+  when(!wasUp && aggUp) {
+    rxErrLatched := false.B
+  }
+  io.rdi.plValid := rxWordDone && !rxErrLatched && (!rxBeatErr || aggUp)
   io.rdi.plData := Mux(someModuleEnabled, rxGathered, 0.U)
   io.rdi.plStateSts := aggState
   io.rdi.plLnkCfg := aggWidth
@@ -463,10 +608,11 @@ class Mmpl(
   io.rdi.plStallReq := aggStallReq
   io.rdi.plClkReq := aggClkReq
   io.rdi.plWakeAck := aggWakeAck
-  io.rdi.plError := anyEnabled(io.modules(_).rdi.plError)
+  io.rdi.plError := aggUp && (rxBeatErr || rxErrLatched)
   io.rdi.plCError := anyEnabled(io.modules(_).rdi.plCError)
   io.rdi.plNfError := anyEnabled(io.modules(_).rdi.plNfError)
-  io.rdi.plTrainError := anyEnabled(io.modules(_).rdi.plTrainError)
+  // A Module being degraded around has not failed the Link.
+  io.rdi.plTrainError := anyRdiMember(io.modules(_).rdi.plTrainError)
   io.rdi.plPhyInRecenter := anyEnabled(io.modules(_).rdi.plPhyInRecenter)
   io.rdi.plSpeedmode := fromLeastEnabled(io.modules(_).rdi.plSpeedmode)
   io.rdi.plMaxSpeedmode := fromLeastEnabled(io.modules(_).rdi.plMaxSpeedmode)
@@ -543,8 +689,14 @@ class Mmpl(
        started once it is fully resident and a Module has been picked, after
        which the pick is registered for the length of the packet. That also
        covers the window where no Module is eligible at all, which used to drop
-       the Adapter's chunks on the floor along with the credit it spent. */
-    val cfgTxEligible = (0 until n).map { m =>
+       the Adapter's chunks on the floor along with the credit it spent.
+
+       A new packet starts only on a Module sbTrafficEligible allows. One
+       already under way is finished on its Module as long as that Module's
+       sideband channel is still up (not RESET or SBINIT): cutting it short
+       there would only lose it sooner. */
+    val cfgTxEligible = (0 until n).map(sbTrafficEligible(_))
+    val cfgTxReachable = (0 until n).map { m =>
       moduleEnable(m) && (ltStates(m) =/= LTState.sRESET) &&
       (ltStates(m) =/= LTState.sSBINIT)
     }
@@ -575,7 +727,7 @@ class Mmpl(
        priority queue and credit counters under sbReset), and the packet
        evaporates. Watch the granted Module rather than assume it stays. */
     val cfgTxGrantEligible =
-      (0 until n).map(m => cfgTxGrant(m) && cfgTxEligible(m)).reduce(_ || _)
+      (0 until n).map(m => cfgTxGrant(m) && cfgTxReachable(m)).reduce(_ || _)
     val cfgTxAbort = cfgTxGrantValid && !cfgTxGrantEligible
 
     val cfgTxSending = cfgTxGrantValid && !cfgTxAbort && txCfg.io.deq.valid
@@ -732,12 +884,40 @@ class Mmpl(
        may still be holding a credit the Adapter is owed. */
     val cfgCrdPendingW = log2Ceil(n * sbParams.maxCrd + 2)
     val cfgCrdPending = RegInit(0.U(cfgCrdPendingW.W))
-    /* A Module's return for a packet it accepted, plus the MMPL's own refund
-       for a packet that died with its Module before any Module could return
-       one. Both are credits the Adapter is owed for lp_cfg it has spent. */
+    /* lp_cfg packets each Module has been handed but not yet returned a credit
+       for. A Module returns one only once the packet leaves its priority queue
+       (SidebandInterfaceNode), and a Module dropping to RESET resets its whole
+       sideband channel, so whatever it still holds dies there -- and those
+       credits would never come back. Register Access completions never
+       consume a credit (spec 7.1.3.3), so they are not counted. */
+    val cfgTxHeaderNow = cfgTxSending && (cfgTxChunks === 0.U)
+    val cfgTxCompletionNow =
+      SBM.isRegAccessComplete(txCfg.io.deq.bits(4, 0))
+    val cfgTxCompletionReg = RegInit(false.B)
+    when(cfgTxHeaderNow) { cfgTxCompletionReg := cfgTxCompletionNow }
+    val cfgTxIsCompletion =
+      Mux(cfgTxHeaderNow, cfgTxCompletionNow, cfgTxCompletionReg)
+
+    val cfgCrdOwedW = log2Ceil(sbParams.maxCrd + 1)
+    val cfgCrdOwed = RegInit(VecInit(Seq.fill(n)(0.U(cfgCrdOwedW.W))))
+    val cfgCrdOwedRefund = Wire(Vec(n, UInt(cfgCrdOwedW.W)))
+    for (m <- 0 until n) {
+      val handed = cfgTxPacketDone && cfgTxGrant(m) && !cfgTxIsCompletion
+      val returned =
+        io.modules(m).rdi.plCfgCrd && (cfgCrdOwed(m) =/= 0.U || handed)
+      val owedNow = cfgCrdOwed(m) + handed.asUInt - returned.asUInt
+      val channelReset = ltStates(m) === LTState.sRESET
+      cfgCrdOwedRefund(m) := Mux(channelReset, owedNow, 0.U)
+      cfgCrdOwed(m) := Mux(channelReset, 0.U, owedNow)
+    }
+
+    /* A Module's return for a packet it accepted, plus the MMPL's own refunds
+       for packets that died with their Module before it could return one --
+       part-sent (cfgTxRefund) or held (cfgCrdOwedRefund). All are credits the
+       Adapter is owed for lp_cfg it has spent. */
     val cfgCrdArriving =
       PopCount((0 until n).map(io.modules(_).rdi.plCfgCrd)) +&
-        cfgTxRefund.asUInt
+        cfgTxRefund.asUInt +& cfgCrdOwedRefund.reduce(_ +& _)
     val cfgCrdEmit = (cfgCrdPending +& cfgCrdArriving) =/= 0.U
     cfgCrdPending := cfgCrdPending +& cfgCrdArriving - cfgCrdEmit.asUInt
     io.rdi.plCfgCrd := cfgCrdEmit
@@ -814,6 +994,13 @@ class Mmpl(
       io.modules(m).status.localTxFunctionalLanes,
       negotiatedBy8
     )
+    // Both directions: what this die receives on is what the other die
+    // transmits on, so the two die judge "narrower" on the same widths.
+    resolver.io.activeRxLanes(m) := MmplByteMap.activeLanes(
+      io.modules(m).status.remoteTxFunctionalLanes,
+      negotiatedBy8
+    )
+    resolver.io.failed(m) := failedReg(m)
   }
 
   // Latch the resolution before applying it. Dropping a Module changes the
@@ -867,15 +1054,24 @@ class Mmpl(
   private val allDirectedAck = allEnabled(m => directedAck(m) || ackedNow(m))
 
   /* Every resolution but one is reached only after *all* operational Modules
-     have reported, so all of them were parked waiting and `!reportsPending` is
-     already the right retirement test -- and the safe one, because it does not
-     depend on watching a Module out of a state it re-enters a few substates
-     later. PHY retrain is the exception: the resolver answers it from a single
-     Module's report by design, so its directive is the only one that can be
-     retired before a sibling has even reached the substate that samples it.
-     Extend the hold for that case alone. */
+     have reported, so all of them were parked waiting and "no report pending"
+     is already the right retirement test -- and the safe one, because it does
+     not depend on watching a Module out of a state it re-enters a few
+     substates later. PHY retrain is the exception: the resolver answers it
+     from a single Module's report by design, so its directive is the only one
+     that can be retired before a sibling has even reached the substate that
+     samples it. Extend the hold for that case alone. */
   private val holdForPhyRetrain =
     (directedLink === MmplResolution.phyRetrain) && !allDirectedAck
+
+  /* Only a Module still owed this directive can hold it. One that has already
+     acted may be back in LINKSPEED with its next pass's report -- the PHY
+     retrain hold above keeps the directive long enough for that on a staggered
+     Link -- and the directive is withdrawn from it, so waiting on that report
+     left the directive unable to retire and every Module timing out. */
+  private val reportsPendingUnacked = anyEnabled(m =>
+    io.modules(m).status.linkSpeedReport.valid && !directedAck(m)
+  )
 
   // A Module whose remote partner answered something other than the directed
   // resolution (spec 4.5.3.4.12 Step 5d).
@@ -918,7 +1114,7 @@ class Mmpl(
       }
       // Hold the directive until every Module has acted on it, then shrink the
       // operational set.
-      when(!reportsPending && !holdForPhyRetrain) {
+      when(!reportsPendingUnacked && !holdForPhyRetrain) {
         /* Except on trainError, where the resolver's nextEnable is all-false
            because no operational configuration remains. Committing that would
            mask the very failure it reports: every anyEnabled() reduction below
@@ -936,8 +1132,91 @@ class Mmpl(
     }
   }
 
+  /* Spec 4.7.1: "if any module failed to train, the MMPL must ensure that the
+     multi-module configuration degrades to the next permitted configuration."
+     A Module that times out or falls into TRAINERROR on its own before
+     reporting -- in SBINIT or MBINIT, say -- never reaches LINKSPEED, and one
+     still in RESET once every sibling is parked on its report never will; the
+     resolver used to wait on either until every sibling timed out and the Link
+     went to LinkError. Latch it as failed instead, hold it in RESET, and let
+     the resolver disable it like any Module that cannot run.
+
+     Only while the Link is not up and some sibling is still on its way to
+     MBTRAIN.LINKSPEED, where the resolution that removes the failed Module
+     will happen: a runtime failure, a failure once the rest have gone on to
+     LINKINIT, or every Module falling together is the Link going down, and
+     keeps its usual path to retry and LinkError. A Module the directive is
+     disabling, or a Link the directive has sent to TRAINERROR, is falling by
+     design.
+
+     "Some sibling still on its way" means one that can carry the Link: not
+     one falling out itself -- timed out, or in TRAINERROR, which a Module
+     that has timed out takes a while to reach -- and not one the directive is
+     disabling. Counting those, Modules that fall together (they leave RESET
+     together and time out together, and a Retrain puts them all in PHYRETRAIN
+     at once) counted each other as the one still training, were all latched
+     failed, and so none of them retried or escalated. */
+  /* A Module has failed once it times out, not only once it reaches
+     TRAINERROR. The residency timeout is what the hosted RDI state machine
+     takes to LinkError, and the TRAINERROR handshake that follows it can wait
+     another 8 ms on a silent partner: left operational until then, one
+     Module's timeout took the whole Link down, and a sibling parked on the
+     resolution could time out first and be the one blamed. In RESET the flag is
+     left over from the previous training until the Module leaves, so it only
+     counts outside RESET -- a Module stuck there is `neverStarted`. */
+  private val droppingOut = VecInit((0 until n).map { m =>
+    val timedOut = io.modules(m).status.trainingTimedout &&
+      (ltStates(m) =/= LTState.sRESET)
+    (ltStates(m) === LTState.sTRAINERROR) || timedOut
+  })
+  private val stillTraining = VecInit((0 until n).map { m =>
+    moduleEnable(m) && !failedReg(m) && !leavingByDirective(m) &&
+    !droppingOut(m) &&
+    ((ltStates(m) === LTState.sSBINIT) || (ltStates(m) === LTState.sMBINIT) ||
+      (ltStates(m) === LTState.sMBTRAIN) ||
+      (ltStates(m) === LTState.sPHYRETRAIN))
+  })
+  private val trainErrorDirected =
+    (resolveState === MmplResolveState.directing) &&
+      (directedLink === MmplResolution.trainError)
+  for (m <- 0 until n) {
+    val siblings = (0 until n).filter(_ != m)
+    val siblingTraining =
+      siblings.map(stillTraining(_)).foldLeft(false.B)(_ || _)
+    val siblingsReported = siblings
+      .map { k =>
+        !(moduleEnable(k) && !failedReg(k)) ||
+        io.modules(k).status.linkSpeedReport.valid
+      }
+      .foldLeft(true.B)(_ && _)
+    val droppedOut = droppingOut(m)
+    val neverStarted = (ltStates(m) === LTState.sRESET) &&
+      (resolveState === MmplResolveState.idle) && siblingsReported
+    fellOut(m) := moduleEnable(m) && !failedReg(m) && !aggUp &&
+      !leavingByDirective(m) && !trainErrorDirected && siblingTraining &&
+      (droppedOut || neverStarted)
+    when(fellOut(m)) { failedReg(m) := true.B }
+  }
+
+  // Modules the restore below takes back: dropped by a resolution, or failed.
+  private val restoring = VecInit((0 until n).map { m =>
+    linkInReset && (resolveState === MmplResolveState.idle) &&
+    (!moduleEnableReg(m) || failedReg(m))
+  })
+  /* The retry episode of a Module the restore is not taking back. If the Link
+     failed as a whole and is retrying, that is the Link's episode, and the
+     restored Modules take it up (see MmplModuleCtrlIO.restartEpisode); after a
+     training the Link finished without them it is none. */
+  private val linkEpisode = PriorityMux(
+    (0 until n).map { m =>
+      (io.moduleConnected(m) && !restoring(m) &&
+        io.modules(m).status.trainingEpisode.active) ->
+        io.modules(m).status.trainingEpisode
+    } :+ (true.B -> 0.U.asTypeOf(new TrainingEpisode()))
+  )
   when(linkInReset && resolveState === MmplResolveState.idle) {
     moduleEnableReg.foreach(_ := true.B)
+    failedReg.foreach(_ := false.B)
     clearBeatState := true.B
   }
 
@@ -949,9 +1228,13 @@ class Mmpl(
      The Link does pass back through MBTRAIN.LINKSPEED on the way to ACTIVE, and
      that resolution flushes -- but only at the far end of the retrain, so this
      catches it at the moment the staleness is created, which is also what keeps
-     pl_valid from completing a word out of a mix of the two periods. */
-  private val wasActive = RegNext(aggActive, false.B)
-  when(wasActive && !aggActive) {
+     pl_valid from completing a word out of a mix of the two periods.
+
+     Only leaving Active for good counts. Active to Active.PMNAK is not leaving
+     it: traffic keeps flowing, and flushing there truncated the transmit word
+     in flight and dropped the receive slices waiting on a skewed sibling, which
+     left every later word assembled from pieces of two. */
+  when(wasUp && !aggUp) {
     clearBeatState := true.B
   }
 
@@ -973,17 +1256,59 @@ class Mmpl(
      it. Modules enter PHYRETRAIN staggered, so letting the value keep moving
      lets one Module transmit one encoding and resolve with another, and the two
      die exit PHYRETRAIN to different states. Sample it once, as the first
-     Module enters, and hold it until the last one leaves. */
-  private val anyInPhyRetrain =
-    anyEnabled(m => ltStates(m) === LTState.sPHYRETRAIN)
+     Module enters, and hold it until every Module has had its turn.
+
+     "Every Module", not "while one is in there": on the PHY retrain from
+     LINKSPEED the Modules enter one by one, and the first one out resets its
+     Lanes on the way to REPAIR or SPEEDIDLE, which changes the very spare
+     count the aggregate is built from. A sibling entering even a cycle after
+     it left would sample that and resolve differently -- one Module at a new
+     speed, another at a new width. A Module that is not going to take part
+     (dropped, failed, in RESET or TRAINERROR, or still in LINKINIT or ACTIVE,
+     which an RDI Retrain leaves all together) does not hold it. */
+  private val inPhyRetrain =
+    (0 until n).map(m => ltStates(m) === LTState.sPHYRETRAIN)
+  private val anyInPhyRetrain = anyEnabled(inPhyRetrain(_))
   private val commonRetrainHeld = RegInit(RetrainEncoding.TXSELFCAL)
-  when(!anyInPhyRetrain) {
+  private val retrainEpoch = RegInit(false.B)
+  private val retrainJoined = RegInit(VecInit(Seq.fill(n)(false.B)))
+  private val retrainSettled = allEnabled { m =>
+    val notTakingPart = (ltStates(m) === LTState.sRESET) ||
+      (ltStates(m) === LTState.sTRAINERROR) ||
+      (ltStates(m) === LTState.sLINKINIT) ||
+      (ltStates(m) === LTState.sACTIVE)
+    !operational(m) ||
+    (retrainJoined(m) && !inPhyRetrain(m)) ||
+    (!retrainJoined(m) && notTakingPart)
+  }
+  when(retrainEpoch) {
+    for (m <- 0 until n) {
+      when(inPhyRetrain(m)) { retrainJoined(m) := true.B }
+    }
+    when(retrainSettled) { retrainEpoch := false.B }
+  }.elsewhen(anyInPhyRetrain) {
+    retrainEpoch := true.B
+    retrainJoined := VecInit(inPhyRetrain)
+  }.otherwise {
     commonRetrainHeld := commonRetrain
   }
 
+  /* Spec 4.5.3.4.12 separates the single-module handshake (Steps 3, 4 and 7)
+     from the multi-module one (Step 5), and a die only ever runs the one its
+     partner runs. A Link with a single connected Module faces a single-module
+     die -- Table 5-28's x2 and x4 to x1 pairings, or a UCIe-S x8 port on Module
+     0 (spec 5.7.3.3) -- which answers {exit to repair req} with
+     {exit to repair resp} and never waits on a resolution, so that Module has
+     to run the single-module flow too. */
+  private val linkIsMultiModule =
+    params.isMultiModule.B && (PopCount(io.moduleConnected) > 1.U)
+
   for (m <- 0 until n) {
     val ctrl = io.modules(m).ctrl
-    ctrl.multiModule := params.isMultiModule.B
+    ctrl.multiModule := linkIsMultiModule
+    // Spec 3.5: the state machine hosted above is the Link's, at two Modules
+    // or four. A one-module Link keeps its own.
+    ctrl.rdiHosted := params.isMultiModule.B
     /* Withdrawn from a Module once it has acted, so that one which finishes its
        exchange and comes back round to LINKSPEED before a slow sibling has left
        does not find last pass's answer still on offer. */
@@ -992,9 +1317,21 @@ class Mmpl(
     ctrl.resolution.bits := directed(m)
     ctrl.commonRetrainEncoding.valid := params.isMultiModule.B
     ctrl.commonRetrainEncoding.bits := commonRetrainHeld
-    // Holds a Module the Link has dropped, or one with no partner, in RESET
-    // until the whole Link retrains from RESET and `linkInReset` restores it.
-    ctrl.moduleDisabled := !moduleEnable(m)
+    // Holds a Module the Link has dropped, one that failed, or one with no
+    // partner in RESET until the whole Link retrains from RESET and
+    // `linkInReset` restores it. One the directive now being applied is
+    // disabling counts already: its way out through TRAINERROR is not the
+    // Link failing, so it must not escalate to LinkError.
+    ctrl.moduleDisabled := !moduleEnable(m) || failedReg(m) ||
+      leavingByDirective(m)
+    ctrl.restart := restoring(m)
+    ctrl.restartEpisode := linkEpisode
+    // A sibling starting to train takes this Module out of RESET with it.
+    ctrl.joinResetExit := linkIsMultiModule &&
+      (0 until n)
+        .filter(_ != m)
+        .map(k => operational(k) && (ltStates(k) === LTState.sSBINIT))
+        .foldLeft(false.B)(_ || _)
 
     leavingByDirective(m) := (resolveState === MmplResolveState.directing) &&
       (directedLink =/= MmplResolution.trainError) && !directedEnable(m)
@@ -1010,7 +1347,7 @@ class Mmpl(
   block(Verification) {
     block(Verification.Assert) {
       assert(
-        aggWidthValid || !aggActive,
+        aggWidthValid || !aggUp,
         "FATAL: MMPL aggregated a Link width that is not a valid pl_lnk_cfg encoding"
       )
       /* Spec 4.7 permits one-, two- and four-Module Links, and spec 5.7.3.4.1
@@ -1032,14 +1369,23 @@ class Mmpl(
       // Spec 4.7.1: every Module of a multi-module Link runs at one speed.
       (0 until n).foreach { m =>
         assert(
-          !aggActive || !moduleEnable(m) ||
+          !aggUp || !moduleEnable(m) ||
             io.modules(m).rdi.plSpeedmode === io.rdi.plSpeedmode,
           "FATAL: MMPL Modules disagree on the Link speed while Active"
         )
         assert(
-          !aggActive || !moduleEnable(m) ||
+          !aggUp || !moduleEnable(m) ||
             io.modules(m).status.linkWidth === moduleWidth,
           "FATAL: MMPL Modules disagree on the Link width while Active"
+        )
+        // The receive gather reads one Lane code for every Module too.
+        assert(
+          !aggUp || !moduleEnable(m) ||
+            MmplByteMap.activeLanes(
+              io.modules(m).status.remoteTxFunctionalLanes,
+              negotiatedBy8
+            ) === MmplByteMap.activeLanes(rxLaneCode, negotiatedBy8),
+          "FATAL: MMPL Modules disagree on the receive width while Active"
         )
       }
       // Spec 4.7: each Module of a multi-module Link has a dedicated Module ID,
@@ -1048,7 +1394,7 @@ class Mmpl(
       // of every aggregate word untransmitted, silently.
       for (i <- 0 until n; j <- (i + 1) until n) {
         assert(
-          !aggActive || !moduleEnable(i) || !moduleEnable(j) ||
+          !aggUp || !moduleEnable(i) || !moduleEnable(j) ||
             remoteId(i) =/= remoteId(j),
           "FATAL: MMPL Modules report the same remote Module ID while Active"
         )

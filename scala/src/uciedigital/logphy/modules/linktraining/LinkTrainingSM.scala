@@ -12,6 +12,22 @@ import chisel3.layer.{Layer, LayerConfig, block}
 import chisel3.layers.Verification
 import chisel3.util._
 
+object LinkTrainingSM {
+  // Spec residency timeout: 8 ms at the 800 MHz the logic runs at.
+  private val timeoutMs = 0.008
+  private val operatingFreq = 800000000
+
+  /** The 8 ms residency timeout, in cycles. */
+  def timeoutCycles(timeoutCyclesOverride: Option[Int]): Int =
+    timeoutCyclesOverride.getOrElse((operatingFreq * timeoutMs).toInt)
+
+  /** Spec 10.3.3.7's 16 ms minimum LinkError residency: two timeouts, so that
+    * it scales with a simulation override along with them.
+    */
+  def linkErrorResidencyCycles(timeoutCyclesOverride: Option[Int]): Int =
+    2 * timeoutCycles(timeoutCyclesOverride)
+}
+
 class LinkTrainingSM(
     sbParams: SidebandParams,
     afeParams: AfeParams,
@@ -49,8 +65,13 @@ class LinkTrainingSM(
     val ltState = Output(LTState())
     val currentState = Output(LTSMState()) // Out to logphytop
     val trainingTimedout = Output(Bool())
+    val trainingEpisode = Output(new TrainingEpisode())
     val fatalTrainingError = Output(Bool())
+    // This Module escalates to RDI LinkError (see TrainError Logic).
     val forceRdiLinkError = Output(Bool())
+    // A software retrain request (swRetrainRequest) waiting in ACTIVE for the
+    // RDI to go to Retrain.
+    val swRetrainPending = Output(Bool())
     val doLaneReversal = Output(Bool())
     val localTxFunctionalLanes = Output(UInt(3.W))
     val remoteTxFunctionalLanes = Output(UInt(3.W))
@@ -120,9 +141,8 @@ class LinkTrainingSM(
   // Variables
   // ==============================================================================================
   val mbSerializerRatio = afeParams.mbSerializerRatio
-  val timeoutMs = 0.008
-  val operatingFreq = 800000000 // TODO: Put this into an object
   val retryAmtW = retryW // TODO: Need to put retryW into an object
+  require(retryW <= 16, "TrainingEpisode carries at most a 16-bit retry count")
 
   // ==============================================================================================
   // FSM state register
@@ -141,13 +161,15 @@ class LinkTrainingSM(
   // ==============================================================================================
   // If operating frequency is 800 MHz and timeout at 8ms, timeout cycles is 6,400,000
   // log2ceil(6,400,000) == 23
-  val timeoutCycles =
-    timeoutCyclesOverride.getOrElse((operatingFreq * timeoutMs).toInt)
+  val timeoutCycles = LinkTrainingSM.timeoutCycles(timeoutCyclesOverride)
   require(
     timeoutCycles > 1,
     s"LinkTrainingSM needs a timeout of more than one cycle, got $timeoutCycles"
   )
-  val timeoutWidth = log2Ceil(timeoutCycles)
+  // The counter has to be able to hold timeoutCycles itself: with a
+  // power-of-two timeout, log2Ceil(timeoutCycles) bits top out one short and no
+  // timeout would ever fire.
+  val timeoutWidth = log2Ceil(timeoutCycles + 1)
   val timeoutCounter = RegInit(0.U(timeoutWidth.W))
   val timeoutMaxCycles = timeoutCycles.U
   val timeoutCntEn = Wire(Bool()) // disable next cycle
@@ -185,7 +207,10 @@ class LinkTrainingSM(
 
   when(timeoutCounter === timeoutMaxCycles) {
     trainingTimedout := true.B
-  }.elsewhen(currentState === LTState.sRESET && nextState =/= LTState.sRESET) {
+  }.elsewhen(
+    (currentState === LTState.sRESET && nextState =/= LTState.sRESET) ||
+      io.mmplCtrl.restart
+  ) {
     trainingTimedout := false.B
   }
 
@@ -232,6 +257,10 @@ class LinkTrainingSM(
   io.trainingTimedout := trainingTimedout
   io.fatalTrainingError := fatalTrainingError
   io.forceRdiLinkError := forceRdiLinkError
+  io.trainingEpisode.active := trainingEpisodeActive
+  io.trainingEpisode.local := currentEpisodeIsLocal
+  io.trainingEpisode.retries := trainingRetryCounter
+  io.trainingEpisode.retryMax := retryAmtMax
 
   io.sbCtrlIo.txEn := true.B
   io.sbCtrlIo.rxEn := true.B
@@ -273,16 +302,25 @@ class LinkTrainingSM(
   prevRdiStateReq := io.rdi.lpStateReq
   rdiTriggerTrainingWire := (io.rdi.plStateSts === RDIState.reset) &&
     (prevRdiStateReq === RDIStateReq.nop) &&
-    (io.rdi.lpStateReq === RDIStateReq.active)
+    (io.rdi.lpStateReq === RDIStateReq.active) &&
+    // A trigger only in RESET: the Adapter's NOP -> Active once training is
+    // done (spec 10.1.6 Step 2, in LINKINIT) is its bring-up request, not a
+    // request to train. Latched there, it held triggerTraining high through
+    // the whole Active period, so no later trigger could read as a fresh edge
+    // and the Link could not train again once it had come down.
+    (currentState === LTState.sRESET)
 
   //  Adapter triggers Link Training on the RDI (RDI status is Reset and there is a NOP to Active
-  //  transition on the state request)
-  when(rdiTriggerTraining) {
-    rdiTriggerTraining := true.B
+  //  transition on the state request). Held until the LTSM leaves RESET on it. Holding it for ever
+  //  instead left the trigger level stuck high, so no later NOP to Active could read as a fresh
+  //  edge and the Link could not be trained again once it had come down.
+  when(
+    (nextState =/= LTState.sRESET && currentState === LTState.sRESET) ||
+      io.mmplCtrl.restart
+  ) {
+    rdiTriggerTraining := false.B
   }.elsewhen(rdiTriggerTrainingWire) {
     rdiTriggerTraining := true.B
-  }.elsewhen(nextState =/= LTState.sRESET && currentState === LTState.sRESET) {
-    rdiTriggerTraining := false.B
   }
 
   // SW triggered training
@@ -299,16 +337,24 @@ class LinkTrainingSM(
   }.elsewhen(io.swRetrainRequest) {
     swRetrainReq := true.B
   }
+  /* Spec 10.3.3.2 has Active go to Retrain "due to an internal request to
+     retrain the Link" on the RDI, and 3.5 has the RDI in Retrain before
+     anything below it retrains. So the request goes to the RDI state machine,
+     and this LTSM follows the RDI into PHYRETRAIN like any other retrain --
+     taking PHYRETRAIN on its own left the RDI Active, and on a multi-module
+     Link left this Module's siblings in ACTIVE without it. */
+  io.swRetrainPending := swRetrainReq && (currentState === LTState.sACTIVE)
 
   val triggerTraining = Wire(Bool())
   triggerTraining := swTriggerTraining || rdiTriggerTraining || remoteTriggerTraining
   val freshTrainingTrigger = Wire(Bool())
   freshTrainingTrigger := triggerTraining && !prevTrigger
   /* A Module the MMPL has taken out of the Link ignores triggers (see the RESET
-     state), and a trigger level that arrived while it was disabled must read as
-     a fresh edge the moment the MMPL restores it, or the rest of the Link would
-     train without it and then wait on its LINKSPEED report for ever. */
-  prevTrigger := triggerTraining && !io.mmplCtrl.moduleDisabled
+     state). A level it saw while out must not read as a fresh edge when the
+     MMPL restores it -- that relaunched it alone, out of step with its
+     siblings -- so a restart swallows it; the restored Module follows the rest
+     of the Link out of RESET through mmplCtrl.joinResetExit instead. */
+  prevTrigger := triggerTraining
 
   // ==============================================================================================
   // Phy Parameters
@@ -1113,8 +1159,19 @@ class LinkTrainingSM(
     ) -> RetrainEncoding.SPEEDIDLE
   )
 
-  // Wait for Remote to send its encoding
-  when(remoteReqEncoding.valid) {
+  /* Wait for Remote to send its encoding. Only a request received in this
+     PHYRETRAIN counts: the responder keeps its encoding valid for a cycle
+     after the handshake, by which point this machine has already left, and a
+     latch taken then would have the next PHYRETRAIN answer the partner with
+     last time's resolution before the partner's request had even arrived
+     (spec 4.5.3.7.1 Step 5: the partner resolves the *received* encoding). */
+  when(
+    (currentState =/= LTState.sPHYRETRAIN) &&
+      (nextState === LTState.sPHYRETRAIN)
+  ) {
+    resolutionDone := false.B
+  }
+  when((currentState === LTState.sPHYRETRAIN) && remoteReqEncoding.valid) {
     resolutionDone := true.B
 
     when(remoteReqEncoding.bits === localEncoding) {
@@ -1182,8 +1239,16 @@ class LinkTrainingSM(
 
   // mbInitSM.io.interoperableParamsNotFound   // TODO: (OUT) used to escalate an error (mbInit.io.fsmCtrl.error also goes high)
 
+  /* Spec 4.5.3.8: "it is required for Physical Layer to be in TRAINERROR as
+     long as RDI is in LinkError". An RDI that has gone to LinkError -- on
+     lp_linkerror, on the remote die's request, or on this Physical Layer's own
+     escalation -- takes a training or trained LTSM down with it, and the LTSM
+     stays down (TRAINERROR, or RESET if it was already there) until the RDI has
+     left LinkError. */
+  val rdiInLinkError = io.rdi.plStateSts === RDIState.linkError
+
   val localError = Wire(Bool())
-  localError := trainingTimedout || errorDetected
+  localError := trainingTimedout || errorDetected || rdiInLinkError
 
   // ==============================================================================================
   // TrainError Logic
@@ -1196,8 +1261,18 @@ class LinkTrainingSM(
   }
 
   // Requester Inputs
+  // Spec 4.5.3.8: "a sideband handshake must be performed to enter TRAINERROR
+  // state from any state other than SBINIT". SBINIT exits on the error itself
+  // (below), as spec 4.5.3.2 has it on a timeout.
+  // Nor from RESET, which has nothing to leave: a timeout flag left over from
+  // the last training raised the request there every other cycle, and each one
+  // restarted the counter the 4 ms RESET wait runs on, so the Module never left
+  // RESET to retry.
   when(
-    localError && !waitTrainErrorResp && (currentState =/= LTState.sTRAINERROR)
+    localError && !waitTrainErrorResp &&
+      (currentState =/= LTState.sTRAINERROR) &&
+      (currentState =/= LTState.sSBINIT) &&
+      (currentState =/= LTState.sRESET)
   ) {
     triggerTrainErrorReq := true.B
   }
@@ -1230,7 +1305,8 @@ class LinkTrainingSM(
   io.remoteRequestingTrainError := trainErrorResponder.io.remoteRequestingTrainError
 
   val transitionToReset = Wire(Bool())
-  transitionToReset := io.sbCtrlIo.allPacketsSent
+  transitionToReset := io.sbCtrlIo.allPacketsSent && !rdiInLinkError &&
+    !forceRdiLinkError
 
   val succeededThisCycle = Wire(Bool())
   succeededThisCycle := (currentState === LTState.sLINKINIT) && (nextState === LTState.sACTIVE)
@@ -1259,12 +1335,44 @@ class LinkTrainingSM(
     trainingRetryCounter := trainingRetryCounter + 1.U
     when(trainingRetryCounter === retryAmtMax) {
       trainingEpisodeActive := false.B
-      when(currentEpisodeIsLocal) {
-        fatalTrainingError := true.B
-        forceRdiLinkError := true.B
-      }
       currentEpisodeIsLocal := false.B
     }
+  }
+
+  /* Escalation to RDI LinkError. A TRAINERROR is not an error escalation by
+     itself -- spec 4.5.3.3.1.2 has one that "does not escalate to RDI
+     transitioning to LinkError", and 4.5.3.8 recommends leaving TRAINERROR "as
+     soon as possible" when there is none -- so a Module that fails in initial
+     training retries from RESET with the RDI still in Reset. Escalating on
+     every residency timeout, as this used to, could not coexist with that:
+     4.5.3.8 holds the Physical Layer in TRAINERROR for as long as the RDI is in
+     LinkError, so no retry could ever run. What does escalate (pl_trainerror,
+     "a fatal error from the Physical Layer", which "must transition
+     pl_state_sts to LinkError") is:
+       - the last retry of a training this die started failing, and
+       - a Link that was up going down: TRAINERROR while the RDI is Active or
+         Retrain (4.5.3.8: TRAINERROR "is also used for any events that
+         transition the Link from a Link Up to a Link Down condition").
+     Decided in TRAINERROR, so the LTSM is still there to be held. Never for a
+     Module the MMPL is taking out of the Link, whose failure is not the Link's.
+     Once per visit, so that leaving LinkError does not re-enter it. */
+  val retriesExhausted = trainingEpisodeActive && currentEpisodeIsLocal &&
+    (trainingRetryCounter === retryAmtMax)
+  val rdiLinkUp = (io.rdi.plStateSts === RDIState.active) ||
+    (io.rdi.plStateSts === RDIState.activePmNak) ||
+    (io.rdi.plStateSts === RDIState.retrain)
+  val escalatedThisVisit = RegInit(false.B)
+  val escalate = (currentState === LTState.sTRAINERROR) &&
+    !escalatedThisVisit && !io.mmplCtrl.moduleDisabled &&
+    (retriesExhausted || rdiLinkUp)
+  when(currentState =/= LTState.sTRAINERROR) {
+    escalatedThisVisit := false.B
+  }.elsewhen(escalate) {
+    escalatedThisVisit := true.B
+  }
+  when(escalate) {
+    fatalTrainingError := true.B
+    forceRdiLinkError := true.B
   }
 
   when(fatalTrainingError && (io.rdi.plStateSts === RDIState.linkError)) {
@@ -1283,6 +1391,34 @@ class LinkTrainingSM(
   ) {
     fatalTrainingError := false.B
     fatalTrainingSawLinkError := false.B
+  }
+
+  // A Module the MMPL has taken out of the Link reports nothing to it.
+  when(io.mmplCtrl.moduleDisabled) {
+    fatalTrainingError := false.B
+    fatalTrainingSawLinkError := false.B
+    forceRdiLinkError := false.B
+  }
+
+  /* The MMPL is taking this Module back after it was disabled or failed. What
+     it accumulated while out -- a retry count bumped by its own disable, a
+     fatal flag from exhausting it, an episode it never finished -- belongs to
+     a training the rest of the Link has already moved on from. Left in place,
+     autoRetrain relaunched it alone, and a latched forceRdiLinkError took the
+     restored Link straight to LinkError. Placed last so it wins. */
+  when(io.mmplCtrl.restart) {
+    /* Unless the rest of the Link is itself retrying: then this Module takes
+       up the Link's episode, so that the Link keeps one retry count and the
+       last Module to fail -- whichever it is -- retries or escalates for all
+       of them. Wiping it left no Module with an episode once the one that held
+       it had been counted failed in turn, and the Link stopped silently. */
+    trainingEpisodeActive := io.mmplCtrl.restartEpisode.active
+    currentEpisodeIsLocal := io.mmplCtrl.restartEpisode.local
+    trainingRetryCounter := io.mmplCtrl.restartEpisode.retries
+    retryAmtMax := io.mmplCtrl.restartEpisode.retryMax
+    fatalTrainingError := false.B
+    fatalTrainingSawLinkError := false.B
+    forceRdiLinkError := false.B
   }
 
   // ==============================================================================================
@@ -1334,11 +1470,27 @@ class LinkTrainingSM(
   }
 
   io.sbLaneIo.rx.ready := sidebandClients.map(_.rx.ready).reduce(_ || _)
-  io.holdSidebandRx := io.sbLaneIo.rx.valid &&
+  val holdSidebandRxCandidate = io.sbLaneIo.rx.valid &&
     SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.PHYRETRAIN_RETRAIN_START_REQ) &&
     ((currentState === LTState.sLINKINIT) ||
       (currentState === LTState.sACTIVE) ||
       (currentState === LTState.sMBTRAIN))
+  /* The hold is for a request that beat this Module into PHYRETRAIN by a
+     sideband latency or an RDI Retrain handshake, and it blocks everything
+     queued behind it on this Module. A Module that is never going to follow
+     (a partner that entered PHYRETRAIN on its own) would otherwise wedge its
+     sideband RX for good, TRAINERROR handshake included. Give up after half
+     the residency timeout: far longer than a legitimate wait, and short enough
+     that the partner's PHYRETRAIN timeout and {TRAINERROR Entry req} still get
+     through, as they did before the hold existed. */
+  val holdSidebandRxCycles = RegInit(0.U(timeoutWidth.W))
+  val holdSidebandRxExpired = holdSidebandRxCycles === resetMinWaitMaxCycles
+  when(holdSidebandRxCandidate && !holdSidebandRxExpired) {
+    holdSidebandRxCycles := holdSidebandRxCycles + 1.U
+  }.otherwise {
+    holdSidebandRxCycles := 0.U
+  }
+  io.holdSidebandRx := holdSidebandRxCandidate && !holdSidebandRxExpired
 
   // TX Arbitration
   val txArbiter = Module(
@@ -1386,15 +1538,23 @@ class LinkTrainingSM(
          reach LINKSPEED, be ignored by the resolver, and time out, over and
          over. It also keeps the MMPL from seeing the whole Link in RESET, which
          is what restores the Module for the next training from scratch. */
+      /* On a multi-module Link, a sibling that has started training pulls this
+         Module along (joinResetExit), so the Modules leave RESET on one
+         Link-level trigger rather than each on its own. */
       when(
         io.pwrGood && io.phyCtrlIo.pllLock && resetMinWait &&
-          (freshTrainingTrigger || autoRetrain) &&
-          !io.mmplCtrl.moduleDisabled
+          (freshTrainingTrigger || autoRetrain || io.mmplCtrl.joinResetExit) &&
+          !io.mmplCtrl.moduleDisabled && !rdiInLinkError
       ) {
         nextState := LTState.sSBINIT
         sbInitPatternCounter := 0.U
       }.otherwise {
         nextState := LTState.sRESET
+      }
+      // A pattern count the partner left while this Module was out of the Link
+      // is not a trigger for the next training.
+      when(io.mmplCtrl.restart) {
+        sbInitPatternCounter := 0.U
       }
     }
     is(LTState.sSBINIT) {
@@ -1405,7 +1565,9 @@ class LinkTrainingSM(
       activeReqSbLane <> sbInitSM.io.requesterSbLaneIo
       activeRespSbLane <> sbInitSM.io.responderSbLaneIo
 
-      when(transitionToTrainError) {
+      // Spec 4.5.3.2 Step 5: "If a timeout occurs, the UCIe Module must exit
+      // to TRAINERROR" -- with no handshake, as the sideband is not up yet.
+      when(transitionToTrainError || localError) {
         nextState := LTState.sTRAINERROR
       }.elsewhen(sbInitSM.io.fsmCtrl.done) {
         nextState := LTState.sMBINIT
@@ -1570,7 +1732,7 @@ class LinkTrainingSM(
 
       when(transitionToTrainError) {
         nextState := LTState.sTRAINERROR
-      }.elsewhen(io.rdi.plStateSts === RDIState.retrain || swRetrainReq) {
+      }.elsewhen(io.rdi.plStateSts === RDIState.retrain) {
         nextState := LTState.sPHYRETRAIN
       }
       // }.elsewhen() {

@@ -196,16 +196,18 @@ class D2DMainbandModuleTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("Ignored a stall request while the link was not active") {
+    it("Stalled at once when asked while the link was not active") {
+      /* Spec 10.3.2: the four-phase handshake needs lp_stallack before
+         pl_stallreq can fall, and RDI leaves Active for LinkReset or Disabled
+         only after the Adapter LSM has (spec 3.5) -- so the stall comes when
+         the Adapter is no longer Active, with nothing in flight. */
       simulate(dut) { c =>
         initActive(c)
-        c.io.state.d2dState.poke(RDIState.reset)
+        c.io.state.d2dState.poke(RDIState.linkReset)
         c.io.state.mainbandStallReq.poke(true.B)
         c.clock.step(3)
-        // txStallRequested is gated by d2dState === active, so the FSM stays
-        // in running and never reports done.
-        c.io.state.mainbandStallDone.expect(false.B)
-        c.io.fdi.plTrdy.expect(true.B)
+        c.io.state.mainbandStallDone.expect(true.B)
+        c.io.fdi.plTrdy.expect(false.B, "the protocol layer is held off")
       }
     }
   }

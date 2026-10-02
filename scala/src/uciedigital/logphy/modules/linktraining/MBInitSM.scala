@@ -165,6 +165,7 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   requester.io.responderRdy := responder.io.responderRdy
   requester.io.interpretBy8Lane := interpretBy8Lane
   requester.io.rxWidthChanged := responder.io.rxWidthChanged
+  requester.io.partnerTxLanes := responder.io.partnerTxLanes
   requester.io.phyParams.localPhySettings := io.localPhySettings
   requester.io.phyParams.interoperableParamsFound := interoperableParamsFound
 
@@ -173,6 +174,7 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   responder.io.requesterRdy := requester.io.requesterRdy
   responder.io.interpretBy8Lane := interpretBy8Lane
   responder.io.txWidthChanged := requester.io.txWidthChanged
+  responder.io.ownTxLanes := requester.io.ownTxLanes
   responder.io.phyParams.localPhySettings.valid := localNegotiatedParamsValid
   responder.io.phyParams.localPhySettings.bits.voltageSwing := 0.U // Not used by responder
   responder.io.phyParams.localPhySettings.bits.ucieSx8 := 0.U // Not used by responder
@@ -228,8 +230,14 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val responderRdy = Input(Bool())
     val interpretBy8Lane = Input(Bool())
     val rxWidthChanged = Input(Bool())
+    // The partner's {MBINIT.REPAIRMB apply degrade req} code, once it has
+    // arrived in this pass of Step 3.
+    val partnerTxLanes = Input(Valid(UInt(3.W)))
 
     // OUT
+    // What this Module's own Transmitter point test found, sent in its
+    // {MBINIT.REPAIRMB apply degrade req}.
+    val ownTxLanes = Output(UInt(3.W))
     val done = Output(Bool())
     val transitioningState = Output(Bool())
     val currentState = Output(MBInitState())
@@ -420,30 +428,32 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   when(
     io.txPtTestReqInterfaceIo.start && io.txPtTestReqInterfaceIo.ptTestResults.valid
   ) {
+    // {Tx Init D to C results resp} carries a per-Lane PASS flag (1h: Pass),
+    // so a Lane is faulty when its bit is low -- as MBTrainSM reads it.
     when(io.interpretBy8Lane) {
-      faultInLowerLanes := Cat(
+      faultInLowerLanes := !Cat(
         io.txPtTestReqInterfaceIo.ptTestResults.bits(0),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(1),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(2),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(3)
-      ).orR
-      faultInUpperLanes := Cat(
+      ).andR
+      faultInUpperLanes := !Cat(
         io.txPtTestReqInterfaceIo.ptTestResults.bits(4),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(5),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(6),
         io.txPtTestReqInterfaceIo.ptTestResults.bits(7)
-      ).orR
+      ).andR
     }.otherwise {
       // Get top (afeParams.mbLanes / 2) lanes
-      faultInLowerLanes := io.txPtTestReqInterfaceIo.ptTestResults.bits
+      faultInLowerLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
         .take(afeParams.mbLanes / 2)
         .map(_.asBool)
-        .reduce(_ || _)
+        .reduce(_ && _)
       // Get bottom (afeParams.mbLanes / 2) lanes
-      faultInUpperLanes := io.txPtTestReqInterfaceIo.ptTestResults.bits
+      faultInUpperLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
         .drop(afeParams.mbLanes / 2)
         .map(_.asBool)
-        .reduce(_ || _)
+        .reduce(_ && _)
     }
   }
 
@@ -483,7 +493,11 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   )
 
   localFuncLanesWire := localTxFunctionalLanesReg
-  widthChange := localTxFunctionalLanesReg =/= localFuncLanesWire
+  /* The Lane map the Transmitter ends this pass on: what its own point test
+     found, adjusted by the partner's once that is known (DegradeLaneMaps). */
+  val txMapWire = WireDefault(localFuncLanesWire)
+  widthChange := localTxFunctionalLanesReg =/= txMapWire
+  io.ownTxLanes := localFuncLanesWire
 
   // TODO: SVA -- if widthChange goes high then it state is sREPAIRMB and s2 (applying degrade)
   io.txWidthChanged := widthChange // goes HIGH in sREPAIRMB if localFuncLanesWire changes
@@ -850,9 +864,17 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
             )
           }
 
+          // Spec 4.5.3.3.6 Step 3, with DegradeLaneMaps' counterpart.
+          when(io.partnerTxLanes.valid) {
+            txMapWire := DegradeLaneMaps.tx(
+              localFuncLanesWire,
+              io.partnerTxLanes.bits
+            )
+          }
+
           // io.localFunctionalLanes should always have an updated value no matter what
           when(widthChange) {
-            io.localFunctionalLanes := localFuncLanesWire
+            io.localFunctionalLanes := txMapWire
           }
 
           sbMsgExchanger.io.req.valid := true.B
@@ -882,7 +904,7 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
           // that means Local die hasn't receieved a request, so Local die is unable to adjust
           // RX widths)
           when(io.requesterRdy && io.responderRdy) {
-            localTxFunctionalLanesReg := localFuncLanesWire
+            localTxFunctionalLanesReg := txMapWire
             requesterRdyStatusReg := false.B
             when(widthChange || io.rxWidthChanged) {
               nextSubstate := MBInitSubstate.s1
@@ -923,8 +945,12 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
     val requesterRdy = Input(Bool())
     val interpretBy8Lane = Input(Bool())
     val txWidthChanged = Input(Bool())
+    // What this Module's own Transmitter point test found this pass.
+    val ownTxLanes = Input(UInt(3.W))
 
     // OUT
+    // The partner's {MBINIT.REPAIRMB apply degrade req} code, once received.
+    val partnerTxLanes = Output(Valid(UInt(3.W)))
     val done = Output(Bool())
     val error = Output(Bool())
     val currentState = Output(MBInitState())
@@ -1072,12 +1098,25 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
   val newRemoteTxFunctionalLanes = RegInit("b011".U(3.W))
   val incRemoteFuncLanesWire = Wire(UInt(3.W))
   val widthChange = WireInit(false.B)
+  // The partner's code for this pass of Step 3 has arrived.
+  val partnerCodeFresh = RegInit(false.B)
 
   incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42, 40)
 
-  widthChange := currRemoteTxFunctionalLanes =/= newRemoteTxFunctionalLanes
+  /* The Lane map the Receiver ends this pass on (spec 4.5.3.3.6 Step 3 via
+     DegradeLaneMaps): the partner's code, or this Module's own when the
+     partner found all Lanes functional and this Module degraded. */
+  val rxMapWire = Mux(
+    partnerCodeFresh,
+    DegradeLaneMaps.rx(io.ownTxLanes, newRemoteTxFunctionalLanes),
+    currRemoteTxFunctionalLanes
+  )
+  io.partnerTxLanes.valid := partnerCodeFresh
+  io.partnerTxLanes.bits := newRemoteTxFunctionalLanes
+
+  widthChange := currRemoteTxFunctionalLanes =/= rxMapWire
   when(widthChange) {
-    io.remoteFunctionalLanes := newRemoteTxFunctionalLanes
+    io.remoteFunctionalLanes := rxMapWire
   }.otherwise {
     io.remoteFunctionalLanes := currRemoteTxFunctionalLanes
   }
@@ -1106,6 +1145,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
       when(io.start) {
         currRemoteTxFunctionalLanes := "b011".U
         newRemoteTxFunctionalLanes := "b011".U
+        partnerCodeFresh := false.B
         errorDetectedReg := false.B
         gotLFSRClearReq := false.B
 
@@ -1411,6 +1451,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           when(sbMsgExchanger.io.resp.valid) {
             errorDetectedWire := incRemoteFuncLanesWire === "b000".U
             newRemoteTxFunctionalLanes := incRemoteFuncLanesWire
+            partnerCodeFresh := true.B
           }
 
           // Width change will be happen within a cycle. The top level register will update
@@ -1430,7 +1471,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           responderRdy := sbMsgExchanger.io.exchDone
 
           when(io.requesterRdy && io.responderRdy) {
-            currRemoteTxFunctionalLanes := newRemoteTxFunctionalLanes
+            currRemoteTxFunctionalLanes := rxMapWire
+            partnerCodeFresh := false.B
             responderRdyStatusReg := false.B
             when(widthChange || io.txWidthChanged) {
               nextSubstate := MBInitSubstate.s1

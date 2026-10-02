@@ -63,6 +63,17 @@ class ProtocolStateController() extends Module {
     (io.fdi.plStateSts === FDIState.linkError) ||
       (io.fdi.plStateSts === FDIState.disabled) ||
       (io.fdi.plStateSts === FDIState.linkReset)
+  /* Spec 10.3.3.4: out of a Retrain entered from Active, the Adapter "begins
+     Active Entry handshakes only after observing a NOP-> Active transition on
+     lp_state_req". So NOP for at least a cycle of Retrain, then Active. Never
+     asking for Active there left the Link in Retrain for good. */
+  val fdiInRetrain = io.fdi.plStateSts === FDIState.retrain
+  val retrainNopSentReg = RegInit(false.B)
+  when(!fdiInRetrain) {
+    retrainNopSentReg := false.B
+  }.elsewhen(io.fdi.lpStateReq === FDIStateReq.nop) {
+    retrainNopSentReg := true.B
+  }
 
   val requestedState = WireDefault(FDIStateReq.nop)
   when(io.ctrl.requestDisable) {
@@ -72,7 +83,9 @@ class ProtocolStateController() extends Module {
   }.elsewhen(io.ctrl.requestRetrain) {
     requestedState := FDIStateReq.retrain
   }.elsewhen(
-    io.ctrl.requestActive && (fdiInBringupWindow || fdiNeedsActiveToRecover)
+    io.ctrl.requestActive &&
+      (fdiInBringupWindow || fdiNeedsActiveToRecover ||
+        (fdiInRetrain && retrainNopSentReg))
   ) {
     // Lowest priority so a held request never masks a teardown.
     requestedState := FDIStateReq.active

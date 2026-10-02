@@ -105,6 +105,28 @@ object MmplDirectedResp {
     }
   }
 
+  /** Which directed response a received message is, if it is one at all. */
+  def decode(received: UInt): Valid[MmplResolution.Type] = {
+    val candidates = Seq(
+      MmplResolution.done -> SBM.MBTRAIN_LINKSPEED_DONE_RESP,
+      MmplResolution.repair -> SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_RESP,
+      MmplResolution.speedDegrade ->
+        SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_RESP,
+      MmplResolution.disableModule ->
+        SBM.MBTRAIN_LINKSPEED_MULTIMODULE_DISABLE_MODULE_RESP
+    )
+    val out = Wire(Valid(MmplResolution()))
+    out.valid := false.B
+    out.bits := MmplResolution.none
+    candidates.foreach { case (res, msg) =>
+      when(SBMsgCompare(received, msg)) {
+        out.valid := true.B
+        out.bits := res
+      }
+    }
+    out
+  }
+
   /** A LINKSPEED response arrived that the resolution did not call for. */
   def mismatch(received: UInt, resolution: MmplResolution.Type): Bool = {
     val candidates = Seq(
@@ -192,9 +214,12 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   requester.io.changeInRuntimeLinkCtrlRegs := io.changeInRuntimeLinkCtrlRegs
   requester.io.currLocalTxFunctionalLanes := io.currLocalTxFunctionalLanes
   requester.io.remoteExitingToPhyretrain := responder.io.remoteExitingToPhyretrain
+  requester.io.remoteRequestingPhyRetrain := responder.io.remoteRequestingPhyRetrain
   requester.io.remoteExitingToSpeedDegrade := responder.io.remoteExitingToSpeedDegrade
   requester.io.remoteExitingToRepair := responder.io.remoteExitingToRepair
   requester.io.remoteErrorInLinkspeed := responder.io.remoteErrorInLinkspeed
+  requester.io.partnerLeftLinkSpeed := responder.io.partnerLeftLinkSpeed
+  requester.io.partnerRepairLanes := responder.io.partnerRepairLanes
   requester.io.multiModule := io.multiModule
   requester.io.mmplResolution := io.mmplResolution
   requester.io.sbLaneIo <> io.requesterSbLaneIo
@@ -214,6 +239,10 @@ class MBTrainSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   responder.io.localInitiatingDone := requester.io.initiatingDone
   responder.io.localInitiatingExitToPhyRetrain := requester.io.initiatingExitToPhyretrain
   responder.io.localCompletedSteps1And2 := requester.io.completedLinkspeedStep1And2
+  responder.io.localAwaitingExitToPhyRetrainResp :=
+    requester.io.awaitingExitToPhyRetrainResp
+  responder.io.localReadyForPhyRetrain := requester.io.readyForPhyRetrain
+  responder.io.ownRepairLanes := requester.io.ownRepairLanes
   responder.io.multiModule := io.multiModule
   responder.io.mmplResolution := io.mmplResolution
   responder.io.sbLaneIo <> io.responderSbLaneIo
@@ -299,9 +328,17 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val changeInRuntimeLinkCtrlRegs = Input(Bool())
     val currLocalTxFunctionalLanes = Input(UInt(3.W))
     val remoteExitingToPhyretrain = Input(Bool())
+    // The partner's {MBTRAIN.LINKSPEED exit to phy retrain req} has arrived;
+    // remoteExitingToPhyretrain follows once the response has gone out.
+    val remoteRequestingPhyRetrain = Input(Bool())
     val remoteExitingToSpeedDegrade = Input(Bool())
     val remoteExitingToRepair = Input(Bool())
     val remoteErrorInLinkspeed = Input(Bool())
+    // Multi-module only: the partner has sent an {exit to PHY retrain resp}
+    // this Module did not ask for (see the responder).
+    val partnerLeftLinkSpeed = Input(Bool())
+    // The partner's {MBTRAIN.REPAIR apply degrade req} code, once received.
+    val partnerRepairLanes = Input(Valid(UInt(3.W)))
     val multiModule = Input(Bool())
     val mmplResolution = Flipped(Valid(MmplResolution()))
 
@@ -309,6 +346,12 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val done = Output(Bool())
     val error = Output(Bool())
     val requesterRdy = Output(Bool())
+    // This Module's {exit to phy retrain req} is on the wire and its response
+    // has not arrived: the response is this requester's to claim.
+    val awaitingExitToPhyRetrainResp = Output(Bool())
+    // Settled in LINKSPEED s7, on the way to PHYRETRAIN: everything this pass
+    // will send from here is already on the wire.
+    val readyForPhyRetrain = Output(Bool())
     val currentState = Output(MBTrainState())
     val transitioningState = Output(Bool())
     val freqSel =
@@ -328,6 +371,8 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val linkSpeedRespMismatch = Output(Bool())
     val txWidthChanged = Output(Bool())
     val newLocalFunctionalLanes = Output(UInt(3.W))
+    // What this Module sends in its {MBTRAIN.REPAIR apply degrade req}.
+    val ownRepairLanes = Output(UInt(3.W))
     val mbLaneCtrlIo = new MainbandLaneCtrlIO(afeParams)
 
     // Bundles with IN & OUT IOs
@@ -513,6 +558,67 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
   val initiatingDoneFlag = RegInit(false.B)
   // Multi-module only: the resolution the MMPL directed for this Module.
   val mmplResolutionReg = RegInit(MmplResolution.none)
+  /* Multi-module only: a directed response the remote Module Partner sent
+     before this die's MMPL had resolved. Each die resolves once its own last
+     Module has reported, so the two die can resolve a sideband latency apart,
+     and the partner's response can land while this Module is still in s11.
+     Nothing claims a packet there, and LogicalPhy retires what nobody claims,
+     so it is latched here for s12 instead of being lost. */
+  val earlyDirectedResp = RegInit(0.U.asTypeOf(Valid(MmplResolution())))
+
+  /* Leaving MBTRAIN.LINKSPEED for PHYRETRAIN part-way through a pass.
+
+     Spec 4.5.3.4.12 Steps 3 and 5: once an {exit to phy retrain req} has been
+     received -- on this Module's sideband, or on any Module of a multi-module
+     Link, which the MMPL relays as its phyRetrain directive -- the Module
+     "must exit to PHYRETRAIN ...; any outstanding messages are abandoned".
+     That can find it anywhere in the pass: its Step 2 point test still
+     running, or a done/error req not yet sent. The two cases are not the same:
+
+     - abandonPass: the partner's own exit req has arrived here, the partner
+       has sent an {exit to PHY retrain resp} this Module never asked for (it
+       is a sibling moved by its own die; see the responder's s8), or the
+       partner has already gone to PHYRETRAIN (its {PHYRETRAIN.retrain start
+       req} is at the head of the queue, held there until this Module follows;
+       nothing it owed this pass is coming). Nothing more is sent -- a done or
+       error req not yet on the wire is dropped, not offered for a cycle -- and
+       nothing more is waited for, except the response to an exit req of this
+       Module's own already on the wire (Step 4a), and then only while the
+       partner has not left. The partner that sent the exit req leaves on the
+       response alone and does not wait for a report from here either.
+
+     - directedToPhyRetrain only (a sibling of the Module that took the exit):
+       nothing has told this Module's partner yet; its own die's MMPL will.
+       Step 2 is abandoned if it is still running and then nothing is
+       reported. Once Step 2 is complete the report is still sent, and held
+       until it is: the partner's responder may already be waiting on it, and
+       two copies of this machine that each waited for a report the other had
+       dropped would never leave. The responder waits for the partner's report
+       under the matching rule, so exactly the reports that are sent are
+       waited for, and a partner that abandons regardless still releases every
+       wait here with its {PHYRETRAIN.retrain start req}. The responder then
+       sends this Module's own {exit to PHY retrain resp} (Step 5), once this
+       requester has settled in s7, so it follows any report on the wire. */
+  val mmplPhyRetrainLive = io.multiModule && io.mmplResolution.valid &&
+    (io.mmplResolution.bits === MmplResolution.phyRetrain)
+  // The MMPL holds the directive until this Module has left LINKSPEED; the
+  // latch keeps it for the rest of the pass regardless.
+  val mmplPhyRetrainSeen = RegInit(false.B)
+  when(currentState === MBTrainState.sLINKSPEED && mmplPhyRetrainLive) {
+    mmplPhyRetrainSeen := true.B
+  }
+  val directedToPhyRetrain = mmplPhyRetrainLive || mmplPhyRetrainSeen
+  val partnerInPhyRetrain = io.sbLaneIo.rx.valid && SBMsgCompare(
+    io.sbLaneIo.rx.bits.data,
+    SBM.PHYRETRAIN_RETRAIN_START_REQ
+  )
+  val abandonPass = io.remoteRequestingPhyRetrain || partnerInPhyRetrain ||
+    io.partnerLeftLinkSpeed
+  val abandonSteps1And2 = abandonPass || directedToPhyRetrain
+  val awaitingExitToPhyRetrainResp = WireInit(false.B)
+  io.awaitingExitToPhyRetrainResp := awaitingExitToPhyRetrainResp
+  io.readyForPhyRetrain := (currentState === MBTrainState.sLINKSPEED) &&
+    (substateReg === MBTrainSubstate.s7)
 
   // Note: Detection and assessment for lane repair is done in LINKSPEED.
   // REPAIR state just sends the message with appropriate functional lane code
@@ -671,12 +777,19 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     newTxFunctionalLanes
   )
 
+  /* The Lane map the Transmitter leaves REPAIR on (spec 4.5.3.4.13 Step 2
+     with DegradeLaneMaps' counterpart): its own, unless it found every Lane
+     good and the partner degraded, in which case it moves onto the partner's
+     map -- where the partner's Receiver now listens. */
+  val repairTxMap = Mux(
+    io.partnerRepairLanes.valid,
+    DegradeLaneMaps.tx(repairTxFunctionalLanes, io.partnerRepairLanes.bits),
+    repairTxFunctionalLanes
+  )
+  io.ownRepairLanes := repairTxFunctionalLanes
   io.txWidthChanged :=
-    applyDegrade &&
-      (laneHasErrors ||
-        (mmplForceWidthDegrade &&
-          (repairTxFunctionalLanes =/= currLocalTxFunctionalLanes)))
-  io.newLocalFunctionalLanes := repairTxFunctionalLanes
+    applyDegrade && (repairTxMap =/= currLocalTxFunctionalLanes)
+  io.newLocalFunctionalLanes := repairTxMap
 
   // IOs
   io.done := false.B
@@ -1627,8 +1740,12 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
              {error req} as well. */
           initiatingErrorFlag := false.B
           linkOpsResultsValid := false.B
+          earlyDirectedResp.valid := false.B
 
-          sbMsgExchanger.io.req.valid := true.B
+          // A Module that reaches LINKSPEED with the directive already waiting
+          // (it was behind its siblings) does not start Step 1; one already on
+          // the wire is still answered unless the partner has left.
+          sbMsgExchanger.io.req.valid := !abandonSteps1And2
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_START_REQ,
             "PHY",
@@ -1638,12 +1755,23 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_START_RESP
 
-          when(sbMsgExchanger.io.exchDone) {
-            nextSubstate := MBTrainSubstate.s1
+          when(
+            abandonPass ||
+              (directedToPhyRetrain && !sbMsgExchanger.io.msgSent)
+          ) {
+            nextSubstate := MBTrainSubstate.s7
+          }.elsewhen(sbMsgExchanger.io.exchDone) {
+            nextSubstate := Mux(
+              directedToPhyRetrain,
+              MBTrainSubstate.s7,
+              MBTrainSubstate.s1
+            )
           }
         }
         is(MBTrainSubstate.s1) { // Start TX D2C PT TEST, and wait for result
-          io.txPtTestReqIntfIo.start := true.B
+          // Dropping start abandons the point test: the helper sends nothing
+          // more and drops the one reply that may still be on its way.
+          io.txPtTestReqIntfIo.start := !abandonSteps1And2
           io.txPtTestReqIntfIo.patternType := PatternSelect.LFSR
           // linkTrainingParameters stay as defaults
 
@@ -1656,16 +1784,22 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
             completedLinkspeedStep1And2Flag := true.B // Goes HIGH when the state transitions
           }
 
+          // A test that completes in the cycle it would be abandoned counts as
+          // complete: the partner has seen it through and expects a report.
           when(io.txPtTestReqIntfIo.done && laneHasErrors) {
             nextSubstate := MBTrainSubstate.s2
           }.elsewhen(io.txPtTestReqIntfIo.done && !laneHasErrors) {
             nextSubstate := MBTrainSubstate.s5
+          }.elsewhen(abandonSteps1And2) {
+            nextSubstate := MBTrainSubstate.s7
           }
         }
         is(MBTrainSubstate.s2) { // SINGLE MODULE - ERRORS ENCOUNTERED (Exchange ERROR msg)
           io.doElectricalIdleTx := true.B
 
-          sbMsgExchanger.io.req.valid := true.B
+          // Held until sent, or dropped once the pass is abandoned; never
+          // offered for one cycle and then withdrawn by the transition.
+          sbMsgExchanger.io.req.valid := !abandonPass
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_ERROR_REQ,
             "PHY",
@@ -1685,14 +1819,16 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
             }.elsewhen(!isWidthDegradePossible) {
               nextSubstate := MBTrainSubstate.s4 // Do speed degrade
             }
-          }.elsewhen(io.remoteExitingToPhyretrain) {
+          }.elsewhen(abandonPass) {
+            // Spec 4.5.3.4.12 Step 3: a partner sending the exit req does not
+            // answer {error req}; this one is abandoned.
             nextSubstate := MBTrainSubstate.s7 // To an intermediate sync state
           }
         }
         is(MBTrainSubstate.s3) { // EXIT TO REPAIR
           io.doElectricalIdleTx := true.B
 
-          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.valid := !abandonPass
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ,
             "PHY",
@@ -1712,6 +1848,8 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
             // Spec 4.5.3.4.12 Step 5c: the request is on the wire, so the MMPL
             // now decides the next state for every Module of the Link.
             nextSubstate := MBTrainSubstate.s11
+          }.elsewhen(abandonPass) {
+            nextSubstate := MBTrainSubstate.s7
           }.elsewhen(io.remoteExitingToSpeedDegrade) {
             nextSubstate := MBTrainSubstate.s9 // To an intermediate sync state
           }.elsewhen(sbMsgExchanger.io.msgReceived) {
@@ -1725,7 +1863,7 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
         is(MBTrainSubstate.s4) { // EXIT TO SPEED DEGRADE
           io.doElectricalIdleTx := true.B
 
-          sbMsgExchanger.io.req.valid := true.B
+          sbMsgExchanger.io.req.valid := !abandonPass
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ,
             "PHY",
@@ -1740,6 +1878,8 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           requesterRdy := sbMsgExchanger.io.exchDone
           when(io.multiModule && sbMsgExchanger.io.msgSent) {
             nextSubstate := MBTrainSubstate.s11
+          }.elsewhen(abandonPass) {
+            nextSubstate := MBTrainSubstate.s7
           }.elsewhen(io.responderRdy && io.requesterRdy) {
             // State transition with Responder into SPEEDIDLE
             nextSubstate := MBTrainSubstate.s0
@@ -1753,8 +1893,15 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           // Note: Multi-module isn't currently implemented. So doing single-module logic only
           // at the moment
           when(io.phyInRetrain) {
-            when(io.changeInRuntimeLinkCtrlRegs) {
-              sbMsgExchanger.io.req.valid := true.B
+            // Once the req is on the wire the partner may already be acting on
+            // it, so the register change being withdrawn does not take it back.
+            when(io.changeInRuntimeLinkCtrlRegs || sbMsgExchanger.io.msgSent) {
+              /* Not sent once the partner's own exit req has arrived: answering
+                 that one is exit enough (spec 4.5.3.4.12 Step 3/5). One already
+                 sent is still answered (Step 4a) -- the responder follows this
+                 exchange out of LINKSPEED (s8) rather than waiting on a done or
+                 error req the partner will now never send. */
+              sbMsgExchanger.io.req.valid := !abandonPass
               sbMsgExchanger.io.req.bits := SBMsgCreate(
                 SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ,
                 "PHY",
@@ -1765,9 +1912,19 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
 
               sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
               sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP
+              awaitingExitToPhyRetrainResp := sbMsgExchanger.io.msgSent &&
+                !sbMsgExchanger.io.msgReceived
 
               requesterRdy := sbMsgExchanger.io.exchDone
-              when(io.requesterRdy && io.responderRdy) {
+              /* A partner resp the responder took before this req went out
+                 (abandonPass then keeps it off the wire) is the partner
+                 leaving: it sends no other. */
+              when(
+                partnerInPhyRetrain || io.partnerLeftLinkSpeed ||
+                  (io.remoteRequestingPhyRetrain && !sbMsgExchanger.io.msgSent)
+              ) {
+                nextSubstate := MBTrainSubstate.s7
+              }.elsewhen(io.requesterRdy && io.responderRdy) {
                 nextSubstate := MBTrainSubstate.s0
                 nextState := MBTrainState.sTOPHYRETRAIN
               }
@@ -1781,7 +1938,14 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           }
         }
         is(MBTrainSubstate.s6) { // DONE
-          sbMsgExchanger.io.req.valid := true.B
+          /* Held until sent, or dropped once the pass is abandoned. Leaving on
+             the first cycle the partner's exit had been answered used to offer
+             it for exactly that cycle: lost whenever the sideband arbiter
+             granted something else, and then a partner waiting on it could not
+             leave. Now the partner that sent the exit req never waits on it,
+             and one that is still sent (an earlier cycle) is ahead of the exit
+             resp on the wire and is dropped by that partner's responder. */
+          sbMsgExchanger.io.req.valid := !abandonPass
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_DONE_REQ,
             "PHY",
@@ -1796,7 +1960,7 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           requesterRdy := sbMsgExchanger.io.exchDone && !io.remoteErrorInLinkspeed
 
           // Priority is given to going into the various repair states that Remote requests.
-          when(io.remoteExitingToPhyretrain) {
+          when(abandonPass) {
             nextSubstate := MBTrainSubstate.s7
           }.elsewhen(io.multiModule && sbMsgExchanger.io.msgSent) {
             // Spec 4.5.3.4.12 Step 4: a multi-module Module sends {done req} and
@@ -1845,16 +2009,21 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           // The Transmitter stays idle unless this Module reported no errors.
           io.doElectricalIdleTx := initiatingErrorFlag
 
+          // The partner's die may have resolved first; keep its response.
+          val arriving = MmplDirectedResp.decode(io.sbLaneIo.rx.bits.data)
+          when(
+            io.sbLaneIo.rx.valid && arriving.valid && !earlyDirectedResp.valid
+          ) {
+            io.sbLaneIo.rx.ready := true.B
+            earlyDirectedResp.valid := true.B
+            earlyDirectedResp.bits := arriving.bits
+          }
+
           // A remote PHY retrain request on any Module of the Link abandons the
           // resolution (spec 4.5.3.4.12 Step 5). This Module's own responder
           // covers the case where the request landed here; the MMPL relays it
           // when it landed on a sibling Module instead.
-          when(io.remoteExitingToPhyretrain) {
-            nextSubstate := MBTrainSubstate.s7
-          }.elsewhen(
-            io.mmplResolution.valid &&
-              io.mmplResolution.bits === MmplResolution.phyRetrain
-          ) {
+          when(abandonPass || directedToPhyRetrain) {
             nextSubstate := MBTrainSubstate.s7
           }.elsewhen(io.mmplResolution.valid) {
             mmplResolutionReg := io.mmplResolution.bits
@@ -1879,24 +2048,36 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
           }
 
           when(MmplDirectedResp.hasMessage(mmplResolutionReg)) {
-            sbMsgExchanger.io.rxRefBitPattern.valid := true.B
-            MmplDirectedResp.expect(
-              sbMsgExchanger.io.rxRefBitPattern.bits,
-              mmplResolutionReg
-            )
-            requesterRdy := sbMsgExchanger.io.msgReceived
+            when(earlyDirectedResp.valid) {
+              // It already arrived in s11. Spec 4.5.3.4.12 Step 5d: a response
+              // that does not match the resolution takes every Module to
+              // TRAINERROR.
+              when(earlyDirectedResp.bits === mmplResolutionReg) {
+                requesterRdy := true.B
+              }.otherwise {
+                errorDetectedWire := true.B
+                linkSpeedRespMismatchWire := true.B
+              }
+            }.otherwise {
+              sbMsgExchanger.io.rxRefBitPattern.valid := true.B
+              MmplDirectedResp.expect(
+                sbMsgExchanger.io.rxRefBitPattern.bits,
+                mmplResolutionReg
+              )
+              requesterRdy := sbMsgExchanger.io.msgReceived
 
-            // Spec 4.5.3.4.12 Step 5d: a response that does not match the
-            // resolution takes every Module to TRAINERROR.
-            when(
-              io.sbLaneIo.rx.valid &&
-                MmplDirectedResp.mismatch(
-                  io.sbLaneIo.rx.bits.data,
-                  mmplResolutionReg
-                )
-            ) {
-              errorDetectedWire := true.B
-              linkSpeedRespMismatchWire := true.B
+              // Spec 4.5.3.4.12 Step 5d: a response that does not match the
+              // resolution takes every Module to TRAINERROR.
+              when(
+                io.sbLaneIo.rx.valid &&
+                  MmplDirectedResp.mismatch(
+                    io.sbLaneIo.rx.bits.data,
+                    mmplResolutionReg
+                  )
+              ) {
+                errorDetectedWire := true.B
+                linkSpeedRespMismatchWire := true.B
+              }
             }
 
             when(io.requesterRdy && io.responderRdy) {
@@ -2062,6 +2243,8 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
     initiatingSpeedDegradeFlag := false.B
     initiatingWidthDegradeFlag := false.B
     initiatingDoneFlag := false.B
+    earlyDirectedResp.valid := false.B
+    mmplPhyRetrainSeen := false.B
   }
 }
 
@@ -2079,6 +2262,12 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     val localInitiatingDone = Input(Bool())
     val localInitiatingExitToPhyRetrain = Input(Bool())
     val localCompletedSteps1And2 = Input(Bool())
+    // The requester is waiting for the response to its own exit req.
+    val localAwaitingExitToPhyRetrainResp = Input(Bool())
+    // The requester is settled in LINKSPEED s7, on its way to PHYRETRAIN.
+    val localReadyForPhyRetrain = Input(Bool())
+    // What this Module's requester sends in {MBTRAIN.REPAIR apply degrade req}.
+    val ownRepairLanes = Input(UInt(3.W))
     val multiModule = Input(Bool())
     val mmplResolution = Flipped(Valid(MmplResolution()))
 
@@ -2090,6 +2279,8 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     val rxClkCalSendTrkPattern = Output(Bool())
     val newRemoteFunctionalLanes = Output(UInt(3.W))
     val rxWidthChanged = Output(Bool())
+    // The partner's {MBTRAIN.REPAIR apply degrade req} code, once received.
+    val partnerRepairLanes = Output(Valid(UInt(3.W)))
     val responderRdy = Output(Bool())
     val remoteErrorInLinkspeed = Output(Bool())
     val remoteExitingToRepair = Output(Bool())
@@ -2101,6 +2292,9 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     val remoteRequestingRepair = Output(Bool())
     val remoteRequestingSpeedDegrade = Output(Bool())
     val remoteRequestingPhyRetrain = Output(Bool())
+    // Multi-module only: an {exit to PHY retrain resp} this Module did not ask
+    // for has arrived, i.e. the partner is leaving LINKSPEED for PHYRETRAIN.
+    val partnerLeftLinkSpeed = Output(Bool())
     val doElectricalIdleRx = Output(Bool())
     val remoteRxSweepResults = Valid(Vec(afeParams.mbLanes, UInt(1.W)))
 
@@ -2211,6 +2405,70 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   // Multi-module only: the resolution the MMPL directed for this Module.
   val mmplResolutionReg = RegInit(MmplResolution.none)
 
+  // Leaving LINKSPEED for PHYRETRAIN part-way through a pass: see the
+  // requester's notes on abandonPass and directedToPhyRetrain.
+  val mmplPhyRetrainLive = io.multiModule && io.mmplResolution.valid &&
+    (io.mmplResolution.bits === MmplResolution.phyRetrain)
+  val mmplPhyRetrainSeen = RegInit(false.B)
+  when(currentState === MBTrainState.sLINKSPEED && mmplPhyRetrainLive) {
+    mmplPhyRetrainSeen := true.B
+  }
+  val directedToPhyRetrain = mmplPhyRetrainLive || mmplPhyRetrainSeen
+  val partnerInPhyRetrain = io.sbLaneIo.rx.valid && SBMsgCompare(
+    io.sbLaneIo.rx.bits.data,
+    SBM.PHYRETRAIN_RETRAIN_START_REQ
+  )
+  // Spec 4.5.3.4.12 Step 3/5: answered wherever it finds this Module.
+  val phyRetrainReqArriving = io.sbLaneIo.rx.valid && SBMsgCompare(
+    io.sbLaneIo.rx.bits.data,
+    SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ
+  )
+  // A report of the partner's pass that nobody is waiting for any more.
+  val abandonedReportArriving = io.sbLaneIo.rx.valid && Seq(
+    SBM.MBTRAIN_LINKSPEED_DONE_REQ,
+    SBM.MBTRAIN_LINKSPEED_ERROR_REQ,
+    SBM.MBTRAIN_LINKSPEED_EXIT_TO_REPAIR_REQ,
+    SBM.MBTRAIN_LINKSPEED_EXIT_TO_SPEED_DEGRADE_REQ
+  ).map(SBMsgCompare(io.sbLaneIo.rx.bits.data, _)).reduce(_ || _)
+  // The partner's Step 1 of a pass this Module is leaving (s0 is past).
+  val startReqArriving = io.sbLaneIo.rx.valid && SBMsgCompare(
+    io.sbLaneIo.rx.bits.data,
+    SBM.MBTRAIN_LINKSPEED_START_REQ
+  )
+
+  /* Multi-module only: an {exit to PHY retrain resp} this Module did not ask
+     for. Spec 4.5.3.4.12 Step 5 has every Module of the die that received an
+     exit req "exit to PHYRETRAIN and send an {exit to PHY retrain resp}", so
+     the partner of a sibling -- which never sent a req -- is sent one too (s8
+     below does the same from here). It means what it means to the Module that
+     did ask (Step 4a: "Once this sideband message is received, the UCIe
+     Module must exit to PHY retrain"): the partner is leaving LINKSPEED, and
+     it is waiting for nothing this pass would still send. Claimed wherever it
+     can find a multi-module Module in LINKSPEED -- s6 answers the partner's
+     own req and s12 exchanges a latched resolution, so neither can be sent
+     one -- unless this Module's own exit req is on the wire, when it is the
+     requester's response. The requester abandons the pass on it (abandonPass)
+     and the responder leaves through s8. */
+  val exitRespClaimable = io.multiModule &&
+    (currentState === MBTrainState.sLINKSPEED) &&
+    Seq(
+      MBTrainSubstate.s0,
+      MBTrainSubstate.s1,
+      MBTrainSubstate.s2,
+      MBTrainSubstate.s3,
+      MBTrainSubstate.s8,
+      MBTrainSubstate.s11
+    ).map(substateReg === _).reduce(_ || _)
+  val unsolicitedExitRespArriving = exitRespClaimable &&
+    !io.localAwaitingExitToPhyRetrainResp && io.sbLaneIo.rx.valid &&
+    SBMsgCompare(
+      io.sbLaneIo.rx.bits.data,
+      SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP
+    )
+  val partnerExitRespSeen = RegInit(false.B)
+  val partnerLeft = partnerExitRespSeen || unsolicitedExitRespArriving
+  io.partnerLeftLinkSpeed := partnerLeft
+
   localNotInitiatingSpeedDegrade := (io.localInitiatingError && io.localInitiatingWidthDegrade) ||
     io.localInitiatingDone
   localCompletedSteps1And2 := io.localCompletedSteps1And2
@@ -2229,10 +2487,18 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   val currRemoteFunctionalLanesWire = Wire(UInt(3.W))
   val incRemoteFuncLanesWire = Wire(UInt(3.W))
   val widthChanged = WireInit(false.B)
+  // The partner's code for this pass of REPAIR, for the requester's Lane map.
+  val partnerRepairLanesReg = RegInit(0.U.asTypeOf(Valid(UInt(3.W))))
+  io.partnerRepairLanes := partnerRepairLanesReg
 
   currRemoteFunctionalLanesWire := io.currRemoteTxFunctionalLanes
   incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42, 40)
-  io.newRemoteFunctionalLanes := incRemoteFuncLanesWire
+  /* The Lane map the Receiver takes on (spec 4.5.3.4.13 Step 2): the
+     partner's, or this Module's own when the partner found all Lanes
+     functional and this Module degraded (DegradeLaneMaps). */
+  val repairRxMap =
+    DegradeLaneMaps.rx(io.ownRepairLanes, incRemoteFuncLanesWire)
+  io.newRemoteFunctionalLanes := repairRxMap
   io.rxWidthChanged := widthChanged
 
   // IOs
@@ -2737,10 +3003,17 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
           remoteRequestingSpeedDegradeFlag := false.B
           remoteRequestingPhyRetrainFlag := false.B
 
-          sbMsgExchanger.io.rxRefBitPattern.valid := true.B
+          // A {start req} already taken is still answered; one not yet here is
+          // not waited for once the pass is being abandoned. A partner that
+          // has left (its start req at the head, or its resp taken) is owed
+          // nothing.
+          val partnerGone = partnerInPhyRetrain || partnerLeft
+          val abandonStep1 = directedToPhyRetrain || partnerGone
+          sbMsgExchanger.io.rxRefBitPattern.valid := !abandonStep1
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_LINKSPEED_START_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
+          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived &&
+            !partnerGone
           sbMsgExchanger.io.req.bits := SBMsgCreate(
             SBM.MBTRAIN_LINKSPEED_START_RESP,
             "PHY",
@@ -2749,55 +3022,81 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
           )
 
           when(sbMsgExchanger.io.exchDone) {
-            nextSubstate := MBTrainSubstate.s1
+            nextSubstate := Mux(
+              directedToPhyRetrain || partnerLeft,
+              MBTrainSubstate.s8,
+              MBTrainSubstate.s1
+            )
+          }.elsewhen(
+            partnerGone ||
+              (directedToPhyRetrain && !sbMsgExchanger.io.msgReceived)
+          ) {
+            nextSubstate := MBTrainSubstate.s8
           }
         }
         is(MBTrainSubstate.s1) {
-          io.txPtTestRespIntfIo.start := !ptTestDoneInLinkSpeed
+          /* The partner's Step 2 is over from here once this side of it has
+             sent its last response -- including in this very cycle. */
+          val partnerStep2Done =
+            ptTestDoneInLinkSpeed || io.txPtTestRespIntfIo.done
+          /* Leave without the partner's done/error req when none is coming:
+             this Module's own exit req is on the wire (the partner answers
+             that and leaves, spec 4.5.3.4.12 Step 4a), the partner has
+             already gone to PHYRETRAIN, or the MMPL directs a PHY retrain
+             while the partner's point test is still running -- the partner
+             then reports nothing (see the requester), so waiting for it would
+             never end. Once the partner's point test is over its report is on
+             its way and is waited for (s2/s11 then follow the directive). */
+          val leave = io.localInitiatingExitToPhyRetrain || partnerInPhyRetrain ||
+            partnerLeft || (directedToPhyRetrain && !partnerStep2Done)
+
+          // Dropping start abandons this side of the partner's point test.
+          io.txPtTestRespIntfIo.start := !ptTestDoneInLinkSpeed && !leave
           io.txPtTestRespIntfIo.patternType := PatternSelect.LFSR
 
           when(io.txPtTestRespIntfIo.done) {
             ptTestDoneInLinkSpeed := true.B
           }
 
-          when(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid) {
-            when(
-              SBMsgCompare(
-                io.sbLaneIo.rx.bits.data,
-                SBM.MBTRAIN_LINKSPEED_ERROR_REQ
-              )
-            ) {
-              io.sbLaneIo.rx.ready := true.B
-              nextSubstate := MBTrainSubstate.s2
-            }.elsewhen(
-              SBMsgCompare(
-                io.sbLaneIo.rx.bits.data,
-                SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ
-              )
-            ) {
-              io.sbLaneIo.rx.ready := true.B
-              remoteRequestingPhyRetrainFlag := true.B
-              nextSubstate := MBTrainSubstate.s6
-            }.elsewhen(
-              SBMsgCompare(
-                io.sbLaneIo.rx.bits.data,
-                SBM.MBTRAIN_LINKSPEED_DONE_REQ
-              )
-            ) {
-              io.sbLaneIo.rx.ready := true.B
-              remoteRequestingDoneFlag := true.B
-              nextSubstate := Mux(
-                io.multiModule,
-                MBTrainSubstate.s11,
-                MBTrainSubstate.s7
-              )
-            }
+          // Spec 4.5.3.4.12 Step 3/5: the exit req is answered wherever it
+          // finds this Module, including before this side of the partner's
+          // point test is over.
+          when(phyRetrainReqArriving) {
+            io.sbLaneIo.rx.ready := true.B
+            remoteRequestingPhyRetrainFlag := true.B
+            nextSubstate := MBTrainSubstate.s6
+          }.elsewhen(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
+            SBMsgCompare(
+              io.sbLaneIo.rx.bits.data,
+              SBM.MBTRAIN_LINKSPEED_ERROR_REQ
+            )
+          ) {
+            io.sbLaneIo.rx.ready := true.B
+            nextSubstate := MBTrainSubstate.s2
+          }.elsewhen(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
+            SBMsgCompare(
+              io.sbLaneIo.rx.bits.data,
+              SBM.MBTRAIN_LINKSPEED_DONE_REQ
+            )
+          ) {
+            io.sbLaneIo.rx.ready := true.B
+            remoteRequestingDoneFlag := true.B
+            nextSubstate := Mux(
+              io.multiModule,
+              MBTrainSubstate.s11,
+              MBTrainSubstate.s7
+            )
+          }.elsewhen(leave) {
+            nextSubstate := MBTrainSubstate.s8
           }
         }
         is(MBTrainSubstate.s2) { // Received {MBTRAIN.LINKSPEED error req}
           remoteErrorInLinkspeedFlag := true.B
 
-          when(localCompletedSteps1And2 && localNotInitiatingPhyRetrain) {
+          when(
+            localCompletedSteps1And2 && localNotInitiatingPhyRetrain &&
+              !partnerInPhyRetrain && !partnerLeft
+          ) {
             io.doElectricalIdleRx := true.B
             sbMsgExchanger.io.req.valid := true.B
             sbMsgExchanger.io.req.bits := SBMsgCreate(
@@ -2808,10 +3107,19 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
             )
           }
 
-          when(io.localInitiatingExitToPhyRetrain) {
+          when(
+            io.localInitiatingExitToPhyRetrain || partnerInPhyRetrain ||
+              partnerLeft
+          ) {
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(sbMsgExchanger.io.msgSent) {
             nextSubstate := MBTrainSubstate.s3
+          }.elsewhen(
+            directedToPhyRetrain && !localCompletedSteps1And2 && io.requesterRdy
+          ) {
+            // Step 2 here was abandoned (the requester is already waiting to
+            // leave without it), so Step 3's {error resp} will never be sent.
+            nextSubstate := MBTrainSubstate.s8
           }
         }
         is(MBTrainSubstate.s3) { // wait for either {exit to repair} or {exit to speed degrade}
@@ -2844,6 +3152,12 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
                 MBTrainSubstate.s5
               )
             }
+          }
+          // The partner sends its repair or speed degrade req even when told
+          // to retrain (it has had {error resp} from here), unless it has
+          // already gone.
+          when(partnerInPhyRetrain || partnerLeft) {
+            nextSubstate := MBTrainSubstate.s8
           }
         }
         is(MBTrainSubstate.s4) { // Received {MBTRAIN.LINKSPEED exit to repair req}
@@ -2919,7 +3233,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
           // If localInitiatingError is HIGH that means link cannot move onto LINKINIT
           // Priority is given to going into various repair states requested by Local die.
-          when(io.localInitiatingExitToPhyRetrain) {
+          when(io.localInitiatingExitToPhyRetrain || partnerInPhyRetrain) {
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(io.localInitiatingWidthDegrade) {
             nextSubstate := MBTrainSubstate.s9
@@ -2931,12 +3245,87 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
           }
         }
         is(MBTrainSubstate.s8) {
-          // Intermediate synchronization state for when io.localInitiatingExitToPhyRetrain is HIGH
-          // Only transition when resp to exit to phyretrain req is received by Requester
-          responderRdy := true.B
-          when(io.responderRdy && io.requesterRdy) {
-            nextSubstate := MBTrainSubstate.s0
-            nextState := MBTrainState.sTOPHYRETRAIN
+          /* Leaving for PHYRETRAIN: this Module's own exit req is out (the
+             requester waits for its response), or the pass is being
+             abandoned. A done or error req the partner sent before it saw the
+             exit req is ahead of the response on the wire; it is abandoned
+             (spec 4.5.3.4.12 Step 3/5), so claim and drop it rather than leave
+             it for nobody. A crossing exit req is still answered (Step 4a). */
+          val siblingExit = io.multiModule && !io.localInitiatingExitToPhyRetrain
+          when(!siblingExit) {
+            when(phyRetrainReqArriving) {
+              io.sbLaneIo.rx.ready := true.B
+              remoteRequestingPhyRetrainFlag := true.B
+              nextSubstate := MBTrainSubstate.s6
+            }.otherwise {
+              when(abandonedReportArriving) {
+                io.sbLaneIo.rx.ready := true.B
+              }
+              responderRdy := true.B
+              when(io.responderRdy && io.requesterRdy) {
+                nextSubstate := MBTrainSubstate.s0
+                nextState := MBTrainState.sTOPHYRETRAIN
+              }
+            }
+          }.otherwise {
+            /* A multi-module Module leaving without an exit req of its own on
+               the wire: moved by the MMPL's phyRetrain directive (the req was
+               sent or received on a sibling), or its partner is leaving.
+               Spec 4.5.3.4.12 Step 5: "If an {exit to phy retrain req} is
+               received on any of the modules in the multi-module Link, the
+               UCIe Module must exit to PHYRETRAIN and send an {exit to PHY
+               retrain resp}". Its partner may belong to a die that does not
+               relay the exit to its own siblings (the die that sent the req
+               need not), and then this resp is the only thing that gets it out
+               of LINKSPEED (Step 4a: "Once this sideband message is received,
+               the UCIe Module must exit to PHY retrain").
+
+               Offered once the requester has settled in s7, so any report it
+               still owed this pass is on the wire ahead of the resp, and held
+               until sent. The Module that sent the req does not come here
+               (Step 4a: it receives the resp), and one that answered a req left
+               through s6. */
+            val respOffered =
+              io.localReadyForPhyRetrain || sbMsgExchanger.io.msgSent
+            sbMsgExchanger.io.req.valid := respOffered
+            sbMsgExchanger.io.req.bits := SBMsgCreate(
+              SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP,
+              "PHY",
+              "PHY",
+              true
+            )
+
+            when(phyRetrainReqArriving && !respOffered) {
+              // Nothing offered yet: answer it as any exit req, once, in s6.
+              io.sbLaneIo.rx.ready := true.B
+              remoteRequestingPhyRetrainFlag := true.B
+              nextSubstate := MBTrainSubstate.s6
+            }.otherwise {
+              when(phyRetrainReqArriving) {
+                // It crossed the resp offered here, which answers it: the
+                // partner leaves on that (Step 4a). Not answered twice.
+                io.sbLaneIo.rx.ready := true.B
+                remoteRequestingPhyRetrainFlag := true.B
+              }.elsewhen(abandonedReportArriving || startReqArriving) {
+                io.sbLaneIo.rx.ready := true.B
+              }
+              /* Then wait to hear the partner leave: its own resp (claimed
+                 by unsolicitedExitRespArriving), its exit req, or its
+                 {PHYRETRAIN.retrain start req} at the head of the queue. The
+                 sideband delivers in order and each is the last LINKSPEED
+                 message that partner sends, so nothing of this pass lands on
+                 this Module once it is in PHYRETRAIN -- in particular not the
+                 resp of a partner that was sending its own at the same time
+                 as this one. */
+              val partnerHeard = partnerLeft ||
+                remoteRequestingPhyRetrainFlag || phyRetrainReqArriving ||
+                partnerInPhyRetrain
+              responderRdy := sbMsgExchanger.io.msgSent && partnerHeard
+              when(io.responderRdy && io.requesterRdy) {
+                nextSubstate := MBTrainSubstate.s0
+                nextState := MBTrainState.sTOPHYRETRAIN
+              }
+            }
           }
         }
         is(MBTrainSubstate.s9) {
@@ -2968,22 +3357,20 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
              parked with no receive pattern armed would leave the request at the
              head of its sideband queue, blocking the directed response queued
              behind it. */
-          val phyRetrainReqArrived = io.sbLaneIo.rx.valid && SBMsgCompare(
-            io.sbLaneIo.rx.bits.data,
-            SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ
-          )
-
           when(io.localInitiatingExitToPhyRetrain) {
             nextSubstate := MBTrainSubstate.s8
-          }.elsewhen(phyRetrainReqArrived) {
+          }.elsewhen(phyRetrainReqArriving) {
             io.sbLaneIo.rx.ready := true.B
             remoteRequestingPhyRetrainFlag := true.B
             nextSubstate := MBTrainSubstate.s6
           }.elsewhen(
-            io.mmplResolution.valid &&
-              io.mmplResolution.bits === MmplResolution.phyRetrain
+            directedToPhyRetrain || partnerInPhyRetrain || partnerLeft
           ) {
-            // A sibling Module took the request; follow it to PHYRETRAIN.
+            /* A sibling Module took the request, or the partner is leaving;
+               follow it to PHYRETRAIN. s8 sends this Module's own {exit to
+               PHY retrain resp} on the way (spec 4.5.3.4.12 Step 5): a
+               partner die that does not relay the exit to its siblings has
+               nothing else to tell this Module's partner. */
             nextSubstate := MBTrainSubstate.s8
           }.elsewhen(io.mmplResolution.valid) {
             mmplResolutionReg := io.mmplResolution.bits
@@ -3043,6 +3430,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     is(MBTrainState.sREPAIR) {
       switch(substateReg) {
         is(MBTrainSubstate.s0) { // INIT
+          partnerRepairLanesReg.valid := false.B
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBTRAIN_REPAIR_INIT_REQ
 
@@ -3064,7 +3452,9 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
           when(sbMsgExchanger.io.resp.valid) {
             errorDetectedWire := incRemoteFuncLanesWire === "b000".U
-            widthChanged := incRemoteFuncLanesWire =/= currRemoteFunctionalLanesWire
+            widthChanged := repairRxMap =/= currRemoteFunctionalLanesWire
+            partnerRepairLanesReg.valid := true.B
+            partnerRepairLanesReg.bits := incRemoteFuncLanesWire
           }
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived && !errorDetected
@@ -3134,6 +3524,11 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     }
   }
 
+  when(unsolicitedExitRespArriving) {
+    io.sbLaneIo.rx.ready := true.B
+    partnerExitRespSeen := true.B
+  }
+
   /* Same as the requester: these describe one pass of LINKSPEED and are
      otherwise only cleared in s0, one cycle after the Module is back, during
      which the report to the MMPL is valid with last pass's contents. */
@@ -3150,5 +3545,7 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
     remoteRequestingRepairFlag := false.B
     remoteRequestingSpeedDegradeFlag := false.B
     remoteRequestingPhyRetrainFlag := false.B
+    mmplPhyRetrainSeen := false.B
+    partnerExitRespSeen := false.B
   }
 }

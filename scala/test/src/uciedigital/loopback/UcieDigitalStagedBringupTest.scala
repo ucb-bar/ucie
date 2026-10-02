@@ -406,5 +406,121 @@ class UcieDigitalStagedBringupTest extends AnyFunSpec with ChiselSim {
           }
       }
     }
+
+    it("Stage 12: retrains end to end and carries data again") {
+      /* Spec 10.3.3.4: the Adapter requests Retrain on RDI when the "Protocol
+         Layer requests Retrain (only applicable for UCIe Raw Format)". Out of
+         Retrain, each interface's upper layer presents NOP -> Active, the
+         Physical Layers run their Active Entry handshake once they have
+         retrained, and then the Adapters run theirs, which 10.2.8 has
+         "performed for every entry to Active state". */
+      simulate(
+        new UcieDigitalLoopbackHarness(exposeDataPath = true),
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        bringUpToActive(h)
+        val before = Seq(
+          Seq(payload(h.beatBits, 0, 0)),
+          Seq(payload(h.beatBits, 1, 0))
+        )
+        val gotBefore = exchange(h, before)
+        checkDelivery(from = 0, sent = before(0), received = gotBefore(1))
+        checkDelivery(from = 1, sent = before(1), received = gotBefore(0))
+
+        h.io.protoCtrl(0)
+          .poke(ProtoCtrl.word(reqActive = true, reqRetrain = true).U)
+        stepUntil(h, handshakeCycles, "both RDIs in Retrain")(
+          bothDies(die =>
+            h.io.rdiState(die).peek().litValue == RDIState.retrain.litValue
+          )
+        )
+        h.io.protoCtrl(0).poke(ProtoCtrl.word(reqActive = true).U)
+        stepUntil(h, handshakeCycles, "both FDIs in Retrain")(
+          bothDies(die =>
+            h.io.fdiState(die).peek().litValue == FDIState.retrain.litValue
+          )
+        )
+        stepUntil(h, trainCycles, "both FDIs back in Active")(
+          bothDies(die =>
+            h.io.fdiState(die).peek().litValue == FDIState.active.litValue
+          )
+        )
+        for (die <- 0 until 2) {
+          h.io.rdiState(die).expect(RDIState.active)
+          h.io.ltState(die).expect(LTState.sACTIVE)
+        }
+
+        val after = Seq(
+          (0 until burstLength).map(payload(h.beatBits, 0, _)),
+          (0 until burstLength).map(payload(h.beatBits, 1, _))
+        )
+        val gotAfter = exchange(h, after)
+        checkDelivery(from = 0, sent = after(0), received = gotAfter(1))
+        checkDelivery(from = 1, sent = after(1), received = gotAfter(0))
+        for (die <- 0 until 2) {
+          h.io.fdiState(die).expect(FDIState.active, "the link did not hold")
+          assert(!flag(h, die, DieFlag.phyTrainError))
+          for ((bit, name) <- DieFlag.sbFaults) {
+            assert(!flag(h, die, bit), s"die $die sideband $name fault")
+          }
+        }
+      }
+    }
+
+    it("Stage 13: resets the Link from Active and brings it back") {
+      /* Spec 10.3.2: the stall handshake is required "when exiting Active
+         state to Retrain, PM, LinkReset or Disabled". The Adapter asks RDI for
+         LinkReset once its own LSM is there (spec 3.5), so the Physical
+         Layer's pl_stallreq arrives outside Active -- and went unanswered, so
+         neither RDI left Active. Out of LinkReset, lp_state_req Active takes
+         RDI to Reset (Table 10-4), and the Link trains again. */
+      simulate(
+        new UcieDigitalLoopbackHarness(exposeDataPath = true),
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        bringUpToActive(h)
+        /* Die 1's protocol layer stops asking for Active, as one would that
+           has nothing to send. Left asking, it takes its FDI straight on out
+           of LinkReset to Reset (Table 10-4), and its Adapter runs link init
+           again while die 0's is still in LinkReset. */
+        h.io.protoCtrl(1).poke(ProtoCtrl.word().U)
+        h.io.protoCtrl(0).poke(ProtoCtrl.word(reqLinkReset = true).U)
+        stepUntil(h, handshakeCycles, "both RDIs in LinkReset")(
+          bothDies(die =>
+            h.io.rdiState(die).peek().litValue == RDIState.linkReset.litValue
+          )
+        )
+        stepUntil(h, flagCycles, "both stalls released")(
+          bothDies(die => !flag(h, die, DieFlag.rdiStallReq))
+        )
+        for (die <- 0 until 2) {
+          h.io.fdiState(die).expect(FDIState.linkReset, s"die $die FDI")
+          assert(!flag(h, die, DieFlag.phyTrainError))
+        }
+
+        for (die <- 0 until 2) {
+          h.io.protoCtrl(die).poke(ProtoCtrl.word(reqActive = true).U)
+        }
+        stepUntil(h, trainCycles, "both FDIs back in Active")(
+          bothDies(die =>
+            h.io.fdiState(die).peek().litValue == FDIState.active.litValue
+          )
+        )
+        for (die <- 0 until 2) {
+          h.io.rdiState(die).expect(RDIState.active)
+          h.io.ltState(die).expect(LTState.sACTIVE)
+        }
+        val words = Seq(
+          (0 until burstLength).map(payload(h.beatBits, 0, _)),
+          (0 until burstLength).map(payload(h.beatBits, 1, _))
+        )
+        val got = exchange(h, words)
+        checkDelivery(from = 0, sent = words(0), received = got(1))
+        checkDelivery(from = 1, sent = words(1), received = got(0))
+        for (die <- 0 until 2; (bit, name) <- DieFlag.sbFaults) {
+          assert(!flag(h, die, bit), s"die $die sideband $name fault")
+        }
+      }
+    }
   }
 }

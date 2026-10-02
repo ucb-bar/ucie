@@ -142,7 +142,38 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
     climbTo(h, LTState.sMBINIT, sidebandCycles)
     climbTo(h, LTState.sMBTRAIN, mbInitCycles)
     climbTo(h, LTState.sLINKINIT, mbTrainCycles)
+    requestActive(h)
     climbTo(h, LTState.sACTIVE, sidebandCycles)
+  }
+
+  /** What an Adapter does once it sees pl_inband_pres (spec 10.1.6 Step 2):
+    * ask for Active. The RDI leaves Reset only on that request, the NOP having
+    * been presented since cold start (spec 10.3.3.1).
+    */
+  private def requestActive(h: H): Unit =
+    for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+
+  /** Waits for `mods(die)` on each die to finish training, asks for Active as
+    * an Adapter would, and waits for them to reach ACTIVE.
+    */
+  private def trainThenActivate(h: H, limit: Int, milestone: String)(
+      mods: Int => Seq[Int]
+  ): Unit = {
+    def trained(die: Int, m: Int): Boolean = {
+      val at = h.io.ltState(die)(m).peek().litValue
+      at == LTState.sLINKINIT.litValue || at == LTState.sACTIVE.litValue
+    }
+    stepWhileFailing(h, limit, s"$milestone (trained)") {
+      (0 until 2).forall(die => mods(die).forall(trained(die, _)))
+    }
+    requestActive(h)
+    stepWhileFailing(h, sidebandCycles, milestone) {
+      (0 until 2).forall(die =>
+        mods(die).forall(m =>
+          h.io.ltState(die)(m).peek().litValue == LTState.sACTIVE.litValue
+        )
+      )
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -439,17 +470,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
 
           val surviving =
             (0 until 2).map(die => modules(h).filterNot(disabled(die).contains))
-          stepWhileFailing(
-            h,
-            mbTrainCycles,
-            "the surviving Modules reached ACTIVE"
-          ) {
-            (0 until 2).forall(die =>
-              surviving(die).forall(m =>
-                h.io.ltState(die)(m).peek().litValue == LTState.sACTIVE.litValue
-              )
-            )
-          }
+          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+            surviving(_)
+          )
 
           for (die <- 0 until 2) {
             h.io.lpStateReq(die).poke(RDIStateReq.active)
@@ -613,17 +636,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           }
           for (m <- injected) h.io.injectLaneError.get(0)(m).poke(false.B)
 
-          stepWhileFailing(
+          trainThenActivate(
             h,
             3 * mbTrainCycles,
             "the width-degraded Link reached ACTIVE on every Module"
-          ) {
-            (0 until 2).forall(die =>
-              (0 until numModules).forall(m =>
-                h.io.ltState(die)(m).peek().litValue == LTState.sACTIVE.litValue
-              )
-            )
-          }
+          )(_ => 0 until numModules)
 
           for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
           stepWhileFailing(
@@ -752,6 +769,768 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
               s"die $die sideband fault: ${sidebandFaults(h)}"
             )
           }
+        }
+      }
+
+      it(
+        "Stage 12: Modules whose sidebands differ in latency resolve on both dies"
+      ) {
+        /* Each die resolves MBTRAIN.LINKSPEED once its own last Module has
+           reported, so when one Module's sideband is slower than its sibling's
+           the two dies resolve at different times, and the early die's
+           directed response can arrive on a Module whose own die has yet to
+           answer. It has to be kept rather than dropped, or that Module waits
+           out its residency timeout and the Link goes down. Stage 8's failure,
+           with the failing Module's sideband a few cycles slower. */
+        val injected = 1
+        val delay = Seq.tabulate(numModules)(m => if (m == injected) 3 else 0)
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            laneErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout),
+            sidebandRxDelayCycles = Seq(delay, Seq())
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          h.io.injectLaneError.get(0)(injected).poke(true.B)
+          coldStart(h)
+
+          stepWhileFailing(
+            h,
+            mbInitCycles + mbTrainCycles,
+            "the MMPL disabled a Module on both dies"
+          ) {
+            (0 until 2).forall(die =>
+              modules(h).exists(m => !h.io.moduleEnable(die)(m).peekBoolean())
+            )
+          }
+          val surviving = (0 until 2).map { die =>
+            modules(h).filter(m => h.io.moduleEnable(die)(m).peekBoolean())
+          }
+          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+            surviving(_)
+          )
+          for (die <- 0 until 2; m <- surviving(die)) {
+            h.io
+              .trainingTimedout(die)(m)
+              .expect(false.B, s"die $die module $m waited out a timeout")
+          }
+        }
+      }
+
+      it(
+        "Stage 13: a one-sided Lane fault leaves both directions of the Module at one width"
+      ) {
+        /* Spec 4.5.3.3.6 Step 3: a Module whose partner found every Lane
+           functional sets its Transmitter and Receiver to the Lane map its own
+           point test found. Only die 1's Transmitter into die 0's Module
+           `injected` sees the fault here, so die 1 degrades that Transmitter
+           and die 0's Transmitter back has nothing to repair; without the rule
+           the pair left MBINIT with its two directions at different widths.
+           The fault is on Lane 0, so the half that survives is Lanes 8 to 15,
+           whose second point test only passes if Lane IDs are compared as
+           sent rather than renumbered. */
+        val injected = 1
+        val partner = pairing(injected)
+        val upperHalf = "b010".U(3.W)
+        val allLanes = "b011".U(3.W)
+        val degradedWidth =
+          if (numModules == 2) LinkWidth.x16 else LinkWidth.x32
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            dataPath = true,
+            repairMbLaneErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          h.io.injectRepairMbLaneError.get(0)(injected).poke(true.B)
+          coldStart(h)
+          climbTo(h, LTState.sSBINIT, sbinitEntryCycles)
+          climbTo(h, LTState.sMBINIT, sidebandCycles)
+          climbTo(h, LTState.sMBTRAIN, mbInitCycles)
+          h.io.injectRepairMbLaneError.get(0)(injected).poke(false.B)
+
+          for (die <- 0 until 2; m <- modules(h)) {
+            val faulted =
+              (die == 0 && m == injected) || (die == 1 && m == partner)
+            val expected = if (faulted) upperHalf else allLanes
+            h.io
+              .moduleTxLanes(die)(m)
+              .expect(expected, s"die $die module $m transmit Lane map")
+            h.io
+              .moduleRxLanes(die)(m)
+              .expect(expected, s"die $die module $m receive Lane map")
+          }
+
+          // That pair is now narrower than the rest (spec 4.7.1.2.1), so both
+          // dies disable it and the others carry the Link.
+          stepWhileFailing(
+            h,
+            mbTrainCycles,
+            "the MMPL disabled a Module on both dies"
+          ) {
+            (0 until 2).forall(die =>
+              modules(h).exists(m => !h.io.moduleEnable(die)(m).peekBoolean())
+            )
+          }
+          h.io.moduleEnable(0)(injected).expect(false.B)
+          h.io.moduleEnable(1)(partner).expect(false.B)
+          val surviving = (0 until 2).map { die =>
+            modules(h).filter(m => h.io.moduleEnable(die)(m).peekBoolean())
+          }
+          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+            surviving(_)
+          )
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepWhileFailing(
+            h,
+            rdiFlagCycles,
+            "the degraded RDI reached Active"
+          ) {
+            (0 until 2).forall(die =>
+              h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
+            )
+          }
+          for (die <- 0 until 2) {
+            h.io
+              .plLnkCfg(die)
+              .expect(degradedWidth, s"die $die aggregate width")
+            h.io.plTrainError(die).expect(false.B, s"die $die training error")
+          }
+          for (seq <- 0 until 2) {
+            sendBothWaysMultiBeat(
+              h,
+              rdiWordBits,
+              (0 until 2).map(payload(rdiWordBits, _, seq))
+            )
+          }
+        }
+      }
+
+      it(
+        "Stage 14: a Valid framing error retrains the Link without the Adapter asking"
+      ) {
+        /* Spec 4.5.3.7.2: on a Valid framing error the Physical Layer asserts
+           pl_error, stalls the Adapter, and sends {LinkMgmt.RDI.Req.Retrain}
+           itself. Both RDIs go to Retrain while both Adapters still ask for
+           Active, and spec 10.3.3.4 then keeps them there until lp_state_req
+           moves NOP to Active. Receive has to work again afterwards: the
+           framing error must not outlive the retrain. */
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            dataPath = true,
+            validErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          def allIn(state: LTState.Type): Boolean =
+            everyModule(h) { (die, m) =>
+              h.io.ltState(die)(m).peek().litValue == state.litValue
+            }
+          def rdiIn(state: RDIState.Type): Boolean =
+            (0 until 2).forall { die =>
+              h.io.plStateSts(die).peek().litValue == state.litValue
+            }
+
+          bringUpToActive(h)
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepUntil(h, rdiFlagCycles, "aggregate RDI Active")(
+            rdiIn(RDIState.active)
+          )
+          sendBothWays(
+            h,
+            rdiWordBits,
+            (0 until 2).map(payload(rdiWordBits, _, 0))
+          )
+
+          // Die 1 streams while one of die 0's Modules has its Valid Lane
+          // corrupted for a few beats.
+          h.io.lpData.get(1).poke(payload(rdiWordBits, 1, 1).U(rdiWordBits.W))
+          h.io.lpValid.get(1).poke(true.B)
+          h.io.lpIrdy.get(1).poke(true.B)
+          h.clock.step(8)
+          var sawPlError = false
+          h.io.injectValidError.get(0)(0).poke(true.B)
+          for (_ <- 0 until 4) {
+            sawPlError ||= h.io.plError(0).peekBoolean()
+            h.clock.step(1)
+          }
+          h.io.injectValidError.get(0)(0).poke(false.B)
+          for (_ <- 0 until 64) {
+            sawPlError ||= h.io.plError(0).peekBoolean()
+            h.clock.step(1)
+          }
+          h.io.lpValid.get(1).poke(false.B)
+          h.io.lpIrdy.get(1).poke(false.B)
+          assert(
+            sawPlError,
+            "die 0 never raised pl_error for the corrupted word"
+          )
+
+          stepWhileFailing(h, sidebandCycles, "both RDIs in Retrain") {
+            rdiIn(RDIState.retrain)
+          }
+          stepWhileFailing(
+            h,
+            2 * mbTrainCycles,
+            "every Module back in LINKINIT after the retrain"
+          ) {
+            allIn(LTState.sLINKINIT)
+          }
+          // Both Adapters have held Active throughout, which is not the NOP to
+          // Active that lets a Retrain entered from Active end.
+          h.clock.step(rdiFlagCycles)
+          assert(
+            rdiIn(RDIState.retrain),
+            "an RDI left Retrain without seeing lp_state_req go NOP to Active"
+          )
+
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.nop)
+          h.clock.step(4)
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+          stepWhileFailing(h, rdiFlagCycles, "aggregate RDI Active again") {
+            rdiIn(RDIState.active)
+          }
+          stepWhileFailing(h, rdiFlagCycles, "every Module ACTIVE again") {
+            allIn(LTState.sACTIVE)
+          }
+          for (seq <- 2 until 4) {
+            sendBothWays(
+              h,
+              rdiWordBits,
+              (0 until 2).map(payload(rdiWordBits, _, seq))
+            )
+          }
+          for (die <- 0 until 2) {
+            h.io.plTrainError(die).expect(false.B, s"die $die training error")
+          }
+        }
+      }
+
+      /* Spec 4.7.1: "if any module failed to train, the MMPL must ensure that
+         the multi-module configuration degrades to the next permitted
+         configuration". Each stage below stops one Module pair training and
+         checks that both dies come up on the rest. The Module that fails
+         waits out its residency timeout while its siblings sit on the
+         resolution in MBTRAIN.LINKSPEED; the timeout used to reach the one
+         RDI state machine and take the whole Link to LinkError. */
+      val faulted = 1
+      // Rule 2 of spec 5.7.3.4.1 takes the failed Module's half down with it
+      // on a four-Module Link, so either way half the Modules survive.
+      val degradedWidth = if (numModules == 2) LinkWidth.x16 else LinkWidth.x32
+
+      def comesUpWithoutFaultedPair(h: H): Unit = {
+        val faultedOn = Seq(faulted, pairing(faulted))
+        stepWhileFailing(
+          h,
+          3 * trainingTimeout,
+          "both dies dropped the faulted Module pair"
+        ) {
+          (0 until 2).forall(die =>
+            !h.io.moduleEnable(die)(faultedOn(die)).peekBoolean()
+          )
+        }
+        val surviving = (0 until 2).map { die =>
+          modules(h).filter(m => h.io.moduleEnable(die)(m).peekBoolean())
+        }
+        for (die <- 0 until 2) {
+          assert(
+            surviving(die).length == numModules / 2,
+            s"die $die kept Modules ${surviving(die)}: ${states(h)}"
+          )
+        }
+        stepWhileFailing(h, mbTrainCycles, "the survivors reached LINKINIT") {
+          (0 until 2).forall(die =>
+            surviving(die).forall(m =>
+              h.io.ltState(die)(m).peek().litValue ==
+                LTState.sLINKINIT.litValue
+            )
+          )
+        }
+        for (die <- 0 until 2) {
+          assert(
+            h.io.plStateSts(die).peek().litValue != RDIState.linkError.litValue,
+            s"die $die RDI went to LinkError"
+          )
+          h.io.lpStateReq(die).poke(RDIStateReq.active)
+        }
+        stepWhileFailing(h, rdiFlagCycles, "both RDIs Active") {
+          (0 until 2).forall(die =>
+            h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
+          )
+        }
+        stepWhileFailing(h, rdiFlagCycles, "the survivors reached ACTIVE") {
+          (0 until 2).forall(die =>
+            surviving(die).forall(m =>
+              h.io.ltState(die)(m).peek().litValue == LTState.sACTIVE.litValue
+            )
+          )
+        }
+        for (die <- 0 until 2) {
+          h.io.plLnkCfg(die).expect(degradedWidth, s"die $die Link width")
+          h.io.plTrainError(die).expect(false.B, s"die $die training error")
+        }
+      }
+
+      it("Stage 15: a Module pair whose sideband is cut is dropped on both dies") {
+        /* Neither Module of the pair ever hears its partner, so both time out
+           in SBINIT -- which spec 4.5.3.8 exits to TRAINERROR without a
+           handshake -- while their siblings wait on them in LINKSPEED. */
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            moduleFaultInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          for (die <- 0 until 2; m <- modules(h)) {
+            h.io.holdPllUnlocked.get(die)(m).poke(false.B)
+            h.io.cutSideband.get(die)(m).poke(false.B)
+          }
+          h.io.cutSideband.get(0)(faulted).poke(true.B)
+          h.io.cutSideband.get(1)(pairing(faulted)).poke(true.B)
+          coldStart(h)
+          comesUpWithoutFaultedPair(h)
+        }
+      }
+
+      it("Stage 16: a Module that never leaves RESET is dropped on both dies") {
+        /* Only one die sees this failure directly: die 0's Module never locks
+           its PLL. Die 1's partner leaves RESET with its siblings and waits in
+           SBINIT for a sideband that never comes, and its timeout is how die 1
+           learns of it. */
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            moduleFaultInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          for (die <- 0 until 2; m <- modules(h)) {
+            h.io.holdPllUnlocked.get(die)(m).poke(false.B)
+            h.io.cutSideband.get(die)(m).poke(false.B)
+          }
+          h.io.holdPllUnlocked.get(0)(faulted).poke(true.B)
+          coldStart(h)
+          comesUpWithoutFaultedPair(h)
+        }
+      }
+
+      it("Stage 17: lp_linkerror holds every Module down until LinkError is left") {
+        /* Spec 10.3.3.7: "The lower layer enters LinkError state when directed
+           by an lp_linkerror signal", and "For RDI, the entry is also
+           triggered if the remote Link partner requested LinkError entry
+           through the relevant sideband message". Spec 4.5.3.8: "it is
+           required for Physical Layer to be in TRAINERROR as long as RDI is in
+           LinkError". LinkError is left for Reset only with lp_state_req
+           Active, lp_linkerror low and the minimum residency met, after which
+           the Link trains again from scratch. */
+        simulate(
+          new MmplLoopbackHarness(
+            params = params,
+            modulePairing = pairing,
+            linkErrorInjection = true,
+            timeoutCyclesOverride = Some(trainingTimeout)
+          ),
+          firtoolOpts = firtoolOpts
+        ) { h =>
+          def rdiIn(state: RDIState.Type): Boolean =
+            (0 until 2).forall(die =>
+              h.io.plStateSts(die).peek().litValue == state.litValue
+            )
+          def allIn(state: LTState.Type): Boolean =
+            everyModule(h)((die, m) =>
+              h.io.ltState(die)(m).peek().litValue == state.litValue
+            )
+
+          for (die <- 0 until 2) h.io.lpLinkError.get(die).poke(false.B)
+          bringUpToActive(h)
+
+          h.io.lpLinkError.get(0).poke(true.B)
+          stepWhileFailing(h, sidebandCycles, "both RDIs in LinkError") {
+            rdiIn(RDIState.linkError)
+          }
+          stepWhileFailing(h, sidebandCycles, "every Module in TRAINERROR") {
+            allIn(LTState.sTRAINERROR)
+          }
+          h.clock.step(trainingTimeout)
+          assert(
+            allIn(LTState.sTRAINERROR) && rdiIn(RDIState.linkError),
+            s"the Link came up while in LinkError: ${states(h)}"
+          )
+
+          // Die 0's Adapter lets go; both still ask for Active.
+          h.io.lpLinkError.get(0).poke(false.B)
+          stepWhileFailing(h, 3 * trainingTimeout, "both RDIs back in Reset") {
+            rdiIn(RDIState.reset)
+          }
+          stepWhileFailing(h, sidebandCycles, "every Module back in RESET") {
+            allIn(LTState.sRESET)
+          }
+          for (die <- 0 until 2) {
+            h.io.plTrainError(die).expect(false.B, s"die $die training error")
+          }
+
+          // Software trains the Link again, and the Adapters bring it up.
+          for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.nop)
+          h.clock.step(resetWait + 128)
+          h.io.swStartLinkTraining(0).poke(true.B)
+          h.clock.step(4)
+          h.io.swStartLinkTraining(0).poke(false.B)
+          trainThenActivate(h, mbInitCycles + mbTrainCycles, "trained again")(
+            _ => modules(h)
+          )
+          stepWhileFailing(h, rdiFlagCycles, "both RDIs Active again") {
+            rdiIn(RDIState.active)
+          }
+        }
+      }
+    }
+  }
+
+  describe("Multi-module Link failure") {
+    /* Spec 4.7.1 degrades a multi-module Link around a Module that fails to
+       train while the rest train on. When the rest fail as well, nothing is
+       left to degrade to: the Link has failed, and the training episode
+       retries it, or escalates once no retry is left (Table 10-1
+       pl_trainerror), exactly as a one-Module Link does. */
+    val params = MmplParams(numModules = 2)
+    val pairing = Seq(0, 1)
+
+    def harness(retries: Int) = new MmplLoopbackHarness(
+      params = params,
+      modulePairing = pairing,
+      moduleFaultInjection = true,
+      retryTrainingAmt = retries,
+      timeoutCyclesOverride = Some(trainingTimeout)
+    )
+
+    def connectAll(h: H): Unit =
+      for (die <- 0 until 2; m <- modules(h)) {
+        h.io.holdPllUnlocked.get(die)(m).poke(false.B)
+        h.io.cutSideband.get(die)(m).poke(false.B)
+      }
+
+    def ltIs(h: H, die: Int, m: Int, state: LTState.Type): Boolean =
+      h.io.ltState(die)(m).peek().litValue == state.litValue
+
+    def die0NotInLinkError(h: H): Unit =
+      assert(
+        h.io.plStateSts(0).peek().litValue != RDIState.linkError.litValue &&
+          !h.io.plTrainError(0).peekBoolean(),
+        s"die 0 escalated: ${h.io.plStateSts(0).peek()} ${states(h)}"
+      )
+
+    def escalates(h: H, held: Seq[Int]): Unit = {
+      stepWhileFailing(h, 3 * trainingTimeout, "die 0's RDI in LinkError") {
+        h.io.plStateSts(0).peek().litValue == RDIState.linkError.litValue
+      }
+      h.io.plTrainError(0).expect(true.B, "pl_trainerror with it")
+      h.clock.step(trainingTimeout / 4)
+      for (m <- held) {
+        h.io.ltState(0)(m).expect(LTState.sTRAINERROR, s"Module $m held")
+      }
+      h.io.plStateSts(0).expect(RDIState.linkError)
+    }
+
+    it("Stage 1: Modules that time out together retry the Link") {
+      /* Die 0 hears nothing on either Module, so both time out in SBINIT in
+         the same cycle. Neither is the one still training for the other to
+         be degraded around; counting each other so latched both out, and the
+         Link neither retried nor escalated. */
+      simulate(harness(retries = 1), firtoolOpts = firtoolOpts) { h =>
+        connectAll(h)
+        for (m <- modules(h)) h.io.cutSideband.get(0)(m).poke(true.B)
+        coldStart(h)
+
+        val sawTrainError = Array.fill(params.numModules)(false)
+        var left = 3 * trainingTimeout
+        while (
+          left > 0 &&
+          !(sawTrainError.forall(identity) &&
+            modules(h).forall(ltIs(h, 0, _, LTState.sRESET)))
+        ) {
+          for (m <- modules(h) if ltIs(h, 0, m, LTState.sTRAINERROR))
+            sawTrainError(m) = true
+          die0NotInLinkError(h)
+          h.clock.step(1)
+          left -= 1
+        }
+        assert(sawTrainError.forall(identity), s"no timeout: ${states(h)}")
+        for (m <- modules(h)) {
+          h.io.moduleEnable(0)(m).expect(true.B, s"Module $m kept")
+          h.io.cutSideband.get(0)(m).poke(false.B)
+        }
+
+        left = sidebandCycles + mbInitCycles + 3 * mbTrainCycles
+        while (
+          left > 0 &&
+          !everyModule(h)((die, m) => ltIs(h, die, m, LTState.sLINKINIT))
+        ) {
+          die0NotInLinkError(h)
+          h.clock.step(1)
+          left -= 1
+        }
+        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(
+          _ => modules(h)
+        )
+        stepWhileFailing(h, rdiFlagCycles, "both RDIs Active") {
+          (0 until 2).forall(die =>
+            h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
+          )
+        }
+        for (die <- 0 until 2) {
+          h.io.plLnkCfg(die).expect(LinkWidth.x32, s"die $die Link width")
+          h.io.plTrainError(die).expect(false.B, s"die $die training error")
+        }
+      }
+    }
+
+    it("Stage 2: Modules that time out together escalate with no retry left") {
+      simulate(harness(retries = 0), firtoolOpts = firtoolOpts) { h =>
+        connectAll(h)
+        for (m <- modules(h)) h.io.cutSideband.get(0)(m).poke(true.B)
+        coldStart(h)
+        escalates(h, modules(h))
+      }
+    }
+
+    it("Stage 3: a Module restored for the retry fails it for the Link") {
+      /* Module 1 fails first and is degraded around; then Module 0 fails too,
+         so the Link has failed and retries, restoring Module 1. Module 0 is
+         then kept in RESET, so the restored Module 1 is all the Link has, and
+         with no retry left its failure must escalate. Restored with no
+         training episode, it ended the Link in RESET without a word. (A
+         restored Module leaves RESET first, its reset wait long over, so a
+         fault on both fails it first and leaves the escalation to the other.) */
+      simulate(harness(retries = 1), firtoolOpts = firtoolOpts) { h =>
+        connectAll(h)
+        h.io.cutSideband.get(0)(1).poke(true.B)
+        coldStart(h)
+        stepWhileFailing(h, sidebandCycles + mbInitCycles, "Module 0 in MBTRAIN") {
+          ltIs(h, 0, 0, LTState.sMBTRAIN)
+        }
+        h.io.cutSideband.get(0)(0).poke(true.B)
+
+        // Module 1 failing while Module 0 trains on is degraded around: held
+        // in RESET, not retrying on its own.
+        var m1Failed = false
+        stepWhileFailing(h, 3 * trainingTimeout, "Module 0 failed") {
+          if (ltIs(h, 0, 1, LTState.sTRAINERROR)) m1Failed = true
+          ltIs(h, 0, 0, LTState.sTRAINERROR)
+        }
+        assert(
+          m1Failed && ltIs(h, 0, 1, LTState.sRESET),
+          s"Module 1 was not degraded around: ${states(h)}"
+        )
+        die0NotInLinkError(h)
+
+        h.io.holdPllUnlocked.get(0)(0).poke(true.B)
+        stepWhileFailing(h, sidebandCycles, "Module 1 restored for the retry") {
+          die0NotInLinkError(h)
+          ltIs(h, 0, 1, LTState.sSBINIT)
+        }
+        escalates(h, Seq(1))
+        h.io.ltState(0)(0).expect(LTState.sRESET)
+      }
+    }
+  }
+
+  describe("One-module link training") {
+    // At one Module a MultiModulePhy is a bare LogicalPhy: the MMPL resolution
+    // never fires and MBTRAIN.LINKSPEED is the Module's own.
+    val params = MmplParams(numModules = 1)
+    val rdiWordBits = params.rdiParams(32).nBytes * 8
+
+    def rdiNeverInLinkError(h: H): Unit =
+      for (die <- 0 until 2) {
+        assert(
+          h.io.plStateSts(die).peek().litValue != RDIState.linkError.litValue,
+          s"die $die RDI went to LinkError: ${states(h)}"
+        )
+        h.io.plTrainError(die).expect(false.B, s"die $die training error")
+      }
+
+    it("Stage 2: a training that times out retries, the RDI staying in Reset") {
+      /* A TRAINERROR is not an error escalation by itself (spec 4.5.3.3.1.2:
+         one that "does not escalate to RDI transitioning to LinkError"), and
+         4.5.3.8 recommends leaving it "as soon as possible" when there is
+         none. Die 0 hears nothing from its partner at first, times out in
+         SBINIT, and retries; the second attempt gets through. The RDI stays in
+         Reset throughout -- escalating on the timeout would have held the PHY
+         in TRAINERROR for as long as LinkError lasted, and no retry could have
+         run. */
+      simulate(
+        new MmplLoopbackHarness(
+          params = params,
+          modulePairing = Seq(0),
+          moduleFaultInjection = true,
+          retryTrainingAmt = 1,
+          timeoutCyclesOverride = Some(trainingTimeout)
+        ),
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        for (die <- 0 until 2) {
+          h.io.holdPllUnlocked.get(die)(0).poke(false.B)
+          h.io.cutSideband.get(die)(0).poke(false.B)
+        }
+        h.io.cutSideband.get(0)(0).poke(true.B)
+        coldStart(h)
+
+        var sawTrainError = false
+        var left = 3 * trainingTimeout
+        while (
+          left > 0 &&
+          !(sawTrainError &&
+            h.io.ltState(0)(0).peek().litValue == LTState.sRESET.litValue)
+        ) {
+          if (h.io.ltState(0)(0).peek().litValue == LTState.sTRAINERROR.litValue)
+            sawTrainError = true
+          rdiNeverInLinkError(h)
+          h.clock.step(1)
+          left -= 1
+        }
+        assert(sawTrainError, s"die 0 never timed out: ${states(h)}")
+        h.io.cutSideband.get(0)(0).poke(false.B)
+
+        left = mbInitCycles + 3 * mbTrainCycles
+        while (
+          left > 0 &&
+          !(0 until 2).forall(die =>
+            h.io.ltState(die)(0).peek().litValue == LTState.sLINKINIT.litValue
+          )
+        ) {
+          rdiNeverInLinkError(h)
+          h.clock.step(1)
+          left -= 1
+        }
+        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(
+          _ => Seq(0)
+        )
+        rdiNeverInLinkError(h)
+      }
+    }
+
+    it("Stage 3: the last retry failing escalates, and TRAINERROR holds") {
+      /* With no retries left, the training die 0 started has failed for good:
+         pl_trainerror, "a fatal error from the Physical Layer", which "must
+         transition pl_state_sts to LinkError" and "remains asserted until RDI
+         exits the LinkError state to Reset". Spec 4.5.3.8 keeps the Physical
+         Layer in TRAINERROR for as long as that lasts, and 10.3.3.7 lets the
+         RDI go to Reset once the Adapter asks, after the 16 ms residency. */
+      simulate(
+        new MmplLoopbackHarness(
+          params = params,
+          modulePairing = Seq(0),
+          moduleFaultInjection = true,
+          timeoutCyclesOverride = Some(trainingTimeout)
+        ),
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        for (die <- 0 until 2) {
+          h.io.holdPllUnlocked.get(die)(0).poke(false.B)
+          h.io.cutSideband.get(die)(0).poke(false.B)
+        }
+        h.io.cutSideband.get(0)(0).poke(true.B)
+        coldStart(h)
+
+        stepWhileFailing(h, 2 * trainingTimeout, "die 0's RDI in LinkError") {
+          h.io.plStateSts(0).peek().litValue == RDIState.linkError.litValue
+        }
+        h.io.plTrainError(0).expect(true.B, "pl_trainerror with it")
+        h.clock.step(trainingTimeout)
+        h.io.ltState(0)(0).expect(LTState.sTRAINERROR, "held in TRAINERROR")
+        h.io.plStateSts(0).expect(RDIState.linkError)
+        h.io.plTrainError(0).expect(true.B)
+
+        // The Adapter asks to leave LinkError.
+        h.io.lpStateReq(0).poke(RDIStateReq.active)
+        stepWhileFailing(h, 3 * trainingTimeout, "die 0's RDI back in Reset") {
+          h.io.plStateSts(0).peek().litValue == RDIState.reset.litValue
+        }
+        stepWhileFailing(h, sidebandCycles, "die 0 back in RESET") {
+          h.io.ltState(0)(0).peek().litValue == LTState.sRESET.litValue
+        }
+        h.io.plTrainError(0).expect(false.B, "until LinkError is left")
+        h.clock.step(trainingTimeout)
+        h.io.ltState(0)(0).expect(LTState.sRESET, "no retry is left to run")
+      }
+    }
+
+    it(
+      "Stage 1: a one-sided LINKSPEED fault leaves both directions of the Module at one width"
+    ) {
+      /* Spec 4.5.3.4.13 Step 2 is MBTRAIN.REPAIR's copy of the MBINIT.REPAIRMB
+         rule the multi-module Stage 13 checks. Only die 1's Transmitter into
+         die 0 sees the fault, so die 1 degrades it and die 0's Transmitter
+         back has nothing to repair. A multi-module Link never reaches REPAIR
+         with a clean Module, because the MMPL's width degrade halves every
+         Module (spec 4.7.1.2.1), but a one-Module Link does -- and REPAIR has
+         no point test of its own to bring the clean direction down. Without
+         the rule the Module left REPAIR with its two directions at x16 and
+         x8. */
+      val upperHalf = "b010".U(3.W)
+      simulate(
+        new MmplLoopbackHarness(
+          params = params,
+          modulePairing = Seq(0),
+          dataPath = true,
+          laneErrorInjection = true,
+          timeoutCyclesOverride = Some(trainingTimeout)
+        ),
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        h.io.injectLaneError.get(0)(0).poke(true.B)
+        coldStart(h)
+        stepWhileFailing(
+          h,
+          mbInitCycles + 2 * mbTrainCycles,
+          "die 1 width degraded its Transmitter"
+        ) {
+          h.io.moduleLinkWidth(1)(0).peek().litValue == LinkWidth.x8.litValue
+        }
+        h.io.injectLaneError.get(0)(0).poke(false.B)
+
+        trainThenActivate(h, 3 * mbTrainCycles, "the Module reached ACTIVE")(
+          _ => Seq(0)
+        )
+        for (die <- 0 until 2) {
+          h.io
+            .moduleTxLanes(die)(0)
+            .expect(upperHalf, s"die $die transmit Lane map")
+          h.io
+            .moduleRxLanes(die)(0)
+            .expect(upperHalf, s"die $die receive Lane map")
+        }
+
+        for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
+        stepWhileFailing(h, rdiFlagCycles, "the RDI reached Active") {
+          (0 until 2).forall(die =>
+            h.io.plStateSts(die).peek().litValue == RDIState.active.litValue
+          )
+        }
+        for (die <- 0 until 2) {
+          h.io.plLnkCfg(die).expect(LinkWidth.x8, s"die $die Link width")
+          h.io.plTrainError(die).expect(false.B, s"die $die training error")
+        }
+        for (seq <- 0 until 2) {
+          sendBothWaysMultiBeat(
+            h,
+            rdiWordBits,
+            (0 until 2).map(payload(rdiWordBits, _, seq))
+          )
         }
       }
     }

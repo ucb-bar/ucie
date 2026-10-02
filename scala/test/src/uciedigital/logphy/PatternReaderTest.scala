@@ -98,12 +98,10 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
 
   def isActive(code: Int, lane: Int): Boolean =
     ((laneMask(code) >> lane) & 1) == 1
-  // Physical lane -> logical (per-lane reference) index; the upper degraded maps shift down.
-  def logicalLane(code: Int, lane: Int): Int = code match {
-    case 2 => math.max(0, lane - 8)
-    case 5 => math.max(0, lane - 4)
-    case _ => lane
-  }
+  // Lane -> per-lane reference index. A degraded map only says which Lanes
+  // carry traffic; each keeps its own Lane ID (spec 4.2.1) and LFSR, which is
+  // what PatternWriter sends on it.
+  def logicalLane(code: Int, lane: Int): Int = lane
 
   def patternWidth(p: PatternSelect.Type): Int =
     p match {
@@ -705,8 +703,8 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
               s"PERLANEID lane map $label"
             )
 
-            // LFSR error-count: clean data on the logically-mapped functional lanes passes
-            // everywhere; a wrong logical mapping would mis-compare the active lanes and fail them.
+            // LFSR error-count: clean data passes on the functional lanes, and a
+            // lane outside the map -- one this Receiver has disabled -- fails.
             startRequest(
               dut,
               PatternSelect.LFSR,
@@ -723,7 +721,11 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
               0,
               ref.laneReferenceModels()
             )
-            ref.finishAndExpect(dut, _ => true, s"LFSR lane map $label")
+            ref.finishAndExpect(
+              dut,
+              lane => active.contains(lane),
+              s"LFSR lane map $label"
+            )
           }
         }
       }
@@ -884,7 +886,8 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
                 "random consecutive"
               )
             } else {
-              // LFSR error-count: blanked active lanes exceed the threshold; everything else passes.
+              // LFSR error-count: blanked active lanes exceed the threshold, and
+              // lanes outside the map fail; the rest pass.
               val threshold = rng.nextInt(5)
               startRequest(
                 dut,
@@ -906,7 +909,7 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
               )
               ref.finishAndExpect(
                 dut,
-                lane => !(active.contains(lane) && bad.contains(lane)),
+                lane => active.contains(lane) && !bad.contains(lane),
                 "random error-count"
               )
             }

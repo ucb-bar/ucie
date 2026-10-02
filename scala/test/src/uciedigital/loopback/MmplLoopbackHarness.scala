@@ -1,9 +1,12 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import chisel3.util.MixedVec
+import chisel3.util.experimental.BoringUtils
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.logphy._
 import edu.berkeley.cs.uciedigital.sideband._
+import scala.language.reflectiveCalls
 
 // Two MultiModulePhy instances cross-wired at the analog boundary, so every
 // training exchange and every mainband byte travels the real digital path.
@@ -16,7 +19,8 @@ import edu.berkeley.cs.uciedigital.sideband._
 // by the remote ID rather than the local one.
 //
 // The analog macro is not modelled: pllLock and clocksUngatedAndStable are tied
-// high, as in LogPhyLoopbackHarness.
+// high, as in LogPhyLoopbackHarness (pllLock unless moduleFaultInjection holds
+// it low).
 //
 // @param modulePairing
 //   must be an involution, so that wiring both dies with the same rule agrees.
@@ -37,7 +41,41 @@ class MmplLoopbackHarness(
     val modulePairing: Seq[Int] = Seq(1, 0),
     val dataPath: Boolean = false,
     val laneErrorInjection: Boolean = false,
-    val timeoutCyclesOverride: Option[Int] = None
+    // Like laneErrorInjection, but inside MBINIT.REPAIRMB: a Lane fault in one
+    // direction of one Module, which is where a Standard Package Module first
+    // width degrades (spec 4.5.3.3.6).
+    val repairMbLaneErrorInjection: Boolean = false,
+    // Inverts a Module's received Valid Lane while it is ACTIVE: a Valid
+    // framing error, which the Physical Layer answers with a retrain of its
+    // own (spec 4.5.3.7.2).
+    val validErrorInjection: Boolean = false,
+    // Per-Module faults that stop a Module training at all: its receive
+    // sideband cut, or its PLL never locking so it never leaves RESET. Spec
+    // 4.7.1 has the MMPL degrade the Link around a Module that fails to train.
+    val moduleFaultInjection: Boolean = false,
+    // Exposes lp_linkerror per die (spec 10.3.3.7); tied low otherwise.
+    val linkErrorInjection: Boolean = false,
+    // Training retries per episode (LogicalPhyCtrlIO.retryTrainingAmt).
+    val retryTrainingAmt: Int = 0,
+    val timeoutCyclesOverride: Option[Int] = None,
+    // Extra sideband receive latency per die and Module, in cycles. Modules of
+    // one Link are free to have sideband links of different latency, and the
+    // two die then resolve MBTRAIN.LINKSPEED at different times.
+    val sidebandRxDelayCycles: Seq[Seq[Int]] = Seq(),
+    // Adds a per-Module switch that back-pressures that Module's mainband
+    // transmitter while it sits in MBTRAIN.LINKSPEED, so its pattern generator
+    // makes no progress and its Step 2 point test stays open for as long as
+    // the switch is held. Gated on the substate like laneErrorInjection.
+    val mainbandStallInjection: Boolean = false,
+    // Counts, per die and Module, the {MBTRAIN.LINKSPEED exit to phy retrain
+    // req} and {... resp} packets that Module put on its own sideband, tapped
+    // where they leave its LogicalPhy.
+    val exitToPhyRetrainProbe: Boolean = false,
+    // Builds this die as SpecLiteralMultiModulePhy: its Modules neither follow
+    // the MMPL's PHY retrain directive nor take the partner's {PHYRETRAIN.retrain
+    // start req} as a cue while in MBTRAIN.LINKSPEED, as a die that follows
+    // spec 4.5.3.4.12 literally on the side that sent the exit req.
+    val specLiteralSenderDie: Option[Int] = None
 ) extends Module {
   private val n = params.numModules
   private val rdiParams = params.rdiParams(32)
@@ -73,6 +111,9 @@ class MmplLoopbackHarness(
     // width, so a width degrade has to reach the Modules that found no errors
     // of their own as well.
     val moduleLinkWidth = Output(Vec(2, Vec(n, LinkWidth())))
+    // Table 4-9 Lane maps a Module transmits and receives on.
+    val moduleTxLanes = Output(Vec(2, Vec(n, UInt(3.W))))
+    val moduleRxLanes = Output(Vec(2, Vec(n, UInt(3.W))))
     // What the MMPL last directed the Link to do, for tests that need to see
     // the resolution rather than only its effect.
     val mmplResolution = Output(Vec(2, MmplResolution()))
@@ -93,6 +134,24 @@ class MmplLoopbackHarness(
 
     val injectLaneError =
       Option.when(laneErrorInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val injectRepairMbLaneError =
+      Option.when(repairMbLaneErrorInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val injectValidError =
+      Option.when(validErrorInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val cutSideband =
+      Option.when(moduleFaultInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val holdPllUnlocked =
+      Option.when(moduleFaultInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val lpLinkError = Option.when(linkErrorInjection)(Input(Vec(2, Bool())))
+    val stallMainbandTx =
+      Option.when(mainbandStallInjection)(Input(Vec(2, Vec(n, Bool()))))
+    val plError = Output(Vec(2, Bool()))
+    val exitToPhyRetrainReqSent = Option.when(exitToPhyRetrainProbe)(
+      Output(Vec(2, Vec(n, UInt(4.W))))
+    )
+    val exitToPhyRetrainRespSent = Option.when(exitToPhyRetrainProbe)(
+      Output(Vec(2, Vec(n, UInt(4.W))))
+    )
 
     val lpData = Option.when(dataPath)(Input(Vec(2, UInt(rdiWordBits.W))))
     val lpValid = Option.when(dataPath)(Input(Vec(2, Bool())))
@@ -100,20 +159,55 @@ class MmplLoopbackHarness(
     val plData = Option.when(dataPath)(Output(Vec(2, UInt(rdiWordBits.W))))
   })
 
-  val duts = Seq.fill(2)(
-    Module(
-      new MultiModulePhy(
-        params = params,
-        sbParams = sbParams,
-        rdiParams = rdiParams,
-        timeoutCyclesOverride = timeoutCyclesOverride
-      )
-    )
+  require(
+    specLiteralSenderDie.forall(d => (d == 0 || d == 1) && n > 1),
+    s"specLiteralSenderDie must name die 0 or 1 of a multi-module Link, got $specLiteralSenderDie"
   )
 
+  // Each die's IO and its Modules, whichever class builds it.
+  private type DieIo = Bundle {
+    val rdi: Rdi
+    val ctrl: Vec[LogicalPhyCtrlIO]
+    val status: Vec[LogicalPhyStatusIO]
+    val analog: Vec[LogicalPhyAnalogIO]
+    val mmplCtrl: MultiModulePhyCtrlIO
+    val mmplStatus: MultiModulePhyStatusIO
+  }
+  private val dies: Seq[(DieIo, Seq[LogicalPhy])] = Seq.tabulate(2) { i =>
+    val rxDelay = sidebandRxDelayCycles.lift(i).getOrElse(Seq())
+    if (specLiteralSenderDie.contains(i)) {
+      val die = Module(
+        new SpecLiteralMultiModulePhy(
+          params,
+          sbParams,
+          rdiParams,
+          timeoutCyclesOverride,
+          rxDelay
+        )
+      )
+      (die.io: DieIo, die.modules)
+    } else {
+      val die = Module(
+        new MultiModulePhy(
+          params = params,
+          sbParams = sbParams,
+          rdiParams = rdiParams,
+          timeoutCyclesOverride = timeoutCyclesOverride,
+          sidebandRxDelayCycles = rxDelay
+        )
+      )
+      // A bypass-capable die stays one multi-module Link here, so the
+      // Modules' own RDIs carry nothing.
+      die.io.mmplCtrl.bypass.foreach(_ := false.B)
+      die.io.moduleRdi.foreach(_.foreach(MmplLoopbackHarness.quietAdapter))
+      (die.io: DieIo, die.modules)
+    }
+  }
+  private val dieIo = dies.map(_._1)
+
   for (i <- 0 until 2) {
-    val dut = duts(i).io
-    val peer = duts(1 - i).io
+    val dut = dieIo(i)
+    val peer = dieIo(1 - i)
 
     // Every Module of this harness faces a Module on the other die.
     dut.mmplCtrl.moduleConnected.foreach(_ := true.B)
@@ -140,14 +234,51 @@ class MmplLoopbackHarness(
           here.mainband.rx.bits.data(0) := ~peerModule.mainband.tx.bits.data(0)
         }
       }
+      io.injectRepairMbLaneError.foreach { inject =>
+        when(
+          inject(i)(m) &&
+            (dut.status(m).currentState === LTSMState.sMBINIT_REPAIRMB)
+        ) {
+          here.mainband.rx.bits.data(0) := ~peerModule.mainband.tx.bits.data(0)
+        }
+      }
+      io.injectValidError.foreach { inject =>
+        when(inject(i)(m) && (dut.status(m).ltState === LTState.sACTIVE)) {
+          here.mainband.rx.bits.valid := ~peerModule.mainband.tx.bits.valid
+        }
+      }
+      io.stallMainbandTx.foreach { stall =>
+        // This Module's transmitter, and the peer Module's view of it, stall
+        // together: no beat is offered on either side while it is held.
+        val peerStatus = dieIo(1 - i).status(modulePairing(m))
+        when(
+          stall(i)(m) &&
+            (dut.status(m).currentState === LTSMState.sMBTRAIN_LINKSPEED)
+        ) {
+          here.mainband.tx.ready := false.B
+        }
+        when(
+          stall(1 - i)(modulePairing(m)) &&
+            (peerStatus.currentState === LTSMState.sMBTRAIN_LINKSPEED)
+        ) {
+          here.mainband.rx.valid := false.B
+        }
+      }
 
-      here.status.pllLock := true.B
+      io.cutSideband.foreach { cut =>
+        when(cut(i)(m)) {
+          here.sidebandLink.in.bits := 0.U
+          here.sidebandLink.in.fwClock := 0.U
+        }
+      }
+
+      here.status.pllLock := !io.holdPllUnlocked.map(_(i)(m)).getOrElse(false.B)
       here.status.clocksUngatedAndStable := true.B
 
       val ctrl = dut.ctrl(m)
       ctrl.pwrGood := io.pwrGood(i)
       ctrl.swStartLinkTraining := io.swStartLinkTraining(i)
-      ctrl.retryTrainingAmt := 0.U
+      ctrl.retryTrainingAmt := retryTrainingAmt.U
       ctrl.maxErrorThresholdPerLane := 0.U
       ctrl.changeInRuntimeLinkCtrlRegsDetected :=
         io.changeInRuntimeLinkCtrlRegs(i)(m)
@@ -193,7 +324,7 @@ class MmplLoopbackHarness(
     dut.rdi.lpStateReq := io.lpStateReq(i)
     dut.rdi.lpClkAck := dut.rdi.plClkReq
     dut.rdi.lpStallAck := dut.rdi.plStallReq
-    dut.rdi.lpLinkError := false.B
+    dut.rdi.lpLinkError := io.lpLinkError.map(_(i)).getOrElse(false.B)
     dut.rdi.lpWakeReq := false.B
     dut.rdi.lpCfg := 0.U
     dut.rdi.lpCfgVld := false.B
@@ -204,6 +335,8 @@ class MmplLoopbackHarness(
 
     for (m <- 0 until n) {
       io.moduleLinkWidth(i)(m) := dut.status(m).linkWidth
+      io.moduleTxLanes(i)(m) := dut.status(m).localTxFunctionalLanes
+      io.moduleRxLanes(i)(m) := dut.status(m).remoteTxFunctionalLanes
     }
 
     io.mmplResolution(i) := dut.mmplStatus.linkResolution
@@ -215,6 +348,7 @@ class MmplLoopbackHarness(
     io.plSpeedmode(i) := dut.rdi.plSpeedmode
     io.plTrdy(i) := dut.rdi.plTrdy
     io.plValid(i) := dut.rdi.plValid
+    io.plError(i) := dut.rdi.plError
     io.plData.foreach(_(i) := dut.rdi.plData)
 
     for (m <- 0 until n) {
@@ -231,5 +365,160 @@ class MmplLoopbackHarness(
         sb.sbUnhandledCurrentLayerMsgSeen
       }
       .reduce(_ || _)
+
+    // Tapped where a packet leaves the Module's LogicalPhy for its sideband
+    // channel, so what is counted is what went on that Module's wire.
+    for (m <- 0 until n if exitToPhyRetrainProbe) {
+      val txq = dies(i)._2(m).sidebandTxQueue.io.deq
+      val fire = BoringUtils.tapAndRead(txq.valid) &&
+        BoringUtils.tapAndRead(txq.ready)
+      val bits = BoringUtils.tapAndRead(txq.bits)
+      def counter(msg: MixedVec[UInt]): UInt = {
+        val count = RegInit(0.U(4.W))
+        when(fire && SBMsgCompare(bits, msg) && !count.andR) {
+          count := count + 1.U
+        }
+        count
+      }
+      io.exitToPhyRetrainReqSent.get(i)(m) :=
+        counter(SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_REQ)
+      io.exitToPhyRetrainRespSent.get(i)(m) :=
+        counter(SBM.MBTRAIN_LINKSPEED_EXIT_TO_PHY_RETRAIN_RESP)
+    }
   }
+}
+
+object MmplLoopbackHarness {
+
+  /** An Adapter that asks for nothing and sends nothing, but acks the clock and
+    * stall handshakes so the Physical Layer never waits on it. Drive any
+    * signal again afterwards to override it.
+    */
+  def quietAdapter(rdi: Rdi): Unit = {
+    rdi.lclk := false.B
+    rdi.lpStateReq := RDIStateReq.nop
+    rdi.lpClkAck := rdi.plClkReq
+    rdi.lpStallAck := rdi.plStallReq
+    rdi.lpLinkError := false.B
+    rdi.lpWakeReq := false.B
+    rdi.lpCfg := 0.U
+    rdi.lpCfgVld := false.B
+    rdi.lpCfgCrd := false.B
+    rdi.lpData := 0.U
+    rdi.lpValid := false.B
+    rdi.lpIrdy := false.B
+  }
+}
+
+/* Test-only stand-in for a partner die that follows spec 4.5.3.4.12 to the
+   letter on the side that SENT {MBTRAIN.LINKSPEED exit to phy retrain req}.
+   Step 5 makes the request received on any Module a directive for every
+   Module of the RECEIVING die; nothing in the spec tells the sending die's
+   other Modules, which learn of the exit only from the {exit to PHY retrain
+   resp} their own partners send them (Step 4a: "Once this sideband message is
+   received, the UCIe Module must exit to PHY retrain"). This RTL has two relays
+   such a die does not: the MMPL's phyRetrain directive, and treating the
+   partner's {PHYRETRAIN.retrain start req} as the partner having left. Both are
+   removed here, so these Modules can leave only on a received exit req or
+   resp. Everything else is MultiModulePhy unchanged. */
+class SpecLiteralLogicalPhy(
+    afeParams: AfeParams,
+    sbParams: SidebandParams,
+    rdiParams: RdiParams,
+    timeoutCyclesOverride: Option[Int],
+    sidebandRxDelayCycles: Int
+) extends LogicalPhy(
+      afeParams = afeParams,
+      sbParams = sbParams,
+      rdiParams = rdiParams,
+      timeoutCyclesOverride = timeoutCyclesOverride,
+      rdiStateMachine = RdiStateMachineHome.Hosted,
+      sidebandRxDelayCycles = sidebandRxDelayCycles
+    ) {
+  // Kept at the head of the queue, as LinkTrainingSM's holdSidebandRx does,
+  // until this Module has reached PHYRETRAIN, where it is taken as usual.
+  private val hideRetrainStart =
+    (ltsm.io.currentState === LTSMState.sMBTRAIN_LINKSPEED) &&
+      sidebandRxQueue.io.deq.valid &&
+      SBMsgCompare(sidebandRxQueue.io.deq.bits, SBM.PHYRETRAIN_RETRAIN_START_REQ)
+  // Last connect wins over LogicalPhy's own.
+  ltsm.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid && !hideRetrainStart
+  io.mmplRdiHost.foreach { host =>
+    host.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid &&
+      !sidebandRxReadyLtsm && !ltsm.io.holdSidebandRx && !hideRetrainStart
+  }
+  sidebandRxUnhandled := sidebandRxQueue.io.deq.valid && !sidebandRxReadyLtsm &&
+    !sidebandRxReadyRdi && !sidebandRxHeldAbove && !ltsm.io.holdSidebandRx &&
+    !hideRetrainStart
+}
+
+/** MultiModulePhy built from SpecLiteralLogicalPhy, with the MMPL's phyRetrain
+  * directive withheld from every Module (see SpecLiteralLogicalPhy). The
+  * wiring is MultiModulePhy's.
+  */
+class SpecLiteralMultiModulePhy(
+    params: MmplParams,
+    sbParams: SidebandParams,
+    rdiParams: RdiParams,
+    timeoutCyclesOverride: Option[Int],
+    sidebandRxDelayCycles: Seq[Int]
+) extends Module {
+  private val n = params.numModules
+  private val afeParams = params.afe
+  require(params.isMultiModule, "only a multi-module Link has siblings")
+  require(rdiParams.nBytes == n * params.bytesPerModule)
+  require(sbParams.maxCrd % n == 0 && sbParams.maxCrd / n >= 1)
+  private val moduleSbParams = sbParams.copy(maxCrd = sbParams.maxCrd / n)
+
+  val io = IO(new Bundle {
+    val rdi = new Rdi(rdiParams)
+    val ctrl = Vec(n, new LogicalPhyCtrlIO(10, afeParams))
+    val status = Vec(n, new LogicalPhyStatusIO())
+    val analog = Vec(n, new LogicalPhyAnalogIO(afeParams, sbParams))
+    val mmplCtrl = new MultiModulePhyCtrlIO(n)
+    val mmplStatus = new MultiModulePhyStatusIO(n)
+  })
+
+  val mmpl = Module(
+    new Mmpl(
+      params,
+      rdiParams,
+      sbParams,
+      LinkTrainingSM.linkErrorResidencyCycles(timeoutCyclesOverride)
+    )
+  )
+  val modules: Seq[LogicalPhy] = Seq.tabulate(n) { m =>
+    val phy = Module(
+      new SpecLiteralLogicalPhy(
+        afeParams,
+        moduleSbParams,
+        params.moduleRdiParams(rdiParams.ncWidth),
+        timeoutCyclesOverride,
+        sidebandRxDelayCycles.lift(m).getOrElse(0)
+      )
+    )
+    phy.suggestName(s"module_$m")
+    phy
+  }
+
+  io.rdi <> mmpl.io.rdi
+  for (m <- 0 until n) {
+    val phy = modules(m)
+    phy.io.ctrl <> io.ctrl(m)
+    phy.io.ctrl.localPhyParamSettings.bits.moduleId := m.U(2.W)
+    io.analog(m) <> phy.io.analog
+    mmpl.io.modules(m).rdi <> phy.io.rdi
+    mmpl.io.modules(m).status := phy.io.status
+    phy.io.mmplCtrl <> mmpl.io.modules(m).ctrl
+    // Last connect wins: every other directive still reaches the Module.
+    phy.io.mmplCtrl.resolution.valid := mmpl.io.modules(m).ctrl.resolution.valid &&
+      (mmpl.io.modules(m).ctrl.resolution.bits =/= MmplResolution.phyRetrain)
+    mmpl.io.modules(m).rdiHost.foreach(_ <> phy.io.mmplRdiHost.get)
+    io.status(m) := phy.io.status
+  }
+  mmpl.io.moduleConnected := io.mmplCtrl.moduleConnected
+  io.mmplStatus.moduleEnable := mmpl.io.status.moduleEnable
+  io.mmplStatus.linkResolution := mmpl.io.status.linkResolution
+  io.mmplStatus.resolutionApplied := mmpl.io.status.resolutionApplied
+  io.mmplStatus.bypassed := false.B
 }
