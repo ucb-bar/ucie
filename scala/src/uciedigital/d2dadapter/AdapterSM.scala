@@ -67,6 +67,17 @@ class AdapterSM(
   val linkResetSbMsgExtRspReg = RegInit(false.B)
   val linkResetSbMsgExtReqReg = RegInit(false.B)
 
+  /* Retrain exit (spec 10.3.3.4 on both interfaces, and 10.2.8's Active Entry
+     handshake, which "must be performed for every entry to Active state"):
+     the Protocol Layer's NOP -> Active on FDI, then this Adapter's NOP ->
+     Active on RDI, then {Req.Active}/{Rsp.Active} with the remote Adapter once
+     RDI is back in Active. */
+  val retrainFdiNopSeenReg = RegInit(false.B)
+  val retrainActiveReqRcvReg = RegInit(false.B)
+  val retrainActiveRspRcvReg = RegInit(false.B)
+  val retrainActiveReqSntReg = RegInit(false.B)
+  val retrainActiveRspSntReg = RegInit(false.B)
+
   // Disabled request/response tracking
   val disabledFdiReqReg = RegInit(false.B)
   val disabledSbMsgReqRcvReg = RegInit(false.B)
@@ -89,10 +100,18 @@ class AdapterSM(
   val stallHandshakeDone = linkMgmtStallReqReg && io.linkmgmt_stalldone
   val rxDeactive = !io.fdi_lp_rx_active_sts && !fdiPlRxActiveReqReg
   val retrainPhySts = io.rdi_pl_state_sts === RDIState.retrain
-  // Retraining has finished on the Physical Layer and the Protocol Layer wants
-  // the link back: the condition for resuming Active out of the retrain state.
-  val retrainResumeActive = (io.rdi_pl_state_sts === RDIState.active) &&
+  // Spec 10.3.3.4: "Protocol Layer requests Retrain (only applicable for UCIe
+  // Raw Format)" is one of the reasons the Adapter requests Retrain on RDI.
+  val retrainFdiReq = io.fdi_lp_state_req === RDIStateReq.retrain
+  // The Protocol Layer has asked for Active the way 10.3.3.4 requires out of
+  // Retrain: after at least one cycle of NOP there.
+  val retrainFdiActiveReq = retrainFdiNopSeenReg &&
     (io.fdi_lp_state_req === RDIStateReq.active)
+  // Retraining has finished on the Physical Layer, and the Active Entry
+  // handshake with the remote Adapter is done: the condition for resuming
+  // Active out of the retrain state.
+  val retrainResumeActive = (io.rdi_pl_state_sts === RDIState.active) &&
+    retrainActiveReqSntReg && retrainActiveRspSntReg && retrainActiveRspRcvReg
 
   // Link-init outputs
   val activeEntry = WireDefault(false.B)
@@ -183,10 +202,32 @@ class AdapterSM(
     }
   }
 
+  // Retrain-exit outputs: the Active Entry handshake of spec 10.2.8, Steps 3
+  // to 5, once RDI is back in Active (spec 3.5: "RDI SM must be in Active
+  // before Adapter LSM can begin negotiation to transition to Active").
+  val retrainExitSbSnd = WireDefault(SideBandMessage.NOP)
+  when(
+    linkStateReg === RDIState.retrain &&
+      io.rdi_pl_state_sts === RDIState.active
+  ) {
+    // Step 4: {Rsp.Active} "must only be sent after the Adapter has sampled
+    // pl_rx_active_req = lp_rx_active_sts = 1".
+    when(
+      retrainActiveReqRcvReg && fdiPlRxActiveReqReg &&
+        io.fdi_lp_rx_active_sts && !retrainActiveRspSntReg
+    ) {
+      retrainExitSbSnd := SideBandMessage.RSP_ACTIVE
+    }.elsewhen(retrainFdiActiveReq && !retrainActiveReqSntReg) {
+      // Step 3: "On sampling lp_state_req = Active".
+      retrainExitSbSnd := SideBandMessage.REQ_ACTIVE
+    }
+  }
+
   // Sideband arbitration
   val disabledSbSelected = WireDefault(false.B)
   val linkResetSbSelected = WireDefault(false.B)
   val linkInitSbSelected = WireDefault(false.B)
+  val retrainExitSbSelected = WireDefault(false.B)
 
   io.sb_snd := SideBandMessage.NOP
   when(linkStateReg === RDIState.reset) {
@@ -215,6 +256,9 @@ class AdapterSM(
     }.elsewhen(linkResetSbSnd =/= SideBandMessage.NOP) {
       io.sb_snd := linkResetSbSnd
       linkResetSbSelected := true.B
+    }.elsewhen(retrainExitSbSnd =/= SideBandMessage.NOP) {
+      io.sb_snd := retrainExitSbSnd
+      retrainExitSbSelected := true.B
     }
   }.elsewhen(linkStateReg === RDIState.linkReset) {
     when(disabledSbSnd =/= SideBandMessage.NOP) {
@@ -226,6 +270,36 @@ class AdapterSM(
   val disabledSbAccepted = disabledSbSelected && io.sb_rdy
   val linkResetSbAccepted = linkResetSbSelected && io.sb_rdy
   val linkInitSbAccepted = linkInitSbSelected && io.sb_rdy
+  val retrainExitSbAccepted = retrainExitSbSelected && io.sb_rdy
+
+  // Retrain-exit state update
+  when(linkStateReg === RDIState.retrain) {
+    when(io.fdi_lp_state_req === RDIStateReq.nop) {
+      retrainFdiNopSeenReg := true.B
+    }
+    when(io.sb_rcv === SideBandMessage.REQ_ACTIVE) {
+      retrainActiveReqRcvReg := true.B
+    }
+    when(io.sb_rcv === SideBandMessage.RSP_ACTIVE) {
+      retrainActiveRspRcvReg := true.B
+    }
+    when(
+      retrainExitSbAccepted && retrainExitSbSnd === SideBandMessage.REQ_ACTIVE
+    ) {
+      retrainActiveReqSntReg := true.B
+    }
+    when(
+      retrainExitSbAccepted && retrainExitSbSnd === SideBandMessage.RSP_ACTIVE
+    ) {
+      retrainActiveRspSntReg := true.B
+    }
+  }.otherwise {
+    retrainFdiNopSeenReg := false.B
+    retrainActiveReqRcvReg := false.B
+    retrainActiveRspRcvReg := false.B
+    retrainActiveReqSntReg := false.B
+    retrainActiveRspSntReg := false.B
+  }
 
   // LinkError propagation from protocol to PHY.
   rdiLpLinkErrorReg := io.fdi_lp_linkerror
@@ -453,6 +527,10 @@ class AdapterSM(
   }.otherwise {
     when(linkResetEntry || disabledEntry || linkErrorPhySts) {
       fdiPlRxActiveReqReg := false.B
+    }.elsewhen(linkStateReg === RDIState.retrain) {
+      // Spec 10.2.8 Step 4, out of Retrain: open the Protocol Layer's
+      // Receiver once the remote Adapter has asked for Active.
+      fdiPlRxActiveReqReg := retrainActiveReqRcvReg
     }.otherwise {
       fdiPlRxActiveReqReg := linkInitFdiPlRxActiveReq
     }
@@ -484,13 +562,18 @@ class AdapterSM(
   when(linkStateReg === RDIState.reset) {
     rdiLpStateReqReg := linkInitRdiLpStateReq
   }.elsewhen(linkStateReg === RDIState.active) {
-    when(retrainPhySts) {
+    when(retrainPhySts || retrainFdiReq) {
       rdiLpStateReqReg := RDIStateReq.retrain
     }.otherwise {
       rdiLpStateReqReg := RDIStateReq.active
     }
   }.elsewhen(linkStateReg === RDIState.retrain) {
-    when(retrainResumeActive) {
+    /* Spec 10.3.3.4: the Physical Layer "begins Active Entry handshakes only
+       after observing a NOP-> Active transition on lp_state_req". Holding NOP
+       until RDI was already Active, as this used to, meant it never was. The
+       Adapter asks once the Protocol Layer has -- 3.5 has it not ask before its
+       own LSM is in Retrain, which it now is. */
+    when(retrainFdiActiveReq) {
       rdiLpStateReqReg := RDIStateReq.active
     }.otherwise {
       rdiLpStateReqReg := RDIStateReq.nop
@@ -558,10 +641,13 @@ class AdapterSM(
       }
     }
     is(RDIState.linkError) {
-      when(
-        (io.fdi_lp_state_req === RDIStateReq.active ||
-          io.rdi_pl_state_sts === RDIState.linkError) && rxDeactive
-      ) {
+      /* LinkError is left the way it was entered, from the bottom up (spec
+         3.5): the Adapter asks RDI to leave (lp_state_req Active above, once
+         the Protocol Layer has), RDI leaves for Reset after its own residency
+         (10.3.3.7), and then so does the Adapter LSM. This used to leave while
+         RDI was still in LinkError, and Reset sent it straight back, every
+         cycle. */
+      when(io.rdi_pl_state_sts === RDIState.reset && rxDeactive) {
         linkStateReg := RDIState.reset
       }
     }

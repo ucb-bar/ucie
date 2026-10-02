@@ -15,6 +15,8 @@ class RDIStallRequesterCtrlIO extends Bundle {
   val releaseStall = Input(Bool()) // Trigger from main FSM to end the stall
   val isStalled = Output(Bool()) // Tells FSM: Adapter is cleanly stalled
   val inIdle = Output(Bool()) // Indicates handshake is fully reset
+  // pl_stallreq is up and lp_stallack has not yet answered it.
+  val waitingForAck = Output(Bool())
 }
 
 class RDIStallRequester() extends Module {
@@ -42,6 +44,7 @@ class RDIStallRequester() extends Module {
   io.rdi.plStallReq := false.B
   io.ctrl.isStalled := false.B
   io.ctrl.inIdle := currentState === State.sIDLE
+  io.ctrl.waitingForAck := currentState === State.sWAIT_ACK_ASSERT
 
   switch(currentState) {
     is(State.sIDLE) {

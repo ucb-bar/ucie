@@ -4,6 +4,15 @@
     Contains TxD2CPointTestRequester, and TxD2CPointTestResponder
 
     Requester initiates the test, and Responder will be reactive to the remote Die's messages.
+
+    `start` is a level on both sides: the test runs while it is held, and a caller that drops it
+    before `done` abandons the test. MBTRAIN.LINKSPEED does this when it exits to PHYRETRAIN with
+    Step 2 still running (spec 4.5.3.4.12 Steps 3 and 5: "any outstanding messages are
+    abandoned"). An abandoned test goes straight back to idle and sends nothing more, but the
+    remote die may already have answered, or asked for, the step that was in flight. That one
+    message is claimed and dropped when it lands, until the remote die's
+    {PHYRETRAIN.retrain start req} (or a TRAINERROR entry) shows it has nothing more of this test
+    to send, or the next test starts.
  */
 
 package edu.berkeley.cs.uciedigital.logphy
@@ -73,7 +82,11 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
         is(PatternSelect.VALTRAIN) {
           txInitPtTestResults(0) := sbMsgExchanger.io.resp.bits(19)
         }
-        is(PatternSelect.LFSR) {
+        // MBINIT.REPAIRMB runs this test on the Per Lane ID pattern (spec
+        // 4.5.3.3.6 Step 2), and its per-Lane results come back in the same
+        // data field as LFSR's. Leaving them at 0 read as "no Lane failed" to
+        // REPAIRMB, which therefore never repaired or degraded anything.
+        is(PatternSelect.LFSR, PatternSelect.PERLANEID) {
           for (i <- 0 until afeParams.mbLanes) {
             txInitPtTestResults(i) := sbMsgExchanger.io.resp.bits(64 + i)
           }
@@ -88,11 +101,13 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
   io.txInitPtTestResults.valid := resultValid
   io.txInitPtTestResults.bits := resultReg
 
-  // If start is HIGH, then patternType can either be VALTRAIN or LFSR
+  // If start is HIGH, then patternType can be VALTRAIN or LFSR, or PERLANEID
+  // for MBINIT.REPAIRMB
   assert(
     ((!io.start) || ((io.patternType === PatternSelect.VALTRAIN) ||
-      (io.patternType === PatternSelect.LFSR))),
-    "PatternType should only be VALTRAIN or LFSR"
+      (io.patternType === PatternSelect.LFSR) ||
+      (io.patternType === PatternSelect.PERLANEID))),
+    "PatternType should only be VALTRAIN, LFSR or PERLANEID"
   )
   io.patternWriterIo.req.bits.patternType := patternTypeReg
   io.patternWriterIo.req.valid := false.B
@@ -197,6 +212,53 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
   }
+
+  // ==========================================================================
+  // Abandoning a test (see the header)
+  // ==========================================================================
+  // A test finishing in the cycle it is abandoned counts as finished.
+  val completing = (currentState === 3.U) && sbMsgExchanger.io.exchDone
+  val busy = (currentState =/= 0.U) || sbMsgExchanger.io.msgSent
+  val abandoning = !io.start && busy && !completing
+
+  // The response to the request this test last put on the wire, if it has not
+  // arrived yet: the one message the remote die may still send.
+  val staleResp = RegInit(0.U.asTypeOf(Valid(UInt(2.W))))
+  val staleRespPatterns = Seq(
+    0.U -> SBM.START_TX_INIT_D2C_POINT_TEST_RESP,
+    1.U -> SBM.LFSR_CLEAR_ERROR_RESP,
+    2.U -> SBM.TX_INIT_D2C_RESULTS_RESP,
+    3.U -> SBM.END_TX_INIT_D2C_POINT_TEST_RESP
+  )
+  val staleRespArrived = io.sbLaneIo.rx.valid && staleResp.valid &&
+    staleRespPatterns
+      .map { case (state, msg) =>
+        (staleResp.bits === state) && SBMsgCompare(io.sbLaneIo.rx.bits.data, msg)
+      }
+      .reduce(_ || _)
+  val remoteDoneWithTest = io.sbLaneIo.rx.valid && Seq(
+    SBM.PHYRETRAIN_RETRAIN_START_REQ,
+    SBM.TRAINERROR_ENTRY_REQ,
+    SBM.TRAINERROR_ENTRY_RESP
+  ).map(SBMsgCompare(io.sbLaneIo.rx.bits.data, _)).reduce(_ || _)
+
+  when(abandoning) {
+    // Last connect wins over the state's own drives: nothing more goes out.
+    sbMsgExchanger.io.req.valid := false.B
+    sbMsgExchanger.io.rxRefBitPattern.valid := false.B
+    sbMsgExchanger.io.clear := true.B
+    io.patternWriterIo.req.valid := false.B
+    nextState := 0.U
+    inProgress := false.B
+    resultValid := false.B
+    staleResp.valid := sbMsgExchanger.io.msgSent && !sbMsgExchanger.io.msgReceived
+    staleResp.bits := currentState
+  }.elsewhen(io.start || remoteDoneWithTest) {
+    staleResp.valid := false.B
+  }.elsewhen(staleRespArrived) {
+    io.sbLaneIo.rx.ready := true.B
+    staleResp.valid := false.B
+  }
 }
 
 class TxInitPtTestResponderInterfaceIO extends Bundle {
@@ -244,17 +306,23 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
   io.done := false.B
 
-  // If start is HIGH, then patternType can either be VALTRAIN or LFSR
+  // If start is HIGH, then patternType can be VALTRAIN or LFSR, or PERLANEID
+  // for MBINIT.REPAIRMB
   assert(
     ((!io.start) || ((io.patternType === PatternSelect.VALTRAIN) ||
-      (io.patternType === PatternSelect.LFSR))),
-    "PatternType should only be VALTRAIN or LFSR"
+      (io.patternType === PatternSelect.LFSR) ||
+      (io.patternType === PatternSelect.PERLANEID))),
+    "PatternType should only be VALTRAIN, LFSR or PERLANEID"
   )
   io.patternReaderIo.req.valid := false.B
   io.patternReaderIo.req.bits.patternType := patternTypeReg // from LTSM
   io.patternReaderIo.req.bits.comparisonMode := comparisonModeReg // from remote die
   io.patternReaderIo.req.bits.errorThreshold := maxErrorThresholdReg // from remote die
-  io.patternReaderIo.req.bits.doConsecutiveCount := false.B // link ops never consecutive counts
+  // Link operations count errors. The Per Lane ID pattern is only sent by
+  // MBINIT.REPAIRMB, where a Lane passes on "at least 16 consecutive
+  // iterations" (spec 4.5.3.3.6 Step 2b).
+  io.patternReaderIo.req.bits.doConsecutiveCount :=
+    patternTypeReg === PatternSelect.PERLANEID
   io.patternReaderIo.done := false.B
   io.patternReaderIo.resp.ready := false.B
   io.patternReaderIo.remoteFuncLanes := "b011".U
@@ -361,15 +429,17 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
       sbMsgExchanger.io.rxRefBitPattern.valid := true.B
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.END_TX_INIT_D2C_POINT_TEST_REQ
 
-      when(sbMsgExchanger.io.resp.valid) {
-        sbMsgExchanger.io.req.valid := true.B
-        sbMsgExchanger.io.req.bits := SBMsgCreate(
-          SBM.END_TX_INIT_D2C_POINT_TEST_RESP,
-          "PHY",
-          "PHY",
-          true
-        )
-      }
+      // Offered until it is sent, not only in the cycle the request lands: the
+      // sideband transmit arbiter need not grant it then, and a response
+      // offered once and lost left both dies waiting on each other.
+      sbMsgExchanger.io.req.valid :=
+        sbMsgExchanger.io.resp.valid || sbMsgExchanger.io.msgReceived
+      sbMsgExchanger.io.req.bits := SBMsgCreate(
+        SBM.END_TX_INIT_D2C_POINT_TEST_RESP,
+        "PHY",
+        "PHY",
+        true
+      )
       when(sbMsgExchanger.io.exchDone) {
         nextState := 0.U
         io.done := true.B
@@ -377,4 +447,72 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
   }
+
+  // ==========================================================================
+  // Abandoning a test (see the header)
+  // ==========================================================================
+  // A test finishing in the cycle it is abandoned counts as finished.
+  val completing = (currentState === 3.U) && sbMsgExchanger.io.exchDone
+  // In idle, only a {start req} already taken counts: one still on its way
+  // is indistinguishable from none and is left unclaimed.
+  val busy = (currentState =/= 0.U) || sbMsgExchanger.io.msgReceived
+  val abandoning = !io.start && busy && !completing
+
+  /* The request this state is still waiting for, if any: the one message the
+     remote die may still send. Once a state's exchange is complete the next
+     state's request is the one that can follow; a request that has landed
+     but not been answered is the last, since the remote die waits for the
+     answer. */
+  val staleReq = RegInit(0.U.asTypeOf(Valid(UInt(2.W))))
+  val staleReqPatterns = Seq(
+    1.U -> SBM.LFSR_CLEAR_ERROR_REQ,
+    2.U -> SBM.TX_INIT_D2C_RESULTS_REQ,
+    3.U -> SBM.END_TX_INIT_D2C_POINT_TEST_REQ
+  )
+  val staleReqArrived = io.sbLaneIo.rx.valid && staleReq.valid &&
+    staleReqPatterns
+      .map { case (state, msg) =>
+        (staleReq.bits === state) && SBMsgCompare(io.sbLaneIo.rx.bits.data, msg)
+      }
+      .reduce(_ || _)
+  val remoteDoneWithTest = io.sbLaneIo.rx.valid && Seq(
+    SBM.PHYRETRAIN_RETRAIN_START_REQ,
+    SBM.TRAINERROR_ENTRY_REQ,
+    SBM.TRAINERROR_ENTRY_RESP
+  ).map(SBMsgCompare(io.sbLaneIo.rx.bits.data, _)).reduce(_ || _)
+
+  /* The Pattern Reader is started by {LFSR_CLEAR_ERROR req} and only stopped
+     by {TX_INIT_D2C_RESULTS req}. Left running, it would still be counting
+     when the next test asks for it, and that test would report the errors
+     this window collected. Stop it and take its result on the way out. */
+  val readerStarted = ((currentState === 1.U) && sbMsgExchanger.io.msgReceived) ||
+    (currentState === 2.U)
+  val drainReader = RegInit(false.B)
+
+  when(abandoning) {
+    // Last connect wins over the state's own drives: nothing more goes out.
+    sbMsgExchanger.io.req.valid := false.B
+    sbMsgExchanger.io.rxRefBitPattern.valid := false.B
+    sbMsgExchanger.io.clear := true.B
+    io.patternReaderIo.req.valid := false.B
+    nextState := 0.U
+    inProgress := false.B
+    drainReader := readerStarted
+    val exchanged = sbMsgExchanger.io.msgReceived && sbMsgExchanger.io.msgSent
+    staleReq.valid := !sbMsgExchanger.io.msgReceived ||
+      (exchanged && (currentState =/= 3.U))
+    staleReq.bits := Mux(exchanged, currentState + 1.U, currentState)
+  }.elsewhen(io.start || remoteDoneWithTest) {
+    staleReq.valid := false.B
+  }.elsewhen(staleReqArrived) {
+    io.sbLaneIo.rx.ready := true.B
+    staleReq.valid := false.B
+  }
+
+  when(drainReader) {
+    io.patternReaderIo.done := true.B
+    io.patternReaderIo.resp.ready := true.B
+    when(io.patternReaderIo.req.ready) { drainReader := false.B }
+  }
+  io.usingPatternReader := inProgress || drainReader
 }

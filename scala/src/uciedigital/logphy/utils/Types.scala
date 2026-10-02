@@ -128,6 +128,22 @@ object MmplPackageType extends Enumeration {
 }
 
 /*
+  Where a Module's RDI state machine lives. Spec 3.5: a multi-module Link has
+  "a single RDI state machine", which the MMPL hosts; a Link of one Module owns
+  its own.
+ */
+object RdiStateMachineHome extends Enumeration {
+  // In the Module: it is the whole Link.
+  val Local = Value
+  // In the MMPL above it, on behalf of every Module of the Link.
+  val Hosted = Value
+  // Either, picked at run time by MmplModuleCtrlIO.rdiHosted: a Module that
+  // joins a multi-module Link or, with the MMPL bypassed, is a Link of its own
+  // (spec 4.7.2, Figure 4-49).
+  val Selectable = Value
+}
+
+/*
   Elaboration parameters for the Multi-module PHY Logic (spec 4.7). One MMPL
   aggregates `numModules` UCIe Modules into a single logical Link that presents
   one RDI to one Die-to-Die Adapter.
@@ -154,11 +170,20 @@ case class MmplParams(
        a Module. Spec 7.1.4 needs the phases of a packet on consecutive cycles,
        so a packet is only started once it is fully resident; this also rides
        out the window where no Module is eligible to transmit yet. */
-    cfgTxDepth: Int = 4
+    cfgTxDepth: Int = 4,
+    /* The Modules can also run as independent single-module Links, each to
+       its own Adapter, with the MMPL bypassed (spec 4.7.2, Figure 4-49(a)).
+       Each Module then carries an RDI state machine of its own beside the
+       hosted one; MultiModulePhyCtrlIO.bypass picks the mode. */
+    bypassable: Boolean = false
 ) {
   require(
     Set(1, 2, 4).contains(numModules),
     s"MMPL supports one-, two-, and four-module Links (spec 4.7), got $numModules"
+  )
+  require(
+    !bypassable || numModules > 1,
+    "MMPL bypass needs more than one Module: a one-module Link is already independent"
   )
   require(
     rxAlignDepth >= 2,
