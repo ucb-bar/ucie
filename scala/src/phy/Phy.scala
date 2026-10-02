@@ -128,12 +128,15 @@ class SbIO extends Bundle {
   * `PhyTest`, so the PHY itself carries only RTL the link needs.
   */
 class PhyDebugIO(numLanes: Int = 16) extends Bundle {
-  // Full-rate TX clock, tapped at the clocking tile output that feeds the lane
-  // clock distribution network. Also clocks the tester's own TX lanes (the TX
-  // data debug lane and the loopback pair), which sit outside that network.
-  val txClk = Output(Clock())
-  // Forwarded clock as recovered by the RX clock lane, before distribution.
-  val rxClk = Output(Clock())
+  // The tester's own lanes -- the TX data debug lane, the loopback transmitter,
+  // and the loopback receiver, in that order -- clocked off the in-phase TX
+  // clock by the lane clock distribution network, alongside the PHY's lanes.
+  val testTxLaneClk = Output(Vec(ClkDistNetwork.numTestLanes, Clock()))
+  // Full-rate TX and forwarded RX clocks for the tester's clock observation
+  // pads. Buffered taps off the distribution network, not the raw clocks, so
+  // the wire out to the pads does not load the network's roots.
+  val testTxPadClk = Output(Clock())
+  val testRxPadClk = Output(Clock())
   // TX global divided clock, i.e. the clock the TX lanes take their words on.
   val txDivClk = Output(Clock())
   // Sideband forwarded clock as the PHY transmits it. Tapped here rather than
@@ -329,7 +332,10 @@ class PhyIO(numLanes: Int = 16) extends Bundle {
   val top = new PhyBumpsIO(numLanes)
 }
 
-class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
+class Phy(
+    numLanes: Int = 16,
+    clkDistLayout: ClkDistLayout = ClkDistLayout.Behavioral
+)(implicit includeDefaultModels: Boolean = false)
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
@@ -342,8 +348,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
 
   // Clocking tile: sources the digital clock and the I/Q TX clocks.
   val clkTile = Module(new ClockingTile)
-  clkTile.io.DigBypassClk := io.top.digitalBypassClk
-  clkTile.io.BypassClk := bypassClkRx.io.Vout
   clkTile.io.PhaseSel := io.clkRst.clkPhaseSel
   clkTile.io.MainClkSel := io.clkRst.mainClkSel
   clkTile.io.Pll8En := io.clkRst.pll8En
@@ -380,13 +384,19 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   // All lane clocks are single-ended; each tile does its own single-to-
   // differential conversion. The network sends the in-phase clock to the data,
   // valid, and track lanes and the quadrature clock to the two forwarded-clock
-  // lanes.
-  val clkDist = Module(new ClkDistNetwork)
+  // lanes. It also carries both bypass clocks into the clocking tile.
+  val clkDist = Module(new ClkDistNetwork(clkDistLayout))
+  clkDist.io.bypassClk := bypassClkRx.io.Vout
+  clkDist.io.digitalBypassClk := io.top.digitalBypassClk
+  clkTile.io.BypassClk := clkDist.io.tileBypassClk
+  clkTile.io.DigBypassClk := clkDist.io.tileDigitalBypassClk
   clkDist.io.txClk := clkTile.io.TxClk
   clkDist.io.txClkQ := clkTile.io.TxClkQ
-  // The tester's own TX lanes sit outside the distribution network, so they
-  // take the in-phase clock from the same place the network does.
-  io.debug.txClk := clkTile.io.TxClk
+  // The tester's own lanes and its clock observation pads take their clocks
+  // from the network too, so no one loads its roots but the network itself.
+  io.debug.testTxLaneClk := clkDist.io.testTxLaneClk
+  io.debug.testTxPadClk := clkDist.io.testTxPadClk
+  io.debug.testRxPadClk := clkDist.io.testRxPadClk
 
   // TODO do we need to set pu/pd ctl to 0 when driver en is low?
 
@@ -526,7 +536,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       clkTile.io.TxClkQ,
       rxClkP.io.clkout
     )
-    io.debug.rxClk := rxClkP.io.clkout
 
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =

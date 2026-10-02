@@ -462,8 +462,8 @@ class PhyTest(
 
   for (
     (((name, din), bump), ctl) <- Seq(
-      ("txclk_driver", io.debug.txClk.asBool),
-      ("rxclk_driver", io.debug.rxClk.asBool),
+      ("txclk_driver", io.debug.testTxPadClk.asBool),
+      ("rxclk_driver", io.debug.testRxPadClk.asBool),
       ("rxdata_driver", rxDebugData),
       ("clkmux_driver", clkMuxOut.asBool)
     ).zip(
@@ -487,14 +487,15 @@ class PhyTest(
   // the lane.
   def txTestLane(
       name: String,
-      ctl: TxLaneDigitalCtlIO
+      ctl: TxLaneDigitalCtlIO,
+      clk: Clock
   ): (DecoupledIO[UInt], TxLane) = {
     val lane = Module(new TxLane)
     lane.suggestName(name)
     // The tile's divider reset is active high, `txDividerRstb` active low. Main
     // reset only, like every other divider.
     lane.io.rst := (!txDividerRstb.asBool).asAsyncReset
-    lane.io.clk := io.debug.txClk
+    lane.io.clk := clk
     lane.io.ctl := ctl.tile
 
     // The tile no longer brings out its own divided clock, so words are handed
@@ -570,7 +571,8 @@ class PhyTest(
     io.regs.txDebugManualRepeatPeriod
   )
 
-  val (txDebugEnq, txDebugLane) = txTestLane("txdebug", io.regs.txctl)
+  val (txDebugEnq, txDebugLane) =
+    txTestLane("txdebug", io.regs.txctl, io.debug.testTxLaneClk(0))
   io.bumps.txData := txDebugLane.io.dout
   io.regs.txDebugState := txDebugState
   io.regs.txDebugPacketsEnqueued := txDebugPacketsEnqueued
@@ -625,7 +627,7 @@ class PhyTest(
   // below at this pair instead of the mainband, and the loopback lane has its
   // own slot in the pattern SRAMs and the capture SRAMs.
   val (txLoopbackEnq, txLoopbackLane) =
-    txTestLane("txloopback", io.regs.loopbackTxctl)
+    txTestLane("txloopback", io.regs.loopbackTxctl, io.debug.testTxLaneClk(1))
 
   val rxLoopbackLane = Module(new RxDataLane)
   rxLoopbackLane.suggestName("rxloopback")
@@ -633,7 +635,7 @@ class PhyTest(
   rxLoopbackLane.io.din := txLoopbackLane.io.dout
   // Sampled with the clock that shifted the data out, the way a mainband RX
   // lane is sampled with the clock the partner die's TX forwarded.
-  rxLoopbackLane.io.clk := io.debug.txClk
+  rxLoopbackLane.io.clk := io.debug.testTxLaneClk(2)
   rxLoopbackLane.io.rstb := rxDividerRstb
 
   val rxLoopbackShuffler = Module(new Shuffler(Phy.SerdesRatio))
