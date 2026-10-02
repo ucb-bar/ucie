@@ -226,11 +226,12 @@ class MmplBypassTest extends AnyFunSpec with ChiselSim {
     }
 
     var left = rdiFlagCycles
-    while (left > 0 && (accepted.size < ends.size || received.size < ends.size)) {
+    while (
+      left > 0 && (accepted.size < ends.size || received.size < ends.size)
+    ) {
       observe()
-      val takenNow = ends.filter(e =>
-        !accepted(e) && h.io.plTrdy(e._1)(e._2).peekBoolean()
-      )
+      val takenNow =
+        ends.filter(e => !accepted(e) && h.io.plTrdy(e._1)(e._2).peekBoolean())
       h.clock.step(1)
       for ((l, s) <- takenNow) {
         accepted += ((l, s))
@@ -365,7 +366,12 @@ class MmplBypassTest extends AnyFunSpec with ChiselSim {
 
         // Back through MBTRAIN to LINKINIT, and Retrain to Active on NOP to
         // Active (spec 10.3.3.4).
-        stepUntil(h, mbTrainCycles, "link 1 back in LINKINIT", holdsActive(h, 0)) {
+        stepUntil(
+          h,
+          mbTrainCycles,
+          "link 1 back in LINKINIT",
+          holdsActive(h, 0)
+        ) {
           sides.forall(ltIs(h, 1, _, LTState.sLINKINIT))
         }
         activate(h, Seq(1), holdsActive(h, 0))
@@ -422,7 +428,8 @@ class MmplBypassTest extends AnyFunSpec with ChiselSim {
           h.io.lpStateReq(die).poke(RDIStateReq.nop)
           h.io.swStartLinkTraining(die).poke(false.B)
           h.io.pwrGood(die).poke(true.B)
-          for (m <- modules) h.io.changeInRuntimeLinkCtrlRegs(die)(m).poke(false.B)
+          for (m <- modules)
+            h.io.changeInRuntimeLinkCtrlRegs(die)(m).poke(false.B)
           h.io.lpValid.get(die).poke(false.B)
           h.io.lpIrdy.get(die).poke(false.B)
         }
@@ -446,7 +453,9 @@ class MmplBypassTest extends AnyFunSpec with ChiselSim {
           h.io
             .remoteModuleId(die)(m)
             .expect((1 - m).U, s"die $die module $m remote Module ID")
-          h.io.moduleEnable(die)(m).expect(true.B, s"die $die module $m enabled")
+          h.io
+            .moduleEnable(die)(m)
+            .expect(true.B, s"die $die module $m enabled")
         }
         for (die <- 0 until 2) {
           h.io.plInbandPres(die).expect(true.B, s"die $die inband present")
@@ -472,8 +481,7 @@ class MmplBypassTest extends AnyFunSpec with ChiselSim {
         for (from <- 0 until 2) {
           val to = 1 - from
           h.io.plValid(to).expect(true.B, s"die $to missed the word")
-          h.io
-            .plData
+          h.io.plData
             .get(to)
             .expect(words(from).U(aggWordBits.W), s"die $from to $to corrupted")
         }

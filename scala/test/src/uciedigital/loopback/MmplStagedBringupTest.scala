@@ -146,9 +146,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
     climbTo(h, LTState.sACTIVE, sidebandCycles)
   }
 
-  /** What an Adapter does once it sees pl_inband_pres (spec 10.1.6 Step 2):
-    * ask for Active. The RDI leaves Reset only on that request, the NOP having
-    * been presented since cold start (spec 10.3.3.1).
+  /** What an Adapter does once it sees pl_inband_pres (spec 10.1.6 Step 2): ask
+    * for Active. The RDI leaves Reset only on that request, the NOP having been
+    * presented since cold start (spec 10.3.3.1).
     */
   private def requestActive(h: H): Unit =
     for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
@@ -470,7 +470,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
 
           val surviving =
             (0 until 2).map(die => modules(h).filterNot(disabled(die).contains))
-          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+          trainThenActivate(
+            h,
+            mbTrainCycles,
+            "the surviving Modules reached ACTIVE"
+          )(
             surviving(_)
           )
 
@@ -809,7 +813,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           val surviving = (0 until 2).map { die =>
             modules(h).filter(m => h.io.moduleEnable(die)(m).peekBoolean())
           }
-          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+          trainThenActivate(
+            h,
+            mbTrainCycles,
+            "the surviving Modules reached ACTIVE"
+          )(
             surviving(_)
           )
           for (die <- 0 until 2; m <- surviving(die)) {
@@ -883,7 +891,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           val surviving = (0 until 2).map { die =>
             modules(h).filter(m => h.io.moduleEnable(die)(m).peekBoolean())
           }
-          trainThenActivate(h, mbTrainCycles, "the surviving Modules reached ACTIVE")(
+          trainThenActivate(
+            h,
+            mbTrainCycles,
+            "the surviving Modules reached ACTIVE"
+          )(
             surviving(_)
           )
           for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
@@ -1080,7 +1092,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
         }
       }
 
-      it("Stage 15: a Module pair whose sideband is cut is dropped on both dies") {
+      it(
+        "Stage 15: a Module pair whose sideband is cut is dropped on both dies"
+      ) {
         /* Neither Module of the pair ever hears its partner, so both time out
            in SBINIT -- which spec 4.5.3.8 exits to TRAINERROR without a
            handshake -- while their siblings wait on them in LINKSPEED. */
@@ -1128,7 +1142,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
         }
       }
 
-      it("Stage 17: lp_linkerror holds every Module down until LinkError is left") {
+      it(
+        "Stage 17: lp_linkerror holds every Module down until LinkError is left"
+      ) {
         /* Spec 10.3.3.7: "The lower layer enters LinkError state when directed
            by an lp_linkerror signal", and "For RDI, the entry is also
            triggered if the remote Link partner requested LinkError entry
@@ -1283,8 +1299,8 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           h.clock.step(1)
           left -= 1
         }
-        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(
-          _ => modules(h)
+        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(_ =>
+          modules(h)
         )
         stepWhileFailing(h, rdiFlagCycles, "both RDIs Active") {
           (0 until 2).forall(die =>
@@ -1319,7 +1335,11 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
         connectAll(h)
         h.io.cutSideband.get(0)(1).poke(true.B)
         coldStart(h)
-        stepWhileFailing(h, sidebandCycles + mbInitCycles, "Module 0 in MBTRAIN") {
+        stepWhileFailing(
+          h,
+          sidebandCycles + mbInitCycles,
+          "Module 0 in MBTRAIN"
+        ) {
           ltIs(h, 0, 0, LTState.sMBTRAIN)
         }
         h.io.cutSideband.get(0)(0).poke(true.B)
@@ -1396,7 +1416,9 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           !(sawTrainError &&
             h.io.ltState(0)(0).peek().litValue == LTState.sRESET.litValue)
         ) {
-          if (h.io.ltState(0)(0).peek().litValue == LTState.sTRAINERROR.litValue)
+          if (
+            h.io.ltState(0)(0).peek().litValue == LTState.sTRAINERROR.litValue
+          )
             sawTrainError = true
           rdiNeverInLinkError(h)
           h.clock.step(1)
@@ -1416,8 +1438,8 @@ class MmplStagedBringupTest extends AnyFunSpec with ChiselSim {
           h.clock.step(1)
           left -= 1
         }
-        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(
-          _ => Seq(0)
+        trainThenActivate(h, rdiFlagCycles, "the retry reached ACTIVE")(_ =>
+          Seq(0)
         )
         rdiNeverInLinkError(h)
       }

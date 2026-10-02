@@ -391,8 +391,8 @@ class MmplLoopbackHarness(
 object MmplLoopbackHarness {
 
   /** An Adapter that asks for nothing and sends nothing, but acks the clock and
-    * stall handshakes so the Physical Layer never waits on it. Drive any
-    * signal again afterwards to override it.
+    * stall handshakes so the Physical Layer never waits on it. Drive any signal
+    * again afterwards to override it.
     */
   def quietAdapter(rdi: Rdi): Unit = {
     rdi.lclk := false.B
@@ -440,7 +440,10 @@ class SpecLiteralLogicalPhy(
   private val hideRetrainStart =
     (ltsm.io.currentState === LTSMState.sMBTRAIN_LINKSPEED) &&
       sidebandRxQueue.io.deq.valid &&
-      SBMsgCompare(sidebandRxQueue.io.deq.bits, SBM.PHYRETRAIN_RETRAIN_START_REQ)
+      SBMsgCompare(
+        sidebandRxQueue.io.deq.bits,
+        SBM.PHYRETRAIN_RETRAIN_START_REQ
+      )
   // Last connect wins over LogicalPhy's own.
   ltsm.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid && !hideRetrainStart
   io.mmplRdiHost.foreach { host =>
@@ -453,8 +456,8 @@ class SpecLiteralLogicalPhy(
 }
 
 /** MultiModulePhy built from SpecLiteralLogicalPhy, with the MMPL's phyRetrain
-  * directive withheld from every Module (see SpecLiteralLogicalPhy). The
-  * wiring is MultiModulePhy's.
+  * directive withheld from every Module (see SpecLiteralLogicalPhy). The wiring
+  * is MultiModulePhy's.
   */
 class SpecLiteralMultiModulePhy(
     params: MmplParams,
@@ -511,7 +514,11 @@ class SpecLiteralMultiModulePhy(
     mmpl.io.modules(m).status := phy.io.status
     phy.io.mmplCtrl <> mmpl.io.modules(m).ctrl
     // Last connect wins: every other directive still reaches the Module.
-    phy.io.mmplCtrl.resolution.valid := mmpl.io.modules(m).ctrl.resolution.valid &&
+    phy.io.mmplCtrl.resolution.valid := mmpl.io
+      .modules(m)
+      .ctrl
+      .resolution
+      .valid &&
       (mmpl.io.modules(m).ctrl.resolution.bits =/= MmplResolution.phyRetrain)
     mmpl.io.modules(m).rdiHost.foreach(_ <> phy.io.mmplRdiHost.get)
     io.status(m) := phy.io.status

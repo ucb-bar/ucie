@@ -41,12 +41,12 @@ object RDIStateMachineHelpers {
     states.map(state === _).reduce(_ || _)
 
   /** Whether the RDI may go from `cur` to `tgt` on a sideband exchange: Table
-    * 10-4 and the state rules of 10.3.3. Everything may go to LinkError.
-    * Active is entered from Reset, Retrain, LinkReset and Disabled -- LinkError
-    * is left only for Reset, and locally. Retrain and PM are entered only from
+    * 10-4 and the state rules of 10.3.3. Everything may go to LinkError. Active
+    * is entered from Reset, Retrain, LinkReset and Disabled -- LinkError is
+    * left only for Reset, and locally. Retrain and PM are entered only from
     * Active. LinkReset is ignored in LinkReset and Disabled, and Disabled in
-    * Disabled ("Disabled transition takes priority over LinkReset
-    * transition", spec 3.5).
+    * Disabled ("Disabled transition takes priority over LinkReset transition",
+    * spec 3.5).
     */
   def allowedFrom(cur: RDIState.Type, tgt: RDIState.Type): Bool = {
     import RDIState._
@@ -735,7 +735,9 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
              and "LinkError transition takes priority over LinkReset or
              Disabled transitions" (spec 3.5). The request is moot. */
           substateReg := Substate.sIdle
-        }.elsewhen(!rxIsReqActive && !stillApplies(io.currentState, rxLeadsTo)) {
+        }.elsewhen(
+          !rxIsReqActive && !stillApplies(io.currentState, rxLeadsTo)
+        ) {
           /* Nor is one the current state ignores (Table 10-4): a Retrain in
              Reset, LinkReset or Disabled, a LinkReset in Disabled. Answering it
              moved the RDI there anyway. */

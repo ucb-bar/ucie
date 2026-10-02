@@ -682,7 +682,8 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         c.clock.step()
 
         deliver(1, 0, error = true)
-        c.io.rdi.plError.expect(true.B, "the error goes up with word 1's first beat")
+        c.io.rdi.plError
+          .expect(true.B, "the error goes up with word 1's first beat")
         c.io.rdi.plValid.expect(false.B, "without the half word it corrupted")
         c.clock.step()
 
@@ -1030,9 +1031,9 @@ class MmplTest extends AnyFunSpec with ChiselSim {
     val rspLinkError = (0x02, 0x0a)
 
     /** The {LinkMgmt.RDI.*} messages, as (MsgCode, MsgSubcode), the hosted
-      * state machine puts on any Module's sideband over the next `cycles`,
-      * with lp_stallack following pl_stallreq if `ackStall`, as an Adapter's
-      * would once it has stopped at a Flit boundary.
+      * state machine puts on any Module's sideband over the next `cycles`, with
+      * lp_stallack following pl_stallreq if `ackStall`, as an Adapter's would
+      * once it has stopped at a Flit boundary.
       */
     def transmitted(
         c: Mmpl,
@@ -1217,7 +1218,11 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         offerRemote(c, 0, rdiRspRetrain)
         awaitRdiState(c, RDIState.retrain)
         for (m <- 0 until n) {
-          c.io.modules(m).rdiHost.get.plStateSts
+          c.io
+            .modules(m)
+            .rdiHost
+            .get
+            .plStateSts
             .expect(RDIState.retrain, s"Module $m")
         }
       }
@@ -2192,7 +2197,9 @@ class MmplTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("Does not count a Module the directive is disabling as the one still training") {
+    it(
+      "Does not count a Module the directive is disabling as the one still training"
+    ) {
       val n = 2
       simulate(dut(n)) { c =>
         initLink(c, n, Seq(0, 1))
@@ -2205,12 +2212,19 @@ class MmplTest extends AnyFunSpec with ChiselSim {
         }
         c.clock.step()
         c.io.status.resolutionApplied.expect(true.B)
-        c.io.modules(1).ctrl.resolution.bits
+        c.io
+          .modules(1)
+          .ctrl
+          .resolution
+          .bits
           .expect(MmplResolution.disableModule)
         // Module 0 times out in its exchange while Module 1 leaves.
         c.io.modules(0).status.trainingTimedout.poke(true.B)
         c.clock.step(2)
-        c.io.modules(0).ctrl.moduleDisabled
+        c.io
+          .modules(0)
+          .ctrl
+          .moduleDisabled
           .expect(false.B, "the Link's last Module, not one to degrade around")
       }
     }

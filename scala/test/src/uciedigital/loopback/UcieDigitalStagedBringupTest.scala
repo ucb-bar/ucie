@@ -427,7 +427,8 @@ class UcieDigitalStagedBringupTest extends AnyFunSpec with ChiselSim {
         checkDelivery(from = 0, sent = before(0), received = gotBefore(1))
         checkDelivery(from = 1, sent = before(1), received = gotBefore(0))
 
-        h.io.protoCtrl(0)
+        h.io
+          .protoCtrl(0)
           .poke(ProtoCtrl.word(reqActive = true, reqRetrain = true).U)
         stepUntil(h, handshakeCycles, "both RDIs in Retrain")(
           bothDies(die =>

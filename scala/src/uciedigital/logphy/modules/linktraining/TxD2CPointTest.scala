@@ -233,7 +233,10 @@ class TxD2CPointTestRequester(afeParams: AfeParams, sbParams: SidebandParams)
   val staleRespArrived = io.sbLaneIo.rx.valid && staleResp.valid &&
     staleRespPatterns
       .map { case (state, msg) =>
-        (staleResp.bits === state) && SBMsgCompare(io.sbLaneIo.rx.bits.data, msg)
+        (staleResp.bits === state) && SBMsgCompare(
+          io.sbLaneIo.rx.bits.data,
+          msg
+        )
       }
       .reduce(_ || _)
   val remoteDoneWithTest = io.sbLaneIo.rx.valid && Seq(
@@ -485,8 +488,9 @@ class TxD2CPointTestResponder(afeParams: AfeParams, sbParams: SidebandParams)
      by {TX_INIT_D2C_RESULTS req}. Left running, it would still be counting
      when the next test asks for it, and that test would report the errors
      this window collected. Stop it and take its result on the way out. */
-  val readerStarted = ((currentState === 1.U) && sbMsgExchanger.io.msgReceived) ||
-    (currentState === 2.U)
+  val readerStarted =
+    ((currentState === 1.U) && sbMsgExchanger.io.msgReceived) ||
+      (currentState === 2.U)
   val drainReader = RegInit(false.B)
 
   when(abandoning) {

@@ -62,7 +62,8 @@ class Mmpl(
     sbParams: SidebandParams = new SidebandParams(),
     // Spec 10.3.3.7's 16 ms minimum LinkError residency, for the hosted RDI
     // state machine; it follows the Modules' residency timeout override.
-    linkErrorResidencyCycles: Int = LinkTrainingSM.linkErrorResidencyCycles(None)
+    linkErrorResidencyCycles: Int =
+      LinkTrainingSM.linkErrorResidencyCycles(None)
 ) extends Module {
   private val n = params.numModules
   private val bytesPerModule = params.bytesPerModule

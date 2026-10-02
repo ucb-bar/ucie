@@ -14,10 +14,10 @@ import org.scalatest.funspec.AnyFunSpec
   * in LINKSPEED, so its Step 2 point test is still open when the exit arrives
   * -- on its own sideband as {MBTRAIN.LINKSPEED exit to phy retrain req}, or,
   * for a sibling, as the MMPL's PHY retrain directive. Step 3/5 has that Module
-  * exit to PHYRETRAIN and abandon what is outstanding. The pattern generator
-  * of a stalled Module cannot finish, so the only way the Link gets out of
-  * LINKSPEED is for that point test to be abandoned; a Module that waits for
-  * it instead sits out its residency timeout and the Link goes to TRAINERROR.
+  * exit to PHYRETRAIN and abandon what is outstanding. The pattern generator of
+  * a stalled Module cannot finish, so the only way the Link gets out of
+  * LINKSPEED is for that point test to be abandoned; a Module that waits for it
+  * instead sits out its residency timeout and the Link goes to TRAINERROR.
   */
 class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
 
@@ -69,7 +69,9 @@ class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
     everyModule(h)((die, m) => in(h, die, m, state))
 
   private def rdiIn(h: H, state: RDIState.Type): Boolean =
-    (0 until 2).forall(die => h.io.plStateSts(die).peek().litValue == state.litValue)
+    (0 until 2).forall(die =>
+      h.io.plStateSts(die).peek().litValue == state.litValue
+    )
 
   private def reached(h: H, target: LTState.Type): Boolean = {
     val goal = forwardPath.indexOf(target)
@@ -127,8 +129,8 @@ class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
   private def climbTo(h: H, target: LTState.Type, limit: Int): Unit =
     stepUntil(h, limit, s"$target")(reached(h, target))
 
-  /** Up to ACTIVE, then an Adapter-directed retrain from die 0, so every
-    * Module comes back into MBTRAIN with PHY_IN_RETRAIN set (spec 4.5.3.7).
+  /** Up to ACTIVE, then an Adapter-directed retrain from die 0, so every Module
+    * comes back into MBTRAIN with PHY_IN_RETRAIN set (spec 4.5.3.7).
     */
   private def retrainThroughRdi(h: H): Unit = {
     coldStart(h)
@@ -140,11 +142,17 @@ class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
     // leaves Reset only on that request (spec 10.3.3.1).
     for (die <- 0 until 2) h.io.lpStateReq(die).poke(RDIStateReq.active)
     climbTo(h, LTState.sACTIVE, sidebandCycles)
-    stepUntil(h, rdiFlagCycles, "aggregate RDI Active")(rdiIn(h, RDIState.active))
+    stepUntil(h, rdiFlagCycles, "aggregate RDI Active")(
+      rdiIn(h, RDIState.active)
+    )
 
     h.io.lpStateReq(1).poke(RDIStateReq.nop)
     h.io.lpStateReq(0).poke(RDIStateReq.retrain)
-    stepUntil(h, sidebandCycles, "every Module in PHYRETRAIN for the RDI retrain") {
+    stepUntil(
+      h,
+      sidebandCycles,
+      "every Module in PHYRETRAIN for the RDI retrain"
+    ) {
       rdiIn(h, RDIState.retrain) && allIn(h, LTState.sPHYRETRAIN)
     }
     h.io.lpStateReq(0).poke(RDIStateReq.nop)
@@ -259,11 +267,11 @@ class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
     * test took (the harness counts from reset, and nothing else in these tests
     * sends either message). Spec 4.5.3.4.12: the Module that saw the register
     * change sends the req and only receives the resp (Step 4a); its partner
-    * answers it; and every other Module of the Link -- a sibling the MMPL
-    * moved -- "must exit to PHYRETRAIN and send an {exit to PHY retrain resp}"
-    * (Step 5) on its own sideband, once, since that is what a partner which
-    * was not told any other way waits for. `dies` limits the check to the die
-    * whose MMPL did the directing.
+    * answers it; and every other Module of the Link -- a sibling the MMPL moved
+    * -- "must exit to PHYRETRAIN and send an {exit to PHY retrain resp}" (Step
+    * 5) on its own sideband, once, since that is what a partner which was not
+    * told any other way waits for. `dies` limits the check to the die whose
+    * MMPL did the directing.
     */
   private def checkExitMessages(
       h: H,
@@ -397,7 +405,9 @@ class LinkSpeedPhyRetrainTest extends AnyFunSpec with ChiselSim {
        their MMPL's directive and the partner's {PHYRETRAIN.retrain start req}.
        Unless die 1's siblings send that resp, they sit in LINKSPEED until the
        residency timeout and the Link goes to TRAINERROR. */
-    it("two-module Link: its sibling leaves on the resp die 1's sibling sends") {
+    it(
+      "two-module Link: its sibling leaves on the resp die 1's sibling sends"
+    ) {
       simulate(
         harness(2, probe = true, specLiteralSenderDie = Some(0)),
         firtoolOpts = firtoolOpts

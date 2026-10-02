@@ -3047,8 +3047,9 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
              then reports nothing (see the requester), so waiting for it would
              never end. Once the partner's point test is over its report is on
              its way and is waited for (s2/s11 then follow the directive). */
-          val leave = io.localInitiatingExitToPhyRetrain || partnerInPhyRetrain ||
-            partnerLeft || (directedToPhyRetrain && !partnerStep2Done)
+          val leave =
+            io.localInitiatingExitToPhyRetrain || partnerInPhyRetrain ||
+              partnerLeft || (directedToPhyRetrain && !partnerStep2Done)
 
           // Dropping start abandons this side of the partner's point test.
           io.txPtTestRespIntfIo.start := !ptTestDoneInLinkSpeed && !leave
@@ -3065,19 +3066,21 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
             io.sbLaneIo.rx.ready := true.B
             remoteRequestingPhyRetrainFlag := true.B
             nextSubstate := MBTrainSubstate.s6
-          }.elsewhen(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
-            SBMsgCompare(
-              io.sbLaneIo.rx.bits.data,
-              SBM.MBTRAIN_LINKSPEED_ERROR_REQ
-            )
+          }.elsewhen(
+            ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_ERROR_REQ
+              )
           ) {
             io.sbLaneIo.rx.ready := true.B
             nextSubstate := MBTrainSubstate.s2
-          }.elsewhen(ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
-            SBMsgCompare(
-              io.sbLaneIo.rx.bits.data,
-              SBM.MBTRAIN_LINKSPEED_DONE_REQ
-            )
+          }.elsewhen(
+            ptTestDoneInLinkSpeed && io.sbLaneIo.rx.valid &&
+              SBMsgCompare(
+                io.sbLaneIo.rx.bits.data,
+                SBM.MBTRAIN_LINKSPEED_DONE_REQ
+              )
           ) {
             io.sbLaneIo.rx.ready := true.B
             remoteRequestingDoneFlag := true.B
@@ -3251,7 +3254,8 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
              exit req is ahead of the response on the wire; it is abandoned
              (spec 4.5.3.4.12 Step 3/5), so claim and drop it rather than leave
              it for nobody. A crossing exit req is still answered (Step 4a). */
-          val siblingExit = io.multiModule && !io.localInitiatingExitToPhyRetrain
+          val siblingExit =
+            io.multiModule && !io.localInitiatingExitToPhyRetrain
           when(!siblingExit) {
             when(phyRetrainReqArriving) {
               io.sbLaneIo.rx.ready := true.B
