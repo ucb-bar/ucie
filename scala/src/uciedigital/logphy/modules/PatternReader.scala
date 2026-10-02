@@ -1,12 +1,20 @@
 /*
   Description:
     PatternReader takes care of pattern comparison done during training of the mainband.
-    The RX mainband lanes (data, valid, clkN, clkP, track) will enter and depending on the
+    The RX mainband lanes (data, valid, track) will enter and depending on the
     control signals from the LTSM, it will do the appropriate pattern comparison
 
   NOTE:
  * Pattern lookup tables are used for patterns whose alignment phase can change with the
     mainband serializer ratio.
+ * MBINIT.REPAIRCLK is NOT scored here. This module compares a received word
+    against a reference, phase tracked, bit for bit -- which works because by
+    the time it runs, the word arrived on a clock the receiver has recovered
+    and is sampling at a trained phase. REPAIRCLK has neither: it is the stage
+    that establishes whether there is a usable forwarded clock at all. Its
+    lanes are oversampled by a locally divided copy of the main clock and
+    scored on the shape of the waveform instead. See `ClkRepairDetector` and
+    `phy/ClkRepair.scala`; `LogicalPhy` routes a `CLKREPAIR` request there.
  */
 
 package edu.berkeley.cs.uciedigital.logphy
@@ -207,16 +215,6 @@ class PatternReader(afeParams: AfeParams) extends Module {
 
   // Clock Repair: clkP, clkN and trk all carry the same repeating pattern;
   // single phase counter reconstructs the reference for all three.
-  val clkPatternWidth = 48
-  val clkRepairPattern = BigInt("000055555555", 16)
-  val clkRepairPatternWords =
-    repeatedPatternWords(clkRepairPattern, clkPatternWidth)
-  val clkRepairPhaseWidth = log2Ceil(math.max(2, clkRepairPatternWords.length))
-  val clkPhaseReg = RegInit(0.U(clkRepairPhaseWidth.W))
-  val clkRepairPhaseLimit =
-    (clkRepairPatternWords.length - 1).U(clkRepairPhaseWidth.W)
-  val clkRepairRefPattern =
-    selectPatternWord(clkRepairPatternWords, clkPhaseReg, clkRepairPhaseWidth)
 
   // Valtrain: pattern carried on the valid lane during VALTRAIN/PERLANEID/LFSR.
   val valTrainWidth = 8
@@ -254,7 +252,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
   val sIdle :: sDetect :: sResult :: Nil = Enum(3)
   val state = RegInit(sIdle)
 
-  val patternTypeReg = RegInit(PatternSelect.CLKREPAIR)
+  val patternTypeReg = RegInit(PatternSelect.VALTRAIN)
   val comparisonModeReg = RegInit(ComparisonMode.PERLANE)
   val doConsecutiveCountReg = RegInit(false.B)
   // Holds the error threshold, or (in consecutive mode) the required number of
@@ -291,7 +289,6 @@ class PatternReader(afeParams: AfeParams) extends Module {
         doConsecutiveCountReg := io.interfaceIo.req.bits.doConsecutiveCount
         patternCounterReg.foreach(x => x := 0.U)
         iterDirtyReg.foreach(x => x := false.B)
-        clkPhaseReg := 0.U
         validPhaseReg := 0.U
         perLaneIdPhaseReg := 0.U
 
@@ -311,16 +308,10 @@ class PatternReader(afeParams: AfeParams) extends Module {
     }
   }
 
-  // Need to free run pattern phase counter so the phase can wrap back around
-  when(counterEn && (patternTypeReg === PatternSelect.CLKREPAIR)) {
-    clkPhaseReg := Mux(
-      clkPhaseReg === clkRepairPhaseLimit,
-      0.U,
-      clkPhaseReg + 1.U
-    )
-  }
-  // The valid lane carries the valtrain pattern for every non-clock-repair pattern.
-  when(counterEn && (patternTypeReg =/= PatternSelect.CLKREPAIR)) {
+  // Need to free run pattern phase counter so the phase can wrap back around.
+  // The valid lane carries the valtrain pattern for every pattern this module
+  // scores.
+  when(counterEn) {
     validPhaseReg := Mux(
       validPhaseReg === validPhaseLimit,
       0.U,
@@ -353,14 +344,6 @@ class PatternReader(afeParams: AfeParams) extends Module {
 
   when(counterEn) {
     switch(patternTypeReg) {
-      is(PatternSelect.CLKREPAIR) {
-        remotePattern(0) := io.mbRxLaneIo.clkP
-        localPattern(0) := clkRepairRefPattern
-        remotePattern(1) := io.mbRxLaneIo.clkN
-        localPattern(1) := clkRepairRefPattern
-        remotePattern(2) := io.mbRxLaneIo.trk
-        localPattern(2) := clkRepairRefPattern
-      }
       is(PatternSelect.VALTRAIN) {
         remotePattern(0) := io.mbRxLaneIo.valid
         localPattern(0) := valTrainRefPattern
@@ -391,7 +374,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
   // Valid lane needs to carry valtrain for every non-clock-repair pattern.
   // Used to detect if there is valid data on the data lanes.
   val validBad =
-    (patternTypeReg =/= PatternSelect.CLKREPAIR) && (io.mbRxLaneIo.valid =/= valTrainRefPattern)
+    io.mbRxLaneIo.valid =/= valTrainRefPattern
 
   // Aggregate mode ORs the perlane mismatches; held at 0 in perlane mode so the
   // aggregate PopCount doesn't toggle when unused.
@@ -422,9 +405,6 @@ class PatternReader(afeParams: AfeParams) extends Module {
       laneActive(i) := (if (i == 0) true.B else false.B)
     }.otherwise {
       switch(patternTypeReg) {
-        is(PatternSelect.CLKREPAIR) {
-          laneActive(i) := (if (i < 3) true.B else false.B)
-        }
         is(PatternSelect.VALTRAIN) {
           laneActive(i) := (if (i == 0) true.B else false.B)
         }
@@ -452,7 +432,6 @@ class PatternReader(afeParams: AfeParams) extends Module {
   val popCountPipe = RegNext(effectivePopCountResult)
   val xorPipe = RegNext(xorResult)
   val validBadPipe = RegNext(validBad)
-  val clkPhasePipe = RegNext(clkPhaseReg)
   val validPhasePipe = RegNext(validPhaseReg)
   val perLaneIdPhasePipe = RegNext(perLaneIdPhaseReg)
   // High once the pipeline holds a real detect word; ignore the idle fill word.
@@ -493,17 +472,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
           // then pick the active one with patternTypeReg.
           val (nextCount, nextDirty) =
             if (i == 0) {
-              // Lane 0: clkP (CLKREPAIR), the valid lane (VALTRAIN), or PERLANEID.
-              val (clkCount, clkDirty) = consecutiveIterNext(
-                clkPatternWidth,
-                clkRepairPatternWords.length,
-                clkPhasePipe,
-                xorWord,
-                false.B,
-                iterDirtyReg(i),
-                patternCounterReg(i),
-                errorThresholdReg
-              )
+              // Lane 0: the valid lane (VALTRAIN) or PERLANEID.
               val (valCount, valDirty) = consecutiveIterNext(
                 valTrainWidth,
                 valTrainPatternWords.length,
@@ -517,47 +486,19 @@ class PatternReader(afeParams: AfeParams) extends Module {
               (
                 MuxLookup(patternTypeReg, patternCounterReg(i))(
                   Seq(
-                    PatternSelect.CLKREPAIR -> clkCount,
                     PatternSelect.VALTRAIN -> valCount,
                     PatternSelect.PERLANEID -> perLaneCount
                   )
                 ),
                 MuxLookup(patternTypeReg, iterDirtyReg(i))(
                   Seq(
-                    PatternSelect.CLKREPAIR -> clkDirty,
                     PatternSelect.VALTRAIN -> valDirty,
                     PatternSelect.PERLANEID -> perLaneDirty
                   )
                 )
               )
-            } else if (i == 1 || i == 2) {
-              // Lanes 1-2: clkN/trk (CLKREPAIR) or PERLANEID.
-              val (clkCount, clkDirty) = consecutiveIterNext(
-                clkPatternWidth,
-                clkRepairPatternWords.length,
-                clkPhasePipe,
-                xorWord,
-                false.B,
-                iterDirtyReg(i),
-                patternCounterReg(i),
-                errorThresholdReg
-              )
-              (
-                MuxLookup(patternTypeReg, patternCounterReg(i))(
-                  Seq(
-                    PatternSelect.CLKREPAIR -> clkCount,
-                    PatternSelect.PERLANEID -> perLaneCount
-                  )
-                ),
-                MuxLookup(patternTypeReg, iterDirtyReg(i))(
-                  Seq(
-                    PatternSelect.CLKREPAIR -> clkDirty,
-                    PatternSelect.PERLANEID -> perLaneDirty
-                  )
-                )
-              )
             } else {
-              // Lanes >2: PERLANEID only.
+              // Every other lane: PERLANEID only.
               (perLaneCount, perLaneDirty)
             }
 

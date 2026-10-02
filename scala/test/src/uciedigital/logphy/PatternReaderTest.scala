@@ -107,8 +107,8 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
 
   def patternWidth(p: PatternSelect.Type): Int =
     p match {
-      case PatternSelect.CLKREPAIR => 48; case PatternSelect.VALTRAIN => 8;
-      case _                       => 16
+      case PatternSelect.VALTRAIN => 8;
+      case _                      => 16
     }
 
   // remoteFuncLanes maps exercised for a given lane count: (label, code).
@@ -143,7 +143,6 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
       }
     }
 
-    val clkRepairWords = repeatedPatternWords(BigInt("000055555555", 16), 48)
     val valTrainWords = repeatedPatternWords(BigInt("00001111", 2), 8)
     val perLaneIdWords = Seq.tabulate(lanes) { lane =>
       val pat = (BigInt("1010", 2) << 12) | (BigInt(lane & 0xff) << 4) | BigInt(
@@ -166,11 +165,11 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
         )
       )
 
-    // Lanes producing a meaningful result: clk lanes for CLKREPAIR, the valid lane
-    // for VALTRAIN, the functional data lanes otherwise.
+    // Lanes producing a meaningful result: the valid lane for VALTRAIN, the
+    // functional data lanes otherwise. MBINIT.REPAIRCLK is not scored here --
+    // see `ClkRepairSpec`, and the note at the top of `PatternReader.scala`.
     def activeLanes(p: PatternSelect.Type, code: Int): Set[Int] = p match {
-      case PatternSelect.CLKREPAIR => Set(0, 1, 2).filter(_ < lanes)
-      case PatternSelect.VALTRAIN  => Set(0)
+      case PatternSelect.VALTRAIN => Set(0)
       case _ => (0 until lanes).filter(isActive(code, _)).toSet
     }
 
@@ -180,7 +179,7 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
     // Drive one cycle of the remote stream for a pattern. corruptData flips one bit,
     // blankData zeroes the data (gross error vs a non-zero reference); both apply only
     // to faultLanes (None = every active lane). corruptValid breaks the valid framing.
-    // For CLKREPAIR, lanes 0/1/2 are clkP/clkN/trk; for VALTRAIN, lane 0 is the valid lane.
+    // For VALTRAIN, lane 0 is the valid lane.
     def driveRxWord(
         dut: PatternReaderWithLfsrHarness,
         patternType: PatternSelect.Type,
@@ -203,12 +202,6 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
         else flip(reference, corruptData && faulted(lane))
 
       patternType match {
-        case PatternSelect.CLKREPAIR =>
-          val w = clkRepairWords(cycle % clkRepairWords.length)
-          dut.io.mbRxLaneIo.clkP.poke(laneWord(w, 0).U)
-          dut.io.mbRxLaneIo.clkN.poke(laneWord(w, 1).U)
-          dut.io.mbRxLaneIo.trk.poke(laneWord(w, 2).U)
-
         case PatternSelect.VALTRAIN =>
           val w = valTrainWords(cycle % valTrainWords.length)
           dut.io.mbRxLaneIo.valid
@@ -391,12 +384,11 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
       val ref = new RefModel(ratio, lanes)
       val tag = s"lanes=$lanes, serRatio=$ratio"
 
-      it(s"consecutive: detects clean CLKREPAIR, VALTRAIN, PERLANEID ($tag)") {
+      it(s"consecutive: detects clean VALTRAIN, PERLANEID ($tag)") {
         simulate(new PatternReaderWithLfsrHarness(ref.params)) { dut =>
           idleReq(dut); ref.zeroLanes(dut); dut.clock.step()
 
           Seq(
-            PatternSelect.CLKREPAIR,
             PatternSelect.VALTRAIN,
             PatternSelect.PERLANEID
           ).foreach { p =>
@@ -428,9 +420,8 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
 
           // For each pattern: two clean runs of 8 iterations split by one bad iteration.
           // Neither side reaches 16 consecutive, so no lane ever passes. corruptData
-          // hits clkP/clkN/trk for CLKREPAIR, the valid lane for VALTRAIN, the data for PERLANEID.
+          // hits the valid lane for VALTRAIN and the data for PERLANEID.
           Seq(
-            PatternSelect.CLKREPAIR,
             PatternSelect.VALTRAIN,
             PatternSelect.PERLANEID
           ).foreach { p =>
@@ -763,20 +754,20 @@ class PatternReaderTest extends AnyFunSpec with ChiselSim {
           // A non-LFSR pattern never advances the LFSR.
           startRequest(
             dut,
-            PatternSelect.CLKREPAIR,
+            PatternSelect.VALTRAIN,
             ComparisonMode.PERLANE,
             0,
             doConsecutiveCount = true,
             allLanes
           )
-          ref.driveRxWord(dut, PatternSelect.CLKREPAIR, 0, Seq.empty, allLanes)
+          ref.driveRxWord(dut, PatternSelect.VALTRAIN, 0, Seq.empty, allLanes)
           dut.io.rxLfsrCtrl.increment
-            .expect(false.B, "no increment for CLKREPAIR")
+            .expect(false.B, "no increment for VALTRAIN")
           dut.clock.step()
           ref.finishAndExpect(
             dut,
             _ => false,
-            "CLKREPAIR ctrl"
+            "VALTRAIN ctrl"
           ) // too short to reach 16
         }
       }

@@ -41,6 +41,12 @@ class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams)
     * rest reaches this port and no further.
     */
   val ctrl = Output(new PhyControlToPhyIO(afeParams))
+
+  /** The MBINIT.REPAIRCLK measurement coming back, scored against the
+    * thresholds the register block holds. `ctrl.repairClkEn` is what asks for
+    * it.
+    */
+  val repairStatus = Input(new ClkRepairStatusIO)
 }
 
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
@@ -160,5 +166,6 @@ class UcieDigitalTop(
     logicalPhy.io.analog.status.pllLock := true.B
     logicalPhy.io.analog.status.clocksUngatedAndStable := true.B
     io.phyFacingIo.ctrl := logicalPhy.io.analog.ctrl
+    logicalPhy.io.analog.repairStatus := io.phyFacingIo.repairStatus
   }
 }

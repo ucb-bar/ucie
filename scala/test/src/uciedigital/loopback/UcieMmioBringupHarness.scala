@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import chisel3.util.experimental.BoringUtils
 import edu.berkeley.cs.chippy.{TLTester, TLTesterIO, TLTesterParams}
@@ -177,6 +178,11 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
       peer.io.phyFacingIo.mainbandLink.tx.valid
     me.io.phyFacingIo.mainbandLink.tx.ready :=
       peer.io.phyFacingIo.mainbandLink.rx.ready
+    // No PHY here, so the measurement is stubbed. See `ClkRepairStub`.
+    ClkRepairStub(
+      me.io.phyFacingIo.repairStatus,
+      me.io.phyFacingIo.ctrl.repairClkEn
+    )
 
     me.io.ctrl.linkReset := false.B
     me.io.ctrl.pwrGood := true.B

@@ -108,6 +108,40 @@ class PhyControlToPhyIO(afeParams: AfeParams) extends Bundle {
   val clockPhaseSelect = UInt(afeParams.clockPhaseSelBitWidth.W)
   val doElectricalIdleTx = Bool()
   val doElectricalIdleRx = Bool()
+
+  /** Opens an MBINIT.REPAIRCLK measurement window in the PHY.
+    *
+    * The whole control surface for that stage: the PHY ungates its repair
+    * sampling clock, clears its counters and starts a window while this is
+    * high, and freezes the result when it drops. Nothing else about the
+    * clocking has to be sequenced from here.
+    */
+  val repairClkEn = Bool()
+}
+
+object ClkRepairStatus {
+
+  /** Lanes MBINIT.REPAIRCLK measures, in the order its result message packs
+    * them: 0 clkP, 1 clkN, 2 track.
+    */
+  val Lanes = 3
+}
+
+/** The MBINIT.REPAIRCLK measurement as the controller sees it.
+  *
+  * Four bits, because everything else about that measurement belongs elsewhere.
+  * The PHY counts what arrived on each lane; the register block holds the
+  * thresholds those counts are judged against, so software owns the policy and
+  * the same thresholds serve a PhyTest run and a trained link. What reaches the
+  * state machine is the verdict.
+  */
+class ClkRepairStatusIO extends Bundle {
+
+  /** The window has accumulated its full count. */
+  val done = Bool()
+
+  /** Per lane, in [[ClkRepairStatus]] order. Only meaningful with `done`. */
+  val laneOk = Vec(ClkRepairStatus.Lanes, Bool())
 }
 
 class SubFsmControlIO extends Bundle {

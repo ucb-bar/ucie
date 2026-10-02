@@ -60,6 +60,11 @@ class LogicalPhyAnalogIO(afeParams: AfeParams, sbParams: SidebandParams)
   val sidebandLink = new SidebandPhyLinkIO(sbParams.sbLinkWidth)
   val status = Input(new PhyStatusFromPhyIO())
   val ctrl = Output(new PhyControlToPhyIO(afeParams))
+
+  /** The MBINIT.REPAIRCLK measurement, scored against the thresholds in the
+    * register block. See [[ClkRepairDetector]].
+    */
+  val repairStatus = Input(new ClkRepairStatusIO)
 }
 
 // ============================================================================================
@@ -88,6 +93,7 @@ class LogicalPhy(
   )
   val patternReader = Module(new PatternReader(afeParams))
   val patternWriter = Module(new PatternWriter(afeParams))
+  val clkRepairDetector = Module(new ClkRepairDetector(afeParams))
   val phyControlTranslator = Module(new PhyControlSignalTranslator(afeParams))
   val phyLaneTrainer = Module(new PhyLaneTrainer(afeParams))
   val scrambler = Module(new UcieLFSR(afeParams))
@@ -320,6 +326,7 @@ class LogicalPhy(
   phyControlTranslator.io.fromDigital.clockPhaseSelect := io.ctrl.clockPhaseSelect
   phyControlTranslator.io.fromDigital.doElectricalIdleTx := ltsm.io.phyCtrlIo.doElectricalIdleTx
   phyControlTranslator.io.fromDigital.doElectricalIdleRx := ltsm.io.phyCtrlIo.doElectricalIdleRx
+  phyControlTranslator.io.fromDigital.repairClkEn := clkRepairDetector.io.repairClkEn
   phyControlTranslator.io.fromPhy := io.analog.status
   io.analog.ctrl := phyControlTranslator.io.toPhy
 
@@ -372,7 +379,53 @@ class LogicalPhy(
   // Pattern engine and runtime mainband path
   // ============================================================================================
   patternWriter.io.interfaceIo <> ltsm.io.patternWriterIo
-  patternReader.io.interfaceIo <> ltsm.io.patternReaderIo
+
+  // Two readers behind one interface. MBINIT.REPAIRCLK is measured by
+  // `ClkRepairDetector` off the PHY's oversampled clock and track lanes;
+  // everything else is `PatternReader`'s phase tracked bit comparison. The
+  // state machine drives one port and does not know which answered.
+  //
+  // The request routes on the pattern type directly; the reply routes on
+  // whichever was last started, since by then the request has gone.
+  clkRepairDetector.io.status := io.analog.repairStatus
+  val readerReq = ltsm.io.patternReaderIo.req
+  val reqIsRepair = readerReq.bits.patternType === PatternSelect.CLKREPAIR
+  val repairActive = RegInit(false.B)
+  when(readerReq.fire) { repairActive := reqIsRepair }
+
+  patternReader.io.interfaceIo.req.valid := readerReq.valid && !reqIsRepair
+  patternReader.io.interfaceIo.req.bits := readerReq.bits
+  clkRepairDetector.io.interfaceIo.req.valid := readerReq.valid && reqIsRepair
+  clkRepairDetector.io.interfaceIo.req.bits := readerReq.bits
+  readerReq.ready := Mux(
+    reqIsRepair,
+    clkRepairDetector.io.interfaceIo.req.ready,
+    patternReader.io.interfaceIo.req.ready
+  )
+
+  patternReader.io.interfaceIo.done :=
+    ltsm.io.patternReaderIo.done && !repairActive
+  clkRepairDetector.io.interfaceIo.done :=
+    ltsm.io.patternReaderIo.done && repairActive
+  patternReader.io.interfaceIo.remoteFuncLanes :=
+    ltsm.io.patternReaderIo.remoteFuncLanes
+  clkRepairDetector.io.interfaceIo.remoteFuncLanes :=
+    ltsm.io.patternReaderIo.remoteFuncLanes
+
+  ltsm.io.patternReaderIo.resp.valid := Mux(
+    repairActive,
+    clkRepairDetector.io.interfaceIo.resp.valid,
+    patternReader.io.interfaceIo.resp.valid
+  )
+  ltsm.io.patternReaderIo.resp.bits := Mux(
+    repairActive,
+    clkRepairDetector.io.interfaceIo.resp.bits,
+    patternReader.io.interfaceIo.resp.bits
+  )
+  patternReader.io.interfaceIo.resp.ready :=
+    ltsm.io.patternReaderIo.resp.ready && !repairActive
+  clkRepairDetector.io.interfaceIo.resp.ready :=
+    ltsm.io.patternReaderIo.resp.ready && repairActive
 
   val rawRxLaneBits = Wire(
     new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)

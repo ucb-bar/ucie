@@ -17,6 +17,15 @@ object RxDataLane {
   /** Reference ladder select pins on the macro. */
   val VrefBits = 7
 
+  /** Thermometer code for `count` of [[DelayTaps]] taps, as the macro's pins
+    * want it: the register holds how many to turn on, the pins want one bit
+    * each. The TX side does the same expansion in Scala
+    * ([[edu.berkeley.cs.uciedigital.phy.macros.TxLane.thermometer]]) because
+    * its codes are literals; these come from a register, so it happens here.
+    */
+  def thermometer(count: UInt): UInt =
+    ((1.U << count(log2Ceil(DelayTaps + 1) - 1, 0)) - 1.U)(DelayTaps - 1, 0)
+
   /** Drives the pins both RX tiles have: termination, the sampling front end,
     * and the reference ladder. Only the delay line is the data tile's alone.
     *
@@ -51,6 +60,50 @@ object RxDataLane {
   }
 }
 
+/** The MBINIT.REPAIRCLK sampling tap a measured lane carries.
+  *
+  * A second 1:32 deserializer behind the same analog front end, clocked by the
+  * gated repair clock rather than by the RX lane clock. Two things make it
+  * necessary rather than convenient. A forwarded-clock lane cannot be sampled
+  * by the clock it is recovering -- that is circular, and if this is the lane
+  * that is broken there is no recovered clock at all. And REPAIRCLK runs before
+  * any sampling phase has been trained, so one sample per UI lands wherever it
+  * lands; the repair clock is a faster division of the same main clock, so the
+  * tap oversamples and the measurement stops depending on phase.
+  *
+  * Only the three lanes REPAIRCLK measures -- the two clock lanes and track --
+  * carry one.
+  */
+class RxRepairTapIO extends Bundle {
+  val clk = Input(Clock())
+  val rstb = Input(AsyncReset())
+
+  /** This tap's own delay trim, thermometer coded. Separate from the lane's
+    * `Dctrl` because the tap and the trained datapath sample the same bump on
+    * different clocks, so they have nothing to share.
+    */
+  val Dctrl = Input(Vec(RxDataLane.DelayTaps, Bool()))
+  val dout = Output(Vec(Phy.SerdesRatio, Bool()))
+  val divclk = Output(Bool())
+}
+
+object RxRepairTapIO {
+
+  /** Drives a tap's pins from a control bundle, and ties off a lane that has no
+    * tap so the caller does not have to care which it has.
+    */
+  def connect(
+      tap: RxRepairTapIO,
+      clk: Clock,
+      rstb: AsyncReset,
+      dl: UInt
+  ): Unit = {
+    tap.clk := clk
+    tap.rstb := rstb
+    tap.Dctrl := VecInit(dl.asBools)
+  }
+}
+
 class RxAfeIO extends Bundle {
   val aEn = Bool()
   val aPc = Bool()
@@ -79,8 +132,9 @@ class RxLaneCtlIO extends Bundle {
   * `Vec`s because the macro splits them into one pin per bit, and a `Vec` emits
   * exactly that naming.
   */
-class RxDataLane(implicit includeDefaultModels: Boolean = false)
-    extends BlackBox
+class RxDataLane(val withRepairTap: Boolean = false)(implicit
+    includeDefaultModels: Boolean = false
+) extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
     val din = Input(Bool())
@@ -99,12 +153,22 @@ class RxDataLane(implicit includeDefaultModels: Boolean = false)
     val b_pc = Input(Bool())
     val sel_a = Input(Bool())
     val vref_sel = Input(Vec(RxDataLane.VrefBits, Bool()))
+
+    /** Present only on the track lane, which is the one data lane
+      * MBINIT.REPAIRCLK measures. A tap on all sixteen would be paid for in
+      * area and in front-end loading to serve one training stage, so the lane
+      * that needs it is a cell of its own.
+      */
+    val repair =
+      if (withRepairTap) Some(new RxRepairTapIO) else None
   })
 
-  override val desiredName = "rx_data_lane"
+  override val desiredName =
+    if (withRepairTap) "rx_track_lane" else "rx_data_lane"
 
   if (includeDefaultModels) {
     addResource("/vsrc/rx_data_lane.v")
+    addResource("/vsrc/ucie_des32.v")
   }
 
   /** Drives this lane's control pins from its control bundle. */
@@ -142,12 +206,18 @@ class RxClkLane(implicit includeDefaultModels: Boolean = false)
     val b_pc = Input(Bool())
     val sel_a = Input(Bool())
     val vref_sel = Input(Vec(RxDataLane.VrefBits, Bool()))
+
+    /** Always present: the tap is the only way a forwarded-clock bump can be
+      * measured at all.
+      */
+    val repair = new RxRepairTapIO
   })
 
   override val desiredName = "rx_clock_lane"
 
   if (includeDefaultModels) {
     addResource("/vsrc/rx_clock_lane.v")
+    addResource("/vsrc/ucie_des32.v")
   }
 
   /** Drives this lane's control pins. A clock tile has no delay line of its
