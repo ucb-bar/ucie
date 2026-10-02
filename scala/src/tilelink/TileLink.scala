@@ -17,6 +17,7 @@ import freechips.rocketchip.regmapper.{RegField, RegWriteFn, RegFieldDesc}
 import freechips.rocketchip.tilelink._
 import edu.berkeley.cs.uciedigital.phy._
 import edu.berkeley.cs.uciedigital.phytest._
+import edu.berkeley.cs.uciedigital.logphy.{ClkRepairStatus, ClkRepairStatusIO}
 import edu.berkeley.cs.uciedigital.top.{
   UcieDigitalTop,
   UcieDigitalTopParams,
@@ -184,6 +185,12 @@ class UcieTLRegsIO(
     new PhyTestRegsIO(bufferDepthPerLane, numLanes, bitCounterWidth)
   )
   val phy = Flipped(new PhyRegsIO(numLanes))
+  val repair = Flipped(new PhyRepairIO)
+  val repairStatus = Output(new ClkRepairStatusIO)
+  // MBINIT.REPAIRCLK asking for a measurement window, from the controller.
+  // Already on this block's clock, so no crossing.
+  val repairClkEnReq = Input(Bool())
+  val repairClkEn = Output(Bool())
   val controllerSel = Output(ControllerSel())
   val mainbandMode = Output(BandMode())
   val sidebandMode = Output(BandMode())
@@ -199,6 +206,20 @@ object UcieTLRegs {
     * PhyTest share.
     */
   val rstStrobeCycles = 8
+
+  /** Words a REPAIRCLK window accumulates out of reset.
+    *
+    * Divides by a whole number of clock repair pattern periods at every
+    * oversample ratio from 2 to 8, so the same default can be left alone across
+    * a ratio sweep without the partial period at the end eating the thresholds'
+    * margin.
+    */
+  val defaultRepairWindow: Int = ClkRepairExpect.alignedWindow(768)
+
+  /** Gap threshold out of reset, for an oversample ratio of four: the ratio
+    * MBINIT runs at with an 8 GHz main clock and the lanes at 4 GT/s.
+    */
+  val defaultRepairGapThresh: Int = ClkRepair.GapThreshUi * 4
 }
 
 /** Clock source controls, on a clock of their own.
@@ -253,6 +274,13 @@ class UcieClkRegs(
       val pll16En = Output(Bool())
       val txClkDiv = Output(UInt(ClockingTile.txClkDivWidth.W))
       val txClkPhase = Output(UInt(ClockingTile.txClkPhaseWidth.W))
+      val repairClkDiv = Output(UInt(ClockingTile.repairClkDivWidth.W))
+      // High while a clock configuration is being applied. The REPAIRCLK
+      // branch divides the same main clock an apply moves out from under every
+      // divider, so its gate is held shut across one -- but the gate itself
+      // lives in the block that also reports the measurement, so the two can
+      // be written and read in one clock domain.
+      val cfgBusy = Output(Bool())
       val digClkDiv = Output(UInt(ClockingTile.digClkDivWidth.W))
       val digClkBypassEn = Output(Bool())
       val sbClkDiv = Output(UInt(ClockingTile.sbClkDivWidth.W))
@@ -355,6 +383,14 @@ class UcieClkRegs(
         )
       }
 
+    // The REPAIRCLK sampling clock's division, a shadow like the other
+    // dividers and moved to the tile by an apply. The gate that goes with it
+    // is not here: it belongs beside the counters it starts and stops, which
+    // are in the block on `ucieClk`.
+    val repairClkDiv = withClockAndReset(clock, reset) {
+      RegInit(0.U(ClockingTile.repairClkDivWidth.W))
+    }
+
     // The copy the tile runs on. Everything above is what software wrote;
     // nothing reaches the tile until an apply moves it here, and it only moves
     // while the clocks are gated.
@@ -368,6 +404,7 @@ class UcieClkRegs(
         (new ClkRateCfgIO).Lit(
           _.mainClkSel -> 3.U,
           _.txClkDiv -> 0.U,
+          _.repairClkDiv -> 0.U,
           _.digClkDiv -> 2.U,
           _.pll8En -> false.B,
           _.pll12En -> false.B,
@@ -384,6 +421,8 @@ class UcieClkRegs(
     val pending = Wire(new ClkRateCfgIO)
     pending.mainClkSel := Mux(freqSelAutoEn, selected.mainClkSel, mainClkSel)
     pending.txClkDiv := Mux(freqSelAutoEn, selected.txClkDiv, txClkDiv)
+    pending.repairClkDiv :=
+      Mux(freqSelAutoEn, selected.repairClkDiv, repairClkDiv)
     pending.digClkDiv := Mux(freqSelAutoEn, selected.digClkDiv, digClkDiv)
     pending.pll8En := Mux(freqSelAutoEn, selected.pll8En, pll8En)
     pending.pll12En := Mux(freqSelAutoEn, selected.pll12En, pll12En)
@@ -509,6 +548,8 @@ class UcieClkRegs(
     io.pll16En := live.pll16En
     io.txClkDiv := live.txClkDiv
     io.txClkPhase := txClkPhase
+    io.repairClkDiv := live.repairClkDiv
+    io.cfgBusy := applyBusy || cfgGate
     io.digClkDiv := live.digClkDiv
     io.digClkBypassEn := liveDigBypass
     io.sbClkDiv := liveSbDiv
@@ -536,6 +577,7 @@ class UcieClkRegs(
         toRegFieldRw(sbClkDiv, "sbClkDiv"),
         toRegFieldRw(sbClkBypassEn, "sbClkBypassEn"),
         toRegFieldRw(rxClkFromTxQ, "rxClkFromTxQ"),
+        toRegFieldRw(repairClkDiv, "repairClkDiv"),
         toRegFieldRw(applyReq, "clkCfgApply"),
         toRegFieldR(applyBusy, "clkCfgBusy"),
         toRegFieldRw(ungateSrc, "clkCfgUngateSrc"),
@@ -608,6 +650,15 @@ object ClkUngateSrc extends ChiselEnum {
 class ClkRateCfgIO extends Bundle {
   val mainClkSel = UInt(ClockingTile.mainClkSelWidth.W)
   val txClkDiv = UInt(ClockingTile.txClkDivWidth.W)
+
+  /** The MBINIT.REPAIRCLK sampling clock's division of the same main clock.
+    *
+    * It rides in the rate table beside `txClkDiv` because the oversample ratio
+    * REPAIRCLK measures at is the ratio of the two -- `2^(txClkDiv -
+    * repairClkDiv)` -- so a rate entry that set one without the other would let
+    * software and the hardware disagree about what a count means.
+    */
+  val repairClkDiv = UInt(ClockingTile.repairClkDivWidth.W)
   val digClkDiv = UInt(ClockingTile.digClkDivWidth.W)
   val pll8En = Bool()
   val pll12En = Bool()
@@ -735,8 +786,20 @@ class UcieTLRegs(
         RegInit(0.U(io.test.txManualRepeatPeriod.getWidth.W))
       val txPacketsToSend =
         RegInit(0.U(io.test.txPacketsToSend.getWidth.W))
-      val txClkP = RegInit(0.U(32.W))
-      val txClkN = RegInit(0.U(32.W))
+      // Three words each, repeating with `txClkPatternPeriod`. See
+      // `PhyTest.ClkPatternWords`: a 48 bit pattern on a 32 bit lane word
+      // repeats every three, and everything else a clock lane sends fits in
+      // one, which is what the period comes up as.
+      val txClkP = RegInit(
+        VecInit(Seq.fill(PhyTest.ClkPatternWords)(0.U(32.W)))
+      )
+      val txClkN = RegInit(
+        VecInit(Seq.fill(PhyTest.ClkPatternWords)(0.U(32.W)))
+      )
+      val txClkPatternPeriod = RegInit(
+        1.U(log2Ceil(PhyTest.ClkPatternWords + 1).W)
+      )
+      val txClkPatternOnTrack = RegInit(false.B)
       val txValid = RegInit(0.U(32.W))
       val txDataLaneGroup =
         RegInit(0.U(io.test.txDataLaneGroup.getWidth.W))
@@ -815,6 +878,71 @@ class UcieTLRegs(
         w.delay := 0.U
         w
       })))
+      // MBINIT.REPAIRCLK measurement controls. `windowWords` and `gapThresh`
+      // are both functions of the oversample ratio, which is set by
+      // `txClkDiv` and `repairClkDiv` in the clock block -- software owns
+      // keeping the three consistent, and `ClkRepairExpect` is where the
+      // arithmetic that ties them together lives.
+      //
+      // The defaults cover a whole number of pattern periods at every ratio
+      // from 2 to 8, and a gap threshold for a ratio of 4.
+      val repairWindowWords = RegInit(
+        UcieTLRegs.defaultRepairWindow.U(ClkRepair.WordCountWidth.W)
+      )
+      val repairGapThresh = RegInit(
+        UcieTLRegs.defaultRepairGapThresh.U(ClkRepair.CounterWidth.W)
+      )
+      // Opens a measurement window, and the whole control surface for one.
+      //
+      // It lives here rather than with the other clocking controls on purpose.
+      // A reader opens a window and then polls `repairDone`, and the two have
+      // to be ordered: from a different block on a different clock the poll
+      // can beat the gate across and read the PREVIOUS window's answer, and
+      // then shut the gate again before anything has been counted. Same clock,
+      // same write ordering, no race.
+      val repairClkEn = RegInit(false.B)
+      val repairCapLane = RegInit(0.U(log2Ceil(ClkRepair.Lanes).W))
+      val repairCapOffset = RegInit(
+        0.U(log2Ceil(ClkRepair.CaptureDepth).W)
+      )
+      // Thresholds the counters are judged against.
+      //
+      // One band per counter rather than one per lane: during REPAIRCLK all
+      // three lanes carry the same word (`PatternWriter` sends `clkRepairWord`
+      // on clkP, clkN and track alike), so they have one expectation between
+      // them.
+      //
+      // Registers rather than constants because the right band depends on the
+      // oversample ratio, on how much the front end's auto-zero handover costs
+      // in spurious transitions, and on how far the two dies' clocks have
+      // drifted -- none of which is an RTL decision.
+      val repairBands = RegInit({
+        val w = Wire(new ClkRepairBandsIO)
+        val d = ClkRepairExpect.defaultBands
+        w.transMin := d.transMin.U
+        w.transMax := d.transMax.U
+        w.onesMin := d.onesMin.U
+        w.onesMax := d.onesMax.U
+        w.gapsMin := d.gapsMin.U
+        w.gapsMax := d.gapsMax.U
+        w.maxRunMin := d.maxRunMin.U
+        w.maxRunMax := d.maxRunMax.U
+        w
+      })
+
+      val repairctl = RegInit(VecInit(Seq.fill(ClkRepair.Lanes)({
+        val w = Wire(new RxRepairDigitalCtlIO)
+        w.delay := 0.U
+        // Same default as every other lane's: cancel the tile's serdes tree so
+        // the tap's word reads in the order it came off the wire. Load bearing
+        // for the measurement, not just for legibility -- see
+        // `RxRepairDigitalCtlIO`.
+        for (i <- 0 until 32) {
+          w.shuffler(i) := Phy.treeBitOrder(i).U(5.W)
+        }
+        w
+      })))
+
       // DEBUG CIRCUITRY
       // Everything below drives the tester's debug hardware rather than the
       // link: the observation bumps and the TX data debug lane.
@@ -942,6 +1070,8 @@ class UcieTLRegs(
       io.test.txPacketsToSend := applyShift(txPacketsToSend)
       io.test.txClkP := applyShift(txClkP)
       io.test.txClkN := applyShift(txClkN)
+      io.test.txClkPatternPeriod := applyShift(txClkPatternPeriod)
+      io.test.txClkPatternOnTrack := applyShift(txClkPatternOnTrack)
       io.test.txValid := applyShift(txValid)
       io.test.rxDataMode := applyShift(rxDataMode)
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
@@ -963,6 +1093,52 @@ class UcieTLRegs(
       io.test.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
+      io.phy.repairctl := applyShift(repairctl)
+      io.repair.windowWords := applyShift(repairWindowWords)
+      io.repair.gapThresh := applyShift(repairGapThresh)
+      io.repair.capLane := applyShift(repairCapLane)
+      io.repair.capOffset := applyShift(repairCapOffset)
+      // Either source opens a window: the controller during MBINIT, or this
+      // register with no controller present at all.
+      val repairWindowOpen = repairClkEn || io.repairClkEnReq
+      io.repairClkEn := repairWindowOpen
+
+      // `done` has to stop being the last window's answer the instant a new
+      // one is asked for. Clearing the counters takes a few cycles to reach
+      // the repair clock domain and a few more to come back, so the flag is
+      // raised here -- in the same cycle as the write, which is what makes it
+      // race free -- and held until the clear has been seen coming back.
+      // "Has not started" is not "has finished".
+      val repairArmPending = RegInit(false.B)
+      val repairWindowOpenPrev = RegNext(repairWindowOpen, false.B)
+      when(repairWindowOpen && !repairWindowOpenPrev) {
+        repairArmPending := true.B
+      }.elsewhen(!io.repair.done) {
+        repairArmPending := false.B
+      }
+      val repairDone = io.repair.done && !repairArmPending
+
+      // The verdict, for the controller and for a readable register. A lane
+      // passes when every counter lands inside its band; `done` says the
+      // window is complete, without which none of them mean anything.
+      val repairLaneOk = VecInit((0 until ClkRepair.Lanes).map { i =>
+        val o = io.repair.obs(i)
+        o.transitions >= repairBands.transMin &&
+        o.transitions <= repairBands.transMax &&
+        o.ones >= repairBands.onesMin &&
+        o.ones <= repairBands.onesMax &&
+        o.gaps >= repairBands.gapsMin &&
+        o.gaps <= repairBands.gapsMax &&
+        o.maxRun >= repairBands.maxRunMin &&
+        o.maxRun <= repairBands.maxRunMax
+      })
+      require(
+        ClkRepairStatus.Lanes == ClkRepair.Lanes,
+        s"the controller expects ${ClkRepairStatus.Lanes} REPAIRCLK lanes " +
+          s"but the PHY measures ${ClkRepair.Lanes}"
+      )
+      io.repairStatus.done := repairDone
+      io.repairStatus.laneOk := repairLaneOk
       // The last lane control slot belongs to the tester's loopback pair, which
       // lives in PhyTest rather than in the PHY.
       io.test.loopbackTxctl := applyShift(txctl(params.numLanes + 4))
@@ -1007,8 +1183,14 @@ class UcieTLRegs(
         ),
         toRegFieldRw(txManualRepeatPeriod, "txManualRepeatPeriod"),
         toRegFieldRw(txPacketsToSend, "txPacketsToSend"),
-        toRegFieldRw(txClkP, "txClkP"),
-        toRegFieldRw(txClkN, "txClkN"),
+        toRegFieldRw(txClkPatternPeriod, "txClkPatternPeriod"),
+        toRegFieldRw(txClkPatternOnTrack, "txClkPatternOnTrack")
+      ) ++ (0 until PhyTest.ClkPatternWords).flatMap((i: Int) =>
+        Seq(
+          toRegFieldRw(txClkP(i), s"txClkP_$i"),
+          toRegFieldRw(txClkN(i), s"txClkN_$i")
+        )
+      ) ++ Seq(
         toRegFieldRw(txDataLaneGroup, "txDataLaneGroup"),
         toRegFieldRw(txDataOffset, "txDataOffset"),
         toRegFieldRw(txDataChunkIn0, "txDataChunkIn0"),
@@ -1093,6 +1275,41 @@ class UcieTLRegs(
         ) ++ Seq(
           toRegFieldRw(rxctl(i).sample_negedge, s"rxctl_${i}_sampleNegedge"),
           toRegFieldRw(rxctl(i).delay, s"rxctl_${i}_rxDelay")
+        )
+      }) ++ Seq(
+        toRegFieldRw(repairWindowWords, "repairWindowWords"),
+        toRegFieldRw(repairGapThresh, "repairGapThresh"),
+        toRegFieldRw(repairCapLane, "repairCapLane"),
+        toRegFieldRw(repairCapOffset, "repairCapOffset"),
+        toRegFieldRw(repairClkEn, "repairClkEn"),
+        toRegFieldR(applyShift(repairWindowOpen), "repairClkEnObserved"),
+        toRegFieldR(applyShift(repairDone), "repairDone"),
+        toRegFieldR(applyShift(io.repair.wordsObserved), "repairWordsObserved"),
+        toRegFieldR(applyShift(io.repair.capWord), "repairCapWord"),
+        toRegFieldR(applyShift(repairLaneOk.asUInt), "repairLaneOk"),
+        toRegFieldRw(repairBands.transMin, "repairTransMin"),
+        toRegFieldRw(repairBands.transMax, "repairTransMax"),
+        toRegFieldRw(repairBands.onesMin, "repairOnesMin"),
+        toRegFieldRw(repairBands.onesMax, "repairOnesMax"),
+        toRegFieldRw(repairBands.gapsMin, "repairGapsMin"),
+        toRegFieldRw(repairBands.gapsMax, "repairGapsMax"),
+        toRegFieldRw(repairBands.maxRunMin, "repairMaxRunMin"),
+        toRegFieldRw(repairBands.maxRunMax, "repairMaxRunMax")
+      ) ++ (0 until ClkRepair.Lanes).flatMap((i: Int) => {
+        Seq(
+          toRegFieldR(
+            applyShift(io.repair.obs(i).transitions),
+            s"repairTransitions_$i"
+          ),
+          toRegFieldR(applyShift(io.repair.obs(i).ones), s"repairOnes_$i"),
+          toRegFieldR(applyShift(io.repair.obs(i).gaps), s"repairGaps_$i"),
+          toRegFieldR(applyShift(io.repair.obs(i).maxRun), s"repairMaxRun_$i")
+        )
+      }) ++ (0 until ClkRepair.Lanes).flatMap((i: Int) => {
+        Seq(
+          toRegFieldRw(repairctl(i).delay, s"repairctl_${i}_delay")
+        ) ++ (0 until 32).map((j: Int) =>
+          toRegFieldRw(repairctl(i).shuffler(j), s"repairctl_${i}_shuffler_$j")
         )
       }) ++ Seq(
         toRegFieldRw(debugTxTestMode, "debugTxTestMode"),
@@ -1351,6 +1568,13 @@ class UcieTL(
     phy.io.clkRst.pll16En := clkRegs.module.io.pll16En
     phy.io.clkRst.txClkDiv := clkRegs.module.io.txClkDiv
     phy.io.clkRst.txClkPhase := clkRegs.module.io.txClkPhase
+    phy.io.clkRst.repairClkDiv := clkRegs.module.io.repairClkDiv
+    // Held shut across a clock configuration apply: that moves the main clock
+    // select out from under every divider, and this branch counts the same
+    // main clock.
+    phy.io.clkRst.repairClkEn :=
+      regs.module.io.repairClkEn && !clkRegs.module.io.cfgBusy
+    phy.io.repair <> regs.module.io.repair
     phy.io.clkRst.digClkDiv := clkRegs.module.io.digClkDiv
     phy.io.clkRst.digClkBypassEn := clkRegs.module.io.digClkBypassEn
     phy.io.clkRst.sbClkDiv := clkRegs.module.io.sbClkDiv
@@ -1401,6 +1625,13 @@ class UcieTL(
     // means what is software's to decide, so a change in how the part is
     // clocked during bringup does not need an RTL change.
     clkRegs.module.io.freqSel := ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
+    // MBINIT.REPAIRCLK asking for a measurement window. Only while the UCIe
+    // controller owns the link: with PhyTest in charge the window is opened
+    // by `repairClkEn` over MMIO instead, and a controller left mid-MBINIT
+    // should not be holding the gate open underneath it.
+    ucieDigital.io.phyFacingIo.repairStatus := regs.module.io.repairStatus
+    regs.module.io.repairClkEnReq :=
+      selUcie && ucieDigital.io.phyFacingIo.ctrl.repairClkEn
     // In `mainClkSel` order, so the block can index it with that selector.
     clkRegs.module.io.pllLock := Cat(
       phy.io.clkRst.pll16Lock,

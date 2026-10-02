@@ -51,6 +51,16 @@ module clocking_tile(
   input [1:0] TxClkDiv,
   // TXCLKQ's lead over TXCLK, in main clock half cycles, 0 to 2*div-1.
   input [3:0] TxClkPhase,
+  // MBINIT.REPAIRCLK sampling clock division of the main clock, same codes as
+  // `TxClkDiv`. Its own divider rather than a tap off the TX one because the
+  // ratio between them IS the oversample ratio: with the lanes at /4 and this
+  // at /1 the repair taps take four samples per transmitted UI, and holding
+  // that ratio across an 8 and a 16 GHz main clock needs two knobs.
+  input [1:0] RepairClkDiv,
+  // Active high enable for `RepairClk`. Unlike `ClkGateEn` this branch has
+  // exactly one consumer, so it is dark outside a REPAIRCLK window -- which is
+  // also what makes the repair counters safe to read: they stop.
+  input RepairClkEn,
   // 0 /1, 1 /2, 2 /4, 3 /8, 4 /15. The ratios that land a little over 1 GHz
   // from an 8 or 16 GHz main clock.
   input [2:0] DigClkDiv,
@@ -75,7 +85,8 @@ module clocking_tile(
   output DigitalClk,
   output SbClk,
   output TxClkQ,
-  output TxClk
+  output TxClk,
+  output RepairClk
 );
   // Nominal half periods in ps, used until the reference has been measured.
   localparam real HALF_8G  = 62.5;
@@ -178,6 +189,34 @@ module clocking_tile(
   reg q_delayed = 1'b0;
   always @(tx_q_raw) q_delayed <= #(phase_delay) tx_q_raw;
 
+  // ---- REPAIRCLK sample clock divider ----
+  // Structurally the TX divider without the phase shifter: REPAIRCLK's
+  // measurement is phase independent by construction, so there is nothing a
+  // quadrature output would buy here.
+  //
+  // The counter free-runs and only the output is gated, exactly as the TX
+  // branch does. Holding the counter with the gate would park it at zero,
+  // where the divided output is HIGH -- and the gate latch only samples on a
+  // low phase, so it would never update and the gate would never take effect.
+  // What the counter would have bought, a deterministic phase per window, the
+  // repair dividers in the PHY provide instead: they are held with no clock
+  // present and restart together on the first edge after the gate opens.
+  //
+  // Only the counter runs while the branch is dark. The distribution and the
+  // three sampling taps behind it, which is where the power is, see nothing.
+  wire [5:0] repair_span = (RepairClkDiv == 2'd0) ? 6'd2 :
+                           (RepairClkDiv == 2'd1) ? 6'd4 :
+                           (RepairClkDiv == 2'd2) ? 6'd8 : 6'd16;
+  wire [4:0] repair_div = repair_span[5:1];
+
+  reg [5:0] repair_cnt = 6'd0;
+  always @(main_clk) begin
+    if ((^repair_cnt === 1'bx) ||
+        (repair_cnt + 6'd1 >= repair_span)) repair_cnt <= 6'd0;
+    else repair_cnt <= repair_cnt + 6'd1;
+  end
+  wire repair_raw = repair_cnt < {1'b0, repair_div};
+
   // ---- Digital clock divider ----
   wire [5:0] dig_div = (DigClkDiv == 3'd0) ? 6'd1 :
                        (DigClkDiv == 3'd1) ? 6'd2 :
@@ -229,6 +268,15 @@ module clocking_tile(
     if (!q_delayed) txClkQEn = ClkGateEn;
   end
 
+  // Initialised rather than left to the first low phase: this gate comes up
+  // shut and stays shut until a training stage asks for a window, so an X here
+  // would reach the sampling taps before anything had a chance to clear it.
+  reg repairClkEnLatched = 1'b0;
+  always @(*) begin
+    if (!repair_raw) repairClkEnLatched = RepairClkEn;
+  end
+
   assign TxClk = tx_i_raw & txClkEn;
   assign TxClkQ = q_delayed & txClkQEn;
+  assign RepairClk = repair_raw & repairClkEnLatched;
 endmodule

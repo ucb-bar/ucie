@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.loopback
 
 import chisel3._
+import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
 import edu.berkeley.cs.uciedigital.interfaces._
 import edu.berkeley.cs.uciedigital.logphy._
@@ -96,6 +97,9 @@ class LogPhyLoopbackHarness(
 
     dut.analog.status.pllLock := true.B
     dut.analog.status.clocksUngatedAndStable := true.B
+
+    // No PHY here, so the measurement is stubbed. See `ClkRepairStub`.
+    ClkRepairStub(dut.analog.repairStatus, dut.analog.ctrl.repairClkEn)
 
     dut.ctrl.pwrGood := io.pwrGood(i)
     dut.ctrl.swStartLinkTraining := io.swStartLinkTraining(i)

@@ -1154,6 +1154,308 @@ end
   * from one that received nothing. This asks the direct question at each
   * division in a few minutes: did every packet arrive, and was it clean.
   */
+/** MBINIT.REPAIRCLK against the analog models.
+  *
+  * The stage establishes whether there is a usable forwarded clock at all, so
+  * it cannot use one: the two clock lanes and track are oversampled by a
+  * locally divided copy of the main clock and scored on the shape of what
+  * arrives. This drives that measurement end to end over MMIO -- the pattern
+  * out of the TX tiles, across the bumps, through the repair taps on the
+  * receiving tiles, into the counters -- at three oversample ratios, across a
+  * sweep of transmitted phase, and against two negative controls.
+  *
+  * The controls are the point. A measurement that cannot fail looks exactly
+  * like a measurement that passes, which is the state REPAIRCLK was in before
+  * any of this existed: its RX words were tied to constants, so every lane
+  * reported good forever.
+  */
+class RepairClkTestDriver extends SVTestDriver {
+  setStimulus(
+    "RepairClkTestDriver",
+    """
+begin : repairclk
+  integer fails;
+  integer bad;
+
+  fails = 0;
+  setup_ucie();
+  set_clk_repair_pattern(1);
+  set_main_clk(3, 2);
+  set_repair_div(0);
+
+  // Two windows back to back in the simplest possible setting, with the gate
+  // and the counters traced. Nothing between them changes, so anything that
+  // differs is the window machinery and not the configuration.
+  $display("REPAIRCLK: back to back windows");
+  repair_trace("first ", 4, bad); fails = fails + bad;
+  repair_trace("second", 4, bad); fails = fails + bad;
+  repair_settle(4);
+
+  // MBINIT runs at the lowest data rate, so the lanes divide down and the
+  // sampling clock does not. The ratio between the two divisions IS the
+  // oversample ratio, which is why both are set rather than one.
+  $display("REPAIRCLK: oversample ratio sweep");
+  set_main_clk(3, 2);          // lanes /4
+  set_repair_div(0);           // sample /1 -> four samples a UI
+  check_repair("lanes /4, sample /1 (x4)", 4, 1, bad); fails = fails + bad;
+  set_repair_div(1);           // sample /2 -> two samples a UI
+  check_repair("lanes /4, sample /2 (x2)", 2, 1, bad); fails = fails + bad;
+  set_main_clk(3, 3);          // lanes /8
+  set_repair_div(0);           // sample /1 -> eight samples a UI
+  check_repair("lanes /8, sample /1 (x8)", 8, 1, bad); fails = fails + bad;
+  set_main_clk(3, 2);
+  set_repair_div(0);
+
+  // Phase independence, which is the whole claim oversampling makes. The
+  // coarse shifter moves TXCLKQ, and the two clock lanes are the lanes it
+  // clocks, so this walks where their edges land relative to the sampling
+  // clock. One main clock half cycle is 62.5 ps and a UI at /4 is 250, so
+  // eight positions cover more than a whole UI.
+  //
+  // Track rides TXCLK and does not move, which makes it a free control: if a
+  // row fails everywhere, something common moved rather than the phase.
+  $display("REPAIRCLK: transmitted phase sweep at x4");
+  for (int h = 0; h < 8; h++) begin
+    set_tx_phase(h);
+    check_repair($sformatf("tx phase %0d", h), 4, 1, bad);
+    fails = fails + bad;
+  end
+  set_tx_phase(0);
+
+  // Negative controls.
+  $display("REPAIRCLK: negative controls");
+
+  // A clock lane carrying nothing. Only clkN is silenced, so the run also
+  // shows the other two still passing -- a control that failed every lane
+  // would not distinguish a dead lane from a broken measurement.
+  silence_clkn();
+  repair_settle(4);
+  check_repair_lanes("clkN silenced", 4, 1, 0, 1, bad); fails = fails + bad;
+  set_clk_repair_pattern(1);
+  repair_settle(4);
+
+  // Every lane carrying a plain clock of the right rate with no gap in it.
+  // This is what the run length counters exist for: it is live, it toggles,
+  // and it is not the repair pattern.
+  send_plain_clock();
+  repair_settle(4);
+  check_repair("gapless clock", 4, 0, bad); fails = fails + bad;
+  set_clk_repair_pattern(1);
+  repair_settle(4);
+
+  // Back to a good configuration, so a failure above cannot be a part left
+  // misconfigured by the last control.
+  check_repair("restored", 4, 1, bad); fails = fails + bad;
+
+  if (fails == 0) $display("TEST PASSED");
+  else $display("TEST FAILED: %0d checks", fails);
+end
+    """.trim,
+    moduleItems = """
+// Words a window accumulates here.
+//
+// Far shorter than the register default: a window is real analog time, and
+// four pattern periods at the coarsest ratio is as much as the counters need
+// to separate every case this bench asks about. It stays a multiple of the
+// alignment step so no ratio is left scoring a partial period.
+localparam integer REPAIR_WORDS = 4 * `REPAIR_WINDOW_STEP;
+
+integer repair_trans[`REPAIR_LANES];
+integer repair_ones[`REPAIR_LANES];
+integer repair_gaps[`REPAIR_LANES];
+integer repair_max_run[`REPAIR_LANES];
+integer repair_words_seen;
+integer repair_done_seen;
+integer repair_tx_period;
+reg [31:0] repair_cap[`REPAIR_LANES][2];
+
+// Runs one window and reads every lane's counters back.
+//
+// The read happens after `run_repairclk` has shut the gate. That is what makes
+// these values static: they live on a clock that only runs inside the window,
+// so stopping it is the handshake. A window that never finished is frozen
+// mid flight and still readable, which is the case worth being able to see.
+task automatic repair_run(input integer n);
+  reg [63:0] v;
+  begin
+    run_repairclk(REPAIR_WORDS, `REPAIR_GAP_THRESH_UI * n);
+    `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, v);
+    repair_words_seen = v;
+    `READ_UCIE(regDrv, `REPAIR_DONE, v);
+    repair_done_seen = v;
+    `READ_UCIE(regDrv, `TX_CLK_PATTERN_PERIOD, v);
+    repair_tx_period = v;
+    // The first words of the window, straight off the lane. The counters say
+    // whether a lane passed; this says what it actually received, which is the
+    // only thing that explains a count nobody predicted.
+    for (int l = 0; l < `REPAIR_LANES; l++) begin
+      `WRITE_UCIE(regDrv, `REPAIR_CAP_LANE, l);
+      for (int o = 0; o < 2; o++) begin
+        `WRITE_UCIE(regDrv, `REPAIR_CAP_OFFSET, o);
+        `READ_UCIE(regDrv, `REPAIR_CAP_WORD, v);
+        repair_cap[l][o] = v;
+      end
+    end
+    for (int l = 0; l < `REPAIR_LANES; l++) begin
+      `READ_UCIE(regDrv, `REPAIR_TRANSITIONS + l * `REPAIR_TRANSITIONS_WIDTH, v);
+      repair_trans[l] = v;
+      `READ_UCIE(regDrv, `REPAIR_ONES + l * `REPAIR_ONES_WIDTH, v);
+      repair_ones[l] = v;
+      `READ_UCIE(regDrv, `REPAIR_GAPS + l * `REPAIR_GAPS_WIDTH, v);
+      repair_gaps[l] = v;
+      `READ_UCIE(regDrv, `REPAIR_MAX_RUN + l * `REPAIR_MAX_RUN_WIDTH, v);
+      repair_max_run[l] = v;
+    end
+  end
+endtask
+
+// Scores one lane against what the pattern should produce at ratio `n`.
+//
+// The expectations are computed from the emitted constants rather than
+// written down, so the pattern, the window and the lane count cannot drift
+// away from what the RTL was built with. `gaps` is allowed either side by one
+// because a window that ends part way through a gap leaves it open and
+// uncounted.
+function automatic bit repair_lane_ok(input integer l, input integer n);
+  integer periods, want_trans, want_ones, want_run;
+  begin
+    periods = (REPAIR_WORDS * `REPAIR_SERDES_RATIO) / (`REPAIR_PATTERN_UI * n);
+    want_trans = periods * `REPAIR_TRANS_PER_PERIOD;
+    want_ones = periods * `REPAIR_PATTERN_HIGH_UI * n;
+    want_run = `REPAIR_LOW_RUN_UI * n;
+    repair_lane_ok =
+      (repair_trans[l] * 100 >= want_trans * 95) &&
+      (repair_trans[l] * 100 <= want_trans * 105) &&
+      (repair_ones[l] * 100 >= want_ones * 95) &&
+      (repair_ones[l] * 100 <= want_ones * 105) &&
+      (repair_gaps[l] + 1 >= periods) && (repair_gaps[l] <= periods + 1) &&
+      (repair_max_run[l] + n >= want_run) && (repair_max_run[l] <= want_run + n);
+  end
+endfunction
+
+// One window, with the gate and the counters read at every step.
+//
+// The regression this guards is a race rather than a measurement: opening a
+// window and then polling `repairDone` only works if the flag stops being the
+// last window's answer the moment a new one is asked for. When it did not,
+// every other window broke out of its poll instantly and scored nothing --
+// and it scored ZERO, which reads exactly like a dead link.
+task automatic repair_trace(input string label, input integer n,
+                            output integer bad);
+  reg [63:0] d, w, en;
+  begin
+    bad = 0;
+    `WRITE_UCIE(regDrv, `REPAIR_WINDOW_WORDS, REPAIR_WORDS);
+    `WRITE_UCIE(regDrv, `REPAIR_GAP_THRESH, `REPAIR_GAP_THRESH_UI * n);
+    `READ_UCIE(regDrv, `REPAIR_DONE, d);
+    `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
+    `READ_UCIE(regDrv, `REPAIR_CLK_EN_OBSERVED, en);
+    $display("  %s before: en %0d done %0d words %0d", label, en, d, w);
+    `WRITE_UCIE(regDrv, `REPAIR_CLK_EN, 64'h1);
+    for (int i = 0; i < 64; i++) begin
+      `READ_UCIE(regDrv, `REPAIR_DONE, d);
+      `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
+      `READ_UCIE(regDrv, `REPAIR_CLK_EN_OBSERVED, en);
+      if (i % 8 == 0 || d != 0)
+        $display("  %s poll %0d: en %0d done %0d words %0d", label, i, en, d, w);
+      if (d != 0) break;
+    end
+    `WRITE_UCIE(regDrv, `REPAIR_CLK_EN, 64'h0);
+    `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
+    if (w != REPAIR_WORDS) begin
+      $display("  %s FAILED: %0d of %0d words", label, w, REPAIR_WORDS);
+      bad = 1;
+    end
+  end
+endtask
+
+// Lets a change to what the lanes transmit reach the wire.
+//
+// PhyTest hands words to the PHY across an asynchronous queue, and at a
+// divided lane rate that queue holds more time than a whole measurement
+// window: at four samples a UI a window spans 384 transmitted UI while the
+// queue holds 1024, so a window run straight after the write still scores the
+// previous pattern.
+//
+// The count is derived from both rather than tuned, because the two scale
+// differently -- the queue is a fixed number of WORDS and a window a fixed
+// number of SAMPLES, so the ratio between them moves with the oversample
+// ratio. A constant here would be right at one ratio and short at the next.
+task automatic repair_settle(input integer n);
+  integer windows;
+  begin
+    windows = (`REPAIR_QUEUE_DEPTH * n + REPAIR_WORDS - 1) / REPAIR_WORDS;
+    for (int i = 0; i <= windows; i++)
+      run_repairclk(REPAIR_WORDS, `REPAIR_GAP_THRESH_UI * n);
+  end
+endtask
+
+// Runs a window and checks each lane against an expected verdict, reporting
+// how many lanes disagreed.
+//
+// A task rather than a function because it drives MMIO, and a function may not
+// call a task in SystemVerilog.
+//
+// Always prints the raw counts, pass or fail. Classifying a lane throws away
+// the only informative part: a lane that failed on gaps alone and a lane that
+// read nothing are the same verdict and completely different faults.
+task automatic check_repair_lanes(
+  input string label, input integer n,
+  input bit want_p, input bit want_n, input bit want_trk,
+  output integer bad
+);
+  bit want[3];
+  string names[3];
+  bit got;
+  begin
+    want[0] = want_p; want[1] = want_n; want[2] = want_trk;
+    names[0] = "clkP"; names[1] = "clkN"; names[2] = "trk ";
+    bad = 0;
+    repair_run(n);
+    $display("  %-28s words %0d done %0d txperiod %0d", label,
+             repair_words_seen, repair_done_seen, repair_tx_period);
+    for (int l = 0; l < `REPAIR_LANES; l++) begin
+      got = repair_lane_ok(l, n);
+      $display("    %s trans %5d ones %5d gaps %3d maxrun %4d  cap %08x %08x  %s%s",
+               names[l], repair_trans[l], repair_ones[l], repair_gaps[l],
+               repair_max_run[l], repair_cap[l][0], repair_cap[l][1],
+               got ? "ok" : "BAD",
+               (got == want[l]) ? "" : "   <-- UNEXPECTED");
+      if (got != want[l]) bad = bad + 1;
+    end
+  end
+endtask
+
+// The common case: all three lanes expected to agree.
+task automatic check_repair(
+  input string label, input integer n, input bit want, output integer bad
+);
+  begin
+    check_repair_lanes(label, n, want, want, want, bad);
+  end
+endtask
+
+// Leaves clkP and track sending the repair pattern and clkN sending nothing.
+task automatic silence_clkn();
+  begin
+    `WRITE_UCIE(regDrv, `TX_CLK_N, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_CLK_N + `TX_CLK_N_WIDTH, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_CLK_N + 2 * `TX_CLK_N_WIDTH, 64'h0);
+  end
+endtask
+
+// A plain alternating forwarded clock on every measured lane: the right rate,
+// the right edge count, no gap.
+task automatic send_plain_clock();
+  begin
+    set_clk_repair_pattern(0);
+    `WRITE_UCIE(regDrv, `TX_CLK_PATTERN_ON_TRACK, 64'h1);
+  end
+endtask
+    """.trim
+  )
+}
+
 class RateSweepTestDriver extends SVTestDriver {
   setStimulus(
     "RateSweepTestDriver",
@@ -2033,6 +2335,33 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new EyeDiagramTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_measure_a_coarse_eye_at_each_rate",
+        amsLevel = Some(AmsLevel.Eye)
+      )
+    }
+
+    // The same driver twice. This one runs against the behavioral models and
+    // takes minutes rather than tens of them: it is what catches a register
+    // that moved, a tap wired to the wrong clock, or a shuffler left in tree
+    // order. The analog run below is what shows the measurement surviving a
+    // real front end.
+    it("should measure MBINIT.REPAIRCLK using Xcelium") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new RepairClkTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_measure_repairclk_using_Xcelium"
+      )
+    }
+
+    it(
+      "should measure MBINIT.REPAIRCLK using Xcelium with PHY analog models"
+    ) {
+      implicit val p = Parameters.empty
+      implicit val includeDefaultModels = false
+      Utils.simulate(
+        new SimTop(new RepairClkTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_measure_repairclk",
         amsLevel = Some(AmsLevel.Eye)
       )
     }

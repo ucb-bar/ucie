@@ -68,6 +68,7 @@ object ClockingTile {
   val phaseSelWidth = 64
   val mainClkSelWidth = 2
   val txClkDivWidth = 2
+  val repairClkDivWidth = 2
   val txClkPhaseWidth = 4
   val digClkDivWidth = 3
   val sbClkDivWidth = 3
@@ -105,6 +106,31 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
+  /** MBINIT.REPAIRCLK sampling clock division of the main clock, same codes as
+    * [[TxClkDiv]].
+    *
+    * Its own divider rather than a tap off the TX one because the ratio between
+    * the two IS the oversample ratio the repair taps measure at:
+    *
+    * {{{N = 2^(txClkDiv - repairClkDiv)}}}
+    *
+    * With the lanes at /4 and this at /1 a tap takes four samples per
+    * transmitted UI. Holding N at four across an 8 GHz and a 16 GHz main clock
+    * takes two knobs, which is the whole reason this is not just "the main
+    * clock".
+    */
+  val RepairClkDiv = Input(UInt(ClockingTile.repairClkDivWidth.W))
+
+  /** Active-high enable for [[RepairClk]].
+    *
+    * Unlike [[ClkGateEn]] this branch has exactly one consumer, so it is dark
+    * outside a REPAIRCLK window -- and that is not only a power argument. The
+    * repair counters and the capture ring live on this clock and are read from
+    * the digital domain as static values; they are static precisely because the
+    * clock stops.
+    */
+  val RepairClkEn = Input(Bool())
+
   /** Digital clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8, 4 /15 --
     * the ratios that land a little over 1 GHz from an 8 or 16 GHz main clock.
     * The divider stops on its own whenever the bypass pin is selected.
@@ -138,6 +164,7 @@ class ClockingTileIO extends Bundle {
   val SbClk = Output(Clock())
   val TxClkQ = Output(Clock())
   val TxClk = Output(Clock())
+  val RepairClk = Output(Clock())
 }
 
 class ClockingTile(implicit includeDefaultModels: Boolean = false)

@@ -206,6 +206,20 @@ class PhyClkRstIO extends Bundle {
   val digClkBypassEn = Input(Bool())
   val sbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
   val sbClkBypassEn = Input(Bool())
+  // MBINIT.REPAIRCLK sampling clock division of the main clock, same codes as
+  // `txClkDiv`. The ratio between the two is the oversample ratio the repair
+  // taps measure at: `N = 2^(txClkDiv - repairClkDiv)`.
+  val repairClkDiv = Input(UInt(ClockingTile.repairClkDivWidth.W))
+  // Opens a REPAIRCLK measurement window.
+  //
+  // This one signal is the whole control surface. Raising it ungates the
+  // repair clock, releases the repair dividers -- which were held with no
+  // clock present, so every one of them restarts on the first edge -- and
+  // clears the counters. Lowering it stops the clock, which is what freezes
+  // the counters and the capture so they can be read from a domain that is
+  // still running. Nothing else has to be sequenced.
+  val repairClkEn = Input(Bool())
+
   // Runs the RX lanes from TXCLKQ rather than the recovered forwarded clock,
   // for when the far side's clock is not behaving.
   val rxClkFromTxQ = Input(Bool())
@@ -300,6 +314,55 @@ class RxLaneDigitalCtlIO extends Bundle {
   val delay = UInt(7.W)
 }
 
+/** Per-lane control for a [[RxRepairTapIO]].
+  *
+  * Its own group rather than more fields on `rxctl` because a tap and the
+  * trained datapath sample the same bump on different clocks: they share the
+  * front end, which `rxctl` configures, and nothing behind it.
+  */
+class RxRepairDigitalCtlIO extends Bundle {
+
+  /** Taps on this tap's sampling clock. The repair measurement is phase
+    * independent by construction, so this is not needed to make it work -- it
+    * is there to sweep the sampling point and prove that it is.
+    */
+  val delay = UInt(7.W)
+
+  /** Bit permutation on the tap's word, as on every other lane. Load bearing
+    * here: in the tile's own tree order an alternating pattern deserializes as
+    * one long square wave, so a tap left unshuffled reads one transition a word
+    * where it should read thirty-two.
+    */
+  val shuffler = Vec(32, UInt(5.W))
+}
+
+/** The MBINIT.REPAIRCLK measurement, as the register block and the controller
+  * see it.
+  *
+  * Everything below the handshake runs on the repair divided clock, which only
+  * exists while `repairClkEn` is high. The outputs are therefore read the way a
+  * stopped domain should be: open the window, wait for `done`, close the
+  * window, and only then read. Closing it stops the clock, so the counters and
+  * the capture are static by the time the next access returns -- and a window
+  * that never finished is frozen mid-flight and still readable, with
+  * `wordsObserved` saying how far it got.
+  */
+class PhyRepairIO extends Bundle {
+  val windowWords = Input(UInt(ClkRepair.WordCountWidth.W))
+  val gapThresh = Input(UInt(ClkRepair.CounterWidth.W))
+  val capOffset = Input(UInt(log2Ceil(ClkRepair.CaptureDepth).W))
+  val capLane = Input(UInt(log2Ceil(ClkRepair.Lanes).W))
+
+  /** The window has accumulated `windowWords`. Synchronized into the digital
+    * clock domain, since this is the one output that is read while the repair
+    * clock is still running.
+    */
+  val done = Output(Bool())
+  val wordsObserved = Output(UInt(ClkRepair.WordCountWidth.W))
+  val obs = Output(Vec(ClkRepair.Lanes, new ClkRepairLaneObsIO))
+  val capWord = Output(UInt(Phy.SerdesRatio.W))
+}
+
 class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // TX CONTROL
   // Per-tile lane control, one entry per lane in the layout order described on
@@ -311,6 +374,10 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // forwarded-clock lanes recover a clock rather than a word, so only their AFE
   // settings do anything.
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
+
+  // One entry per MBINIT.REPAIRCLK tap, in `ClkRepair` lane order: clkP,
+  // clkN, track.
+  val repairctl = Input(Vec(ClkRepair.Lanes, new RxRepairDigitalCtlIO))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -321,6 +388,8 @@ class PhyIO(numLanes: Int = 16) extends Bundle {
   val tx = Input(new TxIO(numLanes))
   val rx = Output(new RxIO(numLanes))
   val sb = new SbIO
+  // The MBINIT.REPAIRCLK measurement.
+  val repair = new PhyRepairIO
   // Observation taps for the tester's debug bumps.
   val debug = new PhyDebugIO(numLanes)
 
@@ -358,6 +427,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbBypassClk := io.top.sidebandBypassClk
   clkTile.io.RefClk := io.top.refClk
+  clkTile.io.RepairClkDiv := io.clkRst.repairClkDiv
+  clkTile.io.RepairClkEn := io.clkRst.repairClkEn
 
   io.clkRst.pll8Lock := clkTile.io.Pll8Lock
   io.clkRst.pll12Lock := clkTile.io.Pll12Lock
@@ -384,6 +455,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   val clkDist = Module(new ClkDistNetwork)
   clkDist.io.txClk := clkTile.io.TxClk
   clkDist.io.txClkQ := clkTile.io.TxClkQ
+  clkDist.io.repairClk := clkTile.io.RepairClk
   // The tester's own TX lanes sit outside the distribution network, so they
   // take the in-phase clock from the same place the network does.
   io.debug.txClk := clkTile.io.TxClk
@@ -437,6 +509,70 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   rxRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.rxDatapathRst)
   rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDatapathRstSync := !rxRstSync.io.rstbSync
+
+  // REPAIRCLK sampling domain.
+  //
+  // Same three layers as TX and RX -- a divider hold, a datapath reset, and
+  // the logic on the divided clock -- but both resets come off `repairClkEn`
+  // instead of a register of their own, because the gate already says exactly
+  // when this domain is supposed to exist.
+  //
+  // The dividers are held whenever the gate is shut, which is the pattern a
+  // delay code change already uses here: they clear with no clock present and
+  // every one of them restarts on the first edge after the clock comes back,
+  // so a tap's load edge and the divided clock keep a fixed phase window to
+  // window.
+  val repairDividerRstb =
+    (!(io.clkRst.reset || !io.clkRst.repairClkEn)).asAsyncReset
+  val repairClkDiv = Module(new ClkDiv4)
+  repairClkDiv.io.clk := clkDist.io.repairClkDivClk
+  repairClkDiv.io.resetb := repairDividerRstb
+  // Inverted for the same reason as the other two: the divided clock then
+  // rises half a word period from the edge a tap loads on.
+  val repairDivClk = (!repairClkDiv.io.clkout_3.asBool).asClock
+
+  // The counters clear when a window OPENS, not while the gate is shut.
+  // Closing the gate is how a result is frozen for reading, so tying their
+  // reset to the gate the way the dividers are tied would wipe the very thing
+  // the window was run to produce.
+  val repairArm = withClockAndReset(io.clkRst.ucieClk, io.clkRst.ucieRst) {
+    // Unlike the other clocking selects, this one moves while the part is
+    // running -- it is how a training stage asks for a window -- so it crosses
+    // from the chip's digital clock through two flops before anything acts on
+    // an edge of it.
+    val sync = RegNext(RegNext(io.clkRst.repairClkEn, false.B), false.B)
+    val prev = RegNext(sync, false.B)
+    sync && !prev
+  }
+  val repairRstSync = Module(new RstSync)
+  repairRstSync.io.rstbAsync := !(io.clkRst.reset || repairArm)
+  repairRstSync.io.clk := repairDivClk
+  val repairDatapathRstSync = !repairRstSync.io.rstbSync
+
+  // One oversampled word per measured lane, past its shuffler, in
+  // `ClkRepair` lane order: clkP, clkN, track.
+  val repairTapWord = Wire(Vec(ClkRepair.Lanes, UInt(Phy.SerdesRatio.W)))
+
+  // Wires a tap up and returns its word in wire order. The shuffle is not
+  // cosmetic: the tile's serdes tree reverses bit order, and an alternating
+  // pattern read in tree order is one long square wave rather than an edge a
+  // UI, so an unshuffled tap would score a live lane as dead.
+  def connectRepairTap(
+      tap: RxRepairTapIO,
+      slot: Int,
+      name: String
+  ): Unit = {
+    tap.clk := clkDist.io.repairLaneClk(slot)
+    tap.rstb := repairDividerRstb
+    tap.Dctrl := VecInit(
+      RxDataLane.thermometer(io.regs.repairctl(slot).delay).asBools
+    )
+    val shuffler = Module(new Shuffler(Phy.SerdesRatio))
+    shuffler.suggestName(s"${name}_repair_shuffler")
+    shuffler.io.din := tap.dout.asUInt
+    shuffler.io.permutation := io.regs.repairctl(slot).shuffler
+    repairTapWord(slot) := shuffler.io.dout
+  }
 
   // The TX words in lane order, for the uniform lane pipeline below.
   val txLaneDin = Wire(Vec(Phy.numTxLanes(numLanes), Bits(Phy.SerdesRatio.W)))
@@ -514,6 +650,7 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       RxAfeCtl.connect(rxClkP, io.regs.rxctl(Phy.clkPLane(numLanes)))
     rxClkP.io.clk_gate_en := io.clkRst.rxClkGateEn
     rxClkP.io.clkin := io.top.rxClkP
+    connectRepairTap(rxClkP.io.repair, ClkDistNetwork.repairClkP, "rxclkp")
     // The forwarded clock arrives as a bump pair, but everything past the
     // clock lanes is single-ended, so the distribution network is driven from
     // the P lane alone. The N lane still terminates its bump and carries its
@@ -533,15 +670,22 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       RxAfeCtl.connect(rxClkN, io.regs.rxctl(Phy.clkNLane(numLanes)))
     rxClkN.io.clk_gate_en := io.clkRst.rxClkGateEn
     rxClkN.io.clkin := io.top.rxClkN
+    connectRepairTap(rxClkN.io.repair, ClkDistNetwork.repairClkN, "rxclkn")
 
     // Every lane that carries a word is the same: a deserializer, then a bit
     // shuffle.
     for (lane <- 0 until Phy.numRxDataLanes(numLanes)) {
       val laneName = Phy.laneName("rx", lane, numLanes)
 
-      val rxLane = Module(new RxDataLane)
+      // Track is the one data lane MBINIT.REPAIRCLK measures, so it is the
+      // one that carries a sampling tap. See `RxRepairTapIO`.
+      val isTrack = lane == Phy.trackLane(numLanes)
+      val rxLane = Module(new RxDataLane(withRepairTap = isTrack))
       val rxLaneAfeCtl = RxAfeCtl.connect(rxLane, io.regs.rxctl(lane))
       rxLane.suggestName(laneName)
+      rxLane.io.repair.foreach(
+        connectRepairTap(_, ClkDistNetwork.repairTrack, laneName)
+      )
       // As on TX, the bump fan-out is the one place a lane index becomes a
       // role.
       if (lane < numLanes) {
@@ -591,5 +735,34 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
   io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
+
+  // MBINIT.REPAIRCLK scoring, on the repair divided clock.
+  val clkRepair = withClockAndReset(repairDivClk, repairDatapathRstSync) {
+    Module(new ClkRepair)
+  }
+  clkRepair.io.word := repairTapWord
+  clkRepair.io.windowWords := io.repair.windowWords
+  clkRepair.io.gapThresh := io.repair.gapThresh
+  clkRepair.io.capOffset := io.repair.capOffset
+  clkRepair.io.capLane := io.repair.capLane
+
+  // The counters, the word count and the capture are read straight across.
+  // They are static by the time anything reads them: the reader closes the
+  // gate first, and with no repair clock there is nothing to update them. See
+  // `PhyRepairIO`.
+  io.repair.wordsObserved := clkRepair.io.wordsObserved
+  io.repair.obs := clkRepair.io.obs
+  io.repair.capWord := clkRepair.io.capWord
+  // `done` is the exception: it is polled while the window is still running,
+  // so it gets a synchronizer.
+  //
+  // It is still the LAST window's answer for the few cycles a new window's
+  // clear takes to reach this domain and come back. Masking that cannot be
+  // done here, because nothing in this module knows when the request was
+  // made -- `repairClkEn` arrives already late. The register block holds it
+  // down instead, in the same cycle as the write that asked for the window.
+  io.repair.done := withClockAndReset(io.clkRst.ucieClk, io.clkRst.ucieRst) {
+    ShiftRegister(clkRepair.io.done, 2, false.B, true.B)
+  }
 
 }

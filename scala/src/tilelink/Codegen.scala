@@ -32,6 +32,7 @@ import edu.berkeley.cs.uciedigital.phy.macros.{
   TxLane,
   TxLaneCtlIO
 }
+import edu.berkeley.cs.uciedigital.phy.{ClkRepair, ClkRepairExpect, Phy}
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -416,6 +417,16 @@ object Codegen {
     */
   val rxSettleTries: Int = 64
 
+  /** Register reads a REPAIRCLK window is given to finish.
+    *
+    * A window is `repairWindowWords` words of the repair divided clock, which
+    * at the slowest division this part can be set to is a few microseconds --
+    * far under one MMIO read. The bound is there so a gate that never opened,
+    * or a main clock that is not running, fails rather than spins; it is not a
+    * timing estimate.
+    */
+  val repairPollTries: Int = 64
+
   val ucieParams: UcieTLParams = UcieTLParams()
 
   /** Elaborates UcieTL with `params` and returns its register map.
@@ -468,8 +479,8 @@ object Codegen {
       reqs += write(s"rxctl_${lane}_zctl", 0)
     }
 
-    reqs += write("txClkP", defaultClkP)
-    reqs += write("txClkN", defaultClkN)
+    reqs += write("txClkP_0", defaultClkP)
+    reqs += write("txClkN_0", defaultClkN)
     reqs += write("txValid", defaultValid)
     reqs += write("rxLfsrValid", defaultValid)
 
@@ -649,6 +660,21 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   ): String = {
     f.formatWriteReg("regDrv", f.formatConstantRef(addrConst), value)
   }
+
+  /** Address of entry `idx` of an indexed register.
+    *
+    * `formatRegs` coalesces `foo_0`, `foo_1`, ... into one base define plus a
+    * `fooWidth` stride rather than a constant per entry, so a reference to
+    * `foo_1` by name does not resolve. Everything indexed has to be addressed
+    * this way.
+    */
+  def indexedRegAddr(base: String, idx: Int): String =
+    if (idx == 0) f.formatConstantRef(base)
+    else
+      s"${f.formatConstantRef(base)} + $idx * ${f.formatConstantRef(s"${base}Width")}"
+
+  def formatWriteIndexedReg(base: String, idx: Int, value: String): String =
+    f.formatWriteReg("regDrv", indexedRegAddr(base, idx), value)
   def formatRegs(): String = {
     val sb = new StringBuilder
 
@@ -766,6 +792,28 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainVrefStep", BigInt(Codegen.trainVrefStep)),
         ("trainPackets", BigInt(Codegen.trainPackets)),
         ("trainSlipRatio", BigInt(Codegen.trainSlipRatio)),
+        // MBINIT.REPAIRCLK. Emitted rather than written down in a driver so
+        // that a change to the pattern, the window alignment or the lane count
+        // cannot leave a bench asserting the old numbers.
+        ("repairLanes", BigInt(ClkRepair.Lanes)),
+        ("repairSerdesRatio", BigInt(Phy.SerdesRatio)),
+        ("repairPatternUi", BigInt(ClkRepair.PatternUi)),
+        ("repairPatternHighUi", BigInt(ClkRepair.PatternHighUi)),
+        ("repairLowRunUi", BigInt(ClkRepair.PatternLowRunUi)),
+        ("repairTransPerPeriod", BigInt(ClkRepair.TransitionsPerPeriod)),
+        ("repairGapThreshUi", BigInt(ClkRepair.GapThreshUi)),
+        ("repairCaptureDepth", BigInt(ClkRepair.CaptureDepth)),
+        // Words the crossing to the PHY holds. A change to what a lane
+        // transmits takes this many words to reach the wire, which at a
+        // divided lane rate is longer than a short measurement window lasts.
+        ("repairQueueDepth", BigInt(params.queueParams.depth)),
+        // Words that cover a whole number of pattern periods at every
+        // oversample ratio up to eight. A window has to be a multiple of this
+        // or the partial period at its end eats the thresholds' margin.
+        (
+          "repairWindowStep",
+          BigInt(ClkRepairExpect.alignedWindow(1))
+        ),
         ("clkUngateSrcPllLock", ClkUngateSrc.pllLock.litValue),
         ("clkUngateSrcMmio", ClkUngateSrc.mmio.litValue),
         ("clkUngateSrcDelay", ClkUngateSrc.delay.litValue)
@@ -1179,6 +1227,111 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
+  /** Puts the MBINIT.REPAIRCLK clock repair pattern on the forwarded-clock
+    * lanes, or takes it back off.
+    *
+    * The pattern is 48 bits -- 32 UI of clock, then 16 UI low -- and a lane
+    * word is 32, so the lane repeats every three words. The low gap is the part
+    * that carries the information: it is what tells the repair pattern apart
+    * from a bare clock of the same rate, and nothing else on the link produces
+    * a long low every 48 UI.
+    *
+    * `on` zero restores the plain alternating forwarded clock, which fits in
+    * one word.
+    */
+  def formatSetClkRepairPatternFn(): String = {
+    val repair = new StringBuilder
+    PhyTest.ClkRepairWords.zipWithIndex.foreach { case (w, i) =>
+      repair.append(formatWriteIndexedReg("txClkP", i, f.formatLong(w.toLong)))
+      repair.append(formatWriteIndexedReg("txClkN", i, f.formatLong(w.toLong)))
+    }
+    repair.append(
+      formatWriteNamedReg(
+        "txClkPatternPeriod",
+        f.formatLong(PhyTest.ClkPatternWords)
+      )
+    )
+    // Track carries it too: REPAIRCLK measures three lanes, and the trained
+    // path sends the same word on all three.
+    repair.append(formatWriteNamedReg("txClkPatternOnTrack", f.formatLong(1)))
+    val plain = new StringBuilder
+    plain.append(
+      formatWriteIndexedReg("txClkP", 0, f.formatConstantRef("defaultClkP"))
+    )
+    plain.append(
+      formatWriteIndexedReg("txClkN", 0, f.formatConstantRef("defaultClkN"))
+    )
+    plain.append(formatWriteNamedReg("txClkPatternPeriod", f.formatLong(1)))
+    plain.append(formatWriteNamedReg("txClkPatternOnTrack", f.formatLong(0)))
+
+    val body = new StringBuilder
+    body.append(f.formatIfStmt("on", repair.toString))
+    body.append(f.formatIfStmt("!on", plain.toString))
+    f.formatFn(
+      "set_clk_repair_pattern",
+      body.toString,
+      args = Seq(Arg("on", Datatype.Long))
+    )
+  }
+
+  /** Sets the REPAIRCLK sampling clock's division of the main clock.
+    *
+    * The oversample ratio is the ratio of this to the TX division --
+    * `2^(txClkDiv - repairClkDiv)` -- so it is set against whatever
+    * `set_main_clk` left the lanes at rather than on its own. Two knobs instead
+    * of one because holding the ratio at four across an 8 GHz and a 16 GHz main
+    * clock needs both to move.
+    */
+  def formatSetRepairDivFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("repairClkDiv", "div"))
+    body.append(f.formatFnCall("apply_clk_cfg"))
+    f.formatFn(
+      "set_repair_div",
+      body.toString,
+      args = Seq(Arg("div", Datatype.Long))
+    )
+  }
+
+  /** Runs one MBINIT.REPAIRCLK measurement window and leaves the result where
+    * it can be read.
+    *
+    * Opening the gate is the whole of the setup: the PHY ungates its repair
+    * sampling clock, releases the repair dividers with no clock present so
+    * every one of them restarts on the same first edge, and clears the
+    * counters. The window then ends itself after `words` words.
+    *
+    * Closing the gate afterwards is not tidiness. The counters and the capture
+    * live on a clock that only runs inside the window, and stopping that clock
+    * is what makes them static for a reader in another domain -- including when
+    * the window did not finish, which is the case worth being able to read.
+    */
+  def formatRunRepairclkFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("repairWindowWords", "words"))
+    body.append(formatWriteNamedReg("repairGapThresh", "gap_thresh"))
+    body.append(formatWriteNamedReg("repairClkEn", f.formatLong(1)))
+
+    val poll = new StringBuilder
+    poll.append(
+      f.formatReadReg(
+        "regDrv",
+        "repair_d",
+        f.formatConstantRef("repairDone"),
+        declareVar = true
+      )
+    )
+    poll.append(f.formatIfStmt("repair_d != 0", f.breakStmt()))
+    body.append(f.formatForLoop("w", Codegen.repairPollTries, poll.toString))
+
+    body.append(formatWriteNamedReg("repairClkEn", f.formatLong(0)))
+    f.formatFn(
+      "run_repairclk",
+      body.toString,
+      args = Seq(Arg("words", Datatype.Long), Arg("gap_thresh", Datatype.Long))
+    )
+  }
+
   /** Sets one lane's slicing reference, as a code up the tile's ladder. */
   def formatSetRxVrefFn(): String = {
     val body = new StringBuilder
@@ -1355,10 +1508,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     }
 
     body.append(
-      formatWriteNamedReg("txClkP", f.formatConstantRef("defaultClkP"))
+      formatWriteIndexedReg("txClkP", 0, f.formatConstantRef("defaultClkP"))
     )
     body.append(
-      formatWriteNamedReg("txClkN", f.formatConstantRef("defaultClkN"))
+      formatWriteIndexedReg("txClkN", 0, f.formatConstantRef("defaultClkN"))
     )
     body.append(
       formatWriteNamedReg("txValid", f.formatConstantRef("defaultValid"))
@@ -1878,6 +2031,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetGlobalDelayFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
+    sb.append(formatSetRepairDivFn())
+    sb.append(formatSetClkRepairPatternFn())
+    sb.append(formatRunRepairclkFn())
     sb.append(formatSetupUcieFn())
     sb.append(formatSeedLfsrsFn())
     sb.append(formatRunLfsrFn())
@@ -1965,6 +2121,9 @@ object GenUcieHeader {
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")
     sb.append(cg.formatSetRxVrefFn())
+    sb.append(cg.formatSetRepairDivFn())
+    sb.append(cg.formatSetClkRepairPatternFn())
+    sb.append(cg.formatRunRepairclkFn())
     sb.append("\n")
     sb.append(cg.formatSetupUcieFn())
     sb.append("\n")

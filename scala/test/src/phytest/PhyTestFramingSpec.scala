@@ -65,8 +65,9 @@ class PhyTestLfsrLoopback(
   dut.io.regs.txValidLaneSel := validSel.U
   dut.io.regs.rxValidLaneSel := validSel.U
   dut.io.regs.rxLfsrValid := io.validPattern
-  dut.io.regs.txClkP := 0.U
-  dut.io.regs.txClkN := 0.U
+  dut.io.regs.txClkP.foreach(_ := 0.U)
+  dut.io.regs.txClkN.foreach(_ := 0.U)
+  dut.io.regs.txClkPatternPeriod := 1.U
   dut.io.regs.txExecute := io.execute
   dut.io.regs.txDatapathRst := io.fsmRst
   dut.io.regs.rxDatapathRst := io.fsmRst
