@@ -270,6 +270,17 @@ object Codegen {
     BigInt(oneTap.lowestSetBit)
   }
 
+  /** Global delay `setup_ucie_digital` puts on the quadrature clock: a quarter
+    * of the TX clock period, which lands the forwarded clock in the middle of
+    * the data eye.
+    *
+    * Sized for the reset clocking -- the main clock on the 8 GHz bypass pin at
+    * TX division /1, so a 125 ps period -- at the clocking tile's 1.086 ps per
+    * tap: 31.25 ps is 29 taps. A part brought up on a different rate needs its
+    * own value.
+    */
+  val digitalGlobalDelayTaps: Int = 29
+
   /** Seed both ends of a training run's LFSRs with this.
     *
     * Any nonzero value does; the RX scores what it receives against its own
@@ -1444,6 +1455,19 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   def formatSetupUcieDigitalFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
+
+    // Same clock setup as `setup_ucie`, with the clocks gated: the global delay
+    // (reset at its maximum) to a quarter period, and the dividers reset so
+    // every TX lane, clock lanes included, restarts on the same edge.
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
+    body.append(
+      f.formatFnCall(
+        "set_global_delay",
+        args = Seq(f.formatLong(Codegen.digitalGlobalDelayTaps.toLong))
+      )
+    )
+    body.append(f.formatFnCall("reset_dividers"))
+    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
 
     {
       // Phy.scala's lane numbering: numLanes data lanes, then valid, then
