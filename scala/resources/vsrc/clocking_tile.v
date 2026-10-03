@@ -81,6 +81,10 @@ module clocking_tile(
   localparam real HALF_8G  = 62.5;
   localparam real HALF_12G = 41.66667;
   localparam real HALF_16G = 31.25;
+  // Delays below are written in ps and applied through a `1ps` time literal,
+  // so they hold under whatever timescale the model is compiled with (ucie's
+  // tests use 1ps, iris uses 1ns). A bare `#(x)` would read them in the
+  // compile unit's time unit instead.
   localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
@@ -89,7 +93,7 @@ module clocking_tile(
 
   // ---- Three PLLs, each locking a half period to the reference ----
   real ref_last = -1.0;
-  real ref_period = 10000.0;
+  real ref_period = 10000.0 * 1ps;
   always @(posedge RefClk) begin
     if (ref_last >= 0.0) ref_period = $realtime - ref_last;
     ref_last = $realtime;
@@ -120,19 +124,19 @@ module clocking_tile(
   // is zero.
   reg pll8Locked = 1'b0;
   always @(posedge Pll8En) begin
-    #(PLL_LOCK_PS) pll8Locked = Pll8En;
+    #(PLL_LOCK_PS * 1ps) pll8Locked = Pll8En;
   end
   always @(negedge Pll8En) pll8Locked = 1'b0;
 
   reg pll12Locked = 1'b0;
   always @(posedge Pll12En) begin
-    #(PLL_LOCK_PS) pll12Locked = Pll12En;
+    #(PLL_LOCK_PS * 1ps) pll12Locked = Pll12En;
   end
   always @(negedge Pll12En) pll12Locked = 1'b0;
 
   reg pll16Locked = 1'b0;
   always @(posedge Pll16En) begin
-    #(PLL_LOCK_PS) pll16Locked = Pll16En;
+    #(PLL_LOCK_PS * 1ps) pll16Locked = Pll16En;
   end
   always @(negedge Pll16En) pll16Locked = 1'b0;
 
@@ -188,7 +192,7 @@ module clocking_tile(
   wire tx_q_gated = tx_q_raw & txClkQEn;
 
   reg q_delayed = 1'b0;
-  always @(tx_q_gated) q_delayed <= #(phase_delay) tx_q_gated;
+  always @(tx_q_gated) q_delayed <= #(phase_delay * 1ps) tx_q_gated;
 
   // ---- Digital clock divider ----
   wire [5:0] dig_div = (DigClkDiv == 3'd0) ? 6'd1 :
