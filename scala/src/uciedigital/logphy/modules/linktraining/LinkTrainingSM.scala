@@ -96,7 +96,7 @@ class LinkTrainingSM(
   // Variables
   // ==============================================================================================
   val mbSerializerRatio = afeParams.mbSerializerRatio
-  val timeoutMs = 0.008
+  val timeoutMs = 0.00005 //0.008 // TEMP HACK, DON'T COMMIT
   val operatingFreq = 800000000 // TODO: Put this into an object
   val retryAmtW = retryW // TODO: Need to put retryW into an object
 
