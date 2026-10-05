@@ -313,9 +313,45 @@ object Codegen {
     * these follow `ClkRateCfgIO`'s declaration order: main clock select, TX
     * division, digital division, then the three PLL enables in the low bits.
     */
-  val rateCfgMainClkSelLsb: Int = 8
-  val rateCfgTxClkDivLsb: Int = 6
-  val rateCfgDigClkDivLsb: Int = 3
+  // Derived from the Chisel type rather than written down.
+  //
+  // These were literals once, and adding `repairClkDiv` to `ClkRateCfgIO`
+  // moved `mainClkSel` and `txClkDiv` two bits up while the literals stayed
+  // put. Nothing caught it: every driver sets the rate through the direct
+  // registers, and the table is only consulted with `freqSelAutoEn` on, which
+  // no test had turned on. Same treatment as `txCtlDelayLsb`.
+  private def rateCfgLit(
+      main: BigInt = 0,
+      tx: BigInt = 0,
+      repair: BigInt = 0,
+      dig: BigInt = 0
+  ): BigInt =
+    (new ClkRateCfgIO)
+      .Lit(
+        _.mainClkSel -> main.U,
+        _.txClkDiv -> tx.U,
+        _.repairClkDiv -> repair.U,
+        _.digClkDiv -> dig.U,
+        _.pll8En -> false.B,
+        _.pll12En -> false.B,
+        _.pll16En -> false.B
+      )
+      .litValue
+
+  private def rateCfgLsb(name: String, packed: BigInt): Int = {
+    require(
+      packed.bitCount == 1,
+      s"$name should set exactly one bit of a rate entry, got 0x${packed.toString(16)}"
+    )
+    packed.lowestSetBit
+  }
+
+  val rateCfgMainClkSelLsb: Int =
+    rateCfgLsb("mainClkSel", rateCfgLit(main = 1))
+  val rateCfgTxClkDivLsb: Int = rateCfgLsb("txClkDiv", rateCfgLit(tx = 1))
+  val rateCfgRepairClkDivLsb: Int =
+    rateCfgLsb("repairClkDiv", rateCfgLit(repair = 1))
+  val rateCfgDigClkDivLsb: Int = rateCfgLsb("digClkDiv", rateCfgLit(dig = 1))
 
   /** Fine steps within one coarse phase position, and taps between them.
     *
@@ -781,6 +817,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
         ("rateCfgDigClkDivLsb", BigInt(Codegen.rateCfgDigClkDivLsb)),
+        ("rateCfgRepairClkDivLsb", BigInt(Codegen.rateCfgRepairClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -1012,6 +1049,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val packed =
       s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
         s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
+        s"(repair_div << ${f.formatConstantRef("rateCfgRepairClkDivLsb")}) | " +
         s"(dig_div << ${f.formatConstantRef("rateCfgDigClkDivLsb")}) | " +
         s"pll_en)"
     body.append(
@@ -1028,6 +1066,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         Arg("rate", Datatype.Long),
         Arg("main_sel", Datatype.Long),
         Arg("tx_div", Datatype.Long),
+        Arg("repair_div", Datatype.Long),
         Arg("dig_div", Datatype.Long),
         Arg("pll_en", Datatype.Long)
       )

@@ -1176,6 +1176,7 @@ class RepairClkTestDriver extends SVTestDriver {
 begin : repairclk
   integer fails;
   integer bad;
+  reg [63:0] rv, rok;
 
   fails = 0;
   setup_ucie();
@@ -1205,6 +1206,38 @@ begin : repairclk
   check_repair("lanes /8, sample /1 (x8)", 8, 1, bad); fails = fails + bad;
   set_main_clk(3, 2);
   set_repair_div(0);
+
+  // The path the controller actually takes to this configuration.
+  //
+  // uciedigital asks for `SpeedMode.speed4` -- 4 GT/s -- throughout MBINIT, and
+  // that indexes rate entry 0. The entry has to carry BOTH divisions, because
+  // the oversample ratio is the ratio between them: lanes at /4 of an 8 GHz
+  // main clock is the 2 GHz the controller asked for, and the sampling clock
+  // undivided alongside it is four samples a UI.
+  //
+  // Driven through the table here rather than through the direct registers,
+  // because the table is what the controller will use and it is packed
+  // differently -- a field in the wrong place reads as a plausible but wrong
+  // division, which is exactly the failure this is here to catch. `freqSel`
+  // comes from uciedigital even while PhyTest owns the mainband, so entry 0 is
+  // what gets selected.
+  $display("REPAIRCLK: through the rate table, as the controller selects it");
+  set_rate_cfg(0, 3, 2, 0, 2, 0);
+  set_freq_sel_auto(1);
+  apply_clk_cfg();
+  `READ_UCIE(regDrv, `REPAIR_OVERSAMPLE, rv);
+  `READ_UCIE(regDrv, `REPAIR_RATIO_OK, rok);
+  $display("  rate entry 0 applied: oversample %0d, ratio ok %0d", rv, rok);
+  if (rv != 4 || rok != 1) begin
+    $display("  UNEXPECTED: expected oversample 4 and a usable ratio");
+    fails = fails + 1;
+  end
+  repair_settle(4);
+  check_repair("via rate table (x4)", 4, 1, bad); fails = fails + bad;
+  set_freq_sel_auto(0);
+  set_main_clk(3, 2);
+  set_repair_div(0);
+  repair_settle(4);
 
   // Phase independence, which is the whole claim oversampling makes. The
   // coarse shifter moves TXCLKQ, and the two clock lanes are the lanes it
