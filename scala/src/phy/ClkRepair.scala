@@ -233,6 +233,36 @@ class ClkRepairBandsIO extends Bundle {
   val maxRunMax = UInt(ClkRepair.CounterWidth.W)
 }
 
+object ClkRepairVerdict {
+
+  /** Whether one lane's counters say it carried the clock repair pattern.
+    *
+    * Here rather than inline in the register block so the seam between the
+    * measurement and the controller can be simulated on its own: this is the
+    * step that turns counts into the three status bits MBINIT puts on the
+    * sideband, and it is the only place a band is interpreted.
+    *
+    * `ratioOk` is the oversample ratio being at least two. Below that a sample
+    * lands wherever the two clocks happen to sit and no count means anything,
+    * so no lane passes -- otherwise a part left at its reset clocking samples
+    * once a UI and can agree with bands written for a ratio of four by luck.
+    */
+  def apply(
+      obs: ClkRepairLaneObsIO,
+      bands: ClkRepairBandsIO,
+      ratioOk: Bool
+  ): Bool =
+    obs.transitions >= bands.transMin &&
+      obs.transitions <= bands.transMax &&
+      obs.ones >= bands.onesMin &&
+      obs.ones <= bands.onesMax &&
+      obs.gaps >= bands.gapsMin &&
+      obs.gaps <= bands.gapsMax &&
+      obs.maxRun >= bands.maxRunMin &&
+      obs.maxRun <= bands.maxRunMax &&
+      ratioOk
+}
+
 object ClkRepairExpect {
 
   /** What a window of `words` at oversample ratio `n` should come back with on
@@ -319,6 +349,17 @@ object ClkRepairExpect {
     * with, at the oversample ratio MBINIT runs at with an 8 GHz main clock and
     * the lanes at 4 GT/s.
     */
+  /** The configuration the register defaults describe: MBINIT on an 8 GHz main
+    * clock, the lanes divided to 2 GHz (4 GT/s, which is what the controller
+    * asks for as `SpeedMode.speed4`), and the sampling clock undivided.
+    *
+    * The clocking registers themselves come up at `txClkDiv` and `repairClkDiv`
+    * of zero, which is a ratio of ONE and not a usable configuration -- that is
+    * the unconfigured state, and the rate table is what moves it. Everything
+    * below is derived from these two so that the window, the gap threshold and
+    * the bands cannot describe different configurations from each other.
+    */
   val defaultN = 4
-  lazy val defaultBands: Bands = bands(alignedWindow(768), defaultN)
+  val defaultWindow: Int = alignedWindow(768)
+  lazy val defaultBands: Bands = bands(defaultWindow, defaultN)
 }

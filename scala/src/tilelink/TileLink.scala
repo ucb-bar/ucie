@@ -191,6 +191,8 @@ class UcieTLRegsIO(
   // Already on this block's clock, so no crossing.
   val repairClkEnReq = Input(Bool())
   val repairClkEn = Output(Bool())
+  val repairOversample = Input(UInt(5.W))
+  val repairRatioOk = Input(Bool())
   val controllerSel = Output(ControllerSel())
   val mainbandMode = Output(BandMode())
   val sidebandMode = Output(BandMode())
@@ -214,12 +216,13 @@ object UcieTLRegs {
     * a ratio sweep without the partial period at the end eating the thresholds'
     * margin.
     */
-  val defaultRepairWindow: Int = ClkRepairExpect.alignedWindow(768)
+  val defaultRepairWindow: Int = ClkRepairExpect.defaultWindow
 
   /** Gap threshold out of reset, for an oversample ratio of four: the ratio
     * MBINIT runs at with an 8 GHz main clock and the lanes at 4 GT/s.
     */
-  val defaultRepairGapThresh: Int = ClkRepair.GapThreshUi * 4
+  val defaultRepairGapThresh: Int =
+    ClkRepair.GapThreshUi * ClkRepairExpect.defaultN
 }
 
 /** Clock source controls, on a clock of their own.
@@ -275,6 +278,14 @@ class UcieClkRegs(
       val txClkDiv = Output(UInt(ClockingTile.txClkDivWidth.W))
       val txClkPhase = Output(UInt(ClockingTile.txClkPhaseWidth.W))
       val repairClkDiv = Output(UInt(ClockingTile.repairClkDivWidth.W))
+      // The oversample ratio the live configuration gives, and whether it is
+      // usable at all. `N = 2^(txClkDiv - repairClkDiv)`, and the measurement
+      // needs at least two samples a UI -- at one, a sample lands wherever the
+      // two clocks happen to sit and the counters mean nothing. Published so a
+      // misconfiguration reads as a misconfiguration rather than as three dead
+      // lanes.
+      val repairOversample = Output(UInt(5.W))
+      val repairRatioOk = Output(Bool())
       // High while a clock configuration is being applied. The REPAIRCLK
       // branch divides the same main clock an apply moves out from under every
       // divider, so its gate is held shut across one -- but the gate itself
@@ -549,6 +560,13 @@ class UcieClkRegs(
     io.txClkDiv := live.txClkDiv
     io.txClkPhase := txClkPhase
     io.repairClkDiv := live.repairClkDiv
+    val repairRatioOk = live.txClkDiv > live.repairClkDiv
+    io.repairRatioOk := repairRatioOk
+    io.repairOversample := Mux(
+      repairRatioOk,
+      (1.U(5.W) << (live.txClkDiv - live.repairClkDiv))(4, 0),
+      0.U
+    )
     io.cfgBusy := applyBusy || cfgGate
     io.digClkDiv := live.digClkDiv
     io.digClkBypassEn := liveDigBypass
@@ -1122,15 +1140,7 @@ class UcieTLRegs(
       // passes when every counter lands inside its band; `done` says the
       // window is complete, without which none of them mean anything.
       val repairLaneOk = VecInit((0 until ClkRepair.Lanes).map { i =>
-        val o = io.repair.obs(i)
-        o.transitions >= repairBands.transMin &&
-        o.transitions <= repairBands.transMax &&
-        o.ones >= repairBands.onesMin &&
-        o.ones <= repairBands.onesMax &&
-        o.gaps >= repairBands.gapsMin &&
-        o.gaps <= repairBands.gapsMax &&
-        o.maxRun >= repairBands.maxRunMin &&
-        o.maxRun <= repairBands.maxRunMax
+        ClkRepairVerdict(io.repair.obs(i), repairBands, io.repairRatioOk)
       })
       require(
         ClkRepairStatus.Lanes == ClkRepair.Lanes,
@@ -1287,6 +1297,8 @@ class UcieTLRegs(
         toRegFieldR(applyShift(io.repair.wordsObserved), "repairWordsObserved"),
         toRegFieldR(applyShift(io.repair.capWord), "repairCapWord"),
         toRegFieldR(applyShift(repairLaneOk.asUInt), "repairLaneOk"),
+        toRegFieldR(applyShift(io.repairOversample), "repairOversample"),
+        toRegFieldR(applyShift(io.repairRatioOk), "repairRatioOk"),
         toRegFieldRw(repairBands.transMin, "repairTransMin"),
         toRegFieldRw(repairBands.transMax, "repairTransMax"),
         toRegFieldRw(repairBands.onesMin, "repairOnesMin"),
@@ -1632,6 +1644,8 @@ class UcieTL(
     ucieDigital.io.phyFacingIo.repairStatus := regs.module.io.repairStatus
     regs.module.io.repairClkEnReq :=
       selUcie && ucieDigital.io.phyFacingIo.ctrl.repairClkEn
+    regs.module.io.repairOversample := clkRegs.module.io.repairOversample
+    regs.module.io.repairRatioOk := clkRegs.module.io.repairRatioOk
     // In `mainClkSel` order, so the block can index it with that selector.
     clkRegs.module.io.pllLock := Cat(
       phy.io.clkRst.pll16Lock,
