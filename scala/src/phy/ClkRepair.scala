@@ -11,6 +11,13 @@ object ClkRepair {
     */
   val Lanes: Int = ClkDistNetwork.repairLanes
 
+  /** Lanes that carry a sampling tap of their own, and so have their own trim
+    * and shuffler: the two forwarded-clock lanes, which have no data path to
+    * borrow. Track is measured through its own deserializer and is configured
+    * by its `rxctl` like any other lane.
+    */
+  val TapLanes: Int = ClkDistNetwork.repairTrack
+
   /** Words of the window the capture ring keeps, per lane. The first ones, so
     * an offset is a word index and nothing has to be unwrapped. Sixteen words
     * is 512 samples, which is two and a half repeats of the clock repair

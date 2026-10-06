@@ -71,8 +71,10 @@ object RxDataLane {
   * lands; the repair clock is a faster division of the same main clock, so the
   * tap oversamples and the measurement stops depending on phase.
   *
-  * Only the three lanes REPAIRCLK measures -- the two clock lanes and track --
-  * carry one.
+  * Only the forwarded-clock lanes carry one. They have no data path at all,
+  * so there is nothing else to measure them with. Track is measured through
+  * the deserializer it already has, by switching that lane's sampling clock
+  * onto the repair clock for the window -- see `docs/repairclk-track-mux.md`.
   */
 class RxRepairTapIO extends Bundle {
   val clk = Input(Clock())
@@ -132,9 +134,8 @@ class RxLaneCtlIO extends Bundle {
   * `Vec`s because the macro splits them into one pin per bit, and a `Vec` emits
   * exactly that naming.
   */
-class RxDataLane(val withRepairTap: Boolean = false)(implicit
-    includeDefaultModels: Boolean = false
-) extends BlackBox
+class RxDataLane(implicit includeDefaultModels: Boolean = false)
+    extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
     val din = Input(Bool())
@@ -153,18 +154,9 @@ class RxDataLane(val withRepairTap: Boolean = false)(implicit
     val b_pc = Input(Bool())
     val sel_a = Input(Bool())
     val vref_sel = Input(Vec(RxDataLane.VrefBits, Bool()))
-
-    /** Present only on the track lane, which is the one data lane
-      * MBINIT.REPAIRCLK measures. A tap on all sixteen would be paid for in
-      * area and in front-end loading to serve one training stage, so the lane
-      * that needs it is a cell of its own.
-      */
-    val repair =
-      if (withRepairTap) Some(new RxRepairTapIO) else None
   })
 
-  override val desiredName =
-    if (withRepairTap) "rx_track_lane" else "rx_data_lane"
+  override val desiredName = "rx_data_lane"
 
   if (includeDefaultModels) {
     addResource("/vsrc/rx_data_lane.v")
