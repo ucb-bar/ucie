@@ -948,7 +948,7 @@ class UcieTLRegs(
         w
       })
 
-      val repairctl = RegInit(VecInit(Seq.fill(ClkRepair.Lanes)({
+      val repairctl = RegInit(VecInit(Seq.fill(ClkRepair.TapLanes)({
         val w = Wire(new RxRepairDigitalCtlIO)
         w.delay := 0.U
         // Same default as every other lane's: cancel the tile's serdes tree so
@@ -1317,7 +1317,7 @@ class UcieTLRegs(
           toRegFieldR(applyShift(io.repair.obs(i).gaps), s"repairGaps_$i"),
           toRegFieldR(applyShift(io.repair.obs(i).maxRun), s"repairMaxRun_$i")
         )
-      }) ++ (0 until ClkRepair.Lanes).flatMap((i: Int) => {
+      }) ++ (0 until ClkRepair.TapLanes).flatMap((i: Int) => {
         Seq(
           toRegFieldRw(repairctl(i).delay, s"repairctl_${i}_delay")
         ) ++ (0 until 32).map((j: Int) =>
