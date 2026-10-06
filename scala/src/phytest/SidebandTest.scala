@@ -23,7 +23,7 @@ class SidebandTestRegsIO extends Bundle {
   val txPacket = Input(UInt(SidebandTest.PacketBits.W))
   // Starts transmitting `txPacket`. Ignored while `txBusy` is high.
   val txSend = Input(Bool())
-  // High while a packet is being shifted out.
+  // High from a send until its packet has been shifted out.
   val txBusy = Output(Bool())
 
   // RX CONTROL
@@ -51,6 +51,10 @@ class SidebandTestIO extends Bundle {
     */
   val en = Input(Bool())
 
+  /** The 800 MHz sideband TX clock the serializer runs on, and its reset. */
+  val txClock = Input(Clock())
+  val txReset = Input(Bool())
+
   // PHY INTERFACE
   // ====================
   val sb = Flipped(new SbIO)
@@ -73,9 +77,13 @@ class SidebandTest extends Module {
   // The transmitter drops out of busy on its own once a packet is shifted out,
   // so `en` going low is the only thing that has to reset it.
   link.io.txRst := !io.en
-  link.io.tx.valid := io.regs.txSend && io.en
+  link.io.txClock := io.txClock
+  link.io.txReset := io.txReset
+  // One packet at a time, as before the serializer moved to its own clock: a
+  // send while the last packet is still queued or on the wire is dropped.
+  link.io.tx.valid := io.regs.txSend && io.en && link.io.txIdle
   link.io.tx.bits := io.regs.txPacket
-  io.regs.txBusy := !link.io.tx.ready
+  io.regs.txBusy := !link.io.txIdle
 
   link.io.rxRst := io.regs.rxRst || !io.en
   link.io.rx.ready := io.regs.rxPop
