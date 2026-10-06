@@ -71,10 +71,10 @@ object RxDataLane {
   * lands; the repair clock is a faster division of the same main clock, so the
   * tap oversamples and the measurement stops depending on phase.
   *
-  * Only the forwarded-clock lanes carry one. They have no data path at all,
-  * so there is nothing else to measure them with. Track is measured through
-  * the deserializer it already has, by switching that lane's sampling clock
-  * onto the repair clock for the window -- see `docs/repairclk-track-mux.md`.
+  * Only the forwarded-clock lanes carry one. They have no data path at all, so
+  * there is nothing else to measure them with. Track is measured through the
+  * deserializer it already has, by switching that lane's sampling clock onto
+  * the repair clock for the window -- see `docs/repairclk-track-mux.md`.
   */
 class RxRepairTapIO extends Bundle {
   val clk = Input(Clock())

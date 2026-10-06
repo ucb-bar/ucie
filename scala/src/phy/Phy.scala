@@ -29,9 +29,9 @@ object Phy {
   /** Digital clock cycles a REPAIRCLK clock-source switch is held for.
     *
     * The track lane's sampling clock moves between the RX tree and the repair
-    * clock, and both are stopped across the move. This covers the gate
-    * reaching the slowest lane clock either side of it, with the mux thrown in
-    * the middle; it is not a tuned number, just comfortably longer than a gate
+    * clock, and both are stopped across the move. This covers the gate reaching
+    * the slowest lane clock either side of it, with the mux thrown in the
+    * middle; it is not a tuned number, just comfortably longer than a gate
     * takes to land.
     */
   val repairSwitchCycles = 8
@@ -362,6 +362,7 @@ class PhyRepairIO extends Bundle {
   val gapThresh = Input(UInt(ClkRepair.CounterWidth.W))
   val capOffset = Input(UInt(log2Ceil(ClkRepair.CaptureDepth).W))
   val capLane = Input(UInt(log2Ceil(ClkRepair.Lanes).W))
+  val detect = Input(new ClkRepairDetectIO)
 
   /** The window has accumulated `windowWords`. Synchronized into the digital
     * clock domain, since this is the one output that is read while the repair
@@ -369,7 +370,7 @@ class PhyRepairIO extends Bundle {
     */
   val done = Output(Bool())
   val wordsObserved = Output(UInt(ClkRepair.WordCountWidth.W))
-  val obs = Output(Vec(ClkRepair.Lanes, new ClkRepairLaneObsIO))
+  val counts = Output(Vec(ClkRepair.Lanes, new ClkRepairLaneCountsIO))
   val capWord = Output(UInt(Phy.SerdesRatio.W))
 }
 
@@ -584,7 +585,6 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   val repairDividerRstb =
     (!(io.clkRst.reset || !io.clkRst.repairClkEn || repairSwitching)).asAsyncReset
 
-
   val repairClkDiv = Module(new ClkDiv4)
   repairClkDiv.io.clk := clkDist.io.repairClkDivClk
   repairClkDiv.io.resetb := repairDividerRstb
@@ -760,7 +760,8 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
       rxLane.io.clk := (if (isTrack) {
                           Mux(
                             repairMode,
-                            clkDist.io.repairLaneClk(ClkDistNetwork.repairTrack),
+                            clkDist.io
+                              .repairLaneClk(ClkDistNetwork.repairTrack),
                             clkDist.io.rxLaneClk(lane)
                           )
                         } else { clkDist.io.rxLaneClk(lane) })
@@ -807,13 +808,14 @@ class Phy(numLanes: Int = 16)(implicit includeDefaultModels: Boolean = false)
   clkRepair.io.gapThresh := io.repair.gapThresh
   clkRepair.io.capOffset := io.repair.capOffset
   clkRepair.io.capLane := io.repair.capLane
+  clkRepair.io.detect := io.repair.detect
 
   // The counters, the word count and the capture are read straight across.
   // They are static by the time anything reads them: the reader closes the
   // gate first, and with no repair clock there is nothing to update them. See
   // `PhyRepairIO`.
   io.repair.wordsObserved := clkRepair.io.wordsObserved
-  io.repair.obs := clkRepair.io.obs
+  io.repair.counts := clkRepair.io.counts
   io.repair.capWord := clkRepair.io.capWord
   // `done` is the exception: it is polled while the window is still running,
   // so it gets a synchronizer.

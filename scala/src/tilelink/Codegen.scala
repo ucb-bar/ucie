@@ -455,13 +455,16 @@ object Codegen {
 
   /** Register reads a REPAIRCLK window is given to finish.
     *
-    * A window is `repairWindowWords` words of the repair divided clock, which
-    * at the slowest division this part can be set to is a few microseconds --
-    * far under one MMIO read. The bound is there so a gate that never opened,
-    * or a main clock that is not running, fails rather than spins; it is not a
-    * timing estimate.
+    * This IS a timing estimate, despite what a bound like it usually is. A
+    * window advances about two words per MMIO read in the benches, so a window
+    * long enough for sixteen consecutive periods needs a poll count scaled to
+    * it -- at 64, a 216 word window stopped at 121 with `done` still low, and
+    * every lane then scored on a window that never finished.
+    *
+    * Derived from the window rather than written down so the two cannot drift
+    * apart again, with enough margin to cover a slower repair clock.
     */
-  val repairPollTries: Int = 64
+  val repairPollTries: Int = 2 * ClkRepairExpect.detectWindow()
 
   val ucieParams: UcieTLParams = UcieTLParams()
 
@@ -851,6 +854,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
           "repairWindowStep",
           BigInt(ClkRepairExpect.alignedWindow(1))
         ),
+        // Periods that must pass back to back, and a window long enough to
+        // contain that many at any ratio up to eight.
+        ("repairNumConsecutive", BigInt(ClkRepair.NumConsecutive)),
+        ("repairDetectWindow", BigInt(ClkRepairExpect.detectWindow())),
         ("clkUngateSrcPllLock", ClkUngateSrc.pllLock.litValue),
         ("clkUngateSrcMmio", ClkUngateSrc.mmio.litValue),
         ("clkUngateSrcDelay", ClkUngateSrc.delay.litValue)
@@ -1368,6 +1375,43 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       "run_repairclk",
       body.toString,
       args = Seq(Arg("words", Datatype.Long), Arg("gap_thresh", Datatype.Long))
+    )
+  }
+
+  /** Writes the per-period expectation for an oversample ratio of `n`.
+    *
+    * The register defaults describe one ratio; a bench that moves the ratio has
+    * to move these with it, because everything here except the transition count
+    * is measured in samples. Derived from the emitted constants rather than
+    * written down, so the bench and the RTL cannot describe different patterns.
+    */
+  def formatSetRepairDetectFn(): String = {
+    val body = new StringBuilder
+    def ui(name: String) = f.formatConstantRef(name)
+    val high = s"(${ui("repairPatternHighUi")} * n)"
+    val gap = s"(${ui("repairLowRunUi")} * n)"
+    val period = s"(${ui("repairPatternUi")} * n)"
+    body.append(
+      formatWriteNamedReg("repairTransMin", ui("repairTransPerPeriod"))
+    )
+    body.append(
+      formatWriteNamedReg("repairTransMax", ui("repairTransPerPeriod"))
+    )
+    body.append(formatWriteNamedReg("repairOnesMin", s"$high - n"))
+    body.append(formatWriteNamedReg("repairOnesMax", s"$high + n"))
+    body.append(formatWriteNamedReg("repairGapMin", s"$gap - n"))
+    body.append(formatWriteNamedReg("repairGapMax", s"$gap + n"))
+    body.append(formatWriteNamedReg("repairPeriodMin", s"$period - n"))
+    body.append(formatWriteNamedReg("repairPeriodMax", s"$period + n"))
+    body.append(formatWriteNamedReg("repairUiSamples", "n"))
+    body.append(formatWriteNamedReg("repairAltMax", "n"))
+    body.append(
+      formatWriteNamedReg("repairTarget", ui("repairNumConsecutive"))
+    )
+    f.formatFn(
+      "set_repair_detect",
+      body.toString,
+      args = Seq(Arg("n", Datatype.Long))
     )
   }
 
@@ -2071,6 +2115,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
     sb.append(formatSetRepairDivFn())
+    sb.append(formatSetRepairDetectFn())
     sb.append(formatSetClkRepairPatternFn())
     sb.append(formatRunRepairclkFn())
     sb.append(formatSetupUcieFn())
@@ -2161,6 +2206,7 @@ object GenUcieHeader {
     sb.append("\n")
     sb.append(cg.formatSetRxVrefFn())
     sb.append(cg.formatSetRepairDivFn())
+    sb.append(cg.formatSetRepairDetectFn())
     sb.append(cg.formatSetClkRepairPatternFn())
     sb.append(cg.formatRunRepairclkFn())
     sb.append("\n")
