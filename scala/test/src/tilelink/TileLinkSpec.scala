@@ -342,8 +342,7 @@ object TestHarness {
 class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  // Two sinks: the UCIe digital domain and the chip digital domain.
-  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val tltReg = LazyModule(
     new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
   )
@@ -371,12 +370,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   )
 
   ucieTL.digitalClockNode := clockNode
-  // Same source: in this harness the chip clock and the bus clock are one.
-  ucieTL.chipDigitalClockNode := clockNode
-  private val regXbar = TLXbar()
-  ucieTL.regNode := regXbar
-  ucieTL.clkRegNode := regXbar
-  regXbar := tltReg.node
+  ucieTL.regNode := tltReg.node
   tlRam.node := ucieTL.clientNode
   ucieTL.managerNode := tltMb.node
 
@@ -484,8 +478,7 @@ class ScalaTestHarness(
 )(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  // Two sinks: the UCIe digital domain and the chip digital domain.
-  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val regDriver = LazyModule(new TLDriver(regReqs))
   val mbDriver = LazyModule(new TLDriver(mbReqs, mbMaxInflight))
   val tlRam =
@@ -510,11 +503,7 @@ class ScalaTestHarness(
   val backpressure = LazyModule(new TLBackpressureTestWidget(stallCycles))
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.chipDigitalClockNode := clockNode
-  private val regXbar = TLXbar()
-  ucieTL.regNode := regXbar
-  ucieTL.clkRegNode := regXbar
-  regXbar := regDriver.node
+  ucieTL.regNode := regDriver.node
   backpressure.node := ucieTL.clientNode
   tlRam.node := backpressure.node
   ucieTL.managerNode := mbDriver.node
@@ -1655,28 +1644,33 @@ tl_long();
 }
 
 /** Register accesses through a harness's tester, with the harness clock and the
-  * UCIe digital clock both running.
+  * PHY clocks the register blocks run on all running.
   *
-  * The tester, and the bus side of the main register block's clock crossing,
-  * run on the harness clock. The block itself runs on the UCIe digital clock,
-  * which the clocking tile takes from `digitalBypassClk` out of reset, so an
-  * access to it needs both. Every step advances both, eight UCIe edges to five
-  * harness edges as 800 and 500 MHz would. The clock register block is on the
-  * harness clock alone, and stepping both does it no harm.
+  * The tester, and the bus side of the register crossings, run on the harness
+  * clock. The PhyTest and controller blocks run on the PhyTest and sideband
+  * clocks, which the clocking tile takes from `digitalBypassClk` and
+  * `sidebandBypassClk` out of reset, so an access to either needs its clock
+  * too. Every step advances them all, eight PHY edges to five harness edges as
+  * 800 and 500 MHz would. The clock register block is on the harness clock
+  * alone, and stepping the others does it no harm.
   *
   * `TLTesterIO.op` steps one clock and leaves `req.valid` asserted, so this
   * drives the tester itself: each access raises `req.valid` for exactly one
   * accepted beat and then waits for its one response.
   */
-class TwoClockRegAccess(io: TLTesterIO, harnessClock: Clock, ucieClock: Clock) {
+class MultiClockRegAccess(
+    io: TLTesterIO,
+    harnessClock: Clock,
+    phyClocks: Clock*
+) {
   import chisel3.simulator.PeekPokeAPI._
 
   private var steps = 0
 
   def step(cycles: Int = 1): Unit = for (_ <- 0 until cycles) {
     harnessClock.step()
-    ucieClock.step()
-    if (steps % 5 < 3) ucieClock.step()
+    phyClocks.foreach(_.step())
+    if (steps % 5 < 3) phyClocks.foreach(_.step())
     steps += 1
   }
 
@@ -1755,17 +1749,19 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
         enableWaves()
-        // The tester and the bus side of the register crossing run on the
-        // harness clock, the register block on the UCIe digital clock, which
-        // the clocking tile takes from `digitalBypassClk`. An access needs both.
-        val regs = new TwoClockRegAccess(
+        // The tester and the bus side of the register crossings run on the
+        // harness clock, the PhyTest and controller register blocks on the
+        // PhyTest and sideband clocks, which the clocking tile takes from the
+        // digital and sideband bypass clocks. An access needs its block's.
+        val regs = new MultiClockRegAccess(
           c.io.reg,
           c.clock,
-          c.io.ucieDigitalBypassClock
+          c.io.ucieDigitalBypassClock,
+          c.io.ucieSidebandBypassClock
         )
         // ChiselSim's own reset sequence only steps the harness clock, so hold
-        // reset across edges of both to bring the UCIe domain, and its end of
-        // the crossing, out of reset with its registers initialized.
+        // reset across edges of all of them to bring the PHY domains, and their
+        // ends of the crossings, out of reset with their registers initialized.
         c.reset.poke(true.B)
         regs.step(5)
         c.reset.poke(false.B)
@@ -1782,6 +1778,12 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         assert(
           regs.read(addr("txDataChunkIn0")) == BigInt("deadbeef", 16),
           "txDataChunkIn0 readback"
+        )
+        // The controller's block, across its own crossing.
+        regs.write(addr("ucieRetryTrainingAmt"), 5)
+        assert(
+          regs.read(addr("ucieRetryTrainingAmt")) == 5,
+          "ucieRetryTrainingAmt readback"
         )
         println("[TEST] Success")
       }
@@ -1809,11 +1811,14 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       }
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
-        // Two domains: the block runs on the digital bypass clock, the
-        // clocking registers on the chip's own, which here is the harness
-        // clock. Both run throughout.
-        val ucieClk = c.io.ucieDigitalBypassClock
-        val regs = new TwoClockRegAccess(c.io.reg, c.clock, ucieClk)
+        // Two domains: the PhyTest registers run on the digital bypass clock,
+        // the clocking registers on the link's digital clock, which here is
+        // the harness clock. Both run throughout.
+        val regs = new MultiClockRegAccess(
+          c.io.reg,
+          c.clock,
+          c.io.ucieDigitalBypassClock
+        )
         c.reset.poke(true.B)
         regs.step(5)
         c.reset.poke(false.B)

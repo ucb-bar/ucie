@@ -1,4 +1,4 @@
-package edu.berkeley.cs.uciedigital.utils
+package edu.berkeley.cs.uciedigital.phy
 
 import chisel3._
 import chisel3.util._
@@ -65,11 +65,9 @@ class SidebandTxQueue[T <: Data](gen: T, depth: Int = 2) extends Module {
   queue.io.enq <> io.enq
   io.deq <> queue.io.deq
 
-  // Packets can be in the queue, in the serializer, and one more accepted by a
-  // serializer that loads its next packet before the last one's trailing gap
-  // is over: the counts need room for all of them and one more to tell full
-  // from empty.
-  private val countBits = log2Ceil(depth + 3) + 1
+  // Wide enough to count every packet in flight: the queue's, the one being
+  // sent, and the next, which a serializer may load before the last is done.
+  private val countBits = log2Ceil(depth + 3)
   private def toGray(x: UInt): UInt = x ^ (x >> 1)
 
   private val enqCount = withReset(enqReset.asAsyncReset) {

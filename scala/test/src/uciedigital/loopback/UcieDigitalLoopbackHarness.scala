@@ -164,10 +164,6 @@ class UcieDigitalLoopbackHarness(
     val adapter = adapters(i).io
     val proto = protocols(i).io
 
-    // One clock for everything here, so the sideband serializer takes it too.
-    phy.analog.sidebandLink.txClock := clock
-    phy.analog.sidebandLink.txReset := reset.asBool
-
     // The peer's half rate pair becomes a serial stream at its bump driver.
     val peerSb = peer.analog.sidebandLink.out
     phy.analog.sidebandLink.in.bits :=
