@@ -73,10 +73,6 @@ class LogPhyLoopbackHarness(
     val dut = duts(i).io
     val peer = duts(1 - i).io
 
-    // One clock for everything here, so the sideband serializer takes it too.
-    dut.analog.sidebandLink.txClock := clock
-    dut.analog.sidebandLink.txReset := reset.asBool
-
     // The peer's half rate pair becomes a serial stream at its bump driver.
     val peerSb = peer.analog.sidebandLink.out
     dut.analog.sidebandLink.in.bits :=

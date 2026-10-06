@@ -5,8 +5,6 @@ import chisel3.util._
 
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 
-import edu.berkeley.cs.uciedigital.utils.SidebandTxQueue
-
 /** Ports of a [[SidebandSerial]] link. */
 class SidebandSerialIO(packetBits: Int) extends Bundle {
 
@@ -77,13 +75,11 @@ class SidebandSerial(packetBits: Int, rxQueueDepth: Int) extends Module {
 
   // TX
   // ====================
-  val txQueue = withReset(reset.asBool || io.txRst) {
-    Module(new SidebandTxQueue(UInt(packetBits.W)))
-  }
+  val txQueue = Module(new SidebandTxQueue(UInt(packetBits.W)))
   txQueue.io.enq <> io.tx
   io.txIdle := txQueue.io.idle
   txQueue.io.txClock := io.txClock
-  txQueue.io.txReset := io.txReset
+  txQueue.io.txReset := io.txReset || io.txRst
 
   val (txClkEn, txDataBit) =
     withClockAndReset(io.txClock, txQueue.io.txResetSync) {
