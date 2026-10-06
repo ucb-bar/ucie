@@ -33,6 +33,10 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
       val fwClockD0 = Output(Bool())
       val fwClockD1 = Output(Bool())
     }
+
+    // Pulses as a packet's trailing wait ends: the packet is fully on the
+    // wire, and if nothing follows it the serializer is idle.
+    val sent = Output(Bool())
   })
 
   object SerializerState extends ChiselEnum {
@@ -63,6 +67,11 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
 
   val (waitBitsCount, waitBitsDone) = Counter(waitBitsCntEn, numBitsToWait)
 
+  // Whether the wait in progress is the one a packet ends with, decided as the
+  // beat before it finishes. Kept apart from `beatCount` because the next
+  // packet can be accepted during that wait, which resets the count.
+  val inFinalWait = RegInit(false.B)
+
   // Packet opcodes without data
   val isWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === pktOpcode).reduce(_ || _)
@@ -91,6 +100,8 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   io.out.d1 := dataBit
   io.out.fwClockD0 := outClkEn
   io.out.fwClockD1 := false.B
+  io.sent := currentState === SerializerState.sBitsWait && waitBitsDone &&
+    inFinalWait
 
   // defaults
   io.in.ready := false.B
@@ -122,6 +133,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
 
       when(outBitsDone) {
         beatCount := beatCount + 1.U
+        inFinalWait := beatCount + 1.U === numBeats
       }
     }
     is(SerializerState.sBitsWait) {

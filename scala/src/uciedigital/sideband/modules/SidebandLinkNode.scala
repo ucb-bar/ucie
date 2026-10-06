@@ -12,7 +12,15 @@ import chisel3.layers.Verification
 import chisel3.ltl._
 import circt.stage.ChiselStage
 import chisel3.util._
-import edu.berkeley.cs.uciedigital.utils.SkidBuffer
+import edu.berkeley.cs.uciedigital.utils.{SidebandTxQueue, SkidBuffer}
+
+/** A sideband message and the TX mode it was accepted under, as it crosses to
+  * the serializer's clock.
+  */
+class SidebandTxPacket(sbMsgWidth: Int) extends Bundle {
+  val bits = UInt(sbMsgWidth.W)
+  val mode = SBRxTxMode()
+}
 
 class SidebandLinkNode(
     sbMsgWidth: Int,
@@ -53,6 +61,10 @@ class SidebandLinkNode(
       val desTimedout = Output(Bool())
     }
 
+    // The 800 MHz sideband TX clock the serializer runs on, and its reset.
+    val txClock = Input(Clock())
+    val txReset = Input(Bool())
+
     // Ctrl signals
     val ctrl = new Bundle {
       val txMode = Input(SBRxTxMode())
@@ -62,27 +74,50 @@ class SidebandLinkNode(
     }
   })
 
-  // TX Path: txIn --> SkidBuffer --> Parity Set --> Serializer --> txOut
-  val serializer = Module(new SidebandLinkSerializer(sbLinkWidth, sbMsgWidth))
-
-  serializer.io.ctrl.txMode := io.ctrl.txMode
+  // TX Path: txIn --> SkidBuffer --> Parity Set --> TX queue --> Serializer
+  // --> txOut. The serializer runs on the sideband TX clock; the queue carries
+  // each message there with the TX mode it was accepted under, since the mode
+  // decides how many beats it is sent as.
+  val txQueue = Module(new SidebandTxQueue(new SidebandTxPacket(sbMsgWidth)))
+  txQueue.io.txClock := io.txClock
+  txQueue.io.txReset := io.txReset
+  val serializer = withClockAndReset(io.txClock, txQueue.io.txResetSync) {
+    Module(new SidebandLinkSerializer(sbLinkWidth, sbMsgWidth))
+  }
+  serializer.io.in.valid := txQueue.io.deq.valid
+  serializer.io.in.bits := txQueue.io.deq.bits.bits
+  txQueue.io.deq.ready := serializer.io.in.ready
+  txQueue.io.sent := serializer.io.sent
+  // The mode of the message being sent, for as long as it is being sent.
+  serializer.io.ctrl.txMode := withClockAndReset(
+    io.txClock,
+    txQueue.io.txResetSync
+  ) {
+    RegEnable(
+      txQueue.io.deq.bits.mode,
+      SBRxTxMode.PACKET,
+      serializer.io.in.fire
+    )
+  }
 
   // Minimizes potentially large combinational path for serializer ready signal
   val skidBuffer = Module(new SkidBuffer(sbMsgWidth))
 
+  // Nothing waiting here, and everything already handed to the serializer on
+  // the wire.
   io.ctrl.allPacketsSent := io.ctrl.freezeAcceptingPackets &&
     !skidBuffer.io.out.valid &&
-    serializer.io.in.ready
+    txQueue.io.idle
 
   skidBuffer.io.in.valid := io.txIn.valid && !io.ctrl.freezeAcceptingPackets
   skidBuffer.io.in.bits := io.txIn.bits
   io.txIn.ready := skidBuffer.io.in.ready && !io.ctrl.freezeAcceptingPackets
 
-  skidBuffer.io.out.ready := serializer.io.in.ready
+  skidBuffer.io.out.ready := txQueue.io.enq.ready
   val txOpcode = skidBuffer.io.out.bits(4, 0)
   val txIsWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === txOpcode).reduce(_ || _)
-  val txAccept = serializer.io.in.fire
+  val txAccept = txQueue.io.enq.fire
 
   // Parity Set Logic -- set parity before serializing
   // NOTE: Assumption is that if data bits need to be zeroed out they will be, so DP == 0
@@ -104,8 +139,9 @@ class SidebandLinkNode(
   )
   val newBits = WireDefault(Cat(payloadPSet, newHeader))
 
-  serializer.io.in.valid := skidBuffer.io.out.valid
-  serializer.io.in.bits := newBits
+  txQueue.io.enq.valid := skidBuffer.io.out.valid
+  txQueue.io.enq.bits.bits := newBits
+  txQueue.io.enq.bits.mode := io.ctrl.txMode
 
   io.txOut.clk := serializer.io.out.clk
   io.txOut.d0 := serializer.io.out.d0
@@ -183,7 +219,7 @@ class SidebandLinkNode(
     block(Verification.Cover) {
       val sawFreezeBusy = RegInit(false.B)
 
-      when(io.ctrl.freezeAcceptingPackets && !serializer.io.in.ready) {
+      when(io.ctrl.freezeAcceptingPackets && !txQueue.io.idle) {
         sawFreezeBusy := true.B
       }.elsewhen(io.ctrl.allPacketsSent) {
         sawFreezeBusy := false.B

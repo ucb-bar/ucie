@@ -63,6 +63,10 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.debug.txDivClk := laneDivClk.asClock
   dut.io.debug.sbTxClk := false.B.asClock
   dut.io.debug.rxData := DontCare
+  // The sideband tester stays in reset below, so its serializer's clock is the
+  // main one.
+  dut.io.sbTxClock := clock
+  dut.io.sbTxReset := reset.asBool
 
   // The mainband FSMs have to be live for the loopback target to run; the
   // sideband tester stays in reset.
