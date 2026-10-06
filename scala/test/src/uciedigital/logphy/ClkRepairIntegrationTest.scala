@@ -7,7 +7,7 @@ import org.scalatest.funspec.AnyFunSpec
 
 import edu.berkeley.cs.uciedigital.phy.{
   ClkRepair,
-  ClkRepairBandsIO,
+  ClkRepairDetectIO,
   ClkRepairExpect,
   ClkRepairVerdict,
   Phy
@@ -116,20 +116,23 @@ class ClkRepairSeam(
   }
   io.wordsObserved := wordsAtDone
 
-  // The register block's half of the seam: the bands, and the verdict.
-  val bands = Wire(new ClkRepairBandsIO)
-  val expect = ClkRepairExpect.bands(windowWords, n)
-  bands.transMin := expect.transMin.U
-  bands.transMax := expect.transMax.U
-  bands.onesMin := expect.onesMin.U
-  bands.onesMax := expect.onesMax.U
-  bands.gapsMin := expect.gapsMin.U
-  bands.gapsMax := expect.gapsMax.U
-  bands.maxRunMin := expect.maxRunMin.U
-  bands.maxRunMax := expect.maxRunMax.U
+  // The register block's half of the seam: the per-period expectation, and
+  // the verdict.
+  val expect = ClkRepairExpect.detect(n)
+  meas.io.detect.transMin := expect.transMin.U
+  meas.io.detect.transMax := expect.transMax.U
+  meas.io.detect.onesMin := expect.onesMin.U
+  meas.io.detect.onesMax := expect.onesMax.U
+  meas.io.detect.gapMin := expect.gapMin.U
+  meas.io.detect.gapMax := expect.gapMax.U
+  meas.io.detect.periodMin := expect.periodMin.U
+  meas.io.detect.periodMax := expect.periodMax.U
+  meas.io.detect.uiSamples := expect.uiSamples.U
+  meas.io.detect.altMax := expect.altMax.U
+  meas.io.detect.target := expect.target.U
 
   val laneOk = VecInit((0 until ClkRepair.Lanes).map { lane =>
-    ClkRepairVerdict(meas.io.obs(lane), bands, ratioOk.B)
+    ClkRepairVerdict(meas.io.counts(lane), ratioOk.B)
   })
   detector.io.status.done := meas.io.done
   detector.io.status.laneOk := laneOk
@@ -139,9 +142,9 @@ class ClkRepairSeam(
 
 class ClkRepairIntegrationTest extends AnyFunSpec with ChiselSim {
   val afeParams = new AfeParams()
-  // A whole number of pattern periods at every ratio this exercises, short
-  // enough to simulate in seconds.
-  val windowWords: Int = ClkRepairExpect.alignedWindow(96)
+  // Enough periods for the spec's sixteen consecutive detections at every
+  // ratio this exercises, plus the one that finds the first gap.
+  val windowWords: Int = ClkRepairExpect.detectWindow()
 
   /** Runs one request through the seam and returns what came back: the three
     * status bits, whether the answer was offered before the requester asked for

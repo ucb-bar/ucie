@@ -923,28 +923,31 @@ class UcieTLRegs(
       val repairCapOffset = RegInit(
         0.U(log2Ceil(ClkRepair.CaptureDepth).W)
       )
-      // Thresholds the counters are judged against.
+      // What one pattern period must look like, and how many must pass back
+      // to back.
       //
-      // One band per counter rather than one per lane: during REPAIRCLK all
-      // three lanes carry the same word (`PatternWriter` sends `clkRepairWord`
-      // on clkP, clkN and track alike), so they have one expectation between
-      // them.
+      // One set rather than one per lane: during REPAIRCLK all three lanes
+      // carry the same word (`PatternWriter` sends `clkRepairWord` on clkP,
+      // clkN and track alike), so they have one expectation between them.
       //
-      // Registers rather than constants because the right band depends on the
-      // oversample ratio, on how much the front end's auto-zero handover costs
-      // in spurious transitions, and on how far the two dies' clocks have
-      // drifted -- none of which is an RTL decision.
-      val repairBands = RegInit({
-        val w = Wire(new ClkRepairBandsIO)
-        val d = ClkRepairExpect.defaultBands
+      // Registers rather than constants because `ones` and the gap are counted
+      // in samples, so both scale with the oversample ratio, which is not an
+      // RTL decision. `target` is a register too so bring-up can lower the bar
+      // to see how far a bad lane gets; the default is the spec's sixteen.
+      val repairDetect = RegInit({
+        val w = Wire(new ClkRepairDetectIO)
+        val d = ClkRepairExpect.defaultDetect
         w.transMin := d.transMin.U
         w.transMax := d.transMax.U
         w.onesMin := d.onesMin.U
         w.onesMax := d.onesMax.U
-        w.gapsMin := d.gapsMin.U
-        w.gapsMax := d.gapsMax.U
-        w.maxRunMin := d.maxRunMin.U
-        w.maxRunMax := d.maxRunMax.U
+        w.gapMin := d.gapMin.U
+        w.gapMax := d.gapMax.U
+        w.periodMin := d.periodMin.U
+        w.periodMax := d.periodMax.U
+        w.uiSamples := d.uiSamples.U
+        w.altMax := d.altMax.U
+        w.target := d.target.U
         w
       })
 
@@ -1116,6 +1119,7 @@ class UcieTLRegs(
       io.repair.gapThresh := applyShift(repairGapThresh)
       io.repair.capLane := applyShift(repairCapLane)
       io.repair.capOffset := applyShift(repairCapOffset)
+      io.repair.detect := applyShift(repairDetect)
       // Either source opens a window: the controller during MBINIT, or this
       // register with no controller present at all.
       val repairWindowOpen = repairClkEn || io.repairClkEnReq
@@ -1139,8 +1143,18 @@ class UcieTLRegs(
       // The verdict, for the controller and for a readable register. A lane
       // passes when every counter lands inside its band; `done` says the
       // window is complete, without which none of them mean anything.
+      // Gated on `done`, so a lane reads good only once there is a complete
+      // window behind the verdict.
+      //
+      // The counters are combinational from a domain that is still running
+      // while a window is in flight, so without this the register -- and
+      // anything that read it at the wrong moment -- would show a verdict on a
+      // partial count. The controller already waits for `done`, so this does
+      // not change what it sees; it makes the readable register say the same
+      // thing the controller acts on.
       val repairLaneOk = VecInit((0 until ClkRepair.Lanes).map { i =>
-        ClkRepairVerdict(io.repair.obs(i), repairBands, io.repairRatioOk)
+        ClkRepairVerdict(io.repair.counts(i), io.repairRatioOk) &&
+        repairDone
       })
       require(
         ClkRepairStatus.Lanes == ClkRepair.Lanes,
@@ -1299,23 +1313,33 @@ class UcieTLRegs(
         toRegFieldR(applyShift(repairLaneOk.asUInt), "repairLaneOk"),
         toRegFieldR(applyShift(io.repairOversample), "repairOversample"),
         toRegFieldR(applyShift(io.repairRatioOk), "repairRatioOk"),
-        toRegFieldRw(repairBands.transMin, "repairTransMin"),
-        toRegFieldRw(repairBands.transMax, "repairTransMax"),
-        toRegFieldRw(repairBands.onesMin, "repairOnesMin"),
-        toRegFieldRw(repairBands.onesMax, "repairOnesMax"),
-        toRegFieldRw(repairBands.gapsMin, "repairGapsMin"),
-        toRegFieldRw(repairBands.gapsMax, "repairGapsMax"),
-        toRegFieldRw(repairBands.maxRunMin, "repairMaxRunMin"),
-        toRegFieldRw(repairBands.maxRunMax, "repairMaxRunMax")
+        toRegFieldRw(repairDetect.transMin, "repairTransMin"),
+        toRegFieldRw(repairDetect.transMax, "repairTransMax"),
+        toRegFieldRw(repairDetect.onesMin, "repairOnesMin"),
+        toRegFieldRw(repairDetect.onesMax, "repairOnesMax"),
+        toRegFieldRw(repairDetect.gapMin, "repairGapMin"),
+        toRegFieldRw(repairDetect.gapMax, "repairGapMax"),
+        toRegFieldRw(repairDetect.periodMin, "repairPeriodMin"),
+        toRegFieldRw(repairDetect.periodMax, "repairPeriodMax"),
+        toRegFieldRw(repairDetect.uiSamples, "repairUiSamples"),
+        toRegFieldRw(repairDetect.altMax, "repairAltMax"),
+        toRegFieldRw(repairDetect.target, "repairTarget")
       ) ++ (0 until ClkRepair.Lanes).flatMap((i: Int) => {
         Seq(
           toRegFieldR(
-            applyShift(io.repair.obs(i).transitions),
+            applyShift(io.repair.counts(i).transitions),
             s"repairTransitions_$i"
           ),
-          toRegFieldR(applyShift(io.repair.obs(i).ones), s"repairOnes_$i"),
-          toRegFieldR(applyShift(io.repair.obs(i).gaps), s"repairGaps_$i"),
-          toRegFieldR(applyShift(io.repair.obs(i).maxRun), s"repairMaxRun_$i")
+          toRegFieldR(applyShift(io.repair.counts(i).ones), s"repairOnes_$i"),
+          toRegFieldR(applyShift(io.repair.counts(i).gaps), s"repairGaps_$i"),
+          toRegFieldR(
+            applyShift(io.repair.counts(i).maxRun),
+            s"repairMaxRun_$i"
+          ),
+          toRegFieldR(
+            applyShift(io.repair.counts(i).consecutive),
+            s"repairConsecutive_$i"
+          )
         )
       }) ++ (0 until ClkRepair.TapLanes).flatMap((i: Int) => {
         Seq(

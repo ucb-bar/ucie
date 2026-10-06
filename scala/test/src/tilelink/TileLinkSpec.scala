@@ -1287,16 +1287,18 @@ end
     moduleItems = """
 // Words a window accumulates here.
 //
-// Far shorter than the register default: a window is real analog time, and
-// four pattern periods at the coarsest ratio is as much as the counters need
-// to separate every case this bench asks about. It stays a multiple of the
-// alignment step so no ratio is left scoring a partial period.
-localparam integer REPAIR_WORDS = 4 * `REPAIR_WINDOW_STEP;
+// Shorter than the register default, but no shorter than detection allows: the
+// spec wants sixteen periods in a row, so the window has to hold them at the
+// coarsest ratio this bench uses, plus the one that finds the first gap and
+// the one left open at the end. `REPAIR_DETECT_WINDOW` is that figure,
+// computed where `ClkRepair` is, so the two cannot disagree.
+localparam integer REPAIR_WORDS = `REPAIR_DETECT_WINDOW;
 
 integer repair_trans[`REPAIR_LANES];
 integer repair_ones[`REPAIR_LANES];
 integer repair_gaps[`REPAIR_LANES];
 integer repair_max_run[`REPAIR_LANES];
+integer repair_consecutive[`REPAIR_LANES];
 integer repair_words_seen;
 integer repair_done_seen;
 integer repair_tx_period;
@@ -1311,6 +1313,7 @@ reg [31:0] repair_cap[`REPAIR_LANES][2];
 task automatic repair_run(input integer n);
   reg [63:0] v;
   begin
+    set_repair_detect(n);
     run_repairclk(REPAIR_WORDS, `REPAIR_GAP_THRESH_UI * n);
     `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, v);
     repair_words_seen = v;
@@ -1338,6 +1341,9 @@ task automatic repair_run(input integer n);
       repair_gaps[l] = v;
       `READ_UCIE(regDrv, `REPAIR_MAX_RUN + l * `REPAIR_MAX_RUN_WIDTH, v);
       repair_max_run[l] = v;
+      `READ_UCIE(regDrv,
+                 `REPAIR_CONSECUTIVE + l * `REPAIR_CONSECUTIVE_WIDTH, v);
+      repair_consecutive[l] = v;
     end
   end
 endtask
@@ -1366,6 +1372,16 @@ function automatic bit repair_lane_ok(input integer l, input integer n);
   end
 endfunction
 
+// What the RTL actually decides on: sixteen periods of the pattern in a row.
+//
+// Kept apart from `repair_lane_ok` on purpose. That one is the bench's own
+// model of the counters and stays as a cross check, but it is a statistic of
+// the window and would pass a lane that never strung two clean periods
+// together. This is the verdict the link is made on.
+function automatic bit repair_lane_detected(input integer l);
+  repair_lane_detected = (repair_consecutive[l] >= `REPAIR_NUM_CONSECUTIVE);
+endfunction
+
 // One window, with the gate and the counters read at every step.
 //
 // The regression this guards is a race rather than a measurement: opening a
@@ -1375,28 +1391,22 @@ endfunction
 // and it scored ZERO, which reads exactly like a dead link.
 task automatic repair_trace(input string label, input integer n,
                             output integer bad);
-  reg [63:0] d, w, en;
+  reg [63:0] w;
   begin
     bad = 0;
-    `WRITE_UCIE(regDrv, `REPAIR_WINDOW_WORDS, REPAIR_WORDS);
-    `WRITE_UCIE(regDrv, `REPAIR_GAP_THRESH, `REPAIR_GAP_THRESH_UI * n);
-    `READ_UCIE(regDrv, `REPAIR_DONE, d);
+    // Driven exactly as the chip is: open the window, poll only `done`, close
+    // it, and read the count afterwards.
+    //
+    // `done` is one bit and synchronized, so it is the only thing safe to read
+    // while the repair clock is running. `wordsObserved` is a free-running
+    // counter in that domain with no synchronizer, and reading it mid-window
+    // could catch a carry -- so it is read once the gate has shut and the
+    // count is static, which is the only way anything should ever read it.
+    run_repairclk(REPAIR_WORDS, `REPAIR_GAP_THRESH_UI * n);
     `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
-    `READ_UCIE(regDrv, `REPAIR_CLK_EN_OBSERVED, en);
-    $display("  %s before: en %0d done %0d words %0d", label, en, d, w);
-    `WRITE_UCIE(regDrv, `REPAIR_CLK_EN, 64'h1);
-    for (int i = 0; i < 64; i++) begin
-      `READ_UCIE(regDrv, `REPAIR_DONE, d);
-      `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
-      `READ_UCIE(regDrv, `REPAIR_CLK_EN_OBSERVED, en);
-      if (i % 8 == 0 || d != 0)
-        $display("  %s poll %0d: en %0d done %0d words %0d", label, i, en, d, w);
-      if (d != 0) break;
-    end
-    `WRITE_UCIE(regDrv, `REPAIR_CLK_EN, 64'h0);
-    `READ_UCIE(regDrv, `REPAIR_WORDS_OBSERVED, w);
+    $display("  %s: %0d of %0d words", label, w, REPAIR_WORDS);
     if (w != REPAIR_WORDS) begin
-      $display("  %s FAILED: %0d of %0d words", label, w, REPAIR_WORDS);
+      $display("  %s FAILED: the window did not complete", label);
       bad = 1;
     end
   end
@@ -1448,11 +1458,17 @@ task automatic check_repair_lanes(
     $display("  %-28s words %0d done %0d txperiod %0d", label,
              repair_words_seen, repair_done_seen, repair_tx_period);
     for (int l = 0; l < `REPAIR_LANES; l++) begin
-      got = repair_lane_ok(l, n);
-      $display("    %s trans %5d ones %5d gaps %3d maxrun %4d  cap %08x %08x  %s%s",
+      // The verdict is the RTL's detection. `repair_lane_ok` is the bench's
+      // own model of the counters, printed beside it so a lane that passes
+      // the totals but fails detection -- the case the counters cannot see --
+      // is visible rather than just failing.
+      got = repair_lane_detected(l);
+      $display("    %s trans %5d ones %5d gaps %3d maxrun %4d consec %3d  cap %08x %08x  %s%s%s",
                names[l], repair_trans[l], repair_ones[l], repair_gaps[l],
-               repair_max_run[l], repair_cap[l][0], repair_cap[l][1],
+               repair_max_run[l], repair_consecutive[l],
+               repair_cap[l][0], repair_cap[l][1],
                got ? "ok" : "BAD",
+               (repair_lane_ok(l, n) == got) ? "" : " (counters disagree)",
                (got == want[l]) ? "" : "   <-- UNEXPECTED");
       if (got != want[l]) bad = bad + 1;
     end

@@ -63,6 +63,51 @@ object ClkRepairStimulus {
   def stuck(level: Boolean, count: Int): Seq[Boolean] =
     Seq.fill(count)(level)
 
+  /** The repair pattern with one UI flipped in every `everyPeriods`-th period.
+    *
+    * Sparse on purpose: a corruption this rare moves the window totals by less
+    * than the margin the bands have to carry for drift and auto-zero, so the
+    * old thresholding scored it clean. It never gets sixteen clean periods in a
+    * row, so detection cannot.
+    */
+  def corrupted(
+      n: Int,
+      count: Int,
+      everyPeriods: Int,
+      ui: Int = 5
+  ): Seq[Boolean] =
+    Seq.tabulate(count) { s =>
+      val uiIndex = (s / n)
+      val bit = patternBit(uiIndex)
+      val corrupt =
+        (uiIndex / patternUi) % everyPeriods == 0 && uiIndex % patternUi == ui
+      if (corrupt) !bit else bit
+    }
+
+  /** A period carrying the pattern's transitions, ones, gap and length, and
+    * none of its shape: one long high pulse, then fifteen one-sample ones
+    * spaced a UI apart, then the gap.
+    *
+    * Every per-period total matches a good lane exactly -- 32 transitions, `16
+    * * n` ones, a `17 * n` gap, `48 * n` samples -- so every aggregate check in
+    * this file passes it. Only the alternation test tells it apart. This is the
+    * case that says why the shape has to be checked at all.
+    */
+  def aggregateMatchedFake(n: Int, count: Int): Seq[Boolean] = {
+    val period = scala.collection.mutable.ArrayBuffer[Boolean]()
+    period ++= Seq.fill(ClkRepair.PatternHighUi * n - 15)(true)
+    for (_ <- 0 until 15) {
+      period ++= Seq.fill(n)(false)
+      period += true
+    }
+    period ++= Seq.fill(ClkRepair.PatternLowRunUi * n)(false)
+    require(
+      period.length == patternUi * n,
+      s"fake period is ${period.length}, want ${patternUi * n}"
+    )
+    Seq.tabulate(count)(s => period(s % period.length))
+  }
+
   /** Packs samples into lane words, earliest sample in bit 0 -- wire order,
     * which is what the lane's shuffler delivers.
     */
@@ -77,6 +122,9 @@ object ClkRepairStimulus {
       .toSeq
 
   case class Counts(transitions: Int, ones: Int, gaps: Int, maxRun: Int)
+
+  /** What a window returns: the diagnostic counters, and the detection. */
+  case class Result(counts: Counts, consecutive: Int, detected: Boolean)
 
   /** The same accumulation [[ClkRepair]] performs, in Scala.
     *
@@ -125,20 +173,27 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
 
   // Short enough to simulate quickly, still a whole number of pattern periods
   // at every ratio from 2 to 8.
-  val windowWords: Int = ClkRepairExpect.alignedWindow(96)
+  // Enough periods for the spec's sixteen consecutive detections at every
+  // ratio from 2 to 8, plus the one that finds the first gap.
+  val windowWords: Int = ClkRepairExpect.detectWindow()
   val windowSamples: Int = windowWords * Phy.SerdesRatio
 
   /** Runs one window with a stream per lane and returns what the hardware
     * counted.
     */
-  def run(lanes: Seq[Seq[Boolean]], n: Int): Seq[Counts] = {
+  def run(
+      lanes: Seq[Seq[Boolean]],
+      n: Int,
+      target: Int = ClkRepair.NumConsecutive
+  ): Seq[Result] = {
     require(lanes.length == ClkRepair.Lanes)
     val gapThresh = ClkRepair.GapThreshUi * n
+    val d = ClkRepairExpect.detect(n, target)
     val laneWords = lanes.map(words)
     laneWords.foreach(w =>
       require(w.length >= windowWords, s"${w.length} words is short")
     )
-    var out: Seq[Counts] = Seq.empty
+    var out: Seq[Result] = Seq.empty
     simulate(new ClkRepair) { c =>
       // A window of zero never starts, so nothing is counted while the reset
       // settles and the first real word is the first one scored.
@@ -146,6 +201,17 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
       c.io.gapThresh.poke(gapThresh.U)
       c.io.capLane.poke(0.U)
       c.io.capOffset.poke(0.U)
+      c.io.detect.transMin.poke(d.transMin.U)
+      c.io.detect.transMax.poke(d.transMax.U)
+      c.io.detect.onesMin.poke(d.onesMin.U)
+      c.io.detect.onesMax.poke(d.onesMax.U)
+      c.io.detect.gapMin.poke(d.gapMin.U)
+      c.io.detect.gapMax.poke(d.gapMax.U)
+      c.io.detect.periodMin.poke(d.periodMin.U)
+      c.io.detect.periodMax.poke(d.periodMax.U)
+      c.io.detect.uiSamples.poke(d.uiSamples.U)
+      c.io.detect.altMax.poke(d.altMax.U)
+      c.io.detect.target.poke(d.target.U)
       c.io.word.foreach(_.poke(0.U))
       c.clock.step(2)
 
@@ -159,11 +225,15 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
       assert(c.io.done.peek().litToBoolean, "window did not close")
       assert(c.io.wordsObserved.peek().litValue == windowWords)
       out = (0 until ClkRepair.Lanes).map { lane =>
-        Counts(
-          transitions = c.io.obs(lane).transitions.peek().litValue.toInt,
-          ones = c.io.obs(lane).ones.peek().litValue.toInt,
-          gaps = c.io.obs(lane).gaps.peek().litValue.toInt,
-          maxRun = c.io.obs(lane).maxRun.peek().litValue.toInt
+        Result(
+          counts = Counts(
+            transitions = c.io.counts(lane).transitions.peek().litValue.toInt,
+            ones = c.io.counts(lane).ones.peek().litValue.toInt,
+            gaps = c.io.counts(lane).gaps.peek().litValue.toInt,
+            maxRun = c.io.counts(lane).maxRun.peek().litValue.toInt
+          ),
+          consecutive = c.io.counts(lane).consecutive.peek().litValue.toInt,
+          detected = c.io.counts(lane).detected.peek().litToBoolean
         )
       }
     }
@@ -172,7 +242,15 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
 
   /** The same stream on all three lanes, which is what REPAIRCLK sends. */
   def runOne(stream: Seq[Boolean], n: Int): Counts =
-    run(Seq.fill(ClkRepair.Lanes)(stream), n).head
+    run(Seq.fill(ClkRepair.Lanes)(stream), n).head.counts
+
+  /** As `runOne`, keeping the detection rather than the counters. */
+  def detectOne(
+      stream: Seq[Boolean],
+      n: Int,
+      target: Int = ClkRepair.NumConsecutive
+  ): Result =
+    run(Seq.fill(ClkRepair.Lanes)(stream), n, target).head
 
   describe("ClkRepair counters") {
     for (n <- Seq(2, 4, 8)) {
@@ -311,9 +389,98 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
     it("should score each lane independently") {
       val good = repair(n, windowSamples)
       val got = run(Seq(good, stuck(false, windowSamples), good), n)
-      assert(inBand(got(0), bands), s"clkP ${got(0)}")
-      assert(!inBand(got(1), bands), s"clkN ${got(1)} should have failed")
-      assert(inBand(got(2), bands), s"track ${got(2)}")
+      assert(inBand(got(0).counts, bands), s"clkP ${got(0)}")
+      assert(
+        !inBand(got(1).counts, bands),
+        s"clkN ${got(1)} should have failed"
+      )
+      assert(inBand(got(2).counts, bands), s"track ${got(2)}")
+      assert(
+        got(0).detected && !got(1).detected && got(2).detected,
+        s"detection should follow the same split: $got"
+      )
+    }
+  }
+
+  describe("ClkRepair pattern detection") {
+    val n = 4
+    val bands = ClkRepairExpect.bands(windowWords, n)
+
+    it("should detect a clean lane at every ratio and phase") {
+      for (nn <- Seq(2, 4, 8); phase <- 0 until nn) {
+        val got = detectOne(repair(nn, windowSamples, phase), nn)
+        assert(got.detected, s"x$nn phase $phase was not detected: $got")
+        assert(
+          got.consecutive == ClkRepair.NumConsecutive,
+          s"x$nn phase $phase should saturate at the target: $got"
+        )
+      }
+    }
+
+    it("should still detect a far side on its own clock") {
+      // The drift the bands were widened for. Detection has to keep it, or it
+      // has traded one false verdict for the opposite one.
+      for (driftPeriod <- Seq(400, 997)) {
+        val got = detectOne(repair(n, windowSamples, 1, driftPeriod), n)
+        assert(got.detected, s"drift 1 in $driftPeriod rejected: $got")
+      }
+    }
+
+    it("should reject sparse corruption that the window bands accept") {
+      // One UI flipped every fourth period. This is the case the whole change
+      // is for: the window totals move by less than the margin, so the bands
+      // call the lane clean, and the spec's sixteen in a row never happens.
+      val got = detectOne(corrupted(n, windowSamples, everyPeriods = 4), n)
+      assert(
+        inBand(got.counts, bands),
+        s"premise failed -- the bands were supposed to accept this: $got"
+      )
+      assert(!got.detected, s"a corrupted lane was detected: $got")
+      assert(
+        got.consecutive < ClkRepair.NumConsecutive,
+        s"consecutive should never reach the target: $got"
+      )
+    }
+
+    it("should reject a fake that matches every per-period total") {
+      // One long high pulse and fifteen one-sample ones. Transitions, ones,
+      // gap and period are each exactly a good lane's, so every count in this
+      // file passes it and only the alternation check does not.
+      val got = detectOne(aggregateMatchedFake(n, windowSamples), n)
+      assert(
+        inBand(got.counts, bands),
+        s"premise failed -- the fake was supposed to match the totals: $got"
+      )
+      assert(!got.detected, s"a fake with the right totals was detected: $got")
+      assert(got.consecutive == 0, s"no period of it should pass: $got")
+    }
+
+    it("should reject the shapes the counters already rejected") {
+      val cases = Seq(
+        "stuck low" -> stuck(false, windowSamples),
+        "stuck high" -> stuck(true, windowSamples),
+        "bare clock" -> bareClock(n, windowSamples),
+        "duty matched gapless" -> dutyMatchedGapless(n, windowSamples),
+        "wrong rate x2" -> repair(2, windowSamples),
+        "wrong rate x8" -> repair(8, windowSamples)
+      )
+      for ((name, stream) <- cases) {
+        val got = detectOne(stream, n)
+        assert(!got.detected, s"$name was detected: $got")
+      }
+    }
+
+    it("should hold a pass once the target is reached") {
+      // Sixteen clean periods then corruption. The spec asks for sixteen in a
+      // row, not for a clean window, so a lane that has already shown them
+      // stays passed -- the rule `PatternReader` uses for the aligned
+      // patterns.
+      val clean = repair(n, windowSamples)
+      val periodSamples = ClkRepair.PatternUi * n
+      val keep = periodSamples * (ClkRepair.NumConsecutive + 2)
+      val tail = stuck(false, windowSamples - keep)
+      val got = detectOne(clean.take(keep) ++ tail, n)
+      assert(got.detected, s"a pass should survive a later bad period: $got")
     }
   }
 
@@ -331,6 +498,18 @@ class ClkRepairSpec extends AnyFunSpec with ChiselSim {
         c.io.gapThresh.poke((ClkRepair.GapThreshUi * n).U)
         c.io.capLane.poke(0.U)
         c.io.capOffset.poke(0.U)
+        val d = ClkRepairExpect.detect(n)
+        c.io.detect.transMin.poke(d.transMin.U)
+        c.io.detect.transMax.poke(d.transMax.U)
+        c.io.detect.onesMin.poke(d.onesMin.U)
+        c.io.detect.onesMax.poke(d.onesMax.U)
+        c.io.detect.gapMin.poke(d.gapMin.U)
+        c.io.detect.gapMax.poke(d.gapMax.U)
+        c.io.detect.periodMin.poke(d.periodMin.U)
+        c.io.detect.periodMax.poke(d.periodMax.U)
+        c.io.detect.uiSamples.poke(d.uiSamples.U)
+        c.io.detect.altMax.poke(d.altMax.U)
+        c.io.detect.target.poke(d.target.U)
         c.io.word.foreach(_.poke(0.U))
         c.clock.step(2)
         c.io.windowWords.poke(windowWords.U)
