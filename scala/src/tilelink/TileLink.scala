@@ -87,7 +87,8 @@ case class UcieTLParams(
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
-  def controlManagerBusWhere = Some(managerWhere)
+  // `UcieChipletLink` hands the router no control node to attach; see there.
+  def controlManagerBusWhere = None
 
   /** Suffix appended to the module names of this instance.
     *
@@ -1300,12 +1301,25 @@ class UcieTL(
   val clkRegs = LazyModule(new UcieClkRegs(params, beatBytes))
   clkRegs.clockNode := chipClockSourceNode
 
-  // Attached separately rather than behind a crossbar here: `regNode` is a
-  // `TLRegisterNode` in the chiplet interface, so the two blocks come out as
-  // two nodes and whoever attaches them decides how to fan out.
-  val regNode = regs.node
-  val clkRegNode = clkRegs.node
   regs.clockNode := ucieDigitalClockNode
+
+  // The two register ports. Both are synchronous to a chip clock, so whoever
+  // attaches them needs no crossing of their own: `regNode` to
+  // `digitalClockNode`, like the mainband ports, and `clkRegNode` to
+  // `chipDigitalClockNode`. They come out as two nodes rather than behind a
+  // crossbar here, and whoever attaches them decides how to fan out.
+  //
+  // The main register block runs on the UCIe digital clock the PHY makes,
+  // which has no relation to the digital clock, so its port crosses into it
+  // here: the source half in this module, the sink inside the block. Without
+  // the crossing the register logic samples the bus asynchronously, which
+  // applies a write twice or not at all depending on the two clocks' phase. One
+  // entry, as the debug module's register crossing has, since register
+  // accesses need no more. The name node keeps the port called `regs`.
+  val regNode: TLInwardNode =
+    regs.crossIn(regs.node).apply(AsynchronousCrossing(depth = 1)) :=*
+      TLNameNode("regs")
+  val clkRegNode: TLInwardNode = clkRegs.node
 
   override lazy val module = new UcieTLImpl
   class UcieTLImpl extends LazyRawModuleImp(this) {
@@ -1448,13 +1462,15 @@ class UcieTL(
 
     // Sideband TL link: with the sideband in `tl` mode the framed TL packets a
     // `tl` mainband spreads across its lanes are shifted out of the sideband
-    // instead, one frame at a time. The sideband is source synchronous, so this
-    // runs in the digital clock domain alongside the rest of the TL path and
-    // forwards a gated copy of that clock; the frames need no async crossing.
+    // instead, one frame at a time. The link sits in the digital clock domain
+    // alongside the rest of the TL path; its serializer runs on the sideband TX
+    // clock and its deserializer on the forwarded one, each behind a queue.
     val sbTlFrameBits = UcieTL.frameBits(params.creditBits)
     val sbTl = withClockAndReset(childClock, childReset) {
       Module(new SidebandSerial(sbTlFrameBits, params.sbRxQueueDepth))
     }
+    sbTl.io.txClock := phy.io.clkRst.sbClk
+    sbTl.io.txReset := phy.io.clkRst.sbRst
     // Held in reset otherwise: the receiver has no framing beyond its bit
     // counter, so it has to start counting at the first bit the partner sends
     // after both dies enter the mode.
@@ -1463,10 +1479,15 @@ class UcieTL(
 
     // Sideband bumps: ucie uses ucieDigital, a `tl` sideband uses the TL link,
     // and otherwise PhyTest's tester drives. Rx goes to all of them; PhyTest
-    // holds its own tester in reset when its sideband is not in `manual`.
+    // holds its own tester in reset when its sideband is not in `manual`. All
+    // three serialize on the 800 MHz sideband TX clock.
     val digiSb = ucieDigital.io.phyFacingIo.sidebandLink
-    // Each producer serializes in its own clock domain, so the clock travels
-    // with the half rate bits and is muxed alongside them.
+    digiSb.txClock := phy.io.clkRst.sbClk
+    digiSb.txReset := phy.io.clkRst.sbRst
+    test.io.sbTxClock := phy.io.clkRst.sbClk
+    test.io.sbTxReset := phy.io.clkRst.sbRst
+    // Each producer hands over its own clock with its half rate bits, muxed
+    // alongside them; all three are the sideband TX clock.
     val digiSbTxClk = Wire(new SbSerialIO)
     digiSbTxClk.clk := digiSb.out.clk
     digiSbTxClk.d0 := digiSb.out.fwClockD0.asBool
@@ -1904,15 +1925,41 @@ class UcieChipletLink(
       sys_params.managerBlockBytes
     )(p)
   )
+  // The router gives a port one clock. It is the link's digital clock and the
+  // chip clock its clock register block runs on, both always running, so both
+  // of UcieTL's clock sinks take it. Named for the UcieTL node it used to feed
+  // directly, so that the port it makes above this module is still
+  // `ucie_digital_clock_in`.
+  val ucieDigitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
+  val ucieClocks = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
+  ucie.digitalClockNode := ucieClocks
+  ucie.chipDigitalClockNode := ucieClocks
+
   val client_node = ucie.clientNode
   val manager_node = ucie.managerNode
-  val control_manager_node = Some(ucie.regNode)
-  val clock_node = Some(ucie.digitalClockNode)
+  // The router attaches one bare `TLRegisterNode` per port. UcieTL has two
+  // register ports, and the main one is behind a clock crossing, so neither
+  // fits: attach `regNode` and `clkRegNode` to a control bus yourself.
+  val control_manager_node: Option[TLRegisterNode] = None
+  val clock_node = Some(ucieDigitalClockNode)
   val top_IO = BundleBridgeSource(() => new UcieBumpsIO(params.numLanes))
+
+  /** The main register block's port, synchronous to this link's clock. */
+  def regNode: TLInwardNode = ucie.regNode
+
+  /** The clock register block's port, synchronous to this link's clock. */
+  def clkRegNode: TLInwardNode = ucie.clkRegNode
+
   override lazy val module = new UcieChipletLinkImpl(this)
 }
 
-class UcieChipletLinkImpl(outer: UcieChipletLink) extends LazyModuleImp(outer) {
+class UcieChipletLinkImpl(outer: UcieChipletLink)
+    extends LazyRawModuleImp(outer) {
+  val digitalClock = outer.ucieDigitalClockNode.in.head._1
+  outer.ucieClocks.out.foreach { case (out, _) =>
+    out.clock := digitalClock.clock
+    out.reset := digitalClock.reset
+  }
   val io = outer.top_IO.out(0)._1
   outer.ucie.module.io <> io
 }

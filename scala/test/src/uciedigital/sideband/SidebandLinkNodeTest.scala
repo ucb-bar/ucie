@@ -8,6 +8,31 @@ import org.scalatest.funspec.AnyFunSpec
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
+/** A [[SidebandLinkNode]] whose serializer runs on the module clock, so the
+  * tests below step one clock. The TX queue still sits in between.
+  */
+class SidebandLinkNodeOneClock(
+    sbMsgWidth: Int,
+    sbLinkWidth: Int,
+    numCredits: Int,
+    desTimeoutCycles: Int,
+    queueDepths: SidebandPriorityQueueDepths
+) extends Module {
+  val node = Module(
+    new SidebandLinkNode(
+      sbMsgWidth,
+      sbLinkWidth,
+      numCredits,
+      desTimeoutCycles,
+      queueDepths
+    )
+  )
+  val io = IO(chiselTypeOf(node.io))
+  io <> node.io
+  node.io.txClock := clock
+  node.io.txReset := reset.asBool
+}
+
 class SidebandLinkNodeTest
     extends AnyFunSpec
     with ChiselSim
@@ -61,10 +86,10 @@ class SidebandLinkNodeTest
       depths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
       timeout: Int = 512
   ) =
-    new SidebandLinkNode(msgW, linkW, 32, timeout, depths)
+    new SidebandLinkNodeOneClock(msgW, linkW, 32, timeout, depths)
 
   // Drive one bit onto the link, toggling the forwarded clock.
-  def driveBit(c: SidebandLinkNode, bit: BigInt): Unit = {
+  def driveBit(c: SidebandLinkNodeOneClock, bit: BigInt): Unit = {
     c.io.rxIn.bits.poke(bit.U)
     c.io.rxIn.fwClock.poke(true.B)
     c.clock.step()
@@ -74,7 +99,7 @@ class SidebandLinkNodeTest
 
   // Serialize a message onto rxIn as 64-bit chunks separated by 32-bit idle gaps.
   def feedRxSerial(
-      c: SidebandLinkNode,
+      c: SidebandLinkNodeOneClock,
       msg: BigInt,
       bitWidth: Int = 128
   ): Unit = {
@@ -94,7 +119,10 @@ class SidebandLinkNodeTest
   }
 
   // Capture the serialized stream from txOut and reassemble it.
-  def captureTxSerial(c: SidebandLinkNode, bitWidth: Int = 128): BigInt = {
+  def captureTxSerial(
+      c: SidebandLinkNodeOneClock,
+      bitWidth: Int = 128
+  ): BigInt = {
     var guard = 0
     while (c.io.txOut.d0.peek().litValue == 0 && guard < 100) {
       c.clock.step()
@@ -116,7 +144,7 @@ class SidebandLinkNodeTest
     result
   }
 
-  def takeRxOut(c: SidebandLinkNode): BigInt = {
+  def takeRxOut(c: SidebandLinkNodeOneClock): BigInt = {
     c.io.rxOut.ready.poke(true.B)
     var guard = 0
     while (!c.io.rxOut.valid.peek().litToBoolean && guard < 50) {

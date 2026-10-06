@@ -59,6 +59,9 @@ class LogPhySidebandChannel(
         val freezeAcceptingPackets = Input(Bool())
         val allPacketsSent = Output(Bool())
       }
+      // The 800 MHz sideband TX clock the serializer runs on, and its reset.
+      val txClock = Input(Clock())
+      val txReset = Input(Bool())
     }
   })
 
@@ -96,6 +99,8 @@ class LogPhySidebandChannel(
   io.layer.status.invalidRouteCurr := switch.io.err.invalidRouteCurr
   io.layer.status.invalidRouteLower := switch.io.err.invalidRouteLower
 
+  linkNode.io.txClock := io.link.txClock
+  linkNode.io.txReset := io.link.txReset
   io.link.out.clk := linkNode.io.txOut.clk
   io.link.out.d0 := linkNode.io.txOut.d0
   io.link.out.d1 := linkNode.io.txOut.d1
