@@ -71,10 +71,6 @@ class MainbandLaneIO(afeParams: AfeParams) extends Bundle {
 // PHY's receiver, while `out` is the half rate pair feeding the sideband bump
 // drivers, which do the 2:1 serialization themselves.
 class SidebandPhyLinkIO(sbLinkWidth: Int) extends Bundle {
-  // The 800 MHz sideband TX clock the serializer runs on, and its reset, from
-  // the PHY.
-  val txClock = Input(Clock())
-  val txReset = Input(Bool())
   val in = new Bundle {
     val bits = Input(UInt(sbLinkWidth.W))
     val fwClock = Input(UInt(1.W))

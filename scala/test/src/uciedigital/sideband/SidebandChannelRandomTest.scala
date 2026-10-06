@@ -489,9 +489,6 @@ class SidebandChannelRandomTest
     dut.io.layer <> io.layer
     dut.io.link.in <> io.link.in
     dut.io.link.ctrl <> io.link.ctrl
-    // One clock for everything here, so the serializer takes it too.
-    dut.io.link.txClock := clock
-    dut.io.link.txReset := reset.asBool
     // This harness stands in for the PHY, so the half rate pair the channel
     // emits passes through a pair of bump drivers first: `link.out` here is the
     // serialized stream a receiver on the bumps would see, which is what the

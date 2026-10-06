@@ -155,10 +155,6 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
 
     io.reg(i) <> outer.testers(i).module.io
 
-    // One clock for everything here, so the sideband serializer takes it too.
-    me.io.phyFacingIo.sidebandLink.txClock := clock
-    me.io.phyFacingIo.sidebandLink.txReset := reset.asBool
-
     // The peer's half rate pair becomes a serial stream at its bump driver.
     val peerSb = peer.io.phyFacingIo.sidebandLink.out
     me.io.phyFacingIo.sidebandLink.in.bits :=

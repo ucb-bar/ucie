@@ -195,10 +195,10 @@ class PhyClkRstIO extends Bundle {
   val txDatapathRst = Input(Bool())
   val rxDatapathRst = Input(Bool())
 
-  // Clocking tile configuration. All of it decides where `ucieClk` comes
-  // from, or has to be settled before it exists, so it is held in a register
-  // block on the chip's own digital clock rather than in the one that runs on
-  // `ucieClk` -- and it arrives here rather than through `PhyRegsIO`.
+  // Clocking tile configuration. All of it decides where the PHY's clocks come
+  // from, or has to be settled before they exist, so it is held in a register
+  // block on the chip's own digital clock rather than in one that runs on a PHY
+  // clock -- and it arrives here rather than through `PhyRegsIO`.
   val mainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
   val pll8En = Input(Bool())
   val pll12En = Input(Bool())
@@ -229,14 +229,16 @@ class PhyClkRstIO extends Bundle {
   val pll12Lock = Output(Bool())
   val pll16Lock = Output(Bool())
 
-  // UCIe digital clock (800 MHz).
+  // PhyTest clock (~1.1 GHz), the clocking tile's `DigitalClk`: PhyTest, its
+  // register block, and the lane controls.
   //
   // Should always be toggling when RX AFEs must be active.
-  val ucieClk = Output(Clock())
-  // UCIe digital reset (synchronous to `clk`).
-  val ucieRst = Output(Bool())
+  val phyTestClk = Output(Clock())
+  // PhyTest reset, released against `phyTestClk`.
+  val phyTestRst = Output(Bool())
 
-  // The sideband's own clock, for the TX sideband serializer, and its reset.
+  // Sideband clock (800 MHz), the clocking tile's `SbClk`: the UCIe controller,
+  // its registers, and every sideband serializer. With its reset.
   val sbClk = Output(Clock())
   val sbRst = Output(Bool())
 
@@ -367,7 +369,7 @@ class Phy(
   io.clkRst.pll12Lock := clkTile.io.Pll12Lock
   io.clkRst.pll16Lock := clkTile.io.Pll16Lock
 
-  io.clkRst.ucieClk := clkTile.io.DigitalClk
+  io.clkRst.phyTestClk := clkTile.io.DigitalClk
   io.clkRst.sbClk := clkTile.io.SbClk
   // The sideband clock is its own domain now -- divided from the main clock
   // or taken from its own pin -- so the logic on it needs a reset released
@@ -378,8 +380,8 @@ class Phy(
   io.clkRst.sbRst := !sbRstSync.io.rstbSync
   val digitalRstSync = Module(new RstSync)
   digitalRstSync.io.rstbAsync := !io.clkRst.reset
-  digitalRstSync.io.clk := io.clkRst.ucieClk
-  io.clkRst.ucieRst := !digitalRstSync.io.rstbSync
+  digitalRstSync.io.clk := io.clkRst.phyTestClk
+  io.clkRst.phyTestRst := !digitalRstSync.io.rstbSync
 
   // All lane clocks are single-ended; each tile does its own single-to-
   // differential conversion. The network sends the in-phase clock to the data,
@@ -511,13 +513,13 @@ class Phy(
 
   // RX Lanes
   //
-  // RX AFE control is on the UCIe digital clock to ensure that it is always toggling,
+  // RX AFE control is on the PhyTest clock to ensure that it is always toggling,
   // even when forwarded clock is gated.
   //
   val rxLaneDout = Wire(
     Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
   )
-  withClockAndReset(io.clkRst.ucieClk, io.clkRst.ucieRst) {
+  withClockAndReset(io.clkRst.phyTestClk, io.clkRst.phyTestRst) {
     // Set up clocking
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
