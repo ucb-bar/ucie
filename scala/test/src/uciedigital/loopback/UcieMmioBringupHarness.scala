@@ -69,12 +69,13 @@ object UcieMmioBringupHarness {
 
   def topParams(): UcieDigitalTopParams = {
     val d = UcieDigitalTopParams.default()
-    d.copy(regs =
-      d.regs.copy(
+    d.copy(
+      regs = d.regs.copy(
         baseAddress = 0,
         includeRegNode = true,
         includeInterruptNode = false
-      )
+      ),
+      logPhy = d.logPhy.copy(sim = true)
     )
   }
 }

@@ -81,10 +81,7 @@ module clocking_tile(
   localparam real HALF_8G  = 62.5;
   localparam real HALF_12G = 41.66667;
   localparam real HALF_16G = 31.25;
-  // Delays below are written in ps and applied through a `1ps` time literal,
-  // so they hold under whatever timescale the model is compiled with (ucie's
-  // tests use 1ps, iris uses 1ns). A bare `#(x)` would read them in the
-  // compile unit's time unit instead.
+  // Force ps in case another compiled module has a different timescale
   localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
@@ -179,12 +176,6 @@ module clocking_tile(
   real phase_delay;
   always @(*) phase_delay = phase_taps * PHASE_TAP_PS;
 
-  // The quadrature clock is gated before the delay line, on its undelayed low
-  // phase, so it carries exactly the edges TxClk's gate lets through, only
-  // later. Gating after the line latched off `q_delayed`, which settles a
-  // step after `tx_q_raw`: a ClkGateEn change on a clock edge could then open
-  // the Q gate an edge before the I gate, and the clock lanes' serializers
-  // counted one edge more than the data lanes', shifting their framing.
   reg txClkQEn;
   always @(*) begin
     if (!tx_q_raw) txClkQEn = ClkGateEn;

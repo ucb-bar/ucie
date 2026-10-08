@@ -434,14 +434,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
     }
   }
 
-  // The transmitter frames every LFSR word with valtrain on the valid lane, so
-  // an unframed word is not pattern data at all -- it is whatever the wire
-  // carried before the pattern reached us. Those words are skipped rather than
-  // counted: the other patterns repeat within a word, so a stray word only
-  // costs them an iteration, but the LFSR never repeats, and counting one both
-  // reports a false error and advances the descrambler past the transmitter,
-  // leaving the two a word apart for the rest of the burst. Skipping parks the
-  // LFSR until framing appears, which is what aligns the two ends.
+  // Skip unframed LFSR words
   val unframedLfsrWord = (patternTypeReg === PatternSelect.LFSR) && validBad
 
   // Perlane mismatch count for error-count mode, gated by counterEn so the
@@ -610,8 +603,7 @@ class PatternReader(afeParams: AfeParams) extends Module {
   // Only meaningful in aggregate mode; in perlane mode read perLaneStatusBits.
   io.interfaceIo.resp.bits.aggregateStatus := patternCompStatus(0)
 
-  // Only framed words advance the descrambler, so it stays parked on the word
-  // the transmitter is about to send rather than running ahead of it.
+  // Only framed words advance the descrambler
   io.rxLfsrCtrl.increment :=
     counterEn && (patternTypeReg === PatternSelect.LFSR) && !validBad
   io.rxLfsrCtrl.resetLfsr :=
