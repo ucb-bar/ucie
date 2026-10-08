@@ -531,7 +531,7 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       requesterRdy := sbMsgExchanger.io.exchDone
 
       when(io.requesterRdy && io.responderRdy) {
-        // TEMP BYPASS sREPAIRCLK
+        // TODO: Remove sREPAIRCLK bypass
         nextState := MBInitState.sREPAIRVAL
       }
     }
@@ -1141,7 +1141,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
       responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
-        // TEMP BYPASS sREPAIRCLK: no clock training support in current PHY
+        // TODO: Remove sREPAIRCLK bypass
         nextState := MBInitState.sREPAIRVAL
       }
     }
