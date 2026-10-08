@@ -310,11 +310,12 @@ object Codegen {
     *
     * Chisel packs a bundle's first field into the most significant bits, so
     * these follow `ClkRateCfgIO`'s declaration order: main clock select, TX
-    * division, digital division, then the three PLL enables in the low bits.
+    * division, PhyTest division, then the PLL8, PLL12, and doubler enables in
+    * the low bits.
     */
   val rateCfgMainClkSelLsb: Int = 8
   val rateCfgTxClkDivLsb: Int = 6
-  val rateCfgDigClkDivLsb: Int = 3
+  val rateCfgPhyTestClkDivLsb: Int = 3
 
   /** Fine steps within one coarse phase position, and taps between them.
     *
@@ -754,7 +755,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
-        ("rateCfgDigClkDivLsb", BigInt(Codegen.rateCfgDigClkDivLsb)),
+        ("rateCfgPhyTestClkDivLsb", BigInt(Codegen.rateCfgPhyTestClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -956,15 +957,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * not been told how to reach.
     *
     * Fields are packed as the bundle declares them, most significant first:
-    * main clock select, TX division, digital division, then the three PLL
-    * enables.
+    * main clock select, TX division, PhyTest division, then the PLL8, PLL12,
+    * and doubler enables.
     */
   def formatSetRateCfgFn(): String = {
     val body = new StringBuilder
     val packed =
       s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
         s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
-        s"(dig_div << ${f.formatConstantRef("rateCfgDigClkDivLsb")}) | " +
+        s"(phytest_div << ${f.formatConstantRef("rateCfgPhyTestClkDivLsb")}) | " +
         s"pll_en)"
     body.append(
       f.formatWriteReg(
@@ -980,7 +981,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         Arg("rate", Datatype.Long),
         Arg("main_sel", Datatype.Long),
         Arg("tx_div", Datatype.Long),
-        Arg("dig_div", Datatype.Long),
+        Arg("phytest_div", Datatype.Long),
         Arg("pll_en", Datatype.Long)
       )
     )
@@ -1032,11 +1033,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   /** Picks what releases the clock gate at the end of an apply.
     *
     * `clkUngateSrcPllLock` opens the gate as soon as the PLL `mainClkSel` names
-    * reports lock -- and at once if the analog bypass pin is selected, which
-    * has no lock to report. `clkUngateSrcDelay` holds it for `delay` cycles of
-    * the register block's clock instead, for a part whose lock is not
-    * trustworthy or not wired. `clkUngateSrcMmio` holds it until
-    * `release_clk_gate` is called. `delay` is ignored by the other two.
+    * reports lock -- PLL8's for the doubler, which has none of its own -- and
+    * at once if the analog bypass pin is selected, which has no lock to report.
+    * `clkUngateSrcDelay` holds it for `delay` cycles of the register block's
+    * clock instead, for a part whose lock is not trustworthy or not wired.
+    * `clkUngateSrcMmio` holds it until `release_clk_gate` is called. `delay` is
+    * ignored by the other two.
     */
   def formatSetUngateSrcFn(): String = {
     val body = new StringBuilder
@@ -1119,23 +1121,24 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Enables the PLLs and points the digital clock at a divided main clock.
+  /** Enables the PLLs and the doubler, and points the PhyTest clock at a
+    * divided main clock.
     *
-    * The digital domain has to keep running across this, so the ratio is set
+    * The PhyTest domain has to keep running across this, so the ratio is set
     * before the source is switched over.
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("pll8En", f.formatLong(1)))
     body.append(formatWriteNamedReg("pll12En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("pll16En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("digClkDiv", "dig_div"))
-    body.append(formatWriteNamedReg("digClkBypassEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("x2En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("phyTestClkDiv", "phytest_div"))
+    body.append(formatWriteNamedReg("phyTestClkBypassEn", f.formatLong(0)))
     body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "use_internal_clk",
       body.toString,
-      args = Seq(Arg("dig_div", Datatype.Long))
+      args = Seq(Arg("phytest_div", Datatype.Long))
     )
   }
 

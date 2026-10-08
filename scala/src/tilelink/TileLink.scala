@@ -261,11 +261,11 @@ class UcieClkRegs(
       val mainClkSel = Output(UInt(ClockingTile.mainClkSelWidth.W))
       val pll8En = Output(Bool())
       val pll12En = Output(Bool())
-      val pll16En = Output(Bool())
+      val x2En = Output(Bool())
       val txClkDiv = Output(UInt(ClockingTile.txClkDivWidth.W))
       val txClkPhase = Output(UInt(ClockingTile.txClkPhaseWidth.W))
-      val digClkDiv = Output(UInt(ClockingTile.digClkDivWidth.W))
-      val digClkBypassEn = Output(Bool())
+      val phyTestClkDiv = Output(UInt(ClockingTile.phyTestClkDivWidth.W))
+      val phyTestClkBypassEn = Output(Bool())
       val sbClkDiv = Output(UInt(ClockingTile.sbClkDivWidth.W))
       val sbClkBypassEn = Output(Bool())
       val rxClkFromTxQ = Output(Bool())
@@ -275,26 +275,26 @@ class UcieClkRegs(
       // The rate link training has negotiated, from the UCIe controller. It
       // is produced on the sideband clock, which this block does not run on.
       val freqSel = Input(UInt(4.W))
-      // Per-PLL lock out of the clocking tile, in `mainClkSel` order.
-      val pllLock = Input(UInt(3.W))
+      // Per-PLL lock out of the clocking tile: PLL8 in bit 0, PLL12 in bit 1.
+      val pllLock = Input(UInt(2.W))
       // Holds the rest of the UCIe block in reset. See `ucieRstReq`.
       val ucieRst = Output(Bool())
     })
 
-    // Reset defaults describe a part that has been told nothing: the digital
+    // Reset defaults describe a part that has been told nothing: the PhyTest
     // clock on its bypass pin, the main clock on the analog bypass pin, no
-    // PLL running, no division, no phase, both clock gates open. That is a
+    // PLL or doubler running, no division, no phase, both clock gates open. That is a
     // design a testbench can drive from its own two clocks without writing a
     // register, which is how every test here starts.
     val (
       mainClkSel,
       pll8En,
       pll12En,
-      pll16En,
+      x2En,
       txClkDiv,
       txClkPhase,
-      digClkDiv,
-      digClkBypassEn,
+      phyTestClkDiv,
+      phyTestClkBypassEn,
       clkPhaseSel,
       clkGateEn,
       rxClkGateEn
@@ -307,7 +307,7 @@ class UcieClkRegs(
           RegInit(false.B),
           RegInit(0.U(ClockingTile.txClkDivWidth.W)),
           RegInit(0.U(ClockingTile.txClkPhaseWidth.W)),
-          RegInit(2.U(ClockingTile.digClkDivWidth.W)),
+          RegInit(2.U(ClockingTile.phyTestClkDivWidth.W)),
           RegInit(true.B),
           RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W)),
           RegInit(true.B),
@@ -350,8 +350,8 @@ class UcieClkRegs(
     // it gets the same two flops. It is a level that settles once per wake-up,
     // not a pulse, so nothing is lost to the delay.
     val pllLockSync = withClockAndReset(clock, reset) {
-      val stage0 = RegInit(0.U(3.W))
-      val stage1 = RegInit(0.U(3.W))
+      val stage0 = RegInit(0.U(2.W))
+      val stage1 = RegInit(0.U(2.W))
       stage0 := io.pllLock
       stage1 := stage0
       stage1
@@ -379,10 +379,10 @@ class UcieClkRegs(
         (new ClkRateCfgIO).Lit(
           _.mainClkSel -> 3.U,
           _.txClkDiv -> 0.U,
-          _.digClkDiv -> 2.U,
+          _.phyTestClkDiv -> 2.U,
           _.pll8En -> false.B,
           _.pll12En -> false.B,
-          _.pll16En -> false.B
+          _.x2En -> false.B
         )
       )
     }
@@ -390,15 +390,16 @@ class UcieClkRegs(
       RegInit(2.U(ClockingTile.sbClkDivWidth.W))
     }
     val liveSbBypass = withClockAndReset(clock, reset) { RegInit(true.B) }
-    val liveDigBypass = withClockAndReset(clock, reset) { RegInit(true.B) }
+    val livePhyTestBypass = withClockAndReset(clock, reset) { RegInit(true.B) }
 
     val pending = Wire(new ClkRateCfgIO)
     pending.mainClkSel := Mux(freqSelAutoEn, selected.mainClkSel, mainClkSel)
     pending.txClkDiv := Mux(freqSelAutoEn, selected.txClkDiv, txClkDiv)
-    pending.digClkDiv := Mux(freqSelAutoEn, selected.digClkDiv, digClkDiv)
+    pending.phyTestClkDiv :=
+      Mux(freqSelAutoEn, selected.phyTestClkDiv, phyTestClkDiv)
     pending.pll8En := Mux(freqSelAutoEn, selected.pll8En, pll8En)
     pending.pll12En := Mux(freqSelAutoEn, selected.pll12En, pll12En)
-    pending.pll16En := Mux(freqSelAutoEn, selected.pll16En, pll16En)
+    pending.x2En := Mux(freqSelAutoEn, selected.x2En, x2En)
 
     // Which lock the gate waits on. Decided here rather than in the clocking
     // tile: the tile reports each PLL's lock raw and knows nothing about what
@@ -407,15 +408,16 @@ class UcieClkRegs(
     // stale value or an X into the wait.
     //
     // Hence a table with every selector spelled out rather than an index into
-    // the lock vector. Selector 3 is the analog bypass pin, which has no lock
-    // to report and counts as ready; that is the default, so a selector the
-    // tile grows later fails safe the same way rather than indexing off the
-    // end of the vector.
+    // the lock vector. Selector 2 is PLL8 doubled, which has no lock of its
+    // own and is ready once PLL8 is. Selector 3 is the analog bypass pin, which
+    // has no lock to report and counts as ready; that is the default, so a
+    // selector the tile grows later fails safe the same way rather than
+    // indexing off the end of the vector.
     val mainClkLocked = MuxLookup(live.mainClkSel, true.B)(
       Seq(
         0.U -> pllLockSync(0),
         1.U -> pllLockSync(1),
-        2.U -> pllLockSync(2)
+        2.U -> pllLockSync(0)
       )
     )
 
@@ -448,8 +450,9 @@ class UcieClkRegs(
 
     // Applying a configuration: gate, switch under the gate, let the clocks
     // back out. Changing a mux or a divider under a running clock hands the
-    // domains behind it a runt. The gate covers all three derived clocks --
-    // the main clock select moves what every divider counts.
+    // domains behind it a glitch. The gate sits straight after the main clock
+    // mux, so it covers all three derived clocks -- the main clock select
+    // moves what every divider counts.
     val applyReq = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyBusy = withClockAndReset(clock, reset) { RegInit(false.B) }
     val applyCount = withClockAndReset(clock, reset) {
@@ -487,7 +490,7 @@ class UcieClkRegs(
             live := pending
             liveSbDiv := sbClkDiv
             liveSbBypass := sbClkBypassEn
-            liveDigBypass := digClkBypassEn
+            livePhyTestBypass := phyTestClkBypassEn
             applyCount := 0.U
             applyPhase := ClkApplyPhase.ungateWait
           }
@@ -517,11 +520,11 @@ class UcieClkRegs(
     io.mainClkSel := live.mainClkSel
     io.pll8En := live.pll8En
     io.pll12En := live.pll12En
-    io.pll16En := live.pll16En
+    io.x2En := live.x2En
     io.txClkDiv := live.txClkDiv
     io.txClkPhase := txClkPhase
-    io.digClkDiv := live.digClkDiv
-    io.digClkBypassEn := liveDigBypass
+    io.phyTestClkDiv := live.phyTestClkDiv
+    io.phyTestClkBypassEn := livePhyTestBypass
     io.sbClkDiv := liveSbDiv
     io.sbClkBypassEn := liveSbBypass
     io.rxClkFromTxQ := rxClkFromTxQ
@@ -534,11 +537,11 @@ class UcieClkRegs(
         toRegFieldRw(mainClkSel, "mainClkSel"),
         toRegFieldRw(pll8En, "pll8En"),
         toRegFieldRw(pll12En, "pll12En"),
-        toRegFieldRw(pll16En, "pll16En"),
+        toRegFieldRw(x2En, "x2En"),
         toRegFieldRw(txClkDiv, "txClkDiv"),
         toRegFieldRw(txClkPhase, "txClkPhase"),
-        toRegFieldRw(digClkDiv, "digClkDiv"),
-        toRegFieldRw(digClkBypassEn, "digClkBypassEn"),
+        toRegFieldRw(phyTestClkDiv, "phyTestClkDiv"),
+        toRegFieldRw(phyTestClkBypassEn, "phyTestClkBypassEn"),
         toRegFieldRw(clkPhaseSel, "clkPhaseSel"),
         toRegFieldRw(clkGateEn, "clkGateEn"),
         toRegFieldRw(rxClkGateEn, "rxClkGateEn"),
@@ -619,10 +622,10 @@ object ClkUngateSrc extends ChiselEnum {
 class ClkRateCfgIO extends Bundle {
   val mainClkSel = UInt(ClockingTile.mainClkSelWidth.W)
   val txClkDiv = UInt(ClockingTile.txClkDivWidth.W)
-  val digClkDiv = UInt(ClockingTile.digClkDivWidth.W)
+  val phyTestClkDiv = UInt(ClockingTile.phyTestClkDivWidth.W)
   val pll8En = Bool()
   val pll12En = Bool()
-  val pll16En = Bool()
+  val x2En = Bool()
 }
 
 object UcieClkRegs {
@@ -1439,11 +1442,11 @@ class UcieTL(
     phy.io.clkRst.mainClkSel := clkRegs.module.io.mainClkSel
     phy.io.clkRst.pll8En := clkRegs.module.io.pll8En
     phy.io.clkRst.pll12En := clkRegs.module.io.pll12En
-    phy.io.clkRst.pll16En := clkRegs.module.io.pll16En
+    phy.io.clkRst.x2En := clkRegs.module.io.x2En
     phy.io.clkRst.txClkDiv := clkRegs.module.io.txClkDiv
     phy.io.clkRst.txClkPhase := clkRegs.module.io.txClkPhase
-    phy.io.clkRst.digClkDiv := clkRegs.module.io.digClkDiv
-    phy.io.clkRst.digClkBypassEn := clkRegs.module.io.digClkBypassEn
+    phy.io.clkRst.phyTestClkDiv := clkRegs.module.io.phyTestClkDiv
+    phy.io.clkRst.phyTestClkBypassEn := clkRegs.module.io.phyTestClkBypassEn
     phy.io.clkRst.sbClkDiv := clkRegs.module.io.sbClkDiv
     phy.io.clkRst.sbClkBypassEn := clkRegs.module.io.sbClkBypassEn
     phy.io.clkRst.rxClkFromTxQ := clkRegs.module.io.rxClkFromTxQ
@@ -1510,9 +1513,7 @@ class UcieTL(
     // means what is software's to decide, so a change in how the part is
     // clocked during bringup does not need an RTL change.
     clkRegs.module.io.freqSel := ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
-    // In `mainClkSel` order, so the block can index it with that selector.
     clkRegs.module.io.pllLock := Cat(
-      phy.io.clkRst.pll16Lock,
       phy.io.clkRst.pll12Lock,
       phy.io.clkRst.pll8Lock
     )
