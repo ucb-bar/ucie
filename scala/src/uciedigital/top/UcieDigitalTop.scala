@@ -114,7 +114,7 @@ class UcieDigitalTop(
         retryW = validatedParams.logPhy.retryW,
         desTimeoutCycles = validatedParams.logPhy.desTimeoutCycles,
         queueDepths = validatedParams.logPhy.queueDepths
-      )
+      )(validatedParams.logPhy.sim)
     )
 
     // Internal connection

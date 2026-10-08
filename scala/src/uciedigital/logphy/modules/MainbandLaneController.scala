@@ -46,6 +46,7 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
     val mbLanes = new MainbandLaneIO(afeParams)
     val ctrl = new Bundle {
       val validFramingError = Output(Bool())
+      val rxWordAccepted = Output(Bool())
       val localTxFunctionalLanes = Input(UInt(3.W))
       val localRxFunctionalLanes = Input(UInt(3.W))
     }
@@ -209,7 +210,9 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   val rxBeatCtr = RegInit(0.U(beatCtrW.W))
   val rxDataAccum = Reg(Vec(nBytes, UInt(8.W)))
   val rxLastBeat = rxBeatCtr === (numRxBeats - 1.U)
-  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready
+  val rxFramed = io.mbLanes.rx.bits.valid === validFrame
+  val rxIdle = io.mbLanes.rx.bits.valid === 0.U
+  val rxAccepting = io.mbLanes.rx.valid && io.mbLanes.rx.ready && rxFramed
 
   when(rxAccepting) {
     rxBeatCtr := Mux(rxLastBeat, 0.U, rxBeatCtr + 1.U)
@@ -258,9 +261,10 @@ class MainbandLaneController(afeParams: AfeParams, rdiParams: RdiParams)
   io.rdi.rx.plValid := rxAccepting && rxLastBeat
   io.rdi.rx.plData := currentRxData.asUInt
 
+  io.ctrl.rxWordAccepted := rxAccepting
+
   // Valid-framing error detection
-  val rxValidBits = rxBundle.valid
-  val currentFramingError = io.mbLanes.rx.valid && (rxValidBits =/= validFrame)
+  val currentFramingError = io.mbLanes.rx.valid && !rxFramed && !rxIdle
   val stickyError = RegInit(false.B)
   when(currentFramingError) {
     stickyError := true.B

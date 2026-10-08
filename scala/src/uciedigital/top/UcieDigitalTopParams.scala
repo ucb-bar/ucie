@@ -30,7 +30,8 @@ case class LogicalPhyTopParams(
     rdi: RdiParams,
     retryW: Int = 10,
     desTimeoutCycles: Int = 512,
-    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
+    queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
+    sim: Boolean = false
 )
 
 case class UcieDigitalTopParams(
