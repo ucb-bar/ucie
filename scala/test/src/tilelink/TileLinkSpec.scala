@@ -361,6 +361,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     new UcieTL(
       UcieTLParams(
         includeDefaultModels = includeDefaultModels,
+        sim = true,
         maxInflight = 1
       ),
       Seq(AddressSet(0x0, 0xffffL)),
@@ -493,6 +494,7 @@ class ScalaTestHarness(
     new UcieTL(
       UcieTLParams(
         includeDefaultModels = includeDefaultModels,
+        sim = true,
         maxInflight = mbMaxInflight
       ),
       Seq(AddressSet(0x0, 0xffffL)),

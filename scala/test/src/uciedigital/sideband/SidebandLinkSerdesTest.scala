@@ -619,7 +619,11 @@ class SidebandLinkSerdesTest
     val dut = Module(new SidebandLinkDeserializer(sbLinkW, msgW, timeoutCycles))
 
     dut.io.ctrl <> io.ctrl
-    dut.io.out <> io.out.msg
+    // dut.io.out carries the deserializer's own isRaw tag alongside the
+    // data (see SbLinkRxWord); these tests only care about the data.
+    io.out.msg.valid := dut.io.out.valid
+    io.out.msg.bits := dut.io.out.bits.data
+    dut.io.out.ready := io.out.msg.ready
     dut.io.in.bits := io.in.bits
     dut.io.in.fwClock := io.in.fwClock
   }
@@ -1339,7 +1343,11 @@ class SidebandLinkSerdesTest
     des.io.in.bits := sbData
     des.io.in.fwClock := sbClk
 
-    des.io.out <> io.deserializerIO.out.msg
+    // des.io.out carries the deserializer's own isRaw tag alongside the data
+    // (see SbLinkRxWord); this loopback test only cares about the data.
+    io.deserializerIO.out.msg.valid := des.io.out.valid
+    io.deserializerIO.out.msg.bits := des.io.out.bits.data
+    des.io.out.ready := io.deserializerIO.out.msg.ready
     io.ctrl.desTimedout := des.io.ctrl.desTimedout
   }
 

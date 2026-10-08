@@ -59,6 +59,7 @@ class RDIController(sbParams: SidebandParams) extends Module {
       activeLifetimeClockNeed ||
       mustHoldClocksUntilStateChanges ||
       io.cfgSidebandActive ||
+      io.trainingTimeout ||
       rdiStateMachine.io.sidebandBusy
 
   val clockRequester = Module(new RDIClockHandshakeRequester())
