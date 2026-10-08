@@ -81,6 +81,7 @@ module clocking_tile(
   localparam real HALF_8G  = 62.5;
   localparam real HALF_12G = 41.66667;
   localparam real HALF_16G = 31.25;
+  // Force ps in case another compiled module has a different timescale
   localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
@@ -89,7 +90,7 @@ module clocking_tile(
 
   // ---- Three PLLs, each locking a half period to the reference ----
   real ref_last = -1.0;
-  real ref_period = 10000.0;
+  real ref_period = 10000.0 * 1ps;
   always @(posedge RefClk) begin
     if (ref_last >= 0.0) ref_period = $realtime - ref_last;
     ref_last = $realtime;
@@ -120,19 +121,19 @@ module clocking_tile(
   // is zero.
   reg pll8Locked = 1'b0;
   always @(posedge Pll8En) begin
-    #(PLL_LOCK_PS) pll8Locked = Pll8En;
+    #(PLL_LOCK_PS * 1ps) pll8Locked = Pll8En;
   end
   always @(negedge Pll8En) pll8Locked = 1'b0;
 
   reg pll12Locked = 1'b0;
   always @(posedge Pll12En) begin
-    #(PLL_LOCK_PS) pll12Locked = Pll12En;
+    #(PLL_LOCK_PS * 1ps) pll12Locked = Pll12En;
   end
   always @(negedge Pll12En) pll12Locked = 1'b0;
 
   reg pll16Locked = 1'b0;
   always @(posedge Pll16En) begin
-    #(PLL_LOCK_PS) pll16Locked = Pll16En;
+    #(PLL_LOCK_PS * 1ps) pll16Locked = Pll16En;
   end
   always @(negedge Pll16En) pll16Locked = 1'b0;
 
@@ -175,8 +176,14 @@ module clocking_tile(
   real phase_delay;
   always @(*) phase_delay = phase_taps * PHASE_TAP_PS;
 
+  reg txClkQEn;
+  always @(*) begin
+    if (!tx_q_raw) txClkQEn = ClkGateEn;
+  end
+  wire tx_q_gated = tx_q_raw & txClkQEn;
+
   reg q_delayed = 1'b0;
-  always @(tx_q_raw) q_delayed <= #(phase_delay) tx_q_raw;
+  always @(tx_q_gated) q_delayed <= #(phase_delay * 1ps) tx_q_gated;
 
   // ---- Digital clock divider ----
   wire [5:0] dig_div = (DigClkDiv == 3'd0) ? 6'd1 :
@@ -219,16 +226,13 @@ module clocking_tile(
   // ---- Outputs ----
   // Latch the enable on each clock's low phase so that changing ClkGateEn
   // mid-cycle cannot chop a pulse short. A runt here would reach the lane
-  // dividers as a real edge and defeat the point of gating.
+  // dividers as a real edge and defeat the point of gating. TxClkQ's gate
+  // sits ahead of the global delay line; see `txClkQEn`.
   reg txClkEn;
-  reg txClkQEn;
   always @(*) begin
     if (!tx_i_raw) txClkEn = ClkGateEn;
   end
-  always @(*) begin
-    if (!q_delayed) txClkQEn = ClkGateEn;
-  end
 
   assign TxClk = tx_i_raw & txClkEn;
-  assign TxClkQ = q_delayed & txClkQEn;
+  assign TxClkQ = q_delayed;
 endmodule

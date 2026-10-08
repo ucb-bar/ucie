@@ -27,7 +27,7 @@ class SidebandLinkNode(
     val txIn = Flipped(Decoupled(UInt(sbMsgWidth.W)))
 
     // Messages going to the switch
-    val rxOut = Decoupled(UInt(sbMsgWidth.W))
+    val rxOut = Decoupled(new SbLinkRxWord(sbMsgWidth))
 
     /* Interface Facing IOs */
     // Half rate bits going OUT to the sideband bump drivers, which do the
@@ -117,7 +117,10 @@ class SidebandLinkNode(
   val deserializer = Module(
     new SidebandLinkDeserializer(sbLinkWidth, sbMsgWidth, desTimeoutCycles)
   )
-  val priorityQueue = Module(new SidebandPriorityQueue(sbMsgWidth, queueDepths))
+  // +1 is for the isRaw bit
+  val priorityQueue = Module(
+    new SidebandPriorityQueue(sbMsgWidth + 1, queueDepths)
+  )
 
   deserializer.io.ctrl.rxMode := io.ctrl.rxMode
   deserializer.io.in.bits := io.rxIn.bits
@@ -129,9 +132,9 @@ class SidebandLinkNode(
   // (reserved bits included), even parity, on every message. DP protects the
   // data fields, even parity, on messages that carry data.
   val parityErrReg = RegInit(false.B)
-  val opcode = deserializer.io.out.bits(4, 0)
+  val opcode = deserializer.io.out.bits.data(4, 0)
 
-  val header = WireDefault(deserializer.io.out.bits(63, 0))
+  val header = WireDefault(deserializer.io.out.bits.data(63, 0))
   val bitsToProtect = WireDefault(header(61, 0)) // Skip DP(63), CP(62)
   val expectedCP = header(62)
   val calculatedCP = WireDefault(bitsToProtect.xorR)
@@ -139,14 +142,14 @@ class SidebandLinkNode(
 
   val doDpCalculation =
     !(SBMsgOpcode.OpsThatDontUseDPField.map(_.asUInt === opcode).reduce(_ || _))
-  val payload = WireDefault(deserializer.io.out.bits(127, 64))
+  val payload = WireDefault(deserializer.io.out.bits.data(127, 64))
   val expectedDP = header(63)
   val payloadForDP = WireDefault(Mux(doDpCalculation, payload, 0.U))
   val calculatedDP = WireDefault(payloadForDP.xorR)
   val dpError = WireDefault(doDpCalculation && (expectedDP ^ calculatedDP))
 
-  val parityError = (cpError || dpError) && (io.ctrl.rxMode =/= SBRxTxMode.RAW)
-  val rxOpcode = io.rxOut.bits(4, 0)
+  val parityError = (cpError || dpError) && !deserializer.io.out.bits.isRaw
+  val rxOpcode = io.rxOut.bits.data(4, 0)
   val rxIsWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === rxOpcode).reduce(_ || _)
 
@@ -158,11 +161,17 @@ class SidebandLinkNode(
     parityErrReg := true.B
   }
 
-  priorityQueue.io.enq.bits := deserializer.io.out.bits
+  priorityQueue.io.enq.bits := Cat(
+    deserializer.io.out.bits.isRaw,
+    deserializer.io.out.bits.data
+  )
   priorityQueue.io.enq.valid := gatedDeserializerValid
   deserializer.io.out.ready := priorityQueue.io.enq.ready
 
-  priorityQueue.io.deq <> io.rxOut
+  io.rxOut.valid := priorityQueue.io.deq.valid
+  io.rxOut.bits.data := priorityQueue.io.deq.bits(sbMsgWidth - 1, 0)
+  io.rxOut.bits.isRaw := priorityQueue.io.deq.bits(sbMsgWidth)
+  priorityQueue.io.deq.ready := io.rxOut.ready
 
   // The priority queue must not be full when there is a valid message incoming
   io.err.rxPriorityQueuesFull := gatedDeserializerValid && !priorityQueue.io.enq.ready
@@ -207,11 +216,11 @@ class SidebandLinkNode(
         "LinkNodeTx128bPacketAccepted"
       )
       cover(
-        io.rxOut.fire && (io.ctrl.rxMode === SBRxTxMode.RAW || rxIsWoData),
+        io.rxOut.fire && (io.rxOut.bits.isRaw || rxIsWoData),
         "LinkNodeRx64bPacketEmitted"
       )
       cover(
-        io.rxOut.fire && io.ctrl.rxMode === SBRxTxMode.PACKET && !rxIsWoData,
+        io.rxOut.fire && !io.rxOut.bits.isRaw && !rxIsWoData,
         "LinkNodeRx128bPacketEmitted"
       )
       cover(deserializer.io.out.valid && cpError, "LinkNodeCpParityErrorDrop")

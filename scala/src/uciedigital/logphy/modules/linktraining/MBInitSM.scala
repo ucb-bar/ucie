@@ -531,7 +531,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       requesterRdy := sbMsgExchanger.io.exchDone
 
       when(io.requesterRdy && io.responderRdy) {
-        nextState := MBInitState.sREPAIRCLK
+        // TODO: Remove sREPAIRCLK bypass
+        nextState := MBInitState.sREPAIRVAL
       }
     }
     is(MBInitState.sREPAIRCLK) {
@@ -1140,7 +1141,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
       responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
-        nextState := MBInitState.sREPAIRCLK
+        // TODO: Remove sREPAIRCLK bypass
+        nextState := MBInitState.sREPAIRVAL
       }
     }
     is(MBInitState.sREPAIRCLK) {
