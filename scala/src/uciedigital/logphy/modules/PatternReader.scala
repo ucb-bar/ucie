@@ -434,6 +434,9 @@ class PatternReader(afeParams: AfeParams) extends Module {
     }
   }
 
+  // Skip unframed LFSR words
+  val unframedLfsrWord = (patternTypeReg === PatternSelect.LFSR) && validBad
+
   // Perlane mismatch count for error-count mode, gated by counterEn so the
   // pipeline fill word from the idle cycle before detection is a no-op.
   val effectivePopCountResult = Wire(
@@ -442,7 +445,11 @@ class PatternReader(afeParams: AfeParams) extends Module {
   effectivePopCountResult.zipWithIndex.foreach { case (res, i) =>
     res := Mux(
       counterEn && validBad,
-      Mux(laneActive(i), 1.U(mismatchCountWidth.W), 0.U(mismatchCountWidth.W)),
+      Mux(
+        laneActive(i) && !unframedLfsrWord,
+        1.U(mismatchCountWidth.W),
+        0.U(mismatchCountWidth.W)
+      ),
       popCountResult(i)
     )
   }
@@ -596,7 +603,9 @@ class PatternReader(afeParams: AfeParams) extends Module {
   // Only meaningful in aggregate mode; in perlane mode read perLaneStatusBits.
   io.interfaceIo.resp.bits.aggregateStatus := patternCompStatus(0)
 
-  io.rxLfsrCtrl.increment := counterEn && (patternTypeReg === PatternSelect.LFSR)
+  // Only framed words advance the descrambler
+  io.rxLfsrCtrl.increment :=
+    counterEn && (patternTypeReg === PatternSelect.LFSR) && !validBad
   io.rxLfsrCtrl.resetLfsr :=
     io.interfaceIo.req.fire && (io.interfaceIo.req.bits.patternType === PatternSelect.LFSR)
 

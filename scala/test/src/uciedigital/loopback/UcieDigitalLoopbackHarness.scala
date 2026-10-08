@@ -149,7 +149,7 @@ class UcieDigitalLoopbackHarness(
         afeParams = afeParams,
         sbParams = sbParams,
         rdiParams = rdiParams
-      )
+      )(sim = true)
     )
   )
   val adapters =

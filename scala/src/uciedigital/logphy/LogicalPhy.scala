@@ -72,7 +72,8 @@ class LogicalPhy(
     retryW: Int = 10,
     desTimeoutCycles: Int = 512,
     queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
-) extends Module {
+)(implicit sim: Boolean = false)
+    extends Module {
   // Current integration target is Standard Package operation in Streaming RAW mode only.
   val io = IO(new Bundle {
     val rdi = new Rdi(rdiParams)
@@ -81,7 +82,9 @@ class LogicalPhy(
     val analog = new LogicalPhyAnalogIO(afeParams, sbParams)
   })
 
-  val ltsm = Module(new LinkTrainingSM(sbParams, afeParams, retryW))
+  val ltsm = Module(
+    new LinkTrainingSM(sbParams, afeParams, retryW)(sim)
+  )
   val rdiController = Module(new RDIController(sbParams))
   val mainbandLaneController = Module(
     new MainbandLaneController(afeParams, rdiParams)
@@ -337,7 +340,8 @@ class LogicalPhy(
   val isActive = ltsm.io.ltState === LTState.sACTIVE
   val txTrainingLfsrActive = patternWriter.io.txLfsrCtrl.valid
   val txRuntimeIncrement =
-    io.analog.mainband.tx.valid && io.analog.mainband.tx.ready && isActive
+    mainbandLaneController.io.mbLanes.tx.valid &&
+      mainbandLaneController.io.mbLanes.tx.ready && isActive
   val scramblerIncrement = Mux(
     txTrainingLfsrActive,
     patternWriter.io.txLfsrCtrl.increment,
@@ -352,7 +356,7 @@ class LogicalPhy(
   scrambler.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(scramblerReset))
 
   val rxRuntimeIncrement =
-    io.analog.mainband.rx.valid && io.analog.mainband.rx.ready && isActive
+    mainbandLaneController.io.ctrl.rxWordAccepted && isActive
   val descramblerIncrement = Mux(
     isActive,
     rxRuntimeIncrement,
@@ -503,15 +507,32 @@ class LogicalPhy(
   )
   io.analog.mainband.tx.valid := false.B
 
+  val idleTxBits = Wire(
+    new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
+  )
+  idleTxBits.data.foreach(_ := 0.U)
+  idleTxBits.valid := 0.U
+  idleTxBits.clkP := fwClkPBits
+  idleTxBits.clkN := fwClkNBits
+  idleTxBits.trk := fwClkPBits
+
   when(isActive) {
-    selectedTxBits := scrambledTxBits
-    io.analog.mainband.tx.valid := mainbandLaneController.io.mbLanes.tx.valid
+    // Keep the lanes up between beats
+    selectedTxBits := Mux(
+      mainbandLaneController.io.mbLanes.tx.valid,
+      scrambledTxBits,
+      idleTxBits
+    )
+    io.analog.mainband.tx.valid := true.B
   }.elsewhen(rxClkCalOverride) {
     selectedTxBits := rxClkCalTxBits
     io.analog.mainband.tx.valid := true.B
   }.elsewhen(patternWriterSelectedForTx) {
     selectedTxBits := patternWriter.io.mbTxLaneIo.bits
     io.analog.mainband.tx.valid := patternWriter.io.mbTxLaneIo.valid
+  }.elsewhen(ltsm.io.ltState === LTState.sLINKINIT) {
+    selectedTxBits := idleTxBits
+    io.analog.mainband.tx.valid := true.B
   }
 
   io.analog.mainband.tx.bits := Mux(

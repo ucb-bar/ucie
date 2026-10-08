@@ -70,6 +70,7 @@ case class UcieTLParams(
     maxInflight: Int = 1,
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
+    sim: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
@@ -1249,8 +1250,13 @@ class UcieTL(
       includeRegNode = false,
       includeInterruptNode = false
     )
-  val ucieDigitalParams =
-    UcieDigitalTopParams.default().copy(regs = ucieRegParams)
+  val ucieDigitalParams = {
+    val d = UcieDigitalTopParams.default()
+    d.copy(
+      regs = ucieRegParams,
+      logPhy = d.logPhy.copy(sim = params.sim)
+    )
+  }
   val ucieDigitalLazy: UcieDigitalTop =
     LazyModule(new UcieDigitalTop(ucieDigitalParams))
   val regs = LazyModule(
@@ -1314,9 +1320,11 @@ class UcieTL(
     override def provideImplicitClockToLazyChildren = true
 
     // Both blocks, at their own bases, so generated collateral sees one map.
-    val regmap = regs.module.regmap ++ clkRegs.module.regmap.map {
-      case (off, fields) => (off + UcieClkRegs.offset) -> fields
-    }
+    val regmap =
+      regs.module.regmap ++ regs.module.ucieRegmap ++ clkRegs.module.regmap
+        .map { case (off, fields) =>
+          (off + UcieClkRegs.offset) -> fields
+        }
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY
@@ -1631,7 +1639,11 @@ class UcieTL(
           params.queueParams
         )
       )
-      txAQ.io.enq.valid := selUcie
+
+      val ucieTxBeat = (clientTl.d.valid && dAvail) ||
+        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
+        creditRetValid
+      txAQ.io.enq.valid := selUcie && ucieTxBeat
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset
