@@ -83,7 +83,10 @@ class LogPhySidebandChannel(
   )
   val layerInBuffer = Module(new SkidBuffer(sbMsgWidth))
   val layerOutBuffer = Module(new SkidBuffer(sbMsgWidth))
-  val rxIsRaw = io.link.ctrl.rxMode === SBRxTxMode.RAW
+  // Only a word that is actually there can be RAW. With the queue empty its
+  // bits are whatever entry it last held, and a stale RAW tag there would
+  // steer the layer output to the link and stall the switch's own traffic.
+  val rxIsRaw = linkNode.io.rxOut.valid && linkNode.io.rxOut.bits.isRaw
 
   // IOs for module
   io.rdi.rxCreditReturn := rdiIntfNode.io.rxCreditReturn
@@ -116,7 +119,7 @@ class LogPhySidebandChannel(
 
   // A RAW word has no header for the switch to route on, so it bypasses it.
   switch.io.lowerLayer.from.valid := linkNode.io.rxOut.valid && !rxIsRaw
-  switch.io.lowerLayer.from.bits := linkNode.io.rxOut.bits
+  switch.io.lowerLayer.from.bits := linkNode.io.rxOut.bits.data
 
   layerOutBuffer.io.in.valid := Mux(
     rxIsRaw,
@@ -125,7 +128,7 @@ class LogPhySidebandChannel(
   )
   layerOutBuffer.io.in.bits := Mux(
     rxIsRaw,
-    linkNode.io.rxOut.bits,
+    linkNode.io.rxOut.bits.data,
     switch.io.currLayer.to.bits
   )
 

@@ -1,6 +1,8 @@
 package edu.berkeley.cs.uciedigital.tilelink
 
 import chisel3._
+import chisel3.layer.block
+import chisel3.layers.Verification
 import chisel3.util._
 import chisel3.util.random._
 import chisel3.experimental.BundleLiterals._
@@ -71,6 +73,7 @@ case class UcieTLParams(
     maxInflight: Int = 1,
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
+    sim: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
@@ -1329,8 +1332,13 @@ class UcieTL(
       includeRegNode = false,
       includeInterruptNode = false
     )
-  val ucieDigitalParams =
-    UcieDigitalTopParams.default().copy(regs = ucieRegParams)
+  val ucieDigitalParams = {
+    val d = UcieDigitalTopParams.default()
+    d.copy(
+      regs = ucieRegParams,
+      logPhy = d.logPhy.copy(sim = params.sim)
+    )
+  }
   val regs = LazyModule(new UcieTLRegs(params, UcieTL.regBeatBytes))
   val controller = LazyModule(
     new UcieController(params, UcieTL.regBeatBytes, ucieDigitalParams)
@@ -1505,6 +1513,32 @@ class UcieTL(
     rxUcieFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
     rxUcieFifo.io.deq_clock := phy.io.clkRst.sbClk
     rxUcieFifo.io.deq_reset := phy.io.clkRst.sbRst
+    // The PHY cannot be held off: every RX word goes in as it arrives, so a
+    // full queue loses it. That happens once the packet clock outruns the
+    // sideband clock the controller drains on -- 1 GHz at 32 GT/s, against
+    // 800 MHz -- which this crossing cannot carry. Say so rather than drop
+    // words silently.
+    //
+    // Ready is also low for a few cycles each time this end leaves reset,
+    // until the two ends have handshaken, and this end only starts once the
+    // partner forwards a clock. That is not a full queue, so the check arms
+    // the first time the queue is ready after a reset.
+    withClockAndReset(
+      phy.io.clkRst.rxDivClk,
+      phy.io.clkRst.rxDatapathRstSync
+    ) {
+      val rxUcieFifoPrimed = RegInit(false.B)
+      when(rxUcieFifo.io.enq.ready) { rxUcieFifoPrimed := true.B }
+      block(Verification) {
+        block(Verification.Assert) {
+          assert(
+            !(selUcie && rxUcieFifoPrimed && !rxUcieFifo.io.enq.ready),
+            "UcieTL: the controller's RX queue overflowed; the PHY's packet " +
+              "clock is faster than the sideband clock the controller runs on"
+          )
+        }
+      }
+    }
 
     // The UCIe controller, on the sideband clock with its register block.
     val ucieDigital = controller.module
@@ -1728,7 +1762,11 @@ class UcieTL(
           params.queueParams
         )
       )
-      txAQ.io.enq.valid := selUcie
+
+      val ucieTxBeat = (clientTl.d.valid && dAvail) ||
+        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
+        creditRetValid
+      txAQ.io.enq.valid := selUcie && ucieTxBeat
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset

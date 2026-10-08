@@ -91,6 +91,14 @@ module clocking_tile(
   output TxClkQ,
   output TxClk
 );
+  // Every delay here is in picoseconds, and the shortest -- a 31.25 ps half
+  // period, a 1.086 ps tap -- are well below the 100 ps precision some
+  // harnesses compile with by default, which would round them to nothing. So
+  // the module sets its own unit and precision. Declared here rather than with
+  // `timescale, which would carry over into every file compiled after this one.
+  timeunit 1ps;
+  timeprecision 1fs;
+
   localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
