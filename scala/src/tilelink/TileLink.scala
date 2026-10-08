@@ -1320,9 +1320,11 @@ class UcieTL(
     override def provideImplicitClockToLazyChildren = true
 
     // Both blocks, at their own bases, so generated collateral sees one map.
-    val regmap = regs.module.regmap ++ regs.module.ucieRegmap ++ clkRegs.module.regmap.map {
-      case (off, fields) => (off + UcieClkRegs.offset) -> fields
-    }
+    val regmap =
+      regs.module.regmap ++ regs.module.ucieRegmap ++ clkRegs.module.regmap
+        .map { case (off, fields) =>
+          (off + UcieClkRegs.offset) -> fields
+        }
     val io = IO(new UcieBumpsIO(params.numLanes))
 
     // PHY

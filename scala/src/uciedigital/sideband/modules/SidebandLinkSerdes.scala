@@ -258,7 +258,10 @@ class SidebandLinkDeserializer(
 
   // The assembled message word crosses to the local clock domain through an async FIFO.
   val rxQueue = Module(
-    new AsyncQueue(new SbLinkRxWord(msgW), AsyncQueueParams(depth = asyncQueueDepth))
+    new AsyncQueue(
+      new SbLinkRxWord(msgW),
+      AsyncQueueParams(depth = asyncQueueDepth)
+    )
   )
   rxQueue.io.enq_clock := negFwClock
   rxQueue.io.enq_reset := reset.asBool

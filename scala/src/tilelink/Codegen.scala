@@ -1442,15 +1442,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   /** MMIO setup to bring the link up through the digital controller
     * (`UcieDigitalTop`) instead of PhyTest: enables the mainband pad drivers,
     * kicks off DVSEC link training, and hands the mainband/sideband muxes to
-    * `ucieDigital` by setting `controllerSel`. Unlike `setup_ucie`, this
-    * skips every PhyTest-only knob (manual clock/valid patterns, debug
-    * drivers, `reset_fsms`) since the digital controller neither reads nor is
-    * reset by them.
+    * `ucieDigital` by setting `controllerSel`. Unlike `setup_ucie`, this skips
+    * every PhyTest-only knob (manual clock/valid patterns, debug drivers,
+    * `reset_fsms`) since the digital controller neither reads nor is reset by
+    * them.
     *
     * Blocks until DVSEC `LinkStatus` reports link-up before returning, so a
-    * caller can start using the link immediately after this returns -- the
-    * same contract `setup_ucie` gives PhyTest callers by leaving the PHY
-    * ready to go, just enforced here by polling instead.
+    * caller can start using the link immediately after this returns -- the same
+    * contract `setup_ucie` gives PhyTest callers by leaving the PHY ready to
+    * go, just enforced here by polling instead.
     */
   def formatSetupUcieDigitalFn(): String = {
     val sb = new StringBuilder
@@ -2083,10 +2083,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
   * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
   * `set_tx_delay`, `set_rx_vref`, `reset_fsms`, `setup_ucie`,
-  * `setup_ucie_digital`, `seed_lfsrs`, and `run_lfsr`. RISC-V test programs
-  * can `#include` it to program the UCIe MMIO registers from C, and
-  * `set_tx_delay` through `run_lfsr` (less `setup_ucie_digital`) are enough to
-  * train a lane the way `TrainMainbandTestDriver` does in simulation.
+  * `setup_ucie_digital`, `seed_lfsrs`, and `run_lfsr`. RISC-V test programs can
+  * `#include` it to program the UCIe MMIO registers from C, and `set_tx_delay`
+  * through `run_lfsr` (less `setup_ucie_digital`) are enough to train a lane
+  * the way `TrainMainbandTestDriver` does in simulation.
   *
   * Run with one argument — the destination path: ./mill ucie.runMain
   * edu.berkeley.cs.uciedigital.tilelink.GenUcieHeader \ software/ucie.h
