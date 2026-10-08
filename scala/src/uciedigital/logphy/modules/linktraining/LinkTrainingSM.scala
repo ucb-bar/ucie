@@ -16,7 +16,8 @@ class LinkTrainingSM(
     sbParams: SidebandParams,
     afeParams: AfeParams,
     retryW: Int
-) extends Module {
+)(implicit sim: Boolean = false)
+    extends Module {
   val io = IO(new Bundle {
     // ========================================================================
     // IN
@@ -96,7 +97,7 @@ class LinkTrainingSM(
   // Variables
   // ==============================================================================================
   val mbSerializerRatio = afeParams.mbSerializerRatio
-  val timeoutMs = 0.00005 //0.008 // TEMP HACK, DON'T COMMIT
+  val timeoutMs = if (sim) 0.00005 else 0.008
   val operatingFreq = 800000000 // TODO: Put this into an object
   val retryAmtW = retryW // TODO: Need to put retryW into an object
 

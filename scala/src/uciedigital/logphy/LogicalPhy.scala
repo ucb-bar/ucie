@@ -72,7 +72,8 @@ class LogicalPhy(
     retryW: Int = 10,
     desTimeoutCycles: Int = 512,
     queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
-) extends Module {
+)(implicit sim: Boolean = false)
+    extends Module {
   // Current integration target is Standard Package operation in Streaming RAW mode only.
   val io = IO(new Bundle {
     val rdi = new Rdi(rdiParams)
@@ -81,7 +82,9 @@ class LogicalPhy(
     val analog = new LogicalPhyAnalogIO(afeParams, sbParams)
   })
 
-  val ltsm = Module(new LinkTrainingSM(sbParams, afeParams, retryW))
+  val ltsm = Module(
+    new LinkTrainingSM(sbParams, afeParams, retryW)(sim)
+  )
   val rdiController = Module(new RDIController(sbParams))
   val mainbandLaneController = Module(
     new MainbandLaneController(afeParams, rdiParams)
@@ -336,10 +339,6 @@ class LogicalPhy(
 
   val isActive = ltsm.io.ltState === LTState.sACTIVE
   val txTrainingLfsrActive = patternWriter.io.txLfsrCtrl.valid
-  // Keyed off the lane controller's handshake rather than the analog one: the
-  // analog side now carries an idle word whenever the controller has nothing,
-  // so its valid no longer distinguishes a beat from a gap. The far end
-  // descrambles only framed words, so only those may advance the scrambler.
   val txRuntimeIncrement =
     mainbandLaneController.io.mbLanes.tx.valid &&
       mainbandLaneController.io.mbLanes.tx.ready && isActive
@@ -356,10 +355,6 @@ class LogicalPhy(
   )
   scrambler.io.resetLfsr := VecInit(Seq.fill(afeParams.mbLanes)(scramblerReset))
 
-  // Only framed words advance the descrambler. The far scrambler advances once
-  // per word it sends, so keying off every word the RX queue delivers -- the
-  // lanes free run, so most of them carry nothing -- would run the two out of
-  // step and garble the data from the first idle gap onwards.
   val rxRuntimeIncrement =
     mainbandLaneController.io.ctrl.rxWordAccepted && isActive
   val descramblerIncrement = Mux(
@@ -512,13 +507,6 @@ class LogicalPhy(
   )
   io.analog.mainband.tx.valid := false.B
 
-  // What goes on the lanes when there is nothing to send. The forwarded clock
-  // rides the mainband's own lanes, and every clock on the far end's RX side --
-  // the deserializers, the divider, the queue's enqueue side -- is recovered
-  // from it. Letting the lanes go quiet therefore stops that receiver dead and
-  // freezes whichever word was in flight, which then thaws when the lanes start
-  // up again and arrives ahead of the traffic that follows, a word older than
-  // the gap. `valid` stays zero so these still read as gaps rather than data.
   val idleTxBits = Wire(
     new MainbandLanes(afeParams.mbLanes, afeParams.mbSerializerRatio)
   )
@@ -529,7 +517,7 @@ class LogicalPhy(
   idleTxBits.trk := fwClkPBits
 
   when(isActive) {
-    // Keep the lanes up between beats as well as during them.
+    // Keep the lanes up between beats
     selectedTxBits := Mux(
       mainbandLaneController.io.mbLanes.tx.valid,
       scrambledTxBits,
@@ -543,12 +531,6 @@ class LogicalPhy(
     selectedTxBits := patternWriter.io.mbTxLaneIo.bits
     io.analog.mainband.tx.valid := patternWriter.io.mbTxLaneIo.valid
   }.elsewhen(ltsm.io.ltState === LTState.sLINKINIT) {
-    // Training is over but the link is not up yet. Keeping the lanes moving
-    // through this window is what lets the far end run its receiver on past the
-    // tail of the training traffic, so the last pattern words drain away here
-    // instead of being held mid flight and delivered as the first word of
-    // ACTIVE. Training itself is deliberately left out: words fed into a
-    // detect window would be counted against the pattern under test.
     selectedTxBits := idleTxBits
     io.analog.mainband.tx.valid := true.B
   }

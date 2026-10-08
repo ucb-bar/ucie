@@ -70,6 +70,7 @@ case class UcieTLParams(
     maxInflight: Int = 1,
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
+    sim: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
@@ -1249,8 +1250,13 @@ class UcieTL(
       includeRegNode = false,
       includeInterruptNode = false
     )
-  val ucieDigitalParams =
-    UcieDigitalTopParams.default().copy(regs = ucieRegParams)
+  val ucieDigitalParams = {
+    val d = UcieDigitalTopParams.default()
+    d.copy(
+      regs = ucieRegParams,
+      logPhy = d.logPhy.copy(sim = params.sim)
+    )
+  }
   val ucieDigitalLazy: UcieDigitalTop =
     LazyModule(new UcieDigitalTop(ucieDigitalParams))
   val regs = LazyModule(
@@ -1631,16 +1637,7 @@ class UcieTL(
           params.queueParams
         )
       )
-      // Offered only when there is a beat to send. The `tl` path below enqueues
-      // unconditionally so its lanes keep moving through gaps in traffic, but
-      // the ucie path cannot: a word offered here becomes an RDI word, which
-      // keeps the lane controller transmitting and the valid lane carrying a
-      // full frame even with nothing to carry. The receiver then cannot tell a
-      // data word from a gap, and -- since the scrambler advances per word sent
-      // and the far descrambler per word taken off the lanes -- the two count
-      // different words and drift apart, so every word lands descrambled
-      // against the wrong state. Idling here leaves the lanes quiet between
-      // beats, which is what keeps the two ends counting the same words.
+
       val ucieTxBeat = (clientTl.d.valid && dAvail) ||
         (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
         creditRetValid
