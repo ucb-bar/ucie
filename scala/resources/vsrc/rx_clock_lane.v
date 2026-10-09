@@ -38,7 +38,7 @@ module rx_clock_lane (
 );
   // Active-high enable for the recovered clock leaving this lane. Low stops
   // the clock reaching the distribution tree, and so none of the data lanes
-  // are clocked. Latched on the low phase so toggling it leaves no runt.
+  // are clocked. Latched on the low phase so toggling it leaves no glitch.
   wire clkout_raw = clkin;
   reg gate_en_latched;
   always @(*) begin

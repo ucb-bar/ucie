@@ -303,6 +303,10 @@ class PhyTestIO(
   val tx = new DecoupledIO(new TxIO(numLanes))
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
+  // The 800 MHz sideband TX clock the sideband tester serializes on, and its
+  // reset.
+  val sbTxClock = Input(Clock())
+  val sbTxReset = Input(Bool())
   val debug = Flipped(new PhyDebugIO(numLanes))
   val txDividerRstb = Output(AsyncReset())
   val rxDividerRstb = Output(AsyncReset())
@@ -439,6 +443,8 @@ class PhyTest(
   val sbTest = Module(new SidebandTest)
   sbTest.io.regs <> io.regs.sb
   sbTest.io.en := sbManual
+  sbTest.io.txClock := io.sbTxClock
+  sbTest.io.txReset := io.sbTxReset
   io.sb <> sbTest.io.sb
 
   // General computations

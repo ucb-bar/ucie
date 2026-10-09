@@ -525,6 +525,10 @@ class LogicalPhy(
     )
     io.analog.mainband.tx.valid := true.B
   }.elsewhen(rxClkCalOverride) {
+    // A constant pattern, so it needs no flow control: a cycle the PHY does
+    // not take it is a cycle it goes out again unchanged. That matters when
+    // the PHY sits behind a clock crossing rather than on this module's
+    // clock, where it pushes back whenever this side runs faster.
     selectedTxBits := rxClkCalTxBits
     io.analog.mainband.tx.valid := true.B
   }.elsewhen(patternWriterSelectedForTx) {
@@ -540,17 +544,6 @@ class LogicalPhy(
     reversedSelectedTxBits,
     selectedTxBits
   )
-
-  block(Verification) {
-    block(Verification.Assert) {
-      when(rxClkCalOverride) {
-        assert(
-          io.analog.mainband.tx.ready,
-          "FATAL: LogicalPhy training TX path assumes the analog PHY is ready"
-        )
-      }
-    }
-  }
 
   // ============================================================================================
   // RDI outputs
