@@ -4,9 +4,7 @@ import chisel3._
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.util._
-import chisel3.util.random._
 import chisel3.experimental.BundleLiterals._
-import chisel3.experimental.VecLiterals._
 import freechips.rocketchip.prci._
 import freechips.rocketchip.subsystem.{
   BaseSubsystem,
@@ -25,17 +23,7 @@ import edu.berkeley.cs.uciedigital.top.{
   UcieDigitalTopParams,
   UcieDigitalTopPhyIO
 }
-import edu.berkeley.cs.uciedigital.regs.{
-  UcieRegBlock,
-  UcieRegBlockIO,
-  UcieRegParams,
-  AdapterToRegs,
-  PhyToRegs,
-  LinkToRegs,
-  MailboxSbResp,
-  PhyToVendor
-}
-import edu.berkeley.cs.chippy._
+import edu.berkeley.cs.uciedigital.regs.UcieRegBlock
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
