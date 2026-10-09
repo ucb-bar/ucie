@@ -15,6 +15,7 @@ class SidebandSerialLoopback(packetBits: Int, rxQueueDepth: Int)
     extends Module {
   val io = IO(new Bundle {
     val tx = Flipped(DecoupledIO(UInt(packetBits.W)))
+    val txIdle = Output(Bool())
     val rx = DecoupledIO(UInt(packetBits.W))
     val rxOverflow = Output(Bool())
     val txRst = Input(Bool())
@@ -23,10 +24,14 @@ class SidebandSerialLoopback(packetBits: Int, rxQueueDepth: Int)
 
   val dut = Module(new SidebandSerial(packetBits, rxQueueDepth))
   dut.io.tx <> io.tx
+  io.txIdle := dut.io.txIdle
   io.rx <> dut.io.rx
   io.rxOverflow := dut.io.rxOverflow
   dut.io.txRst := io.txRst
   dut.io.rxRst := io.rxRst
+  // One clock for everything here, so the serializer takes it too.
+  dut.io.txClock := clock
+  dut.io.txReset := reset.asBool
   // Loop back through real bump drivers, so the 2:1 is exercised too.
   dut.io.sb.rxClk := SbDriver
     .bump(
@@ -69,9 +74,24 @@ class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
     c.clock.step()
   }
 
-  def send(c: SidebandSerialLoopback, packet: BigInt): Unit = {
+  // Offers a packet until the link takes it. Coming out of reset the TX queue
+  // takes a few cycles to be ready, while its two clock domains finish their
+  // reset handshake.
+  def offer(c: SidebandSerialLoopback, packet: BigInt): Unit = {
     c.io.tx.bits.poke(packet.U)
-    pulse(c, c.io.tx.valid)
+    c.io.tx.valid.poke(true.B)
+    var n = 0
+    while (!c.io.tx.ready.peek().litToBoolean) {
+      c.clock.step()
+      n += 1
+      assert(n < 100, "the link never took the packet")
+    }
+    c.clock.step()
+    c.io.tx.valid.poke(false.B)
+  }
+
+  def send(c: SidebandSerialLoopback, packet: BigInt): Unit = {
+    offer(c, packet)
     c.clock.step(drainCycles)
   }
 
@@ -110,26 +130,26 @@ class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("should refuse a frame while one is in flight") {
+    it("should queue a frame offered while one is in flight") {
       simulate(new SidebandSerialLoopback(frameBits, queueDepth)) { c =>
-        val wanted = BigInt(1) << (frameBits - 1)
+        val first = BigInt(1) << (frameBits - 1)
+        val second = (BigInt(1) << frameBits) - 1
         idle(c)
         c.clock.step(4)
         pulse(c, c.io.rxRst)
 
-        c.io.tx.ready.expect(true.B)
-        c.io.tx.bits.poke(wanted.U)
-        pulse(c, c.io.tx.valid)
-        c.io.tx.ready.expect(false.B)
+        // The second frame goes into the TX queue while the first is on the
+        // wire, and follows it out intact, without corrupting it.
+        offer(c, first)
+        c.io.txIdle.expect(false.B)
+        offer(c, second)
+        c.clock.step(2 * drainCycles)
 
-        // A frame offered mid-packet must be dropped, not corrupt the packet.
-        c.io.tx.bits.poke(((BigInt(1) << frameBits) - 1).U)
-        pulse(c, c.io.tx.valid)
-        c.clock.step(drainCycles)
-
-        c.io.tx.ready.expect(true.B)
+        c.io.txIdle.expect(true.B)
         c.io.rx.valid.expect(true.B)
-        assert(pop(c) == wanted)
+        assert(pop(c) == first)
+        c.io.rx.valid.expect(true.B)
+        assert(pop(c) == second)
         c.io.rx.valid.expect(false.B)
       }
     }
@@ -140,8 +160,7 @@ class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
         c.clock.step(4)
         pulse(c, c.io.rxRst)
 
-        c.io.tx.bits.poke(((BigInt(1) << frameBits) - 1).U)
-        pulse(c, c.io.tx.valid)
+        offer(c, (BigInt(1) << frameBits) - 1)
         c.clock.step(frameBits / 2)
         pulse(c, c.io.txRst)
         c.clock.step(drainCycles)

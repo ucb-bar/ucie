@@ -69,7 +69,7 @@ object ClockingTile {
   val mainClkSelWidth = 2
   val txClkDivWidth = 2
   val txClkPhaseWidth = 4
-  val digClkDivWidth = 3
+  val phyTestClkDivWidth = 3
   val sbClkDivWidth = 3
 }
 
@@ -78,23 +78,28 @@ class ClockingTileIO extends Bundle {
   /** Global delay line on TXCLKQ, thermometer coded. */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
 
-  /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL16, 3 the analog bypass pin. Each
-    * PLL is named for the clock it puts out, in GHz.
+  /** Main clock source: 0 PLL8, 1 PLL12, 2 PLL8 doubled, 3 the analog bypass
+    * pin. Each PLL is named for the clock it puts out, in GHz; the doubler
+    * makes 16 GHz from PLL8. The bypass pin can run at any rate up to 16 GHz.
     */
   val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
 
   /** Per-PLL enables, so an unselected one can be powered down. */
   val Pll8En = Input(Bool())
   val Pll12En = Input(Bool())
-  val Pll16En = Input(Bool())
+
+  /** Enables the x2 multiplier on PLL8's output. PLL8 has to be enabled too:
+    * the doubler has nothing to double without it.
+    */
+  val X2En = Input(Bool())
 
   /** Per-PLL lock. Low while a PLL is off and from the moment it is enabled
     * until it has settled, so a configuration apply has something to hold the
-    * clock gate across rather than counting out a guess.
+    * clock gate across rather than counting out a guess. The doubler has no
+    * lock of its own; it is ready once PLL8 is.
     */
   val Pll8Lock = Output(Bool())
   val Pll12Lock = Output(Bool())
-  val Pll16Lock = Output(Bool())
 
   /** TX clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8. */
   val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
@@ -105,17 +110,17 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** Digital clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8, 4 /15 --
+  /** PhyTest clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8, 4 /15 --
     * the ratios that land a little over 1 GHz from an 8 or 16 GHz main clock.
     * The divider stops on its own whenever the bypass pin is selected.
     */
-  val DigClkDiv = Input(UInt(ClockingTile.digClkDivWidth.W))
+  val PhyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
 
-  /** Takes the digital clock from the bypass pin rather than the divider. */
-  val DigClkBypassEn = Input(Bool())
+  /** Takes the PhyTest clock from the bypass pin rather than the divider. */
+  val PhyTestClkBypassEn = Input(Bool())
 
   /** Sideband division of the main clock: 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The
-    * sideband runs at a rate the digital domain does not, so it divides the
+    * sideband runs at a rate the PhyTest domain does not, so it divides the
     * same main clock separately.
     */
   val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
@@ -123,18 +128,22 @@ class ClockingTileIO extends Bundle {
   /** Takes the sideband clock from its own bypass pin. */
   val SbClkBypassEn = Input(Bool())
 
-  /** Active-high enable for the TX clock outputs. Low holds TxClk and TxClkQ at
-    * zero, which stops the clock reaching the TX lanes. DigitalClk is not
-    * gated: the digital domain has to keep running to service the RX AFEs.
+  /** Active-high enable for the glitch-free clock gate straight after the main
+    * clock mux. Low stops the main clock between pulses, so all three dividers
+    * -- TX, PhyTest, and sideband -- stop together and hold their count. A
+    * clock taken from a bypass pin is past the gate and keeps running, which is
+    * how the PhyTest domain keeps servicing the RX AFEs with the gate shut.
     */
   val ClkGateEn = Input(Bool())
 
   /** 100 MHz reference the PLLs lock to. */
   val RefClk = Input(Clock())
+  // `DigBypassClk` keeps its old name: the clock routing DEF routes it by
+  // that name.
   val DigBypassClk = Input(Clock())
   val SbBypassClk = Input(Clock())
   val BypassClk = Input(Clock())
-  val DigitalClk = Output(Clock())
+  val PhyTestClk = Output(Clock())
   val SbClk = Output(Clock())
   val TxClkQ = Output(Clock())
   val TxClk = Output(Clock())

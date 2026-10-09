@@ -342,8 +342,7 @@ object TestHarness {
 class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  // Two sinks: the UCIe digital domain and the chip digital domain.
-  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val tltReg = LazyModule(
     new TLTester(TestHarness.tltParams, TestHarness.beatBytes)
   )
@@ -372,12 +371,7 @@ class TestHarness(implicit p: Parameters, includeDefaultModels: Boolean = true)
   )
 
   ucieTL.digitalClockNode := clockNode
-  // Same source: in this harness the chip clock and the bus clock are one.
-  ucieTL.chipDigitalClockNode := clockNode
-  private val regXbar = TLXbar()
-  ucieTL.regNode := regXbar
-  ucieTL.clkRegNode := regXbar
-  regXbar := tltReg.node
+  ucieTL.regNode := tltReg.node
   tlRam.node := ucieTL.clientNode
   ucieTL.managerNode := tltMb.node
 
@@ -485,8 +479,7 @@ class ScalaTestHarness(
 )(implicit p: Parameters, includeDefaultModels: Boolean = true)
     extends LazyModule {
 
-  // Two sinks: the UCIe digital domain and the chip digital domain.
-  val clockNode = ClockSourceNode(Seq.fill(2)(ClockSourceParameters()))
+  val clockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val regDriver = LazyModule(new TLDriver(regReqs))
   val mbDriver = LazyModule(new TLDriver(mbReqs, mbMaxInflight))
   val tlRam =
@@ -512,11 +505,7 @@ class ScalaTestHarness(
   val backpressure = LazyModule(new TLBackpressureTestWidget(stallCycles))
 
   ucieTL.digitalClockNode := clockNode
-  ucieTL.chipDigitalClockNode := clockNode
-  private val regXbar = TLXbar()
-  ucieTL.regNode := regXbar
-  ucieTL.clkRegNode := regXbar
-  regXbar := regDriver.node
+  ucieTL.regNode := regDriver.node
   backpressure.node := ucieTL.clientNode
   tlRam.node := backpressure.node
   ucieTL.managerNode := mbDriver.node
@@ -1656,6 +1645,77 @@ tl_long();
   )
 }
 
+/** Register accesses through a harness's tester, with the harness clock and the
+  * PHY clocks the register blocks run on all running.
+  *
+  * The tester, and the bus side of the register crossings, run on the harness
+  * clock. The PhyTest and controller blocks run on the PhyTest and sideband
+  * clocks, which the clocking tile takes from `digitalBypassClk` and
+  * `sidebandBypassClk` out of reset, so an access to either needs its clock
+  * too. Every step advances them all, eight PHY edges to five harness edges as
+  * 800 and 500 MHz would. The clock register block is on the harness clock
+  * alone, and stepping the others does it no harm.
+  *
+  * `TLTesterIO.op` steps one clock and leaves `req.valid` asserted, so this
+  * drives the tester itself: each access raises `req.valid` for exactly one
+  * accepted beat and then waits for its one response.
+  */
+class MultiClockRegAccess(
+    io: TLTesterIO,
+    harnessClock: Clock,
+    phyClocks: Clock*
+) {
+  import chisel3.simulator.PeekPokeAPI._
+
+  private var steps = 0
+
+  def step(cycles: Int = 1): Unit = for (_ <- 0 until cycles) {
+    harnessClock.step()
+    phyClocks.foreach(_.step())
+    if (steps % 5 < 3) phyClocks.foreach(_.step())
+    steps += 1
+  }
+
+  // A response can come back in the cycle its request is accepted -- the clock
+  // register block answers combinationally -- so both handshakes are sampled
+  // before every step, and each completes on the edge that step makes.
+  private def op(
+      addr: BigInt,
+      data: BigInt,
+      write: Boolean,
+      timeout: Int
+  ): BigInt = {
+    io.resp.ready.poke(true.B)
+    io.req.bits.addr.poke(addr.U)
+    io.req.bits.data.poke(data.U)
+    io.req.bits.is_write.poke(write.B)
+    io.req.valid.poke(true.B)
+    var accepted = false
+    var response: Option[BigInt] = None
+    var n = 0
+    while (response.isEmpty) {
+      val acceptNow = !accepted && io.req.ready.peek().litToBoolean
+      if (io.resp.valid.peek().litToBoolean) {
+        response = Some(io.resp.bits.data.peek().litValue)
+      }
+      step()
+      if (acceptNow) {
+        accepted = true
+        io.req.valid.poke(false.B)
+      }
+      n += 1
+      assert(n < timeout, f"request to 0x$addr%x never completed")
+    }
+    response.get
+  }
+
+  def write(addr: BigInt, data: BigInt, timeout: Int = 1000): Unit =
+    op(addr, data, true, timeout)
+
+  def read(addr: BigInt, timeout: Int = 1000): BigInt =
+    op(addr, 0, false, timeout)
+}
+
 class TileLinkSpec extends AnyFunSpec with ChiselSim {
   describe("UcieTL") {
     it("should generate valid SystemVerilog") {
@@ -1691,19 +1751,23 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
         enableWaves()
-        // The clocking tile hands `digitalBypassClk` straight through as the
-        // UCIe digital clock, so that port -- not the harness clock -- is what
-        // the register block and its reset synchronizer run on. The register
-        // TL path is combinational, so advancing this clock alone carries an
-        // MMIO access.
-        val ucieClk = c.io.ucieDigitalBypassClock
+        // The tester and the bus side of the register crossings run on the
+        // harness clock, the PhyTest and controller register blocks on the
+        // PhyTest and sideband clocks, which the clocking tile takes from the
+        // digital and sideband bypass clocks. An access needs its block's.
+        val regs = new MultiClockRegAccess(
+          c.io.reg,
+          c.clock,
+          c.io.ucieDigitalBypassClock,
+          c.io.ucieSidebandBypassClock
+        )
         // ChiselSim's own reset sequence only steps the harness clock, so hold
-        // reset across a few edges of this one to bring the UCIe domain out of
-        // reset with its registers initialized.
+        // reset across edges of all of them to bring the PHY domains, and their
+        // ends of the crossings, out of reset with their registers initialized.
         c.reset.poke(true.B)
-        ucieClk.step(cycles = 5)
+        regs.step(5)
         c.reset.poke(false.B)
-        ucieClk.step(cycles = 5)
+        regs.step(5)
         // Addresses come from the register map by name, the way the
         // SystemVerilog drivers use the generated constants. Hardcoded offsets
         // silently retarget this test at a different register whenever the map
@@ -1711,9 +1775,18 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         def addr(name: String): BigInt =
           BigInt(0x200000L) +
             (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
-        c.io.reg.expect(ucieClk, addr("testTarget").U, 0.U)
-        c.io.reg.write(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
-        c.io.reg.expect(ucieClk, addr("txDataChunkIn0").U, "hdeadbeef".U)
+        assert(regs.read(addr("testTarget")) == 0, "testTarget reset value")
+        regs.write(addr("txDataChunkIn0"), BigInt("deadbeef", 16))
+        assert(
+          regs.read(addr("txDataChunkIn0")) == BigInt("deadbeef", 16),
+          "txDataChunkIn0 readback"
+        )
+        // The controller's block, across its own crossing.
+        regs.write(addr("ucieRetryTrainingAmt"), 5)
+        assert(
+          regs.read(addr("ucieRetryTrainingAmt")) == 5,
+          "ucieRetryTrainingAmt readback"
+        )
         println("[TEST] Success")
       }
     }
@@ -1740,68 +1813,48 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       }
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
-        // Two domains: the block runs on the digital bypass clock, the
-        // clocking registers on the chip's own, which here is the harness
-        // clock. Both have to be stepped, and which one carries an access
-        // depends on which block it lands in.
-        val ucieClk = c.io.ucieDigitalBypassClock
+        // Two domains: the PhyTest registers run on the digital bypass clock,
+        // the clocking registers on the link's digital clock, which here is
+        // the harness clock. Both run throughout.
+        val regs = new MultiClockRegAccess(
+          c.io.reg,
+          c.clock,
+          c.io.ucieDigitalBypassClock
+        )
         c.reset.poke(true.B)
-        ucieClk.step(cycles = 5)
-        c.clock.step(cycles = 5)
+        regs.step(5)
         c.reset.poke(false.B)
-        ucieClk.step(cycles = 5)
-        c.clock.step(cycles = 5)
+        regs.step(5)
 
         def addr(name: String): BigInt =
           BigInt(0x200000L) +
             (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
-
-        // `TLTesterIO.op` asserts `req.valid` and never drops it, so the
-        // trailing step inside write/read reissues the last request with the
-        // address still poked. On one clock the duplicate is identical and
-        // harmless; interleaving two clocks lets it land against the other
-        // domain and the responses come back a transaction out of step. Park
-        // the request between accesses so each one stands alone.
-        def quiesce(): Unit = {
-          c.io.reg.req.valid.poke(false.B)
-          c.clock.step(2)
-          ucieClk.step(2)
-        }
-        def wr(clk: Clock, name: String, v: BigInt): Unit = {
-          c.io.reg.write(clk, addr(name).U, v.U)
-          quiesce()
-        }
-        def rd(clk: Clock, name: String): BigInt = {
-          val v = c.io.reg.read(clk, addr(name).U).litValue
-          quiesce()
-          v
-        }
+        def wr(name: String, v: BigInt): Unit = regs.write(addr(name), v)
+        def rd(name: String): BigInt = regs.read(addr(name))
 
         // One register either side of the boundary, each holding a value that
         // is not its reset value.
-        wr(ucieClk, "txDataChunkIn0", BigInt("deadbeef", 16))
-        wr(c.clock, "txClkPhase", 3)
+        wr("txDataChunkIn0", BigInt("deadbeef", 16))
+        wr("txClkPhase", 3)
         assert(
-          rd(ucieClk, "txDataChunkIn0") == BigInt("deadbeef", 16),
+          rd("txDataChunkIn0") == BigInt("deadbeef", 16),
           "the block register did not take its value before the reset"
         )
         assert(
-          rd(c.clock, "txClkPhase") == 3,
+          rd("txClkPhase") == 3,
           "the clocking register did not take its value before the reset"
         )
 
         // Assert and release. Both writes go to the clocking block, which is
         // the point: the register that commands the reset has to live where
         // the reset cannot reach it, or nothing could release it.
-        wr(c.clock, "ucieRst", 1)
-        c.clock.step(cycles = 5)
-        ucieClk.step(cycles = 5)
-        wr(c.clock, "ucieRst", 0)
-        c.clock.step(cycles = 10)
-        ucieClk.step(cycles = 20)
+        wr("ucieRst", 1)
+        regs.step(5)
+        wr("ucieRst", 0)
+        regs.step(20)
 
         // The block restarted: its register file is back at reset values.
-        val blockReg = rd(ucieClk, "txDataChunkIn0")
+        val blockReg = rd("txDataChunkIn0")
         assert(
           blockReg == 0,
           s"ucieRst left the block's register file alone (txDataChunkIn0 = 0x${blockReg
@@ -1810,7 +1863,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         )
         // The clocking configuration did not, so the block comes back up on
         // the clocking software set rather than on the reset defaults.
-        val clkReg = rd(c.clock, "txClkPhase")
+        val clkReg = rd("txClkPhase")
         assert(
           clkReg == 3,
           s"ucieRst cleared the clocking configuration (txClkPhase 3 -> $clkReg), " +
