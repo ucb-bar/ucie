@@ -1,45 +1,37 @@
-# Xcelium UCIePHY Simulation Project
+# Xcelium AMS setup
 
-This directory contains the Xcelium simulation setup for the UCIePHY (Universal Chiplet Interconnect Express Physical Layer) testbench. The simulation uses mixed-signal (AMS + SystemVerilog) modeling to verify the PHY components.
+The files here are shared by every mixed-signal bench under `../verilog`:
+
+- **amscf.scs**: the AMS control file -- the transient analysis and the
+  connect-module rules between the analog models and the digital logic.
+- **probe.tcl**: probes every signal into `waves.shm` and runs the bench.
+- **Makefile**: runs one bench by hand.
+
+The benches are normally run with `cargo test` from `../rs`, which compiles each
+one in its own work directory against each level of the analog models; see
+`../verilog/README.md`. The Makefile runs the same thing outside it, for when you
+want a bench's waveforms in SimVision.
 
 ## Prerequisites
 
-Before running the simulation, you **must** define the following environment variables to point to your Cadence tool installations:
+- **XCELIUM_HOME** set to the Xcelium installation, with `xrun` on `PATH`.
+- A real Spectre ahead of anything else called `spectre` on `PATH`. xrun's AMS
+  flow looks for `amsspice` next to the first `spectre` it finds, and Liberate
+  ships a `spectre` without one:
 
-- **SPECTRE_HOME**: Path to the Spectre installation directory.
-- **AMS_HOME**: Path to the Xcelium AMS installation directory.
+  ```bash
+  export PATH=/tools/cadence/SPECTRE/SPECTRE251/bin:$PATH
+  ```
 
-Without these variables, the Makefile will fail to locate necessary libraries and disciplines.
-
-## Running the Simulation
-
-1. Ensure you are in the `xcelium` directory.
-2. Set the environment variables as described above.
-3. Run the simulation:
-
-   ```bash
-   make phy
-   ```
-
-   This will compile all AMS and SystemVerilog sources, elaborate the design, and run the testbench with the top-level module `phy_tb`.
-
-## Cleaning Up
-
-To remove simulation artifacts (libraries, logs, waveforms):
+## Running a bench
 
 ```bash
+make                                # phy_tb against models/eye
+make TB=training_tb                 # another bench
+make TB=phy_tb LEVEL=circuit        # another level of the analog models
 make clean
 ```
 
-## Files Overview
-
-- **Makefile**: Defines the simulation flow using `xrun`.
-- **amscf.scs**: AMS control file for Spectre integration.
-- **probe.tcl**: Tcl script for waveform probing.
-- **../verilog/**: Source files (AMS and SV) for the PHY components.
-
-## Notes
-
-- The simulation uses mixed-signal mode (`-sv_ms`) to handle both analog (AMS) and digital (SystemVerilog) components.
-- Waveforms are saved to `phy_waves.shm` upon completion.
-- If you encounter permission or path errors, verify the environment variables and tool installations.
+`TB` is any top-level bench module under `../verilog` (`phy_tb`, `training_tb`,
+`dff_tb`, ...), and `LEVEL` any directory under `../verilog/models`. Waveforms
+land in `waves.shm`.

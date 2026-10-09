@@ -507,4 +507,65 @@ class UcieMmioBringupTest extends AnyFunSpec with ChiselSim {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Training that fails
+  // ---------------------------------------------------------------------------
+
+  // The LTSM's substate timeout, which the reset wait is half of.
+  private val substateTimeout = 2 * resetWait
+
+  /** Step in chunks until `done` holds, for waits too long to poll every cycle.
+    */
+  private def stepThrough(h: H, limit: Int, milestone: String)(
+      done: => Boolean
+  ): Unit = {
+    val chunk = 1024
+    var left = limit
+    while (left > 0 && !done) {
+      h.clock.step(chunk)
+      left -= chunk
+    }
+    assert(done, s"$milestone was not reached: ${states(h)}")
+  }
+
+  describe("UCIe training failure over MMIO") {
+
+    // Start Link Training is held until training is over. If failing does not
+    // count as over, the bit stays set, the next write to it is ignored, and
+    // software has no way to try again short of a reset.
+    it("lets software start training again after it fails") {
+      simulate(
+        LazyModule(new UcieMmioBringupHarness(peerPowered = false)).module,
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        coldStart(h)
+        startTraining(h, 0)
+        assert(
+          bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "Start Link Training did not take"
+        )
+
+        // Die 1 never powers up, so die 0 times out in SBINIT, then again
+        // waiting for the train error handshake, and with no retries allowed
+        // that is the end of it.
+        stepThrough(h, 2 * substateTimeout + 65536, "training failing")(
+          flag(h, 0, MmioFlag.phyTrainError)
+        )
+        assert(
+          !bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "Start Link Training stayed set after training failed"
+        )
+
+        startTraining(h, 0)
+        assert(
+          bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "a second Start Link Training was ignored"
+        )
+        stepThrough(h, resetWait + 65536, "training again")(
+          h.io.ltState(0).peek().litValue == LTState.sSBINIT.litValue
+        )
+      }
+    }
+  }
 }

@@ -69,8 +69,8 @@ endmodule
 // pull-down impedance is set by the thermometer codes `ENP` and `ENN`, next to
 // a capacitive-peaking equalizer branch set by `ENP_EQ` and `ENN_EQ`.
 //
-// `ENP` and `ENP_EQ` are active low (a one turns its segment off); `ENN` and
-// `ENN_EQ` are active high.
+// All four codes are active high: a one turns its segment on, on either rail,
+// and with every bit low the output is high impedance.
 module tx_tile_driver (
     input din,
     input [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN,
@@ -86,7 +86,7 @@ module tx_tile_driver (
         // Count the enabled segments on each rail.
         pu_on = 0;
         for (i = 0; i < `TX_DRIVER_SEGMENTS; i=i+1) begin
-            if (!ENP[i])
+            if (ENP[i])
                 pu_on = pu_on + 1;
         end
         pd_on = 0;
@@ -96,7 +96,7 @@ module tx_tile_driver (
         end
         pu_eq_on = 0;
         for (i = 0; i < `TX_DRIVER_EQ_SEGMENTS; i=i+1) begin
-            if (!ENP_EQ[i])
+            if (ENP_EQ[i])
                 pu_eq_on = pu_eq_on + 1;
         end
         pd_eq_on = 0;

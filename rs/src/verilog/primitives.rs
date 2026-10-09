@@ -19,10 +19,16 @@ mod tests {
 
     #[test]
     fn dff() -> Result<()> {
-        // TODO: Improve checks.
+        // The bench checks `q` itself, in reset and in normal operation, and
+        // reports a wrong one with `$error`; that makes xrun exit nonzero, which
+        // fails `run`. What it cannot check itself is that the timing checks
+        // fire, and only where they are provoked, so that is what is matched
+        // here: exactly one setup and one hold violation, in that order, both
+        // before the normal operation that has to raise none.
         let re = Regex::new(
             "\
                 (?s)\
+                .*Testing reset\
                 .*Testing setup violation\
                 .*Timing violation\
                 \\s*\\$setup\
@@ -49,7 +55,9 @@ mod tests {
 
     #[test]
     fn latch() -> Result<()> {
-        // TODO: Improve checks.
+        // As for `dff`: a wrong `q` from either latch is an `$error` and fails
+        // `run`, and what is matched here is that each latch raises exactly its
+        // one setup and one hold violation.
         let re_p = Regex::new(
             "\
                 (?s)\

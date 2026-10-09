@@ -22,8 +22,8 @@ verilog/
 | | what it is | what it costs | what it is for |
 |---|---|---|---|
 | behavioral | `scala/resources/vsrc/*.v`, no analog at all | Verilator, seconds | RTL: word rates, bit order, reset |
-| `models/eye` | finite driver slew, a `vref` comparison | Xcelium AMS, ~8 min for `phy_tb`, ~30 s for `training_tb` | training, bring-up sequences, full-stack MMIO tests |
-| `models/circuit` | switched-capacitor sampler, driver segments, clock phase noise | Xcelium AMS, ~15 min for `phy_tb` | sizing, calibration ranges, jitter |
+| `models/eye` | finite driver slew, a `vref` comparison | Xcelium AMS, ~5 min for `phy_tb`, ~30 s for `training_tb` | training, bring-up sequences, full-stack MMIO tests |
+| `models/circuit` | switched-capacitor sampler, driver segments, clock phase noise | Xcelium AMS, ~9 min for `phy_tb` | sizing, calibration ranges, jitter |
 
 The behavioral tier is not in this directory. It lives next to the Chisel
 blackboxes that select it (`includeDefaultModels`), models a lane as a shift
@@ -56,11 +56,12 @@ So the two axes of the eye do not come out the same shape. The **height** is
 real and both its edges are: `verilog/common/training_tb.sv` measures 0.516 V of
 it at the default codes, which is the supply divided by the driver's on
 resistance against the far termination, and a reference code outside that range
-kills the lane. The **width** comes out about one UI, because nothing at this
-level closes it: a sample taken part way up an edge still resolves to the old
-bit or the new one, so there is no band of sampling points that fails outright,
-only the UI slip at each end of the run. Jitter and ISI are what narrow a real
-eye and both are `models/circuit`'s business.
+kills the lane. The **width** comes out close to one UI, because little at
+this level closes it: a sample taken part way up an edge mostly still resolves
+to the old bit or the new one, so only a band a few ps wide around the boundary
+between two UI fails outright, besides the UI slip at each end of the run.
+Jitter and ISI are what narrow a real eye and both are `models/circuit`'s
+business.
 
 ### `models/circuit`
 
@@ -131,7 +132,8 @@ than near the bottom of it.
 
 ## Where the sampling point lands
 
-`phy` offsets the forwarded clock by two clock distribution delays and a
+`phy` puts the forwarded clock through the global delay line, as TXCLKQ is in
+the PHY, and then through a fixed delay of two clock distribution delays and a
 quarter period, on the reasoning that the first cancels the distribution on
 each side and the second puts the clock in the middle of the eye. Two
 distribution delays are 400 ps and a UI is 62.5 ps, so the first part does not
@@ -140,13 +142,17 @@ things again. Where the sampling edge actually lands is therefore left over
 from delays that were never meant to add up, and it moves when the models
 underneath do.
 
-Against `models/circuit` it lands inside the eye; against `models/eye` it lands
-on the edge, and the loopback reads back the wrong bits. Nothing is wrong with
-either model -- an untrained lane has no reason to be centred, which is the
-whole reason a lane has a delay line. `phy_tb` therefore walks that delay line
-until it is sampling inside the eye before it checks anything, the same way
-`training_tb` and the MMIO training sequence do, and prints the code it settled
-on.
+Nothing is wrong with either model when it lands badly -- an untrained lane has
+no reason to be centred, which is the whole reason the forwarded clock has a
+delay line. `phy_tb` therefore sweeps the global line over a UI before it
+checks anything, the same way `training_tb` and the MMIO training sequence do,
+settles in the middle of the longest run of codes lane 0 receives at, and
+prints the sweep and the code it settled on.
+
+The sweep has to be on the global line. A lane's own delay line only trims it
+against the spread of the clock tree -- `TX_DCDL_TAPS` taps of
+`DCDL_DELAY_STEP`, a few ps in all -- where the global line covers a little
+over a UI.
 
 ## Running
 
@@ -158,9 +164,9 @@ cargo test eye                          # the eye level only
 cargo test verilog::training            # the training sweep
 ```
 
-`verilog::phy::tests::circuit` is the long one: about 15 minutes against 20
+`verilog::phy::tests::circuit` is the long one: about 9 minutes against 20
 lanes of switched-capacitor front ends, where the eye level does the same run in
-about 8. Everything else finishes in seconds.
+about 5. Everything else finishes in about a minute.
 
 `Level` in `rs/src/verilog/mod.rs` is the list of levels; adding a directory
 under `models/` and an entry to that enum is the whole of adding one.

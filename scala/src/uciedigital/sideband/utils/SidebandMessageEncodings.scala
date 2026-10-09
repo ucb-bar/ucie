@@ -1169,6 +1169,13 @@ object SBMsgCreate {
       case "PHY" => "b010".U(3.W)
     }
     dstid = (dstid | Cat(remote.B.asUInt, 0.U(2.W)))
+    // MsgInfo is 16 bits, and everything above it is placed by position, so a
+    // narrower one would slide `dstid` down a bit and send the message to the
+    // wrong place. Zero extend it here rather than trust every caller to.
+    msgInfo.widthOption.foreach { w =>
+      require(w <= 16, s"msgInfo is $w bits, wider than the 16 it is sent in")
+    }
+    val info = msgInfo.pad(16)
     val cp = 0.U(1.W)
     val dp = 0.U(1.W)
     val msgSubcode = base(2)
@@ -1180,7 +1187,7 @@ object SBMsgCreate {
       cp,
       0.U(3.W),
       dstid,
-      msgInfo,
+      info,
       msgSubcode,
       srcid,
       0.U(2.W),

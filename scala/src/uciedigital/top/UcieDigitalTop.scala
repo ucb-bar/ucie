@@ -41,6 +41,13 @@ class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams)
     * rest reaches this port and no further.
     */
   val ctrl = Output(new PhyControlToPhyIO(afeParams))
+
+  /** What the PHY's clocking reports back: whether the PLL is locked at the
+    * rate `ctrl.freqSel` asks for, which training waits on to leave RESET and
+    * to finish a rate change, and whether the clocks are ungated, which the RDI
+    * wake handshake waits on. Synchronous to this block's clock.
+    */
+  val status = Input(new PhyStatusFromPhyIO)
 }
 
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
@@ -154,11 +161,7 @@ class UcieDigitalTop(
       r.module.io.linkErrorIrq.foreach(dontTouch(_))
     }
 
-    // TODO: PHY macro status is owned by the analog register file, not the
-    // UCIe block. Both of these are still asserted rather than observed, so
-    // training believes a PLL is locked whether or not one is even enabled.
-    logicalPhy.io.analog.status.pllLock := true.B
-    logicalPhy.io.analog.status.clocksUngatedAndStable := true.B
+    logicalPhy.io.analog.status := io.phyFacingIo.status
     io.phyFacingIo.ctrl := logicalPhy.io.analog.ctrl
   }
 }
