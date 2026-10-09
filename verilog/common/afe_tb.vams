@@ -252,11 +252,11 @@ module tx_tile_driver_data_tb;
         dout_sample = V(dout);
     end
 
-    // Every main segment on, equalizer branch off.
+    // Every main segment on, equalizer branch off. Every enable is active high.
     initial begin
-        ENP = 0;
+        ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-        ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        ENP_EQ = 0;
         ENN_EQ = 0;
     end
 
@@ -307,12 +307,13 @@ module tx_tile_driver_impedance_tb;
         dout_sample = V(dout);
     end
 
-    // One segment per rail, equalizer branch off: the weakest code the driver
-    // can be set to short of turning off entirely.
+    // Starts off: every enable is active high, so every bit low is the driver
+    // off. One segment per rail with the equalizer branch off, set below, is
+    // then the weakest code it can be set to short of that.
     initial begin
-        ENP = {`TX_DRIVER_SEGMENTS{1'b1}} << 1;
-        ENN = 1;
-        ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        ENP = 0;
+        ENN = 0;
+        ENP_EQ = 0;
         ENN_EQ = 0;
     end
 
@@ -325,6 +326,22 @@ module tx_tile_driver_impedance_tb;
         r30 = 1/(1/`TX_R_OUT + 1/rtest);
         vpu = rtest / (r30 + rtest) * `VDD;
         vpd = r30 / (r30 + rtest) * `VDD;
+
+        // Off, the driver should leave the bump to the load whatever `din` is:
+        // the two test resistors put it at mid-rail.
+        din = 0;
+        #300;
+        $display("din = %b, all enables off, dout = %f", din, dout_sample);
+        if (dout_sample < 0.49 * `VDD || dout_sample > 0.51 * `VDD)
+            $display("Error: driver with every enable low is not high impedance");
+        din = 1;
+        #300;
+        $display("din = %b, all enables off, dout = %f", din, dout_sample);
+        if (dout_sample < 0.49 * `VDD || dout_sample > 0.51 * `VDD)
+            $display("Error: driver with every enable low is not high impedance");
+
+        ENP = 1;
+        ENN = 1;
         din = 0;
         #300;
 
@@ -340,7 +357,7 @@ module tx_tile_driver_impedance_tb;
         #300;
         $display("din = %b, ENP = %b, dout = %f", din, ENP, dout_sample);
         if (dout_sample > vpu) $display("Error: highest pull-up impedance is too low (vpu = %f)", vpu);
-        ENP = 0;
+        ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         #300;
         $display("din = %b, ENP = %b, dout = %f", din, ENP, dout_sample);
         if (dout_sample < vpu) $display("Error: lowest pull-up impedance is too high (vpu = %f)", vpu);

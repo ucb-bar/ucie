@@ -7,8 +7,14 @@ interface phy_intf;
     rxdata_tile_intf rxdata[`LANES]();
     rxdata_tile_intf rxval(), rxtrk();
     rxclk_tile_intf rxclkp(), rxclkn();
+    // The global delay line on the forwarded clock, thermometer coded: what
+    // `clkPhaseSel` drives in the PHY, and what training moves to put the
+    // clock the far end samples with in the middle of the data eye.
+    logic [`GLOBAL_DL_CTRL_BITWIDTH-1:0] clk_phase_sel;
     logic pll_reset;
     wire pll_clk_out;
+    // The PLL model's lock status. Only the PLL drives it, so it is left
+    // undriven while the model is commented out below.
     wire pll_Dctrl_value;
 endinterface
 
@@ -49,15 +55,29 @@ clocking_distribution_model #(
     .clk_out(txclk_sed)
 );
 
+// The global delay line, on the forwarded clock only, as it sits on TXCLKQ in
+// the PHY. It is the training knob for where in the UI the far end samples: a
+// little over a UI in `GLOBAL_DL_CTRL_BITWIDTH` taps, where a lane's own delay
+// line only trims it by a few ps.
+wire clk_q;
+global_delayline global_dl(
+    .dl_ctrl(intf.clk_phase_sel),
+    .clk_in(intf.pll_clk_out),
+    .clk_out(clk_q)
+);
+
+// A fixed delay after it, standing in for the forwarded clock's arm of the
+// clock tree. Its offset was meant to cancel the distribution on both sides and
+// centre the clock in the eye, which it does not quite do (see "Where the
+// sampling point lands" in `verilog/README.md`); centring is the global line's
+// job, so this line's gain and control stay at zero.
 wire deskewed_clk_tx;
 dcdl #(
     .delay_gain(0),
-    // FIXME(Di): set the gain for DCDL 
     .delay_offset(2 * `CLK_DIST_DELAY_MU + `CLK_PERIOD/4)
 ) dcdl_inst(
-    .clk_in(intf.pll_clk_out),
-    // TODO(Di): connect the control signal to the main LogPHY controller
-    .dl_ctrl(0), 
+    .clk_in(clk_q),
+    .dl_ctrl(0),
     .clk_out(deskewed_clk_tx)
 );
 
@@ -81,13 +101,14 @@ txdata_tile txclkn_tile(.intf(intf.txclkn), .D2D_TX(txclkn_bump));
 txdata_tile txval_tile(.intf(intf.txval), .D2D_TX(txval_bump));
 txdata_tile txtrk_tile(.intf(intf.txtrk), .D2D_TX(txtrk_bump));
 
+// The recovered clock, past the clock lane's gate, fans out to the data lanes.
 wire [`LANES-1:0] rxclk_dist_sed;
+wire rxclk_gated = intf.rxclkp.clkout;
 clocking_distribution_model #(
     .propagation_delay_mu(`CLK_DIST_DELAY_MU),
     .propagation_delay_sigma(`CLK_DIST_DELAY_SIGMA)
 )   clk_dist_inst_rx(
-    .clk_in(rxclkp_tile.afe.dout), // HACK(Di): explicitly call the AFE output
-//    .clk_in(intf.pll_clk_out),
+    .clk_in(rxclk_gated),
     .clk_out(rxclk_dist_sed)
 );
 
@@ -138,23 +159,26 @@ module phy_tb;
     wire vdd = 1, vss = 0;
     reg reset = 1;
 
-    // Delay taps on the data-carrying lanes' tile clocks, as a thermometer
-    // code. Nothing in this loopback centres the forwarded clock in the data
-    // eye: `phy`'s deskew line offsets it by two clock distribution delays and
-    // a quarter period, and two distribution delays are not a whole number of
-    // UI, so where the sampling edge lands is left over from delays that were
-    // never meant to add up. It lands inside the eye for some models and on the
-    // edge for others, so the bench walks this code until it is inside. One
-    // code serves every lane here, since a loopback puts them all through the
-    // same delays; `verilog/common/training_tb.sv` is where the eye either side
-    // of it gets measured.
-    reg [`TX_DCDL_TAPS-1:0] tx_delay = 0;
-    // How far it is willing to walk. One UI is `MIN_PERIOD`/2 = 62.5 ps at
-    // 16 GT/s and a tap is `DCDL_DELAY_STEP`, so a whole UI is covered well
-    // before this runs out.
-    localparam int MAX_DELAY_TAPS = 8;
-    // Time for a code to settle and the receiver to refill, in ps.
-    localparam int DELAY_SETTLE = 20000;
+    // The global delay line's code, as a thermometer code. Nothing in this
+    // loopback centres the forwarded clock in the data eye: `phy`'s fixed
+    // delay offsets it by two clock distribution delays and a quarter period,
+    // and two distribution delays are not a whole number of UI, so where the
+    // sampling edge lands is left over from delays that were never meant to
+    // add up. It lands inside the eye for some models and on the edge for
+    // others, so the bench sweeps this code over a UI and settles in the middle
+    // of the longest run of codes lane 0 receives at. One code serves every
+    // lane here, since a loopback puts them all through the same delays;
+    // `verilog/common/training_tb.sv` is where the eye either side of it gets
+    // measured.
+    reg [`GLOBAL_DL_CTRL_BITWIDTH-1:0] phase_sel = 0;
+    // Codes swept, as `PHASE_POINTS` steps of `PHASE_STEP` taps. A tap is
+    // `GLOBAL_DL_DELAY_STEP` ps, so this covers a UI -- `MIN_PERIOD`/2 = 62.5 ps
+    // at 16 GT/s -- and the edge of the eye has to be somewhere along it.
+    localparam int PHASE_POINTS = 16;
+    localparam int PHASE_STEP = 4;
+    // Time for a code to settle and the receiver to refill, in ps: six word
+    // periods, as in `training_tb`.
+    localparam int PHASE_SETTLE = 6 * 2**`SERDES_STAGES * `MIN_PERIOD / 2;
     reg pll_clkp_out;
     wire pll_clkn_out;
 
@@ -225,8 +249,8 @@ module phy_tb;
     );
 
     assign intf.pll_reset = reset;
-    assign intf.pll_Dctrl_value = 1; // FIXME(Di): pll_Dctrl_value is an output showing the internal locking status of the PLL, so don't tie it to 1.
     assign intf.pll_clk_out = pll_clkp_out;
+    assign intf.clk_phase_sel = phase_sel;
     assign intf.sb_txdata.vdd = vdd;
     assign intf.sb_txdata.vss = vss;
     // The sideband drivers do their own 2:1; this testbench does not exercise
@@ -259,13 +283,13 @@ module phy_tb;
             assign intf.txdata[i].vss = vss;
             assign intf.txdata[i].DataIN = shuffle(ALT_HIGH_FIRST);
             assign intf.txdata[i].RST_async = reset;
-            // Every main driver segment on (`ENP` is active low, `ENN` active high),
-            // equalizer branch off, no added delay on the tile clock.
-            assign intf.txdata[i].ENP = 0;
+            // Every main driver segment on and the equalizer branch off (every
+            // enable is active high), no added delay on the tile clock.
+            assign intf.txdata[i].ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
             assign intf.txdata[i].ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-            assign intf.txdata[i].ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+            assign intf.txdata[i].ENP_EQ = 0;
             assign intf.txdata[i].ENN_EQ = 0;
-            assign intf.txdata[i].Dctrl = tx_delay;
+            assign intf.txdata[i].Dctrl = 0;
 
             assign intf.rxdata[i].vdd = vdd;
             assign intf.rxdata[i].vss = vss;
@@ -287,11 +311,11 @@ module phy_tb;
     assign intf.txclkp.vss = vss;
     assign intf.txclkp.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txclkp.RST_async = reset;
-    // Every main driver segment on (`ENP` is active low, `ENN` active high),
-    // equalizer branch off, no added delay on the tile clock.
-    assign intf.txclkp.ENP = 0;
+    // Every main driver segment on and the equalizer branch off (every enable
+    // is active high), no added delay on the tile clock.
+    assign intf.txclkp.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txclkp.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txclkp.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txclkp.ENP_EQ = 0;
     assign intf.txclkp.ENN_EQ = 0;
     assign intf.txclkp.Dctrl = 0;
 
@@ -300,11 +324,11 @@ module phy_tb;
     assign intf.txclkn.vss = vss;
     assign intf.txclkn.DataIN = shuffle(ALT_LOW_FIRST);
     assign intf.txclkn.RST_async = reset;
-    // Every main driver segment on (`ENP` is active low, `ENN` active high),
-    // equalizer branch off, no added delay on the tile clock.
-    assign intf.txclkn.ENP = 0;
+    // Every main driver segment on and the equalizer branch off (every enable
+    // is active high), no added delay on the tile clock.
+    assign intf.txclkn.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txclkn.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txclkn.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txclkn.ENP_EQ = 0;
     assign intf.txclkn.ENN_EQ = 0;
     assign intf.txclkn.Dctrl = 0;
 
@@ -313,26 +337,31 @@ module phy_tb;
     assign intf.txval.vss = vss;
     assign intf.txval.DataIN = shuffle(VALID_PATTERN);
     assign intf.txval.RST_async = reset;
-    // Every main driver segment on (`ENP` is active low, `ENN` active high),
-    // equalizer branch off, no added delay on the tile clock.
-    assign intf.txval.ENP = 0;
+    // Every main driver segment on and the equalizer branch off (every enable
+    // is active high), no added delay on the tile clock.
+    assign intf.txval.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txval.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txval.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txval.ENP_EQ = 0;
     assign intf.txval.ENN_EQ = 0;
-    assign intf.txval.Dctrl = tx_delay;
+    assign intf.txval.Dctrl = 0;
 
     assign intf.txtrk.vddq = vdd;
     assign intf.txtrk.vdd = vdd;
     assign intf.txtrk.vss = vss;
     assign intf.txtrk.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txtrk.RST_async = reset;
-    // Every main driver segment on (`ENP` is active low, `ENN` active high),
-    // equalizer branch off, no added delay on the tile clock.
-    assign intf.txtrk.ENP = 0;
+    // Every main driver segment on and the equalizer branch off (every enable
+    // is active high), no added delay on the tile clock.
+    assign intf.txtrk.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txtrk.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txtrk.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+    assign intf.txtrk.ENP_EQ = 0;
     assign intf.txtrk.ENN_EQ = 0;
-    assign intf.txtrk.Dctrl = tx_delay;
+    assign intf.txtrk.Dctrl = 0;
+
+    // Both recovered clocks' gates open, as `rxClkGateEn` resets to. Shut, the
+    // clock lane hands the distribution, and so every data lane, no clock.
+    assign intf.rxclkp.clk_gate_en = 1;
+    assign intf.rxclkn.clk_gate_en = 1;
 
     assign intf.rxclkp.vdd = vdd;
     assign intf.rxclkp.vss = vss;
@@ -403,22 +432,62 @@ module phy_tb;
         lane_ok = (word === expected_a) || (word === expected_b);
     endfunction
 
+    // Thermometer code with `n` of the global delay line's taps enabled.
+    function automatic logic [`GLOBAL_DL_CTRL_BITWIDTH-1:0] phase_taps(input int n);
+        phase_taps = {`GLOBAL_DL_CTRL_BITWIDTH{1'b1}} >> (`GLOBAL_DL_CTRL_BITWIDTH - n);
+    endfunction
+
+    bit phase_ok[PHASE_POINTS];
+    int run_start, run_len, best_start, best_len, phase;
+    string row;
+
     initial begin
-        #200000; // FIXME(Di): Do we need to wait this long for reset?
+        // Reset only has to reach the dividers, which take it asynchronously.
+        // Nothing analog waits on it: the reference ladders and terminations
+        // are resistive and sit at their levels from the first time step, at
+        // either level. After it, a few word periods for the transmitters to
+        // start and the receivers to fill; every code the sweep below tries
+        // gets its own settle besides.
+        #20000;
         reset = 0;
 
-        #200000;
+        #20000;
 
-        // Walk the delay line until lane 0 is sampling inside its eye. Every
-        // lane shares the code, so one lane is enough to find it and the check
-        // below is what says the rest agree.
-        for (integer t = 0; t < MAX_DELAY_TAPS; t++) begin
-            tx_delay = (1 << t) - 1;
-            #DELAY_SETTLE;
-            if (lane_ok(dout_shuffled[0])) break;
+        // Sweep the global line and settle in the middle of the longest run of
+        // codes lane 0 receives at. Every lane shares the code, so one lane is
+        // enough to find it and the check below is what says the rest agree.
+        // The sweep only ever moves the line later, so no edge in flight on it
+        // is overtaken by a later one; the jump back to the chosen code can
+        // leave a runt, which the settle after it rides out.
+        best_start = 0;
+        best_len = 0;
+        run_len = 0;
+        for (int p = 0; p < PHASE_POINTS; p++) begin
+            phase_sel = phase_taps(p * PHASE_STEP);
+            #PHASE_SETTLE;
+            phase_ok[p] = lane_ok(dout_shuffled[0]);
+            if (!phase_ok[p]) begin
+                run_len = 0;
+            end else begin
+                if (run_len == 0) run_start = p;
+                run_len++;
+                if (run_len > best_len) begin
+                    best_start = run_start;
+                    best_len = run_len;
+                end
+            end
         end
-        $display("Lane delay settled at %0d taps (%0d ps)",
-                 $countones(tx_delay), $countones(tx_delay) * `DCDL_DELAY_STEP);
+        row = "";
+        for (int p = 0; p < PHASE_POINTS; p++) row = {row, phase_ok[p] ? "#" : "."};
+        phase = (best_start + best_len / 2) * PHASE_STEP;
+        phase_sel = phase_taps(phase);
+        #PHASE_SETTLE;
+        $display("Forwarded clock phase sweep: %s (%0.2f ps per point)",
+                 row, PHASE_STEP * `GLOBAL_DL_DELAY_STEP);
+        $display("Forwarded clock phase settled at %0d taps (%0.1f ps)",
+                 phase, phase * `GLOBAL_DL_DELAY_STEP);
+        if (best_len == 0)
+            $error("Incorrect RX data output: lane 0 receives at no forwarded clock phase");
 
         for (integer i = 0; i < `LANES; i++) begin
             $display("Lane %d dout = %x (tile), %x (shuffled)",

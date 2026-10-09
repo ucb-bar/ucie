@@ -5,9 +5,10 @@
 // it slices against.
 //
 // This is the bench the abstraction levels exist for. Both codes are real pins
-// on the tiles -- `Dctrl` on the transmitting tile's delay line, `vref_sel` on
-// the receiving tile's reference ladder -- and both are reachable from software
-// over MMIO, as `txctl_<lane>_tile` and `rxctl_<lane>_vrefSel`. What each level
+// -- `PhaseSel` on the clocking tile's global delay line, which delays the
+// quadrature clock the forwarded clock lanes run on, and `vref_sel` on the
+// receiving tile's reference ladder -- and both are reachable from software
+// over MMIO, as `clkPhaseSel` and `rxctl_<lane>_vrefSel`. What each level
 // owes this bench is that a wrong code fails and a right one does not, which is
 // what makes training something a test can observe. A purely digital model of
 // the same tiles passes at every code, which is why `scala/resources/vsrc` is
@@ -30,12 +31,13 @@
 //     roughly half the bits, so it counts as a failure here too.
 //
 // The run of codes that share one rotation is therefore the eye. In the
-// sampling axis it comes out about one UI wide, because nothing at the eye
-// level closes it: a sample taken part way up an edge still resolves to the old
-// bit or the new one, so there is no band of codes that fails outright. Jitter
-// and ISI are what narrow that in reality, and both are `models/circuit`'s
-// business. In the reference axis the eye is the swing itself, and both of its
-// edges are real.
+// sampling axis little closes it at the eye level -- only a band a few ps wide
+// around the boundary between two UI fails -- and jitter and ISI, which narrow
+// it in reality, are `models/circuit`'s business. The global line only covers a
+// little over a UI, though, so the sweep starts wherever the sampling point
+// happens to sit and usually cuts one end of the eye off; the width it reports
+// is then a lower bound. In the reference axis the eye is the swing itself,
+// and both of its edges are real.
 module training_tb;
 
     import ucie_serdes_order::shuffle;
@@ -45,17 +47,22 @@ module training_tb;
     // is double data rate, so a UI is half of it.
     localparam real UI = `MIN_PERIOD / 2.0;
 
-    // Delay line taps to sweep. Each is `DCDL_DELAY_STEP` ps, so this covers
-    // just under two UI: enough to watch the sampling point leave one UI and
-    // settle into the next.
-    localparam int DELAY_TAPS = 13;
+    // Global delay line codes to sweep, as `PHASE_POINTS` steps of
+    // `PHASE_STEP` taps. A tap is `GLOBAL_DL_DELAY_STEP` ps, so this covers a
+    // little over a UI -- enough that the sampling point has to leave one UI
+    // and settle into the next somewhere along it. The tile's own delay line
+    // cannot do this: its whole range is `TX_DCDL_TAPS` taps of
+    // `DCDL_DELAY_STEP`, a few ps, because it only trims a lane against the
+    // spread of the clock tree.
+    localparam int PHASE_POINTS = 32;
+    localparam int PHASE_STEP = 2;
     // Reference codes to sweep, as `VREF_POINTS` steps of `VREF_STEP` up the
     // ladder. The ladder spans the whole supply and the receiver only ever sees
     // `RX_V_HIGH` of it, so the swing is in the bottom half and the sweep runs
     // past the top of it to find that edge.
     localparam int VREF_POINTS = 16;
     localparam int VREF_STEP = 16;
-    // Reference code to hold the lane at while the delay line is swept:
+    // Reference code to hold the lane at while the sampling point is swept:
     // `RX_V_HIGH`/2, the middle of the swing the nominal driver and termination
     // impedances divide down to. The weakest termination code the sweep uses
     // puts the real swing a little above that, so this sits just below its
@@ -76,7 +83,7 @@ module training_tb;
 
     // How wide a pass band has to be for the sweep to count as having found an
     // eye rather than a lucky code.
-    localparam int MIN_EYE_TAPS = 3;
+    localparam int MIN_EYE_PHASE_POINTS = 3;
     localparam int MIN_EYE_VREF_CODES = 4;
 
     wire vdd = 1'b1;
@@ -84,6 +91,18 @@ module training_tb;
 
     reg ck = 1'b0;
     always #(`MIN_PERIOD / 2.0) ck = ~ck;
+
+    // The global delay line, between the high speed clock and the forwarded
+    // clock lane. In the PHY it sits on TXCLKQ, which only the forwarded clock
+    // lanes run on, so it moves the clock the far end samples with rather than
+    // the data being sampled.
+    logic [`GLOBAL_DL_CTRL_BITWIDTH-1:0] phase_sel;
+    wire ck_q;
+    global_delayline global_dl(
+        .dl_ctrl(phase_sel),
+        .clk_in(ck),
+        .clk_out(ck_q)
+    );
 
     // TILES
     // The forwarded clock lane and one data lane, transmitted off the same high
@@ -118,13 +137,13 @@ module training_tb;
     assign rxdata_intf.vdd = vdd;
     assign rxdata_intf.vss = vss;
 
-    assign txclk_intf.CK = ck;
+    assign txclk_intf.CK = ck_q;
     assign txdata_intf.CK = ck;
 
     // The data lane samples on the clock the clock lane recovered, which is
     // what the clock distribution network hands it in the real PHY.
     assign rxdata_intf.clk = rxclk_intf.clkout;
-    // No local RX trim in this bench; the sweep here moves the TX delay.
+    // No local RX trim in this bench; the sweep here moves the forwarded clock.
     assign rxdata_intf.Dctrl = '0;
 
     // AFE HANDOVER
@@ -180,10 +199,10 @@ module training_tb;
         rxdata_intf.sel_a = sel_a;
     end
 
-    // Thermometer code with `n` of the `TX_DCDL_TAPS` taps enabled, which is
-    // how the tile reads its delay line control.
-    function automatic logic [`TX_DCDL_TAPS-1:0] taps(input int n);
-        taps = ((1 << n) - 1);
+    // Thermometer code with `n` of the global delay line's taps enabled, which
+    // is how the line reads its control.
+    function automatic logic [`GLOBAL_DL_CTRL_BITWIDTH-1:0] phase_taps(input int n);
+        phase_taps = {`GLOBAL_DL_CTRL_BITWIDTH{1'b1}} >> (`GLOBAL_DL_CTRL_BITWIDTH - n);
     endfunction
 
     function automatic logic [WORD-1:0] rotl(
@@ -204,10 +223,10 @@ module training_tb;
     // Programs a code pair, lets it settle, and reads the lane twice a word
     // apart. `rot` is the word boundary the receiver came back with, or -1 if
     // the two reads disagreed or neither is this pattern.
-    task automatic measure(input int tap, input int vref, output int rot);
+    task automatic measure(input int phase, input int vref, output int rot);
         logic [WORD-1:0] first;
         logic [WORD-1:0] second;
-        txdata_intf.Dctrl = taps(tap);
+        phase_sel = phase_taps(phase);
         rxdata_intf.vref_sel = vref[`RDAC_SEL_BITS-1:0];
         repeat (SETTLE_WORDS) @(posedge rxdata_intf.divclk);
         @(negedge rxdata_intf.divclk);
@@ -246,10 +265,10 @@ module training_tb;
         end
     endtask
 
-    int delay_score[DELAY_TAPS];
+    int phase_score[PHASE_POINTS];
     int vref_score[VREF_POINTS];
-    int delay_start, delay_len, vref_start, vref_len;
-    int trained_tap, trained_vref;
+    int phase_start, phase_len, vref_start, vref_len;
+    int trained_phase, trained_vref;
     int rot;
     string row;
 
@@ -258,24 +277,29 @@ module training_tb;
         txclk_intf.RST_async = 1'b1;
         txdata_intf.RST_async = 1'b1;
 
-        // Every driver segment on, equalizer branch off. `ENP`/`ENP_EQ` are
-        // active low.
-        txclk_intf.ENP = 0;
+        // Every driver segment on, equalizer branch off. Every enable is active
+        // high.
+        txclk_intf.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         txclk_intf.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-        txclk_intf.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        txclk_intf.ENP_EQ = 0;
         txclk_intf.ENN_EQ = 0;
-        txdata_intf.ENP = 0;
+        txdata_intf.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         txdata_intf.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-        txdata_intf.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        txdata_intf.ENP_EQ = 0;
         txdata_intf.ENN_EQ = 0;
 
-        // The clock lane is the reference the data lane is swept against, so it
-        // keeps the shortest delay the line can be set to.
-        txclk_intf.Dctrl = taps(0);
-        txdata_intf.Dctrl = taps(0);
+        // Neither lane's own delay line is trimmed: with one data lane there is
+        // no spread between lanes for it to take out.
+        txclk_intf.Dctrl = '0;
+        txdata_intf.Dctrl = '0;
+        phase_sel = phase_taps(0);
 
         txclk_intf.DataIN = shuffle(CLK_PATTERN);
         txdata_intf.DataIN = shuffle(PATTERN);
+
+        // The recovered clock's gate open, as `rxClkGateEn` resets to. Shut, the
+        // clock lane hands the data lane no clock at all.
+        rxclk_intf.clk_gate_en = 1'b1;
 
         // Termination on at its weakest code, and the clock lane sliced at the
         // middle of its swing. Only the data lane's reference is swept.
@@ -292,34 +316,39 @@ module training_tb;
         rxdata_intf.rstb = 1'b1;
         #20000;
 
-        // SWEEP 1: where in the UI the lane is sampled.
+        // SWEEP 1: where in the UI the lane is sampled. Only ever moved later
+        // until the sweep is done, so no edge in flight on the line is
+        // overtaken by a later one and the clock lane never sees a runt.
         $display("");
-        $display("Sampling point sweep at vref_sel = %0d (%0d ps per tap, %0.1f ps per UI)",
-                 VREF_CENTER, `DCDL_DELAY_STEP, UI);
-        for (int t = 0; t < DELAY_TAPS; t++) begin
-            measure(t, VREF_CENTER, rot);
-            delay_score[t] = rot;
-            $display("  tap %2d (%3d ps): %s",
-                     t, t * `DCDL_DELAY_STEP,
+        $display("Sampling point sweep at vref_sel = %0d (%0.3f ps per tap, %0.1f ps per UI)",
+                 VREF_CENTER, `GLOBAL_DL_DELAY_STEP, UI);
+        for (int p = 0; p < PHASE_POINTS; p++) begin
+            measure(p * PHASE_STEP, VREF_CENTER, rot);
+            phase_score[p] = rot;
+            $display("  phase %2d (%5.1f ps): %s",
+                     p * PHASE_STEP, p * PHASE_STEP * `GLOBAL_DL_DELAY_STEP,
                      rot < 0 ? "no clean word" : $sformatf("word boundary %0d", rot));
         end
-        longest_run(delay_score, DELAY_TAPS, delay_start, delay_len);
-        trained_tap = delay_start + delay_len / 2;
+        longest_run(phase_score, PHASE_POINTS, phase_start, phase_len);
+        trained_phase = (phase_start + phase_len / 2) * PHASE_STEP;
         row = "";
-        for (int t = 0; t < DELAY_TAPS; t++) begin
-            row = {row, (t >= delay_start && t < delay_start + delay_len)
+        for (int p = 0; p < PHASE_POINTS; p++) begin
+            row = {row, (p >= phase_start && p < phase_start + phase_len)
                         ? "#" : "."};
         end
-        $display("  eye: %s  (%0d taps, %0d ps, %0.2f UI, centered on tap %0d)",
-                 row, delay_len, delay_len * `DCDL_DELAY_STEP,
-                 delay_len * `DCDL_DELAY_STEP / UI, trained_tap);
+        $display("  eye: %s  (%s%0d points, %0.1f ps, %0.2f UI, centered on phase %0d)",
+                 row,
+                 (phase_start == 0 || phase_start + phase_len == PHASE_POINTS)
+                     ? "cut off by the sweep, at least " : "",
+                 phase_len, phase_len * PHASE_STEP * `GLOBAL_DL_DELAY_STEP,
+                 phase_len * PHASE_STEP * `GLOBAL_DL_DELAY_STEP / UI, trained_phase);
 
         // SWEEP 2: what level the lane is sliced against, at the sampling point
         // the first sweep found.
         $display("");
-        $display("Reference sweep at tap %0d", trained_tap);
+        $display("Reference sweep at phase %0d", trained_phase);
         for (int i = 0; i < VREF_POINTS; i++) begin
-            measure(trained_tap, i * VREF_STEP, rot);
+            measure(trained_phase, i * VREF_STEP, rot);
             vref_score[i] = rot;
             $display("  vref_sel %3d (%0.3f V): %s",
                      i * VREF_STEP,
@@ -339,8 +368,8 @@ module training_tb;
 
         // The link at the codes the two sweeps picked.
         $display("");
-        $display("Trained: tap %0d, vref_sel %0d", trained_tap, trained_vref);
-        measure(trained_tap, trained_vref, rot);
+        $display("Trained: phase %0d, vref_sel %0d", trained_phase, trained_vref);
+        measure(trained_phase, trained_vref, rot);
         if (rot < 0)
             $error("Error: the lane does not receive cleanly at the trained codes");
 
@@ -349,12 +378,12 @@ module training_tb;
         // either the delay line is not moving the sampling point, or the slicer
         // is not comparing against its reference. A model that did either would
         // let training pass without training anything.
-        if (delay_len < MIN_EYE_TAPS)
-            $error("Error: sampling point eye is %0d taps, expected at least %0d",
-                   delay_len, MIN_EYE_TAPS);
-        if (delay_len == DELAY_TAPS)
-            $error("Error: the sampling point never slips a UI over %0d ps of delay, so the delay line is not moving it",
-                   DELAY_TAPS * `DCDL_DELAY_STEP);
+        if (phase_len < MIN_EYE_PHASE_POINTS)
+            $error("Error: sampling point eye is %0d points, expected at least %0d",
+                   phase_len, MIN_EYE_PHASE_POINTS);
+        if (phase_len == PHASE_POINTS)
+            $error("Error: the sampling point never slips a UI over %0.1f ps of delay, so the delay line is not moving it",
+                   (PHASE_POINTS - 1) * PHASE_STEP * `GLOBAL_DL_DELAY_STEP);
         if (vref_len < MIN_EYE_VREF_CODES)
             $error("Error: reference eye is %0d codes, expected at least %0d",
                    vref_len, MIN_EYE_VREF_CODES);

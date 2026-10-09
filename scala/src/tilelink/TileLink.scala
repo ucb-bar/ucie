@@ -270,6 +270,12 @@ class UcieClkRegs(
       val pllLock = Input(UInt(2.W))
       // Holds the rest of the UCIe block in reset. See `ucieRstReq`.
       val ucieRst = Output(Bool())
+      // What the UCIe controller is told about its clocks, on this block's
+      // clock: whether they are up, the rate that answer is about, and
+      // whether they are ungated. See `clksReady`.
+      val clksReady = Output(Bool())
+      val clksReadyFreqSel = Output(UInt(4.W))
+      val clksUngated = Output(Bool())
     })
 
     // Reset defaults describe a part that has been told nothing: the PhyTest
@@ -508,6 +514,29 @@ class UcieClkRegs(
       }
     }
 
+    // What the UCIe controller is told in place of a PHY's PLL lock: the call
+    // an apply makes when it lets the clocks back out, on whichever source
+    // `clkCfgUngateSrc` names, kept up from then on. So, no apply under way,
+    // and with the source on the PLL, that PLL still locked. The delay and
+    // software sources are for a lock that is not trusted or not wired, so
+    // with those the finished apply is the whole answer.
+    //
+    // With the rate table in charge, the clocks are also only ready once the
+    // live configuration is the table's entry for the rate training asked
+    // for. Nothing applies that on its own, so a rate change holds training
+    // until software has. The rate the answer is about goes out with it, for
+    // the controller to tell an answer to its request from one about the rate
+    // before.
+    val clksStable = !applyBusy &&
+      (ungateSrc =/= ClkUngateSrc.pllLock || mainClkLocked)
+    val rateLive = !freqSelAutoEn || live.asUInt === selected.asUInt
+    withClockAndReset(clock, reset) {
+      io.clksReady := RegNext(clksStable && rateLive, false.B)
+      io.clksReadyFreqSel := RegNext(freqSelSync, 0.U)
+      // Ungated is the same, less the rate, and with software's own gate open.
+      io.clksUngated := RegNext(clksStable && clkGateEn, false.B)
+    }
+
     io.mainClkSel := live.mainClkSel
     io.pll8En := live.pll8En
     io.pll12En := live.pll12En
@@ -700,9 +729,6 @@ class UcieTLRegs(
     )
 
     val regmap = withClockAndReset(clock, reset) {
-      // TODO: Remove and add necessary registers
-      io.test := DontCare
-
       // MMIO registers.
       val testTarget = RegInit(TestTarget.mainband)
       val txTestMode = RegInit(TxTestMode.manual)
@@ -1463,16 +1489,22 @@ class UcieTL(
       !selUcie && !selMbTl && regs.module.io.sidebandMode === BandMode.tl
 
     // Mainband crossings to and from the PHY's packet clocks: PhyTest's from
-    // the PhyTest clock, the controller's from the sideband clock. At most one
-    // of them, or the TL path, is selected.
-    // TODO: should deq ready be synchronous to deq clock?
+    // the PhyTest clock, the controller's from the sideband clock. Their PHY
+    // ends do not look at the selects, which come from the PhyTest clock: the
+    // TX queues are always drained and the RX queues always fed, so no select
+    // reaches their pointers on a packet clock. Only the selected controller's
+    // TX words reach the lanes; the others' are dropped, and the others' RX
+    // sides see words that are not theirs. (The TL path's RX queue is the
+    // exception; see there.) Software resets the datapath after changing a
+    // select, which empties every queue on the packet clocks, both ends, and
+    // starts whichever controller now has the lanes from clean queues.
     val txTestFifo =
       Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
     txTestFifo.io.enq_clock := phy.io.clkRst.phyTestClk
     txTestFifo.io.enq_reset := phy.io.clkRst.phyTestRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txTestFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-    txTestFifo.io.deq.ready := !selMbTl && !selUcie
+    txTestFifo.io.deq.ready := true.B
     txTestFifo.io.enq <> test.io.tx
 
     val txUcieFifo =
@@ -1481,12 +1513,12 @@ class UcieTL(
     txUcieFifo.io.enq_reset := phy.io.clkRst.sbRst
     txUcieFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txUcieFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-    txUcieFifo.io.deq.ready := selUcie
+    txUcieFifo.io.deq.ready := true.B
 
     val rxTestFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
     rxTestFifo.io.enq.bits := phy.io.rx
-    rxTestFifo.io.enq.valid := !selMbTl && !selUcie
+    rxTestFifo.io.enq.valid := true.B
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
     rxTestFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
     rxTestFifo.io.deq_clock := phy.io.clkRst.phyTestClk
@@ -1496,7 +1528,7 @@ class UcieTL(
     val rxUcieFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
     rxUcieFifo.io.enq.bits := phy.io.rx
-    rxUcieFifo.io.enq.valid := selUcie
+    rxUcieFifo.io.enq.valid := true.B
     rxUcieFifo.io.enq_clock := phy.io.clkRst.rxDivClk
     rxUcieFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
     rxUcieFifo.io.deq_clock := phy.io.clkRst.sbClk
@@ -1507,20 +1539,27 @@ class UcieTL(
     // 800 MHz -- which this crossing cannot carry. Say so rather than drop
     // words silently.
     //
-    // Ready is also low for a few cycles each time this end leaves reset,
-    // until the two ends have handshaken, and this end only starts once the
-    // partner forwards a clock. That is not a full queue, so the check arms
-    // the first time the queue is ready after a reset.
+    // Only while the controller has the lanes, though. Before then the queue
+    // takes whatever PhyTest or the TL path runs, at whatever rate, and may
+    // well be full, so the check arms at a datapath reset with the controller
+    // selected -- the order software switches in -- and stays disarmed from
+    // the first cycle it is not. Ready is also low for a few cycles after that
+    // reset, until the two ends have handshaken, and this end only starts once
+    // the partner forwards a clock. That is not a full queue either, so the
+    // check also waits for the queue to be ready.
     withClockAndReset(
       phy.io.clkRst.rxDivClk,
       phy.io.clkRst.rxDatapathRstSync
     ) {
+      val selectedSinceReset = RegInit(true.B)
+      when(!selUcie) { selectedSinceReset := false.B }
       val rxUcieFifoPrimed = RegInit(false.B)
       when(rxUcieFifo.io.enq.ready) { rxUcieFifoPrimed := true.B }
       block(Verification) {
         block(Verification.Assert) {
           assert(
-            !(selUcie && rxUcieFifoPrimed && !rxUcieFifo.io.enq.ready),
+            !(selUcie && selectedSinceReset && rxUcieFifoPrimed &&
+              !rxUcieFifo.io.enq.ready),
             "UcieTL: the controller's RX queue overflowed; the PHY's packet " +
               "clock is faster than the sideband clock the controller runs on"
           )
@@ -1539,6 +1578,34 @@ class UcieTL(
       phy.io.clkRst.pll12Lock,
       phy.io.clkRst.pll8Lock
     )
+    // And back: that block's account of the clocks, in place of the PLL lock
+    // and clocks-ungated status a PHY reports. All of it crosses as held
+    // levels, two flops a bit like the lock into that block. Lock also has to
+    // be about the rate the controller is asking for now: during a rate change
+    // the answer about the old rate is still on its way for a few cycles, and
+    // taking it would let training on before the clocks have moved, so lock
+    // drops the cycle the request changes. A multi-bit level can arrive skewed
+    // for a cycle while it settles, so lock is only believed once it has held
+    // for `lockHoldCycles`.
+    withClockAndReset(phy.io.clkRst.sbClk, phy.io.clkRst.sbRst) {
+      def sync[T <: Data](x: T): T =
+        RegNext(RegNext(x, 0.U.asTypeOf(x)), 0.U.asTypeOf(x))
+      val lockHoldCycles = 4
+      val ready = sync(clkRegs.module.io.clksReady)
+      val readyFreqSel = sync(clkRegs.module.io.clksReadyFreqSel)
+      val lockNow = ready &&
+        readyFreqSel === ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
+      val lockHeld = RegInit(0.U(log2Ceil(lockHoldCycles + 1).W))
+      when(!lockNow) {
+        lockHeld := 0.U
+      }.elsewhen(lockHeld =/= lockHoldCycles.U) {
+        lockHeld := lockHeld + 1.U
+      }
+      ucieDigital.io.phyFacingIo.status.pllLock :=
+        lockNow && lockHeld === lockHoldCycles.U
+      ucieDigital.io.phyFacingIo.status.clocksUngatedAndStable :=
+        sync(clkRegs.module.io.clksUngated)
+    }
 
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
     txUcieFifo.io.enq.valid := digiToPhyTx.valid
@@ -1805,12 +1872,18 @@ class UcieTL(
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
       txTlFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-      txTlFifo.io.deq.ready := selMbTl
+      // Always drained, like the PHY's other TX queues.
+      txTlFifo.io.deq.ready := true.B
 
       val rxTlFifo =
         Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
       val validFramer = Module(new ValidFramer(params.numLanes))
       rxTlFifo.io.enq.bits := phy.io.rx
+      // Unlike the PHY's other RX queues, only fed in `tl` mode: what comes out
+      // is decoded into TL requests on the bus, so another controller's words
+      // must never reach it. The select is from the PhyTest clock, so a change
+      // that lands on an edge can upset this queue's pointers; the datapath
+      // reset software issues after the change puts them right.
       rxTlFifo.io.enq.valid := selMbTl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync

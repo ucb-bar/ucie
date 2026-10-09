@@ -33,6 +33,9 @@ class LogPhyLoopbackHarness(
   val io = IO(new Bundle {
     val lpStateReq = Input(Vec(2, RDIStateReq()))
     val swStartLinkTraining = Input(Vec(2, Bool()))
+    // Straight into the LTSM, the way the runtime link test retrains, so a
+    // retrain does not need an adapter above the RDI to ask for it.
+    val swRetrainRequest = Input(Vec(2, Bool()))
     val pwrGood = Input(Vec(2, Bool()))
 
     // Coarse LTSM state, and the debug state that names the substate inside it.
@@ -104,7 +107,7 @@ class LogPhyLoopbackHarness(
     dut.ctrl.changeInRuntimeLinkCtrlRegsDetected := false.B
     dut.ctrl.runtimeLinkCtrlBusyBit := false.B
     dut.ctrl.runtimeRequestForRepair := false.B
-    dut.ctrl.swRetrainRequest := false.B
+    dut.ctrl.swRetrainRequest := io.swRetrainRequest(i)
     dut.ctrl.linkOpParamOverride := false.B
     dut.ctrl.clockPhaseSelect := 0.U
 

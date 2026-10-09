@@ -11,6 +11,8 @@ package edu.berkeley.cs.uciedigital.logphy
 
 import edu.berkeley.cs.uciedigital.sideband._
 import chisel3._
+import chisel3.layer.block
+import chisel3.layers.Verification
 import chisel3.util._
 
 // ============================================================================
@@ -459,13 +461,16 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   // Lower lanes failed so width degrade to upper lanes (when interpreting by 8 lanes)
   widthDegradeFromAllToUpperBy8 := isLanes0To7 && onlyLowerLanesFailed
 
-  // Upper lanes failed to width degrade to lower lanes
-  widthDegradeFromAllToLower := isLanes0To15 && onlyUpperLanesFailed
+  // Upper lanes failed to width degrade to lower lanes. Not when interpreting
+  // by 8 lanes: `isLanes0To15` is still true then, and the By8 conditions above
+  // cover it.
+  widthDegradeFromAllToLower := isLanes0To15 && !io.interpretBy8Lane &&
+    onlyUpperLanesFailed
 
-  // Lower lanes failed so width degrade to upper lanes
-  widthDegradeFromAllToUpper := isLanes0To15 && onlyLowerLanesFailed
+  // Lower lanes failed so width degrade to upper lanes, likewise not by 8 lanes
+  widthDegradeFromAllToUpper := isLanes0To15 && !io.interpretBy8Lane &&
+    onlyLowerLanesFailed
 
-  // TODO: SVA for one hot (or generate onehot checker hw gated with a sim flag, or wrap in layer)
   laneRepairDegradeCondSel := Cat(
     allLanesFailed,
     widthDegradeFromAllToLower,
@@ -473,6 +478,16 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
     widthDegradeFromAllToLowerBy8,
     widthDegradeFromAllToUpperBy8
   )
+  // The Mux1H that applies these ORs its inputs, so two at once would program
+  // a lane map that is neither.
+  block(Verification) {
+    block(Verification.Assert) {
+      assert(
+        PopCount(laneRepairDegradeCondSel) <= 1.U,
+        "MBInitSM: more than one width degrade condition at once"
+      )
+    }
+  }
 
   localFuncLanesWire := localTxFunctionalLanesReg
   widthChange := localTxFunctionalLanesReg =/= localFuncLanesWire

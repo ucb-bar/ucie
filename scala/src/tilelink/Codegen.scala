@@ -261,25 +261,38 @@ object Codegen {
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
 
+  /** Bit position of the rail `one` sets the lowest bit of, inside the packed
+    * `TxLaneCtlIO` word. Taken from the Chisel type rather than written down,
+    * so a field added to `TxLaneCtlIO` cannot silently move it.
+    */
+  private def txCtlLsb(rail: String, one: TxLaneCtlIO): BigInt = {
+    val bit = one.litValue
+    require(
+      bit.bitCount == 1,
+      s"one bit of `$rail` should set exactly one bit of the word, got 0x${bit.toString(16)}"
+    )
+    BigInt(bit.lowestSetBit)
+  }
+
   /** Bit position of `Dctrl` inside the packed `TxLaneCtlIO` word.
     *
     * A training sweep walks the delay line, so it needs to build one control
     * word per tap. Emitting the position lets it do that at run time from
-    * [[enableTxCtl]] rather than needing a constant per tap, and taking the
-    * position from the Chisel type rather than writing it down means a field
-    * added to `TxLaneCtlIO` cannot silently move it.
+    * [[enableTxCtl]] rather than needing a constant per tap.
     */
-  val txCtlDelayLsb: BigInt = {
-    val oneTap = enableTxCtl ^
-      TxLaneCtlIO
-        .codes(driver = TxLane.DriverSegments, eq = 0, delay = 1)
-        .litValue
-    require(
-      oneTap.bitCount == 1,
-      s"one delay tap should differ from `full` in exactly one bit, got 0x${oneTap.toString(16)}"
-    )
-    BigInt(oneTap.lowestSetBit)
-  }
+  val txCtlDelayLsb: BigInt =
+    txCtlLsb("Dctrl", TxLaneCtlIO.raw(0, 0, 0, 0, 1))
+
+  /** Bit positions of the driver rails inside the packed `TxLaneCtlIO` word, so
+    * software can turn any segment of any stack on or off by itself. Every rail
+    * is active high, and all of them zero is a high impedance driver.
+    */
+  val txCtlEnpLsb: BigInt = txCtlLsb("ENP", TxLaneCtlIO.raw(1, 0, 0, 0, 0))
+  val txCtlEnnLsb: BigInt = txCtlLsb("ENN", TxLaneCtlIO.raw(0, 1, 0, 0, 0))
+  val txCtlEnpEqLsb: BigInt =
+    txCtlLsb("ENP_EQ", TxLaneCtlIO.raw(0, 0, 1, 0, 0))
+  val txCtlEnnEqLsb: BigInt =
+    txCtlLsb("ENN_EQ", TxLaneCtlIO.raw(0, 0, 0, 1, 0))
 
   /** Global delay `setup_ucie_digital` puts on the quadrature clock: a quarter
     * of the TX clock period, which lands the forwarded clock in the middle of
@@ -520,13 +533,14 @@ object Codegen {
 
     reqs += write("debugTxctlTile", enableTxCtl)
 
-    reqs += write("txDatapathRst", 1)
-    reqs += write("rxDatapathRst", 1)
-    reqs += write("debugTxFsmRst", 1)
-
+    // The selects, then the datapath reset a change of select needs.
     reqs += write("controllerSel", ControllerSel.phytest.litValue)
     reqs += write("mainbandMode", mainbandMode)
     reqs += write("sidebandMode", sidebandMode)
+
+    reqs += write("txDatapathRst", 1)
+    reqs += write("rxDatapathRst", 1)
+    reqs += write("debugTxFsmRst", 1)
 
     reqs.toSeq
   }
@@ -795,6 +809,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("enableDriverCtl", Codegen.enableDriverCtl),
         ("enableTxCtl", Codegen.enableTxCtl),
         ("txCtlDelayLsb", Codegen.txCtlDelayLsb),
+        ("txCtlEnpLsb", Codegen.txCtlEnpLsb),
+        ("txCtlEnnLsb", Codegen.txCtlEnnLsb),
+        ("txCtlEnpEqLsb", Codegen.txCtlEnpEqLsb),
+        ("txCtlEnnEqLsb", Codegen.txCtlEnnEqLsb),
         ("trainLfsrSeed", Codegen.trainLfsrSeed),
         ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
         ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
@@ -828,18 +846,26 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.toString
   }
 
+  /** Flushes the serdes handoff and the mainband's async queues, both ends.
+    *
+    * Required after every change to `controllerSel`, `mainbandMode` or
+    * `sidebandMode`. The queues' PHY ends do not synchronize the selects --
+    * they are always drained and fed, and the TL path's are gated by a select
+    * from another clock -- so this is what starts the controller that now has
+    * the lanes from empty queues with consistent pointers.
+    */
+  def formatResetDatapathFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("txDatapathRst", f.formatLong(1)))
+    body.append(formatWriteNamedReg("rxDatapathRst", f.formatLong(1)))
+    f.formatFn("reset_datapath", body.toString)
+  }
+
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
-    // Datapath first, then the FSMs that feed it: `txDatapathRst` and
-    // `rxDatapathRst` flush the serdes handoff and the PHY side of the async
-    // queues, `txFsmRst`/`rxFsmRst` return the test FSMs and their counters to
-    // idle.
-    body.append(
-      formatWriteNamedReg("txDatapathRst", f.formatLong(1))
-    )
-    body.append(
-      formatWriteNamedReg("rxDatapathRst", f.formatLong(1))
-    )
+    // Datapath first, then the FSMs that feed it: `txFsmRst`/`rxFsmRst` return
+    // the test FSMs and their counters to idle.
+    body.append(f.formatFnCall("reset_datapath"))
     body.append(
       formatWriteNamedReg("txFsmRst", f.formatLong(1))
     )
@@ -1441,8 +1467,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
     body.append(f.formatFnCall("reset_dividers"))
     body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
-    body.append(f.formatFnCall("reset_fsms"))
-    // Leave both bands under PhyTest; each test selects what it needs.
+    // Leave both bands under PhyTest; each test selects what it needs. Before
+    // `reset_fsms`, since its datapath reset is what a change of select needs.
     body.append(
       formatWriteNamedReg(
         "controllerSel",
@@ -1455,6 +1481,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg("sidebandMode", f.formatConstantRef("bandModeManual"))
     )
+    body.append(f.formatFnCall("reset_fsms"))
     sb.append(f.formatFn("setup_ucie", body.toString))
     sb.toString
   }
@@ -1557,6 +1584,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         f.formatConstantRef("controllerSelUcie")
       )
     )
+    // Then empty the mainband queues of whatever PhyTest left in them.
+    body.append(f.formatFnCall("reset_datapath"))
 
     // DVSEC LinkControl packs raw_format_enable and start_link_training
     // alongside target_link_width/target_link_speed (see
@@ -1938,6 +1967,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg(band, f.formatConstantRef("bandModeTl"))
     )
+    body.append(f.formatFnCall("reset_datapath"))
     body.append(f.formatWaitCycles(32))
     body.append(
       f.formatWrite(
@@ -2032,6 +2062,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeTl"))
     )
+    body.append(f.formatFnCall("reset_datapath"))
     body.append(f.formatWaitCycles(32))
     for (i <- 0 until 32) {
       body.append(
@@ -2064,6 +2095,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   def formatFns(): String = {
     val sb = new StringBuilder
+    sb.append(formatResetDatapathFn())
     sb.append(formatResetFsmsFn())
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
@@ -2107,7 +2139,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 /** Generates a C header (`ucie.h`) that mirrors the SystemVerilog setup
   * sequence emitted by `Codegen` — `#define`s for register offsets and tuned
   * constants, plus `static inline` helpers for `write_txctl`, `write_rxctl`,
-  * `set_tx_delay`, `set_rx_vref`, `reset_fsms`, `setup_ucie`,
+  * `set_tx_delay`, `set_rx_vref`, `reset_datapath`, `reset_fsms`, `setup_ucie`,
   * `setup_ucie_digital`, `seed_lfsrs`, and `run_lfsr`. RISC-V test programs can
   * `#include` it to program the UCIe MMIO registers from C, and `set_tx_delay`
   * through `run_lfsr` (less `setup_ucie_digital`) are enough to train a lane
@@ -2149,6 +2181,7 @@ object GenUcieHeader {
     sb.append("\n// === Constants ===\n")
     sb.append(cg.formatConstants())
     sb.append("\n// === Helper functions ===\n")
+    sb.append(cg.formatResetDatapathFn())
     sb.append(cg.formatResetFsmsFn())
     sb.append("\n")
     sb.append(cg.formatWriteTxctlFn())

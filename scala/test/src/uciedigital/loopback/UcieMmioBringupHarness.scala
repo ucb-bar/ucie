@@ -94,8 +94,14 @@ object UcieMmioBringupHarness {
   * @param exposeDataPath
   *   exposes the chip-facing data ports. With them tied off the simulator folds
   *   away the beat packing, which every stage pays for across the reset wait.
+  * @param peerPowered
+  *   false holds die 1's power good low, so it never trains and die 0's
+  *   training fails, for the tests of what software sees after that.
   */
-class UcieMmioBringupHarness(val exposeDataPath: Boolean = false)(implicit
+class UcieMmioBringupHarness(
+    val exposeDataPath: Boolean = false,
+    val peerPowered: Boolean = true
+)(implicit
     p: Parameters
 ) extends LazyModule {
   val tops =
@@ -178,9 +184,13 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
       peer.io.phyFacingIo.mainbandLink.tx.valid
     me.io.phyFacingIo.mainbandLink.tx.ready :=
       peer.io.phyFacingIo.mainbandLink.rx.ready
+    // No clocking here to report on: the PLL is always locked at whatever rate
+    // training asks for, and the clocks always ungated.
+    me.io.phyFacingIo.status.pllLock := true.B
+    me.io.phyFacingIo.status.clocksUngatedAndStable := true.B
 
     me.io.ctrl.linkReset := false.B
-    me.io.ctrl.pwrGood := true.B
+    me.io.ctrl.pwrGood := (i == 0 || outer.peerPowered).B
     me.io.ctrl.retryTrainingAmt := 0.U
 
     me.io.chipFacingIo.mainbandTx.valid :=

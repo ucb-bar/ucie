@@ -64,6 +64,10 @@ interface txdata_tile_intf;
     logic CK;
     // Asynchronous reset for the tile's clock dividers, active high.
     logic RST_async;
+    // Driver segment enables, thermometer coded: pull-up and pull-down for the
+    // main stack, then for the equalizer branch. All four are active high, so
+    // a one turns its segment on and every bit low leaves the bump high
+    // impedance.
     logic [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN;
     logic [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ;
     logic [`TX_DCDL_TAPS-1:0] Dctrl;
@@ -91,8 +95,11 @@ module txdata_tile (
         .clk_out(clkin)
     );
 
-    // TODO: ensure serializer samples async queue correctly
-    // for different delay line codes.
+    // The delay line moves the edge the serializer loads `DataIN` on, but not
+    // enough to matter: its whole range, `TX_DCDL_TAPS` steps of
+    // `DCDL_DELAY_STEP` (5.4 ps), is small next to a 32 UI word, and the
+    // digital hands each word over about half a word away from the load (see
+    // the TX handoff in `Phy.scala`). No code can pull the load into a change.
     logic [`SERDES_STAGES-1:0] serclk;
     assign serclk[0] = clkin;
     generate

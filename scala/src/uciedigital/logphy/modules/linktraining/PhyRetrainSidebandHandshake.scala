@@ -50,7 +50,8 @@ class PhyRetrainSidebandHandshake(sbParams: SidebandParams) extends Module {
   // OUT
   io.requesterRemoteRetrainEncoding := requester.io.remoteRetrainEncoding
   io.responderRemoteRetrainEncoding := responder.io.remoteRetrainEncoding
-  io.done := requester.io.requesterRdy && responder.io.requesterRdy
+  // Both halves: our request answered, and the remote's request answered.
+  io.done := requester.io.requesterRdy && responder.io.responderRdy
 }
 
 class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
@@ -122,7 +123,9 @@ class PhyRetrainRequester(sbParams: SidebandParams) extends Module {
 
       when(sbMsgExchanger.io.resp.valid) {
         validRemoteRetrainEncoding := true.B
-        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(74, 72)
+        // MsgInfo[2:0]. The message carries no data, so nothing above bit 63
+        // is the remote's.
+        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(42, 40)
       }
 
       requesterRdy := sbMsgExchanger.io.exchDone
@@ -197,7 +200,8 @@ class PhyRetrainResponder(sbParams: SidebandParams) extends Module {
 
       when(sbMsgExchanger.io.resp.valid) {
         validRemoteRetrainEncoding := true.B
-        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(74, 72)
+        // MsgInfo[2:0], as on the requester side.
+        remoteRetrainEncoding := sbMsgExchanger.io.resp.bits(42, 40)
       }
 
       sbMsgExchanger.io.req.valid := io.localRetrainEncoding.valid
