@@ -23,8 +23,21 @@ class ClkRx(implicit includeDefaultModels: Boolean = false)
   }
 }
 
-/** Which netlist the lane clock distribution network is. */
-sealed trait ClkDistLayout {
+/** Which netlist the lane clock distribution network is.
+  *
+  * The PHY instantiates the netlist as a blackbox, so a physical design can
+  * swap the behavioral model for the network it actually builds, and keep that
+  * network's technology out of this repository. Such a layout lives in the
+  * physical design's own project:
+  *
+  *   - Its module has the port list of `ucie_clk_dist_network.sv`, and delivers
+  *     every lane and bypass clock with the behavioral model's polarity.
+  *   - Its resources are classpath paths, so they can be in any project on the
+  *     classpath.
+  *   - It is a case class or case object: layouts are compared as part of
+  *     `UcieTLParams`.
+  */
+trait ClkDistLayout {
 
   /** The netlist module's name. */
   def moduleName: String
@@ -44,34 +57,6 @@ object ClkDistLayout {
     def resources(includeDefaultModels: Boolean) =
       if (includeDefaultModels) Seq("/vsrc/ucie_clk_dist_network.sv") else Seq()
   }
-
-  /** The buffered, shielded tree the analog IP's clock DEF places and routes
-    * for a module whose bump field sits in orientation `orient` (`"r0"` or
-    * `"r90"`). The netlist is generated alongside the DEF by the analog IP's
-    * clock tree generator, so every buffer and wire has the same name in both.
-    * Every path is an even count of inverters, so the lane and bypass clocks
-    * carry the same polarity as the behavioral model's.
-    */
-  case class Buffered(orient: String) extends ClkDistLayout {
-    require(
-      Seq("r0", "r90").contains(orient),
-      s"no clock tree netlist for orientation $orient"
-    )
-    val moduleName = s"ucie_clk_dist_network_$orient"
-    def resources(includeDefaultModels: Boolean) = {
-      val cells =
-        if (includeDefaultModels) ClkBuf.cells.map(c => s"/vsrc/$c.v")
-        else Seq()
-      s"/vsrc/$moduleName.sv" +: cells
-    }
-  }
-}
-
-/** The clock tree's buffer cells: one inverter each, in three layouts --
-  * horizontal runs, vertical runs driving down, and vertical runs driving up.
-  */
-object ClkBuf {
-  val cells = Seq("clkbuf_horizontal", "clkbuf_vertical", "clkbuf_vertical_fs")
 }
 
 class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
@@ -102,9 +87,8 @@ class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
 
   // The clocking tile's two bypass clocks, on their way to it: the bypass
   // clock receiver's restored clock, and the digital bypass clock, straight off
-  // its bump. Every module has its own bump for each. The buffered trees put
-  // the bypass clock on a chain of its own and pass the digital bypass clock
-  // straight through.
+  // its bump. Every module has its own bump for each. A physical network may
+  // buffer either of them.
   val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
   val tileBypassClk = Output(Clock())
