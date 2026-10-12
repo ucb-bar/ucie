@@ -71,8 +71,8 @@ case class UcieTLParams(
     // separately in physical design.
     moduleId: Int = 0,
     // Which netlist the PHY's lane clock distribution network is: the
-    // behavioral model, or the buffered tree the analog IP's clock DEF places
-    // for this instance's bump field orientation. The tree is physical, so an
+    // behavioral model, or a physical network a physical design supplies (see
+    // `ClkDistLayout`). A physical network is laid out for one instance, so an
     // instance that uses one should have a `moduleId` of its own.
     clkDistLayout: edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout =
       edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral
