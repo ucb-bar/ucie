@@ -1606,6 +1606,9 @@ class UcieTL(
       ucieDigital.io.phyFacingIo.status.clocksUngatedAndStable :=
         sync(clkRegs.module.io.clksUngated)
     }
+    // The PHY has no TX self-calibration steps yet, so there is never any
+    // left to do.
+    ucieDigital.io.phyFacingIo.status.txSelfCalDone := true.B
 
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
     txUcieFifo.io.enq.valid := digiToPhyTx.valid

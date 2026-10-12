@@ -11,8 +11,9 @@ import edu.berkeley.cs.uciedigital.sideband._
 // forwarded clock are wired together with no added skew, and mainband lanes go
 // straight across, so REVERSALMB resolves to no reversal.
 //
-// The analog macro is not modelled. LogicalPhy reads two status bits from it,
-// pllLock and clocksUngatedAndStable, and both are tied high here.
+// The analog macro is not modelled. LogicalPhy reads three status bits from
+// it, pllLock, clocksUngatedAndStable and txSelfCalDone, and all are tied high
+// here.
 //
 // Above the RDI the harness is a quiet adapter: it acks the clock and stall
 // handshakes and drives nothing else, so the PHY never waits on a partner that
@@ -99,6 +100,7 @@ class LogPhyLoopbackHarness(
 
     dut.analog.status.pllLock := true.B
     dut.analog.status.clocksUngatedAndStable := true.B
+    dut.analog.status.txSelfCalDone := true.B
 
     dut.ctrl.pwrGood := io.pwrGood(i)
     dut.ctrl.swStartLinkTraining := io.swStartLinkTraining(i)

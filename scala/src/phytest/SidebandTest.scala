@@ -23,7 +23,8 @@ class SidebandTestRegsIO extends Bundle {
   val txPacket = Input(UInt(SidebandTest.PacketBits.W))
   // Starts transmitting `txPacket`. Ignored while `txBusy` is high.
   val txSend = Input(Bool())
-  // High from a send until its packet has been shifted out.
+  // High from a send until its packet has been shifted out, and while the link
+  // is still coming out of reset.
   val txBusy = Output(Bool())
 
   // RX CONTROL
@@ -83,7 +84,9 @@ class SidebandTest extends Module {
   // send while the last packet is still queued or on the wire is dropped.
   link.io.tx.valid := io.regs.txSend && io.en && link.io.txIdle
   link.io.tx.bits := io.regs.txPacket
-  io.regs.txBusy := !link.io.txIdle
+  // Not ready only coming out of reset, while the TX queue's two clock domains
+  // finish their reset handshake. A send then would be dropped too.
+  io.regs.txBusy := !link.io.txIdle || !link.io.tx.ready
 
   link.io.rxRst := io.regs.rxRst || !io.en
   link.io.rx.ready := io.regs.rxPop

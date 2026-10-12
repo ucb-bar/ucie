@@ -94,12 +94,17 @@ object UcieMmioBringupHarness {
   * @param exposeDataPath
   *   exposes the chip-facing data ports. With them tied off the simulator folds
   *   away the beat packing, which every stage pays for across the reset wait.
+  * @param peerConnected
+  *   false leaves both dies' receivers with nothing on the far side, so die 0's
+  *   training fails the way it would with no partner, for the tests of what
+  *   software sees after that.
   * @param peerPowered
-  *   false holds die 1's power good low, so it never trains and die 0's
-  *   training fails, for the tests of what software sees after that.
+  *   false holds die 1's power good low, so its training stays in RESET while
+  *   its sideband and RDI still hear die 0.
   */
 class UcieMmioBringupHarness(
     val exposeDataPath: Boolean = false,
+    val peerConnected: Boolean = true,
     val peerPowered: Boolean = true
 )(implicit
     p: Parameters
@@ -162,32 +167,45 @@ class UcieMmioBringupHarnessImp(outer: UcieMmioBringupHarness)
 
     io.reg(i) <> outer.testers(i).module.io
 
-    // The peer's half rate pair becomes a serial stream at its bump driver.
-    val peerSb = peer.io.phyFacingIo.sidebandLink.out
-    me.io.phyFacingIo.sidebandLink.in.bits :=
-      SbDriver.bump(
-        peerSb.clk,
-        peerSb.d0.asBool,
-        peerSb.d1.asBool,
-        includeDefaultModels = true
-      )
-    me.io.phyFacingIo.sidebandLink.in.fwClock :=
-      SbDriver.bump(
-        peerSb.clk,
-        peerSb.fwClockD0.asBool,
-        peerSb.fwClockD1.asBool,
-        includeDefaultModels = true
-      )
-    me.io.phyFacingIo.mainbandLink.rx.bits :=
-      peer.io.phyFacingIo.mainbandLink.tx.bits
-    me.io.phyFacingIo.mainbandLink.rx.valid :=
-      peer.io.phyFacingIo.mainbandLink.tx.valid
-    me.io.phyFacingIo.mainbandLink.tx.ready :=
-      peer.io.phyFacingIo.mainbandLink.rx.ready
+    if (outer.peerConnected) {
+      // The peer's half rate pair becomes a serial stream at its bump driver.
+      val peerSb = peer.io.phyFacingIo.sidebandLink.out
+      me.io.phyFacingIo.sidebandLink.in.bits :=
+        SbDriver.bump(
+          peerSb.clk,
+          peerSb.d0.asBool,
+          peerSb.d1.asBool,
+          includeDefaultModels = true
+        )
+      me.io.phyFacingIo.sidebandLink.in.fwClock :=
+        SbDriver.bump(
+          peerSb.clk,
+          peerSb.fwClockD0.asBool,
+          peerSb.fwClockD1.asBool,
+          includeDefaultModels = true
+        )
+      me.io.phyFacingIo.mainbandLink.rx.bits :=
+        peer.io.phyFacingIo.mainbandLink.tx.bits
+      me.io.phyFacingIo.mainbandLink.rx.valid :=
+        peer.io.phyFacingIo.mainbandLink.tx.valid
+      me.io.phyFacingIo.mainbandLink.tx.ready :=
+        peer.io.phyFacingIo.mainbandLink.rx.ready
+    } else {
+      // Nothing on the far side: no sideband edges and no mainband words, and
+      // whatever this die sends goes nowhere.
+      me.io.phyFacingIo.sidebandLink.in.bits := 0.U
+      me.io.phyFacingIo.sidebandLink.in.fwClock := 0.U
+      me.io.phyFacingIo.mainbandLink.rx.bits :=
+        0.U.asTypeOf(me.io.phyFacingIo.mainbandLink.rx.bits)
+      me.io.phyFacingIo.mainbandLink.rx.valid := false.B
+      me.io.phyFacingIo.mainbandLink.tx.ready := true.B
+    }
     // No clocking here to report on: the PLL is always locked at whatever rate
-    // training asks for, and the clocks always ungated.
+    // training asks for, and the clocks always ungated. Nor any TX
+    // self-calibration, so that is always done.
     me.io.phyFacingIo.status.pllLock := true.B
     me.io.phyFacingIo.status.clocksUngatedAndStable := true.B
+    me.io.phyFacingIo.status.txSelfCalDone := true.B
 
     me.io.ctrl.linkReset := false.B
     me.io.ctrl.pwrGood := (i == 0 || outer.peerPowered).B

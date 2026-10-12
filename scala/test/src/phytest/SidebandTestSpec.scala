@@ -17,6 +17,9 @@ class SidebandTestLoopback extends Module {
   val dut = Module(new SidebandTest)
   dut.io.regs <> io.regs
   dut.io.en := io.en
+  // The serializer runs on the main clock here, as in `SidebandSerialSpec`.
+  dut.io.txClock := clock
+  dut.io.txReset := reset.asBool
   // Loop back through real bump drivers, so the 2:1 is exercised too.
   dut.io.sb.rxClk := SbDriver
     .bump(
@@ -54,7 +57,20 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
     c.clock.step()
   }
 
+  // Waits for the transmitter to take a send, as software would. Coming out of
+  // reset the TX queue takes a few cycles to be ready, while its two clock
+  // domains finish their reset handshake.
+  def waitNotBusy(c: SidebandTestLoopback): Unit = {
+    var n = 0
+    while (c.io.regs.txBusy.peek().litToBoolean) {
+      c.clock.step()
+      n += 1
+      assert(n < 100, "the transmitter stayed busy")
+    }
+  }
+
   def send(c: SidebandTestLoopback, packet: BigInt): Unit = {
+    waitNotBusy(c)
     c.io.regs.txPacket.poke(packet.U)
     pulse(c, c.io.regs.txSend)
     c.clock.step(drainCycles)
@@ -115,7 +131,7 @@ class SidebandTestSpec extends AnyFunSpec with ChiselSim {
         c.clock.step(4)
         pulse(c, c.io.regs.rxRst)
 
-        c.io.regs.txBusy.expect(false.B)
+        waitNotBusy(c)
         c.io.regs.txPacket.poke(BigInt("a5a5a5a5a5a5a5a5", 16).U)
         pulse(c, c.io.regs.txSend)
         c.io.regs.txBusy.expect(true.B)

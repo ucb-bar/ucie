@@ -536,7 +536,7 @@ class UcieMmioBringupTest extends AnyFunSpec with ChiselSim {
     // software has no way to try again short of a reset.
     it("lets software start training again after it fails") {
       simulate(
-        LazyModule(new UcieMmioBringupHarness(peerPowered = false)).module,
+        LazyModule(new UcieMmioBringupHarness(peerConnected = false)).module,
         firtoolOpts = firtoolOpts
       ) { h =>
         coldStart(h)
@@ -546,9 +546,9 @@ class UcieMmioBringupTest extends AnyFunSpec with ChiselSim {
           "Start Link Training did not take"
         )
 
-        // Die 1 never powers up, so die 0 times out in SBINIT, then again
-        // waiting for the train error handshake, and with no retries allowed
-        // that is the end of it.
+        // Nothing answers, so die 0 times out in SBINIT, then again waiting
+        // for the train error handshake, and with no retries allowed that is
+        // the end of it.
         stepThrough(h, 2 * substateTimeout + 65536, "training failing")(
           flag(h, 0, MmioFlag.phyTrainError)
         )
@@ -564,6 +564,33 @@ class UcieMmioBringupTest extends AnyFunSpec with ChiselSim {
         )
         stepThrough(h, resetWait + 65536, "training again")(
           h.io.ltState(0).peek().litValue == LTState.sSBINIT.litValue
+        )
+      }
+    }
+
+    // A die held in RESET still hears its partner over the sideband. When die
+    // 0's training fails, its RDI sends die 1 a LinkError request, die 1's RDI
+    // answers it, and die 1's adapter then asks for Active, which goes back to
+    // die 0. Sideband traffic between the RDI and the adapter has to happen
+    // with the RDI clock requested, which `RDIController` asserts.
+    //
+    // Fails today at that assertion. In RESET the only thing holding the clock
+    // request up is the traffic itself, so the request trails the traffic, and
+    // the Active request goes out while the request before it is still being
+    // released.
+    it("keeps the RDI clock requested while a die in RESET answers its peer") {
+      simulate(
+        LazyModule(new UcieMmioBringupHarness(peerPowered = false)).module,
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        coldStart(h)
+        startTraining(h, 0)
+        stepThrough(h, 2 * substateTimeout + 65536, "training failing")(
+          flag(h, 0, MmioFlag.phyTrainError)
+        )
+        assert(
+          h.io.ltState(1).peek().litValue == LTState.sRESET.litValue,
+          s"die 1 left RESET with its power good low: ${states(h)}"
         )
       }
     }

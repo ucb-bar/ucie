@@ -86,6 +86,8 @@ class PhyTrainIO(afeParams: AfeParams) extends Bundle {
 class PhyLaneTrainer(afeParams: AfeParams) extends Module {
   val io = IO(new Bundle {
     val phyTrainIo = new PhyTrainIO(afeParams)
+    // From the PHY, which is what runs TX self-calibration.
+    val txSelfCalDone = Input(Bool())
   })
 
   // Recieves a trigger on which test can be done
@@ -104,7 +106,7 @@ class PhyLaneTrainer(afeParams: AfeParams) extends Module {
     rxClkCalCounter := 0.U
   }
 
-  io.phyTrainIo.mbTrain.txSelfCalDone := false.B
+  io.phyTrainIo.mbTrain.txSelfCalDone := io.txSelfCalDone
   io.phyTrainIo.mbTrain.rxClkCalDone := rxClkCalCounter === rxClkCalDwell.U
   io.phyTrainIo.mbTrain.req.start := false.B
   io.phyTrainIo.mbTrain.req.testKind := TrainingTestType.Either

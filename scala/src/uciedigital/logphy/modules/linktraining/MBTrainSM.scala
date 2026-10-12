@@ -218,6 +218,16 @@ class MBTrainRequester(afeParams: AfeParams, sbParams: SidebandParams)
   when(requesterRdy) {
     requesterRdyStatusReg := true.B
   }
+  // The set above wins in a transition, so the exchange that ends a state
+  // leaves its ready bit set in the next one. TXSELFCAL has no substates and
+  // checks the ready bits in its first cycle, so it would be left again before
+  // its own exchange, which then goes out to a partner that has moved on.
+  when(
+    (nextState === MBTrainState.sTXSELFCAL) &&
+      (currentState =/= MBTrainState.sTXSELFCAL)
+  ) {
+    requesterRdyStatusReg := false.B
+  }
   io.requesterRdy := requesterRdyStatusReg || requesterRdy
 
   // Error detection status bits
@@ -1805,6 +1815,16 @@ class MBTrainResponder(afeParams: AfeParams, sbParams: SidebandParams)
   }
   when(responderRdy) {
     responderRdyStatusReg := true.B
+  }
+  // The set above wins in a transition, so the exchange that ends a state
+  // leaves its ready bit set in the next one. TXSELFCAL has no substates and
+  // checks the ready bits in its first cycle, so it would be left again before
+  // its own exchange, which then goes out to a partner that has moved on.
+  when(
+    (nextState === MBTrainState.sTXSELFCAL) &&
+      (currentState =/= MBTrainState.sTXSELFCAL)
+  ) {
+    responderRdyStatusReg := false.B
   }
   io.responderRdy := responderRdyStatusReg || responderRdy
 

@@ -68,6 +68,10 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
   dut.io.debug.txDivClk := io.txDivClk.asClock
   dut.io.debug.sbTxClk := io.sbTxClk.asClock
   dut.io.debug.rxData := io.rxData
+  // The sideband tester is in reset, so its serializer's clock is the main
+  // one. This is not the `sbTxClk` tap above, which only feeds the clock mux.
+  dut.io.sbTxClock := clock
+  dut.io.sbTxReset := reset.asBool
   dut.io.regs.clkMuxSel := io.clkMuxSel
   dut.io.regs.rxDebugLane := io.rxDebugLane
   dut.io.regs.rxDebugBit := io.rxDebugBit

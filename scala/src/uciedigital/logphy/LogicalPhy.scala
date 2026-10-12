@@ -333,6 +333,7 @@ class LogicalPhy(
   io.analog.ctrl := phyControlTranslator.io.toPhy
 
   ltsm.io.phyCtrlIo.pllLock := phyControlTranslator.io.toDigital.pllLock
+  phyLaneTrainer.io.txSelfCalDone := phyControlTranslator.io.toDigital.txSelfCalDone
 
   // TODO: Route this to a future digital power-management / clock-control block.
   dontTouch(rdiController.io.ungateClocks)

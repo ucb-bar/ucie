@@ -87,6 +87,8 @@ class SidebandPhyLinkIO(sbLinkWidth: Int) extends Bundle {
 class PhyStatusFromPhyIO extends Bundle {
   val pllLock = Bool()
   val clocksUngatedAndStable = Bool()
+  // TX self-calibration is done, which MBTRAIN.TXSELFCAL waits on.
+  val txSelfCalDone = Bool()
 }
 
 class PhyControlToPhyIO(afeParams: AfeParams) extends Bundle {

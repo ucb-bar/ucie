@@ -60,6 +60,10 @@ class PhyTestDebugLaneHarness(
   dut.io.debug.txDivClk := laneDivClk.asClock
   dut.io.debug.sbTxClk := false.B.asClock
   dut.io.debug.rxData := DontCare
+  // The sideband tester stays in reset below, so its serializer's clock is the
+  // main one.
+  dut.io.sbTxClock := clock
+  dut.io.sbTxReset := reset.asBool
 
   // Both bands stay under TileLink, so the mainband TX/RX FSMs and the sideband
   // tester are held in reset and only the debug lane runs.
