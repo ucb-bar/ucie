@@ -278,14 +278,14 @@ module training_tb;
         txdata_intf.RST_async = 1'b1;
 
         // Every driver segment on, equalizer branch off. Every enable is active
-        // high.
+        // high but `ENP_EQ`, which is active low, so off is all ones there.
         txclk_intf.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         txclk_intf.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-        txclk_intf.ENP_EQ = 0;
+        txclk_intf.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
         txclk_intf.ENN_EQ = 0;
         txdata_intf.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         txdata_intf.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-        txdata_intf.ENP_EQ = 0;
+        txdata_intf.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
         txdata_intf.ENN_EQ = 0;
 
         // Neither lane's own delay line is trimmed: with one data lane there is

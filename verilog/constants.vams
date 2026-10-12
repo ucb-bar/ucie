@@ -91,6 +91,10 @@
 // The equalizer branch is assumed to be built from the same unit segment as
 // the main driver, so at full code it reaches half of nominal drive.
 `define TX_DRIVER_EQ_R_SEGMENT `TX_DRIVER_R_SEGMENT
+// Series capacitor between the equalizer branch and the bump (F): `XC2` in the
+// tile's `INV_EQ_Final`, a `cfmom_2t` at nr=80, lr=10u, stm=4, spm=8, which
+// the TT models put at 202.3 fF. Only `models/circuit` uses it.
+`define TX_DRIVER_EQ_C 202.3e-15
 // Number of taps in the delay line on a TX tile's high speed clock (`Dctrl`)
 `define TX_DCDL_TAPS 32
 

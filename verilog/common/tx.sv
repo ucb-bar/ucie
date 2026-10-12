@@ -65,9 +65,10 @@ interface txdata_tile_intf;
     // Asynchronous reset for the tile's clock dividers, active high.
     logic RST_async;
     // Driver segment enables, thermometer coded: pull-up and pull-down for the
-    // main stack, then for the equalizer branch. All four are active high, so
-    // a one turns its segment on and every bit low leaves the bump high
-    // impedance.
+    // main stack, then for the equalizer branch. `ENP_EQ` gates the
+    // equalizer's PMOS headers and is active low; the other three are active
+    // high. So the bump is high impedance with `ENP`, `ENN` and `ENN_EQ` all
+    // zeros and `ENP_EQ` all ones.
     logic [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN;
     logic [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ;
     logic [`TX_DCDL_TAPS-1:0] Dctrl;

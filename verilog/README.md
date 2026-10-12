@@ -66,7 +66,8 @@ business.
 ### `models/circuit`
 
 The front end as it is built: the auto-zeroing switched-capacitor sampler out
-of switches, capacitors and inverters; the drivers as counts of unit segments;
+of switches, capacitors and inverters; the drivers as counts of unit segments,
+with the TX equalizer branch reaching the bump through its series capacitor;
 the delay line and the distribution network with their white and flicker phase
 noise. Treat the current models as the floor of this level rather than the
 finished article -- `bbpll.vams` and `s2d.vams` are here too, and neither is

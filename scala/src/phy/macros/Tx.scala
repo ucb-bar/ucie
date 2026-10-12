@@ -23,8 +23,8 @@ object TxLane {
   val DelayTaps = 32
 
   /** Thermometer code with the low `count` of `segments` segments enabled.
-    * Every control rail on the tile is active high, so this is the code for any
-    * of them.
+    * Every control rail on the tile but `ENP_EQ` is active high, so this is the
+    * code for all of them; `ENP_EQ` takes [[thermometerLow]].
     */
   def thermometer(count: Int, segments: Int): BigInt = {
     require(
@@ -33,21 +33,30 @@ object TxLane {
     )
     (BigInt(1) << count) - 1
   }
+
+  /** Active low thermometer code: the low `count` of `segments` segments
+    * enabled by a zero, every other bit one. The code for `ENP_EQ`.
+    */
+  def thermometerLow(count: Int, segments: Int): BigInt =
+    thermometer(count, segments) ^ thermometer(segments, segments)
 }
 
 /** Control pins of a [[TxLane]], driven straight through to the tile.
   *
-  * These are the codes as the pins carry them: thermometer coded, and every one
-  * active high, a one enabling its segment or tap. Nothing between the register
-  * and the pin inverts a rail, and every bit is its own, so any pattern the
-  * tile accepts is reachable, including ones no binary code could express, and
-  * the pull-up and pull-down stacks need not match.
+  * These are the codes as the pins carry them: thermometer coded, and active
+  * high, a one enabling its segment or tap, on every rail but `ENP_EQ`. That
+  * one gates the equalizer's PMOS headers directly, so it is active low: a zero
+  * enables its segment. Nothing between the register and the pin inverts a
+  * rail, and every bit is its own, so any pattern the tile accepts is
+  * reachable, including ones no binary code could express, and the pull-up and
+  * pull-down stacks need not match.
   *
   * There is no separate driver enable. The driver is high impedance when every
-  * segment of `ENP`, `ENN`, `ENP_EQ` and `ENN_EQ` is off, i.e. all of them
-  * zero.
+  * segment of `ENP`, `ENN`, `ENP_EQ` and `ENN_EQ` is off: `ENP`, `ENN` and
+  * `ENN_EQ` all zeros, and `ENP_EQ` all ones.
   *
-  * Use [[TxLane.thermometer]] to build a code from a segment count.
+  * Use [[TxLane.thermometer]] to build a code from a segment count, or
+  * [[TxLane.thermometerLow]] for `ENP_EQ`.
   */
 class TxLaneCtlIO extends Bundle {
 
@@ -57,7 +66,9 @@ class TxLaneCtlIO extends Bundle {
   /** Pull-down driver impedance. A one turns its segment on. */
   val ENN = UInt(TxLane.DriverSegments.W)
 
-  /** Pull-up impedance of the equalizer branch. A one turns its segment on. */
+  /** Pull-up impedance of the equalizer branch. Active low: a zero turns its
+    * segment on.
+    */
   val ENP_EQ = UInt(TxLane.EqSegments.W)
 
   /** Pull-down impedance of the equalizer branch. A one turns its segment on.
@@ -88,7 +99,7 @@ object TxLaneCtlIO {
     raw(
       enp = TxLane.thermometer(driver, TxLane.DriverSegments),
       enn = TxLane.thermometer(driver, TxLane.DriverSegments),
-      enpEq = TxLane.thermometer(eq, TxLane.EqSegments),
+      enpEq = TxLane.thermometerLow(eq, TxLane.EqSegments),
       ennEq = TxLane.thermometer(eq, TxLane.EqSegments),
       dctrl = TxLane.thermometer(delay, TxLane.DelayTaps)
     )

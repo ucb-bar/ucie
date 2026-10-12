@@ -283,11 +283,12 @@ module phy_tb;
             assign intf.txdata[i].vss = vss;
             assign intf.txdata[i].DataIN = shuffle(ALT_HIGH_FIRST);
             assign intf.txdata[i].RST_async = reset;
-            // Every main driver segment on and the equalizer branch off (every
-            // enable is active high), no added delay on the tile clock.
+            // Every main driver segment on and the equalizer branch off (its
+            // `ENP_EQ` is active low, so off is all ones), no added delay on
+            // the tile clock.
             assign intf.txdata[i].ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
             assign intf.txdata[i].ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-            assign intf.txdata[i].ENP_EQ = 0;
+            assign intf.txdata[i].ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
             assign intf.txdata[i].ENN_EQ = 0;
             assign intf.txdata[i].Dctrl = 0;
 
@@ -311,11 +312,11 @@ module phy_tb;
     assign intf.txclkp.vss = vss;
     assign intf.txclkp.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txclkp.RST_async = reset;
-    // Every main driver segment on and the equalizer branch off (every enable
-    // is active high), no added delay on the tile clock.
+    // Every main driver segment on and the equalizer branch off (its `ENP_EQ`
+    // is active low, so off is all ones), no added delay on the tile clock.
     assign intf.txclkp.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txclkp.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txclkp.ENP_EQ = 0;
+    assign intf.txclkp.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
     assign intf.txclkp.ENN_EQ = 0;
     assign intf.txclkp.Dctrl = 0;
 
@@ -324,11 +325,11 @@ module phy_tb;
     assign intf.txclkn.vss = vss;
     assign intf.txclkn.DataIN = shuffle(ALT_LOW_FIRST);
     assign intf.txclkn.RST_async = reset;
-    // Every main driver segment on and the equalizer branch off (every enable
-    // is active high), no added delay on the tile clock.
+    // Every main driver segment on and the equalizer branch off (its `ENP_EQ`
+    // is active low, so off is all ones), no added delay on the tile clock.
     assign intf.txclkn.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txclkn.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txclkn.ENP_EQ = 0;
+    assign intf.txclkn.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
     assign intf.txclkn.ENN_EQ = 0;
     assign intf.txclkn.Dctrl = 0;
 
@@ -337,11 +338,11 @@ module phy_tb;
     assign intf.txval.vss = vss;
     assign intf.txval.DataIN = shuffle(VALID_PATTERN);
     assign intf.txval.RST_async = reset;
-    // Every main driver segment on and the equalizer branch off (every enable
-    // is active high), no added delay on the tile clock.
+    // Every main driver segment on and the equalizer branch off (its `ENP_EQ`
+    // is active low, so off is all ones), no added delay on the tile clock.
     assign intf.txval.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txval.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txval.ENP_EQ = 0;
+    assign intf.txval.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
     assign intf.txval.ENN_EQ = 0;
     assign intf.txval.Dctrl = 0;
 
@@ -350,11 +351,11 @@ module phy_tb;
     assign intf.txtrk.vss = vss;
     assign intf.txtrk.DataIN = shuffle(ALT_HIGH_FIRST);
     assign intf.txtrk.RST_async = reset;
-    // Every main driver segment on and the equalizer branch off (every enable
-    // is active high), no added delay on the tile clock.
+    // Every main driver segment on and the equalizer branch off (its `ENP_EQ`
+    // is active low, so off is all ones), no added delay on the tile clock.
     assign intf.txtrk.ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
     assign intf.txtrk.ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
-    assign intf.txtrk.ENP_EQ = 0;
+    assign intf.txtrk.ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
     assign intf.txtrk.ENN_EQ = 0;
     assign intf.txtrk.Dctrl = 0;
 

@@ -285,7 +285,8 @@ object Codegen {
 
   /** Bit positions of the driver rails inside the packed `TxLaneCtlIO` word, so
     * software can turn any segment of any stack on or off by itself. Every rail
-    * is active high, and all of them zero is a high impedance driver.
+    * is active high but `ENP_EQ`, which is active low, so a high impedance
+    * driver is all of them zero except `ENP_EQ`, which is all ones.
     */
   val txCtlEnpLsb: BigInt = txCtlLsb("ENP", TxLaneCtlIO.raw(1, 0, 0, 0, 0))
   val txCtlEnnLsb: BigInt = txCtlLsb("ENN", TxLaneCtlIO.raw(0, 1, 0, 0, 0))
