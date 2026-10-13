@@ -195,6 +195,12 @@ pub(crate) mod tests {
 
     /// Runs `tb` and fails if it printed anything the benches use to report a
     /// mismatch.
+    ///
+    /// A bench that reports with `$error` has already failed by then: xrun exits
+    /// nonzero, and `simulate` turns that into an error. Xcelium prints those as
+    /// `*E,ERRSEV`, which does not contain "Error", so this count is for the
+    /// benches that `$display("Error: ...")` instead, which xrun does not
+    /// notice.
     pub fn expect_clean(level: Level, tb: &str) -> Result<()> {
         let output = run(level, tb)?;
         assert_eq!(

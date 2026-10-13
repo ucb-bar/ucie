@@ -402,8 +402,6 @@ class Phy(
   io.debug.testTxPadClk := clkDist.io.testTxPadClk
   io.debug.testRxPadClk := clkDist.io.testRxPadClk
 
-  // TODO do we need to set pu/pd ctl to 0 when driver en is low?
-
   // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
   // and the pad driver as one cell.
   val sbTxClk = Module(new SbDriver)

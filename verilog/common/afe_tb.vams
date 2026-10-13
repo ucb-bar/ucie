@@ -6,8 +6,9 @@
 //
 // Everything checked here is DC or functional, because that is all the contract
 // promises: a driver's code range brackets its nominal impedance, a termination
-// code does the same, a reference ladder is monotonic, and a receiver hands back
-// the bit that was driven at it. What each level does with an edge is its own
+// code does the same, a reference ladder is monotonic, a receiver hands back
+// the bit that was driven at it, and each rail of the TX equalizer branch turns
+// on and off with its enable. What each level does with an edge is its own
 // business and is measured by `verilog/common/training_tb.sv`.
 
 // Ideal comparator of two analog nets. Bench-only: no level models a cell like
@@ -252,9 +253,10 @@ module tx_tile_driver_data_tb;
         dout_sample = V(dout);
     end
 
-    // Every main segment on, equalizer branch off.
+    // Every main segment on, equalizer branch off. Every enable is active high
+    // but `ENP_EQ`, which is off at all ones.
     initial begin
-        ENP = 0;
+        ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         ENN = {`TX_DRIVER_SEGMENTS{1'b1}};
         ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
         ENN_EQ = 0;
@@ -307,11 +309,13 @@ module tx_tile_driver_impedance_tb;
         dout_sample = V(dout);
     end
 
-    // One segment per rail, equalizer branch off: the weakest code the driver
-    // can be set to short of turning off entirely.
+    // Starts off: every enable is active high but `ENP_EQ`, so the driver is
+    // off with that one all ones and the rest all zeros. One segment per rail
+    // with the equalizer branch off, set below, is then the weakest code it can
+    // be set to short of that.
     initial begin
-        ENP = {`TX_DRIVER_SEGMENTS{1'b1}} << 1;
-        ENN = 1;
+        ENP = 0;
+        ENN = 0;
         ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
         ENN_EQ = 0;
     end
@@ -325,6 +329,22 @@ module tx_tile_driver_impedance_tb;
         r30 = 1/(1/`TX_R_OUT + 1/rtest);
         vpu = rtest / (r30 + rtest) * `VDD;
         vpd = r30 / (r30 + rtest) * `VDD;
+
+        // Off, the driver should leave the bump to the load whatever `din` is:
+        // the two test resistors put it at mid-rail.
+        din = 0;
+        #300;
+        $display("din = %b, all enables off, dout = %f", din, dout_sample);
+        if (dout_sample < 0.49 * `VDD || dout_sample > 0.51 * `VDD)
+            $display("Error: driver with every enable off is not high impedance");
+        din = 1;
+        #300;
+        $display("din = %b, all enables off, dout = %f", din, dout_sample);
+        if (dout_sample < 0.49 * `VDD || dout_sample > 0.51 * `VDD)
+            $display("Error: driver with every enable off is not high impedance");
+
+        ENP = 1;
+        ENN = 1;
         din = 0;
         #300;
 
@@ -340,10 +360,119 @@ module tx_tile_driver_impedance_tb;
         #300;
         $display("din = %b, ENP = %b, dout = %f", din, ENP, dout_sample);
         if (dout_sample > vpu) $display("Error: highest pull-up impedance is too low (vpu = %f)", vpu);
-        ENP = 0;
+        ENP = {`TX_DRIVER_SEGMENTS{1'b1}};
         #300;
         $display("din = %b, ENP = %b, dout = %f", din, ENP, dout_sample);
         if (dout_sample < vpu) $display("Error: lowest pull-up impedance is too high (vpu = %f)", vpu);
+
+        $finish;
+    end
+endmodule
+
+// The equalizer branch, one rail at a time. The levels disagree about what the
+// branch does to an edge -- a DC conductance at the eye level, a kick through
+// its series capacitor at the circuit level -- so this checks only what both
+// owe: with the branch off the bump does not move whatever `din` does, and each
+// rail's half, on by itself, pulls the bump toward its rail as `din` moves that
+// way. That pins the polarity of both enables: `ENN_EQ` is active high and
+// `ENP_EQ` active low, so the branch is off with `ENP_EQ` all ones and
+// `ENN_EQ` all zeros.
+//
+// The main stack stays off throughout, so nothing else drives the bump, and the
+// load holds it at mid-rail.
+module tx_tile_driver_eq_tb;
+    // How long after an edge to watch the bump (ps): the connect module's edge
+    // and the circuit level's kick decaying into the load both fit well inside.
+    localparam WINDOW = 150;
+    // Least excursion from mid-rail (V) that counts as the bump being pulled,
+    // and most that still counts as it staying put.
+    localparam real PULLED = 0.02;
+    localparam real QUIET = 0.005;
+
+    reg din;
+    reg [`TX_DRIVER_SEGMENTS-1:0] ENP, ENN;
+    reg [`TX_DRIVER_EQ_SEGMENTS-1:0] ENP_EQ, ENN_EQ;
+    electrical dout;
+    electrical vddq, vss;
+    real dout_sample;
+
+    tx_tile_driver drv (
+        .din(din),
+        .ENP(ENP),
+        .ENN(ENN),
+        .ENP_EQ(ENP_EQ),
+        .ENN_EQ(ENN_EQ),
+        .dout(dout),
+        .vddq(vddq),
+        .vss(vss)
+    );
+
+    analog begin
+        V(vddq) <+ `VDD;
+        V(vss) <+ 0;
+        I(dout, vss) <+ V(dout, vss) / 50;
+        I(vddq, dout) <+ V(vddq, dout) / 50;
+        dout_sample = V(dout);
+    end
+
+    initial begin
+        din = 0;
+        ENP = 0;
+        ENN = 0;
+        ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        ENN_EQ = 0;
+    end
+
+    // Highest and lowest the bump gets, relative to mid-rail, over `WINDOW`
+    // after `din` is driven to `value`.
+    real hi, lo;
+    task drive(input value);
+        integer t;
+        begin
+            din = value;
+            hi = 0;
+            lo = 0;
+            for (t = 0; t < WINDOW; t = t + 1) begin
+                #1;
+                if (dout_sample - `VDD/2 > hi) hi = dout_sample - `VDD/2;
+                if (dout_sample - `VDD/2 < lo) lo = dout_sample - `VDD/2;
+            end
+            $display("din -> %b, ENP_EQ = %b, ENN_EQ = %b: dout within [%f, %f] V of mid-rail",
+                value, ENP_EQ, ENN_EQ, lo, hi);
+        end
+    endtask
+
+    initial begin
+        #300;
+
+        // Off: no edge moves the bump.
+        drive(1);
+        if (hi > QUIET || lo < -QUIET)
+            $display("Error: equalizer branch off moves the bump on a rising edge");
+        drive(0);
+        if (hi > QUIET || lo < -QUIET)
+            $display("Error: equalizer branch off moves the bump on a falling edge");
+
+        // Pull-up half alone: `ENP_EQ` low, `ENN_EQ` still low. A rising edge
+        // pulls the bump up, and nothing pulls it down.
+        ENP_EQ = 0;
+        #300;
+        drive(1);
+        if (hi < PULLED)
+            $display("Error: equalizer with ENP_EQ low does not pull the bump up");
+        if (lo < -QUIET)
+            $display("Error: equalizer pull-up half pulls the bump down");
+
+        // Pull-down half alone: `ENN_EQ` high, `ENP_EQ` back high. Switched over
+        // while `din` is high, so neither half is selected until it falls.
+        ENP_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        ENN_EQ = {`TX_DRIVER_EQ_SEGMENTS{1'b1}};
+        #300;
+        drive(0);
+        if (lo > -PULLED)
+            $display("Error: equalizer with ENN_EQ high does not pull the bump down");
+        if (hi > QUIET)
+            $display("Error: equalizer pull-down half pulls the bump up");
 
         $finish;
     end

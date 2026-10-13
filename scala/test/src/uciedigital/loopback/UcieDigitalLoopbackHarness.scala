@@ -102,8 +102,8 @@ object ProtoCtrl {
   * analog boundary. The adapter is real, so the RDI handshakes the LogPhy
   * harness stubbed out are driven by hardware here.
   *
-  * The analog macro is not modelled: pllLock and clocksUngatedAndStable are
-  * tied high.
+  * The analog macro is not modelled: pllLock, clocksUngatedAndStable and
+  * txSelfCalDone are tied high.
   *
   * @param exposeDataPath
   *   exposes the chip-facing data ports. Leaving them tied off lets the
@@ -187,6 +187,7 @@ class UcieDigitalLoopbackHarness(
 
     phy.analog.status.pllLock := true.B
     phy.analog.status.clocksUngatedAndStable := true.B
+    phy.analog.status.txSelfCalDone := true.B
 
     // The whole stack in two lines, as UcieDigitalTop wires it. Driving any FDI
     // signal here as well would win by last connect and make the protocol layer

@@ -163,6 +163,10 @@ vcs \\
       incDirs: Seq[Path] = Seq.empty
   ) = {
     os.makeDir.all(path / os.up)
+    // `-sysv_ext +.v` compiles `.v` files as SystemVerilog too, as `-sverilog`
+    // does for VCS: some behavioral models use SystemVerilog in a `.v` file,
+    // such as the `timeunit` in `clocking_tile.v`. Not `-sv`, which would take
+    // the `.vams` models and the disciplines they include as SystemVerilog.
     os.write.over(
       path,
       s"""#!/bin/bash
@@ -171,6 +175,7 @@ xrun \\
   -allowredefinition \\
   -dmsaoi \\
   -sv_ms \\
+  -sysv_ext +.v \\
   -timescale 1ps/100fs \\
   -spectre_args "+preset=mx +mt=32 -ahdllint=warn" \\
   -access +rwc \\

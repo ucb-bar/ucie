@@ -104,10 +104,13 @@ module tx_lane (
     else shiftReg <= shiftReg >> 1'b1;
   end
 
-  // `ENP` is active low and `ENN` active high, so the driver is off when every
-  // segment of both rails is disabled. The tile then floats its output, which
-  // this model reports as 0, as it does before the tile has woken.
-  wire driver_off = (&ENP) & ~(|ENN);
-  assign D2D_TX = (driver_off || !awake) ? 1'b0 : shiftReg[0];
+  // `ENP` and `ENN` are both active high, and there is no driver enable of its
+  // own: with every segment of both stacks off, all of them zero, the driver
+  // is high impedance. This model is two-state and reports a floating output
+  // as 0, as it does before the tile has woken. So a one only reaches the wire
+  // with a pull-up segment on; a zero is either driven by a pull-down segment
+  // or floats, which reads the same here.
+  wire pull_up = |ENP;
+  assign D2D_TX = awake & pull_up & shiftReg[0];
 
 endmodule

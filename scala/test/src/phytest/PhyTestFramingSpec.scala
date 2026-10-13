@@ -92,6 +92,10 @@ class PhyTestLfsrLoopback(
   dut.io.debug.txDivClk := false.B.asClock
   dut.io.debug.sbTxClk := false.B.asClock
   dut.io.debug.rxData := DontCare
+  // The sideband tester is never sent anything, so its serializer's clock is
+  // the main one.
+  dut.io.sbTxClock := clock
+  dut.io.sbTxReset := reset.asBool
   // Loop back through real bump drivers, so the 2:1 is exercised too.
   dut.io.sb.rxClk := SbDriver
     .bump(

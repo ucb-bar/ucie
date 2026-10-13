@@ -184,7 +184,13 @@ class LogicalPhy(
 
   ltsm.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid
   ltsm.io.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
-  sidebandRxReadyLtsm := ltsm.io.sbLaneIo.rx.ready
+  // In RESET the LTSM takes every word, listening for the SBINIT clock
+  // pattern. A link management request for the RDI is still the RDI's: the
+  // remote reports a link error to a die that has gone back to RESET, or never
+  // left it. So there, and only there, the RDI controller goes first.
+  sidebandRxReadyLtsm := ltsm.io.sbLaneIo.rx.ready &&
+    !((ltsm.io.ltState === LTState.sRESET) &&
+      rdiController.io.sbLaneIo.rx.ready)
 
   rdiController.io.sbLaneIo.rx.valid := sidebandRxQueue.io.deq.valid
   rdiController.io.sbLaneIo.rx.bits.data := sidebandRxQueue.io.deq.bits
@@ -327,6 +333,7 @@ class LogicalPhy(
   io.analog.ctrl := phyControlTranslator.io.toPhy
 
   ltsm.io.phyCtrlIo.pllLock := phyControlTranslator.io.toDigital.pllLock
+  phyLaneTrainer.io.txSelfCalDone := phyControlTranslator.io.toDigital.txSelfCalDone
 
   // TODO: Route this to a future digital power-management / clock-control block.
   dontTouch(rdiController.io.ungateClocks)

@@ -145,11 +145,17 @@ class CodegenSpec extends AnyFunSpec {
 
   describe("Codegen with SystemVerilogFormatter") {
     val codegen = new Codegen(new SystemVerilogFormatter)
+    it("should format reset_datapath as a task") {
+      val result = codegen.formatResetDatapathFn()
+      assert(result.contains("task reset_datapath()"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `TX_DATAPATH_RST, 64'h1)"))
+      assert(result.contains("`WRITE_UCIE(regDrv, `RX_DATAPATH_RST, 64'h1)"))
+      assert(result.contains("endtask"))
+    }
     it("should format reset_fsms as a task") {
       val result = codegen.formatResetFsmsFn()
       assert(result.contains("task reset_fsms()"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `TX_DATAPATH_RST, 64'h1)"))
-      assert(result.contains("`WRITE_UCIE(regDrv, `RX_DATAPATH_RST, 64'h1)"))
+      assert(result.contains("reset_datapath();"))
       assert(result.contains("`WRITE_UCIE(regDrv, `DEBUG_TX_FSM_RST, 64'h1)"))
       assert(
         result.contains(
@@ -171,15 +177,22 @@ class CodegenSpec extends AnyFunSpec {
 
   describe("Codegen with CFormatter") {
     val codegen = new Codegen(new CFormatter)
-    it("should format reset_fsms as a base-relative MMIO function") {
-      val result = codegen.formatResetFsmsFn()
-      assert(result.contains("static inline void reset_fsms(uintptr_t base)"))
+    it("should format reset_datapath as a base-relative MMIO function") {
+      val result = codegen.formatResetDatapathFn()
+      assert(
+        result.contains("static inline void reset_datapath(uintptr_t base)")
+      )
       assert(
         result.contains("reg_write64(base + UCIE_TX_DATAPATH_RST, 0x1ULL);")
       )
       assert(
         result.contains("reg_write64(base + UCIE_RX_DATAPATH_RST, 0x1ULL);")
       )
+    }
+    it("should format reset_fsms as a base-relative MMIO function") {
+      val result = codegen.formatResetFsmsFn()
+      assert(result.contains("static inline void reset_fsms(uintptr_t base)"))
+      assert(result.contains("reset_datapath(base);"))
       assert(
         result.contains("reg_write64(base + UCIE_DEBUG_TX_FSM_RST, 0x1ULL);")
       )
