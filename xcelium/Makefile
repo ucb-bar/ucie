@@ -1,57 +1,51 @@
-XRUN := xrun
-XRUN_OPTS := -sv_ms \
+# Runs one bench by hand, the way `rs/src/verilog/mod.rs` runs it for
+# `cargo test`: the same xrun options, every source under `verilog/common`, and
+# one level's analog models out of `verilog/models`. `cargo test` is how the
+# benches are meant to be run; this is for running one outside it, to look at
+# its waveforms in SimVision.
+#
+#   make                              # phy_tb against models/eye
+#   make TB=training_tb LEVEL=circuit
+#
+# See README.md for the environment it needs.
+
+TB ?= phy_tb
+LEVEL ?= eye
+
+VERILOG_DIR := ../verilog
+AHDL_DIR := $(XCELIUM_HOME)/tools.lnx86/spectre/etc/ahdl
+
+# Every level provides the same cells, so a level is nothing more than which
+# directory under `models` is compiled next to `common`. xrun compiles in the
+# order it is given files, and a package has to come before whatever imports
+# it, so `*_pkg.sv` goes first.
+SRC := $(shell find $(VERILOG_DIR)/common $(VERILOG_DIR)/models/$(LEVEL) \
+           -type f \( -name '*.sv' -o -name '*.v' -o -name '*.vams' \) | sort)
+SRC := $(filter %_pkg.sv,$(SRC)) $(filter-out %_pkg.sv,$(SRC))
+
+XRUN_OPTS := -allowredefinition \
              -dmsaoi \
-			 ++aps \
-			 +mt=32 \
-             -timescale 1ps/1fs \
+             -sv_ms \
+             -timescale 1ps/100fs \
+             -spectre_args "+preset=mx +mt=32 -ahdllint=warn" \
              -access +rwc \
-             -iereport \
-			 -plusperf \
-			 -64bit \
-			 -spectre_args "++aps +preset=mx +mt=32" \
-			 -CFLAGS "-std=c++11 -g"
-VAMS_DIR := ../verilog
-INCLUDES := -incdir $(VAMS_DIR) -incdir $(SPECTRE_HOME)/tools.lnx86/spectre/etc/ahdl
-PHY_PROBE := probe.tcl
+             -incdir $(VERILOG_DIR) \
+             -incdir $(AHDL_DIR)
 
-# Source files
-DISCIPLINES := $(SPECTRE_HOME)/tools.lnx86/spectre/etc/ahdl/disciplines.vams
-CONSTANTS := $(VAMS_DIR)/constants.vams
-PRIMITIVES_SV := $(VAMS_DIR)/primitives.sv
-PRIMITIVES_VAMS := $(VAMS_DIR)/primitives.vams
-TX_SRC := $(VAMS_DIR)/tx.sv
-TX_VAMS := $(VAMS_DIR)/tx.vams
-RX_SRC := $(VAMS_DIR)/rx.sv
-RX_VAMS := $(VAMS_DIR)/rx.vams
-PHY_SRC := $(VAMS_DIR)/phy.sv
-# bbpll.vams, dcdl.vams, s2d.vams, clock_distribution.vams
-CLOCKING_SRC := $(VAMS_DIR)/dcdl.vams $(VAMS_DIR)/s2d.vams $(VAMS_DIR)/clock_distribution.vams
-
-
-phy:
-	@echo "=========================================="
-	@echo "Running UCIePHY Testbench with xrun..."
-	@echo "=========================================="
-	$(XRUN) $(XRUN_OPTS) \
-		$(DISCIPLINES) \
-		$(CONSTANTS) \
-		$(PRIMITIVES_VAMS) \
-		$(TX_VAMS) \
-		$(RX_VAMS) \
-		$(PRIMITIVES_SV) \
-		$(TX_SRC) \
-		$(RX_SRC) \
-		$(PHY_SRC) \
-		$(CLOCKING_SRC) \
-		amscf.scs \
-		-reflib $(XCELIUM_HOME)/tools.lnx86/affirma_ams/etc/connect_lib/connectLib:uCR \
-		-amsconnrules uCR \
-		-top phy_tb \
-		-input $(PHY_PROBE)
-	@echo "UCIePHY simulation completed. Waveforms: phy_waves.shm"
-	@echo ""
+.PHONY: sim clean
+sim:
+	@test -d $(VERILOG_DIR)/models/$(LEVEL) || \
+		{ echo "no such level: $(LEVEL) (see $(VERILOG_DIR)/models)"; exit 1; }
+	xrun $(XRUN_OPTS) \
+		-top $(TB) \
+		-input probe.tcl \
+		$(AHDL_DIR)/disciplines.vams \
+		$(AHDL_DIR)/constants.vams \
+		$(VERILOG_DIR)/constants.vams \
+		$(SRC) \
+		amscf.scs
+	@echo "Waveforms: waves.shm"
 
 clean:
-	@echo "Cleaning simulation outputs..."
-	@rm -rf worklib *.log *.shm *.diag INCA_libs xcelium.d .simvision xrun.history .cadence worklibxrun amscf.ams
-	@echo "Clean complete."
+	rm -rf xcelium.d waves.shm *.log *.diag *.history .simvision .cadence \
+		amscf.ams amscomm.list

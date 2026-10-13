@@ -51,8 +51,8 @@ sideband pattern and opens its own FDI without ever being written.
 ## Harnesses
 
 Each testbench has a harness that cross-wires the two dies and exposes what the
-tests observe. The analog macro is not modelled, so `pllLock` and
-`clocksUngatedAndStable` are tied high.
+tests observe. The analog macro is not modelled, so `pllLock`,
+`clocksUngatedAndStable` and `txSelfCalDone` are tied high.
 
 Observation goes through one packed word rather than one port per signal.
 Registering many scopes makes the generated Verilator model fault at time zero,

@@ -15,7 +15,6 @@ module pos_dff #(
         $hold(posedge clk, d, T_HOLD);
     endspecify
 
-    // TODO: design reset distribution/async reset?
     always_ff @(posedge clk, negedge rstb) begin
         if (!rstb)
             q <= 1'b0;
@@ -30,12 +29,14 @@ module dff_tb;
     // Signals
     logic clk;
     logic d;
+    logic rstb;
     logic q;
 
     // Ips DUT
     pos_dff dut (
         .clk(clk),
         .d(d),
+        .rstb(rstb),
         .q(q)
     );
 
@@ -48,6 +49,21 @@ module dff_tb;
     // Test stimulus
     initial begin
         d = 0;
+        rstb = 0;
+
+        // --- Reset: 'q' stays low across a clock edge with 'd' high ---
+        // The clock dividers are built from this flop and rely on it to come
+        // out of reset in phase. 'd' moves on falling edges, clear of the
+        // setup and hold windows, so this adds no timing violations.
+        $display("Testing reset at %0t", $time);
+        @(negedge clk);
+        d = 1;
+        @(posedge clk);
+        #(`T_CLKQ_DQ_DEFAULT + 1)
+        if (q !== 1'b0) $error("Incorrect q value in reset (expected 0, got %b)", q);
+        @(negedge clk);
+        d = 0;
+        rstb = 1;
 
         repeat (2) @(posedge clk);
 

@@ -257,8 +257,9 @@ class LinkTrainingSM(
     rdiTriggerTraining := false.B
   }
 
-  // SW triggered training
-  // TODO: Need to implement DVSEC registers and add the correct link up/down logic for this
+  // SW triggered training: the DVSEC Start Link Training bit, held until
+  // training is over either way (see `trainingDone` in `UcieRegBridge`), so
+  // only its rising edge starts an episode.
   val swTriggerTraining = Wire(Bool())
   swTriggerTraining := io.swStartLinkTraining
 
@@ -1048,8 +1049,11 @@ class LinkTrainingSM(
     ) -> RetrainEncoding.SPEEDIDLE
   )
 
-  // Wait for Remote to send its encoding
-  when(remoteReqEncoding.valid) {
+  // Wait for Remote to send its encoding. Only in PHYRETRAIN: the handshake
+  // still shows the remote's encoding as valid the cycle after `done`, once the
+  // LTSM has left and cleared `resolutionDone`, and taking it then would carry
+  // a resolved encoding into the next retrain before its request has arrived.
+  when(remoteReqEncoding.valid && (currentState === LTState.sPHYRETRAIN)) {
     resolutionDone := true.B
 
     when(remoteReqEncoding.bits === localEncoding) {
@@ -1131,8 +1135,16 @@ class LinkTrainingSM(
   }
 
   // Requester Inputs
+  //
+  // Not from RESET, which is where a train error ends up anyway. The timeout
+  // flag is sticky until RESET is left, so asking from there would fire every
+  // other cycle -- `waitTrainErrorResp` drops again in RESET -- and each
+  // request zeroes the counter the 4ms minimum wait counts on. RESET would
+  // never end.
   when(
-    localError && !waitTrainErrorResp && (currentState =/= LTState.sTRAINERROR)
+    localError && !waitTrainErrorResp &&
+      (currentState =/= LTState.sTRAINERROR) &&
+      (currentState =/= LTState.sRESET)
   ) {
     triggerTrainErrorReq := true.B
   }

@@ -507,4 +507,92 @@ class UcieMmioBringupTest extends AnyFunSpec with ChiselSim {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Training that fails
+  // ---------------------------------------------------------------------------
+
+  // The LTSM's substate timeout, which the reset wait is half of.
+  private val substateTimeout = 2 * resetWait
+
+  /** Step in chunks until `done` holds, for waits too long to poll every cycle.
+    */
+  private def stepThrough(h: H, limit: Int, milestone: String)(
+      done: => Boolean
+  ): Unit = {
+    val chunk = 1024
+    var left = limit
+    while (left > 0 && !done) {
+      h.clock.step(chunk)
+      left -= chunk
+    }
+    assert(done, s"$milestone was not reached: ${states(h)}")
+  }
+
+  describe("UCIe training failure over MMIO") {
+
+    // Start Link Training is held until training is over. If failing does not
+    // count as over, the bit stays set, the next write to it is ignored, and
+    // software has no way to try again short of a reset.
+    it("lets software start training again after it fails") {
+      simulate(
+        LazyModule(new UcieMmioBringupHarness(peerConnected = false)).module,
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        coldStart(h)
+        startTraining(h, 0)
+        assert(
+          bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "Start Link Training did not take"
+        )
+
+        // Nothing answers, so die 0 times out in SBINIT, then again waiting
+        // for the train error handshake, and with no retries allowed that is
+        // the end of it.
+        stepThrough(h, 2 * substateTimeout + 65536, "training failing")(
+          flag(h, 0, MmioFlag.phyTrainError)
+        )
+        assert(
+          !bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "Start Link Training stayed set after training failed"
+        )
+
+        startTraining(h, 0)
+        assert(
+          bit(regRead(h, 0, Off.LinkControl), startTrainBit),
+          "a second Start Link Training was ignored"
+        )
+        stepThrough(h, resetWait + 65536, "training again")(
+          h.io.ltState(0).peek().litValue == LTState.sSBINIT.litValue
+        )
+      }
+    }
+
+    // A die held in RESET still hears its partner over the sideband. When die
+    // 0's training fails, its RDI sends die 1 a LinkError request, die 1's RDI
+    // answers it, and die 1's adapter then asks for Active, which goes back to
+    // die 0. Sideband traffic between the RDI and the adapter has to happen
+    // with the RDI clock requested, which `RDIController` asserts.
+    //
+    // Fails today at that assertion. In RESET the only thing holding the clock
+    // request up is the traffic itself, so the request trails the traffic, and
+    // the Active request goes out while the request before it is still being
+    // released.
+    it("keeps the RDI clock requested while a die in RESET answers its peer") {
+      simulate(
+        LazyModule(new UcieMmioBringupHarness(peerPowered = false)).module,
+        firtoolOpts = firtoolOpts
+      ) { h =>
+        coldStart(h)
+        startTraining(h, 0)
+        stepThrough(h, 2 * substateTimeout + 65536, "training failing")(
+          flag(h, 0, MmioFlag.phyTrainError)
+        )
+        assert(
+          h.io.ltState(1).peek().litValue == LTState.sRESET.litValue,
+          s"die 1 left RESET with its power good low: ${states(h)}"
+        )
+      }
+    }
+  }
 }

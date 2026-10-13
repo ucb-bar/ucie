@@ -98,7 +98,16 @@ class UcieRegBridge(
     Cat(linkUp, linkTraining, rawFormatEnabled)
   )
   linkToRegs.bwChanged := linkUp && changed(Cat(widthEnabled, speedEnabled))
-  linkToRegs.trainingDone := linkUp
+  // Start Link Training clears once training is over either way: the link is
+  // up, or the retries have run out. Clearing on the failure is what lets
+  // software start training again, since a write while the bit is still set is
+  // ignored. `fatalTrainingError` stays up for a while after the failure, so it
+  // is its edge that clears, or a fresh write would be cleared as it landed.
+  val fatalTrainingErrorPrev =
+    RegNext(io.phyStatus.fatalTrainingError, false.B)
+  val trainingFailed =
+    io.phyStatus.fatalTrainingError && !fatalTrainingErrorPrev
+  linkToRegs.trainingDone := linkUp || trainingFailed
   linkToRegs.retrainDone := retrainDone
 
   // ==============================================================================================

@@ -105,6 +105,16 @@ mod tests {
     }
 
     #[test]
+    fn tx_tile_driver_eq_eye() -> Result<()> {
+        expect_clean(Level::Eye, "tx_tile_driver_eq_tb")
+    }
+
+    #[test]
+    fn tx_tile_driver_eq_circuit() -> Result<()> {
+        expect_clean(Level::Circuit, "tx_tile_driver_eq_tb")
+    }
+
+    #[test]
     fn rx_afe_eye() -> Result<()> {
         expect_clean(Level::Eye, "rx_afe_tb")
     }

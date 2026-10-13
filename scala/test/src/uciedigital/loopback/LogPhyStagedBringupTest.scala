@@ -118,6 +118,7 @@ class LogPhyStagedBringupTest extends AnyFunSpec with ChiselSim {
     for (die <- 0 until 2) {
       h.io.lpStateReq(die).poke(RDIStateReq.nop)
       h.io.swStartLinkTraining(die).poke(false.B)
+      h.io.swRetrainRequest(die).poke(false.B)
       h.io.pwrGood(die).poke(true.B)
     }
     h.clock.step(resetWait + 128)
@@ -364,6 +365,116 @@ class LogPhyStagedBringupTest extends AnyFunSpec with ChiselSim {
           h.io.plStateSts(die).expect(RDIState.active)
           h.io.plTrainError(die).expect(false.B)
           h.io.sbFaultSeen(die).expect(false.B)
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Error recovery
+  // ---------------------------------------------------------------------------
+
+  // The LTSM's substate timeout, which the reset wait is half of.
+  private val substateTimeout = 2 * resetWait
+
+  /** Step in chunks until `done` holds, then fail naming the milestone if it
+    * never did. Unlike `stepUntil` this keeps going off the forward path, which
+    * is where these tests mean to be.
+    */
+  private def stepThrough(
+      h: LogPhyLoopbackHarness,
+      limit: Int,
+      milestone: String
+  )(
+      done: => Boolean
+  ): Unit = {
+    val chunk = 1024
+    var left = limit
+    while (left > 0 && !done) {
+      h.clock.step(chunk)
+      left -= chunk
+    }
+    assert(done, s"$milestone was not reached: ${states(h)}")
+  }
+
+  private def isAt(h: LogPhyLoopbackHarness, die: Int, s: LTState.Type) =
+    h.io.ltState(die).peek().litValue == s.litValue
+
+  describe("LogicalPhy training error recovery") {
+
+    // Die 1 never powers up, so die 0 times out in SBINIT, times out again
+    // waiting for the train error handshake, and drains back to RESET. It has
+    // to be able to train again from there. RESET used to keep requesting a
+    // train error off the sticky timeout flag, each request zeroing the counter
+    // its minimum wait counts on, so it never ended.
+    it("leaves RESET again after a training timeout") {
+      simulate(new LogPhyLoopbackHarness(), firtoolOpts = firtoolOpts) { h =>
+        for (die <- 0 until 2) {
+          h.io.lpStateReq(die).poke(RDIStateReq.nop)
+          h.io.swStartLinkTraining(die).poke(false.B)
+          h.io.swRetrainRequest(die).poke(false.B)
+        }
+        h.io.pwrGood(0).poke(true.B)
+        h.io.pwrGood(1).poke(false.B)
+        h.clock.step(resetWait + 128)
+
+        h.io.swStartLinkTraining(0).poke(true.B)
+        h.clock.step(4)
+        h.io.swStartLinkTraining(0).poke(false.B)
+        stepThrough(h, substateTimeout + 65536, "die 0 timing out")(
+          h.io.trainingTimedout(0).peekBoolean()
+        )
+        stepThrough(h, substateTimeout + 65536, "die 0 back in RESET")(
+          isAt(h, 0, LTState.sRESET)
+        )
+
+        h.io.swStartLinkTraining(0).poke(true.B)
+        h.clock.step(4)
+        h.io.swStartLinkTraining(0).poke(false.B)
+        stepThrough(h, resetWait + 65536, "die 0 training again")(
+          isAt(h, 0, LTState.sSBINIT)
+        )
+        h.io.trainingTimedout(0).expect(false.B, "the timeout outlived RESET")
+      }
+    }
+  }
+
+  describe("LogicalPhy retraining") {
+
+    // Twice, because what one retrain leaves behind only shows in the next.
+    // The resolved retrain encoding used to outlive PHYRETRAIN, so the next
+    // one answered the remote's request before it had arrived. Both dies are
+    // asked, the way the runtime link test asks each one.
+    it("retrains from ACTIVE and comes back, twice") {
+      simulate(new LogPhyLoopbackHarness(), firtoolOpts = firtoolOpts) { h =>
+        bringUpToActive(h)
+
+        for (round <- 1 to 2) {
+          for (die <- 0 until 2) h.io.swRetrainRequest(die).poke(true.B)
+          h.clock.step(4)
+          for (die <- 0 until 2) h.io.swRetrainRequest(die).poke(false.B)
+
+          val retrained = Array(false, false)
+          var left = mbTrainCycles + sidebandCycles
+          def back =
+            retrained.forall(identity) && bothDies(isAt(h, _, LTState.sACTIVE))
+          while (left > 0 && !back) {
+            for (die <- 0 until 2) {
+              if (isAt(h, die, LTState.sPHYRETRAIN)) retrained(die) = true
+              assert(
+                !isAt(h, die, LTState.sTRAINERROR),
+                s"retrain $round failed: ${states(h)}"
+              )
+            }
+            h.clock.step(1)
+            left -= 1
+          }
+          assert(back, s"retrain $round did not come back: ${states(h)}")
+          for (die <- 0 until 2) {
+            h.io.plTrainError(die).expect(false.B)
+            h.io.trainingTimedout(die).expect(false.B)
+            h.io.sbFaultSeen(die).expect(false.B)
+          }
         }
       }
     }

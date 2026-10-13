@@ -11,8 +11,9 @@ import edu.berkeley.cs.uciedigital.sideband._
 // forwarded clock are wired together with no added skew, and mainband lanes go
 // straight across, so REVERSALMB resolves to no reversal.
 //
-// The analog macro is not modelled. LogicalPhy reads two status bits from it,
-// pllLock and clocksUngatedAndStable, and both are tied high here.
+// The analog macro is not modelled. LogicalPhy reads three status bits from
+// it, pllLock, clocksUngatedAndStable and txSelfCalDone, and all are tied high
+// here.
 //
 // Above the RDI the harness is a quiet adapter: it acks the clock and stall
 // handshakes and drives nothing else, so the PHY never waits on a partner that
@@ -33,6 +34,9 @@ class LogPhyLoopbackHarness(
   val io = IO(new Bundle {
     val lpStateReq = Input(Vec(2, RDIStateReq()))
     val swStartLinkTraining = Input(Vec(2, Bool()))
+    // Straight into the LTSM, the way the runtime link test retrains, so a
+    // retrain does not need an adapter above the RDI to ask for it.
+    val swRetrainRequest = Input(Vec(2, Bool()))
     val pwrGood = Input(Vec(2, Bool()))
 
     // Coarse LTSM state, and the debug state that names the substate inside it.
@@ -96,6 +100,7 @@ class LogPhyLoopbackHarness(
 
     dut.analog.status.pllLock := true.B
     dut.analog.status.clocksUngatedAndStable := true.B
+    dut.analog.status.txSelfCalDone := true.B
 
     dut.ctrl.pwrGood := io.pwrGood(i)
     dut.ctrl.swStartLinkTraining := io.swStartLinkTraining(i)
@@ -104,7 +109,7 @@ class LogPhyLoopbackHarness(
     dut.ctrl.changeInRuntimeLinkCtrlRegsDetected := false.B
     dut.ctrl.runtimeLinkCtrlBusyBit := false.B
     dut.ctrl.runtimeRequestForRepair := false.B
-    dut.ctrl.swRetrainRequest := false.B
+    dut.ctrl.swRetrainRequest := io.swRetrainRequest(i)
     dut.ctrl.linkOpParamOverride := false.B
     dut.ctrl.clockPhaseSelect := 0.U
 
