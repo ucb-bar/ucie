@@ -51,7 +51,7 @@ class RDIController(sbParams: SidebandParams) extends Module {
   val mustHoldClocksUntilStateChanges =
     currentStateIsResetOrPm && localStateTransitionRequested
   val activeLifetimeClockNeed =
-    (io.ltsmState === LTState.sACTIVE) && rdiStateMachine.io.sidebandBusy
+    (io.ltsmState === LTState.sACTIVE) && rdiStateMachine.io.clkNeeded
   val keepClockRequested =
     io.doRdiBringup ||
       (io.ltsmState === LTState.sLINKINIT) ||
@@ -60,7 +60,10 @@ class RDIController(sbParams: SidebandParams) extends Module {
       mustHoldClocksUntilStateChanges ||
       io.cfgSidebandActive ||
       io.trainingTimeout ||
-      rdiStateMachine.io.sidebandBusy
+      // Raised before the state machine sends anything, so the request leads
+      // the traffic. Holding it on the traffic alone let the request trail it,
+      // and let a transition start while the previous request was released.
+      rdiStateMachine.io.clkNeeded
 
   val clockRequester = Module(new RDIClockHandshakeRequester())
   clockRequester.io.ctrl.startHandshake := keepClockRequested
@@ -93,6 +96,7 @@ class RDIController(sbParams: SidebandParams) extends Module {
   rdiStateMachine.io.rdi.lpStateReq := effectiveLpStateReq
   rdiStateMachine.io.rdi.plWakeAck := activeBringupReady
   rdiStateMachine.io.trainingTimeout := io.trainingTimeout
+  rdiStateMachine.io.clkReady := clockRequester.io.ctrl.doneHandshake
 
   val requesterSbLane = Wire(new SidebandLaneIO(sbParams))
   val responderSbLane = Wire(new SidebandLaneIO(sbParams))
@@ -146,14 +150,11 @@ class RDIController(sbParams: SidebandParams) extends Module {
           "FATAL: pl_clk_req must remain asserted while leaving RESET/PM states"
         )
       }
-      when(
-        rdiStateMachine.io.sidebandBusy && RegNext(
-          rdiStateMachine.io.sidebandBusy,
-          false.B
-        )
-      ) {
+      // Traffic waits for the handshake to complete, so there is no cycle of
+      // grace here: the request and the ack are both up from its first cycle.
+      when(rdiStateMachine.io.sidebandBusy) {
         assert(
-          clockRequester.io.rdi.plClkReq,
+          clockRequester.io.ctrl.doneHandshake,
           "FATAL: Sideband traffic to the Adapter must be covered by the clock handshake"
         )
       }
