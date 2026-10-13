@@ -51,16 +51,18 @@ class RDIClockHandshakeRequester() extends Module {
 
   switch(currentState) {
     is(State.sIDLE) {
-      when(io.ctrl.startHandshake) {
+      // A rising edge on pl_clk_req only while lp_clk_ack is de-asserted.
+      when(io.ctrl.startHandshake && !io.rdi.lpClkAck) {
         nextState := State.sWAIT_ACK_ASSERT
       }
     }
     is(State.sWAIT_ACK_ASSERT) {
+      // A falling edge on pl_clk_req only while lp_clk_ack is asserted, so a
+      // request that is no longer needed still waits for its ack and is then
+      // released from sACTIVE_HOLD.
       io.rdi.plClkReq := true.B
       when(io.rdi.lpClkAck) {
         nextState := State.sACTIVE_HOLD
-      }.elsewhen(releaseCondition) {
-        nextState := State.sIDLE
       }
     }
     is(State.sACTIVE_HOLD) {
