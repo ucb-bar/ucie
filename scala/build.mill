@@ -73,6 +73,18 @@ object `package` extends UcieModule, PublishModule {
     // Chisel's FIRRTL converter recurses once per command, so elaborating
     // UcieTL overflows the default JVM stack.
     def forkArgs = Seq("-Xss64m")
+
+    // Mill's own `javaHomePathForkEnv` reads PATH in a cached task that nothing
+    // invalidates, so the forked tests -- and the simulators they spawn -- keep
+    // whatever PATH the shell had the first time it ran. Reading PATH through
+    // an input re-reads it every run, so a PATH change (e.g. putting Spectre
+    // ahead of another Cadence install for xrun's `amsspice`) takes effect.
+    def shellPath = Task.Input { Task.env.get("PATH") }
+    def javaHomePathForkEnv = Task {
+      val javaHomeBin =
+        (javaHome().fold(os.Path(sys.props("java.home")))(_.path) / "bin").toString
+      Map("PATH" -> shellPath().fold(javaHomeBin)(p => s"$javaHomeBin:$p"))
+    }
   }
 }
 

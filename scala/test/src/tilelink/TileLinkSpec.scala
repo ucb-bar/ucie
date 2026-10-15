@@ -969,17 +969,22 @@ endtask
 
 /** Coarse eye at 4 Gb/s with the quadrature the divider makes.
   *
-  * The bypass pin runs at twice the main clock, so /2 lands TXCLK at 2 GHz and
-  * the lane at 4 Gb/s. Dividing by two gives the shifter a span of four main
-  * clock half cycles, and each of those is 125 ps -- half a UI at this rate --
-  * so the four coarse positions walk two whole UI on their own, and the global
-  * delay line only has to fill in between them.
+  * The main clock stays at 8 GHz, and /4 lands TXCLK at 2 GHz: 4 Gb/s a lane.
+  * Dividing by four gives the shifter a span of eight main clock half cycles,
+  * each 62.5 ps -- a quarter of a UI at this rate -- so the eight coarse
+  * positions walk two whole UI, and each step is short enough for the global
+  * delay line (64 taps, about 69 ps) to fill in. Four fine points, each 14 taps
+  * or 15.2 ps apart, leave 17 ps to the next coarse position, so the whole
+  * sweep is one grid of about 15.6 ps with no gaps.
+  *
+  * The main clock has to stay fast for that, since a coarse step is half of its
+  * period. Reaching the same rate off a slower main clock divided less -- 4 GHz
+  * /2 -- makes 125 ps steps the line cannot bridge, so the sweep skips half of
+  * every UI. Under the eye models the shut stretch around a transition is
+  * narrower than one fine step, and those gaps are wide enough to miss both
+  * edges and read open everywhere.
   */
 class EyeLowRateDividerTestDriver extends SVTestDriver {
-
-  /** 4 GHz: twice the 2 GHz main clock /2 produces. */
-  override def bypassHalfPeriodPs: Double = 125.0
-
   setStimulus(
     "EyeLowRateDividerTestDriver",
     """
@@ -991,20 +996,20 @@ begin : eye_lowrate_div
   setup_ucie();
   seed_lfsrs();
 
-  // 4 GHz bypass /2 -> TXCLK 2 GHz -> 4 Gb/s a lane.
-  set_main_clk(3, 1);
+  // 8 GHz bypass /4 -> TXCLK 2 GHz -> 4 Gb/s a lane.
+  set_main_clk(3, 2);
 
-  $display("Coarse eye at 4 Gb/s, quadrature from the /2 divider");
-  $display("  4 coarse positions of 125 ps (half a UI), 8 fine of 8 ps");
+  $display("Coarse eye at 4 Gb/s, quadrature from the /4 divider");
+  $display("  8 coarse positions of 62.5 ps (a quarter UI), 4 fine of 15.2 ps");
 
   row = "";
   open_points = 0;
   total_points = 0;
-  for (int c = 0; c < 4; c++) begin
+  for (int c = 0; c < 8; c++) begin
     set_tx_phase(c);
-    for (int fi = 0; fi < 8; fi++) begin
+    for (int fi = 0; fi < 4; fi++) begin
       set_clk_gate(0);
-      set_global_delay(fi * 8);
+      set_global_delay(fi * 14);
       set_clk_gate(1);
       run_lfsr(`TRAIN_PACKETS);
       run_lfsr(`TRAIN_PACKETS);
@@ -1029,86 +1034,9 @@ begin : eye_lowrate_div
   // Two UI of travel, so an open stretch and a shut one both have to appear.
   // All open or all shut means the phase is not being resolved at all.
   assert(open_points > 0)
-    else $fatal(1, "4 Gb/s /2: nothing samples cleanly, so the sweep never found the eye");
+    else $fatal(1, "4 Gb/s /4: nothing samples cleanly, so the sweep never found the eye");
   assert(open_points < total_points)
-    else $fatal(1, "4 Gb/s /2: everything samples cleanly, so the eye is not being resolved");
-
-  $display("TEST PASSED");
-end
-    """.trim,
-    moduleItems = TestDriverItems.scoring
-  )
-}
-
-/** Coarse eye at 4 Gb/s with nothing but the global delay line.
-  *
-  * The bypass pin runs at the main clock, so /1 already puts the lane at 4 Gb/s
-  * and the divider has no quadrature to give -- a span of two half cycles is 0
-  * and 180 degrees with nothing between. That leaves the global delay line as
-  * the only way to move the sampling point, and its 64 taps of 1 ps cover 64 ps
-  * against a 250 ps UI.
-  *
-  * So this is the case expected to fall short, and the test says so rather than
-  * pretending otherwise: it checks the link runs and reports how much of a UI
-  * the line reaches. It is the measurement that argues for the divider based
-  * shifter, which is why it is worth keeping.
-  */
-class EyeLowRateDelayTestDriver extends SVTestDriver {
-
-  /** 2 GHz: the main clock itself, undivided. */
-  override def bypassHalfPeriodPs: Double = 250.0
-
-  setStimulus(
-    "EyeLowRateDelayTestDriver",
-    """
-begin : eye_lowrate_delay
-  integer open_points, total_points;
-  integer clean_any;
-  string row;
-
-  setup_ucie();
-  seed_lfsrs();
-
-  // 2 GHz bypass /1 -> TXCLK 2 GHz -> 4 Gb/s a lane.
-  set_main_clk(3, 0);
-  // No coarse shift: the delay line is the whole of the sweep.
-  set_tx_phase(0);
-
-  $display("Coarse eye at 4 Gb/s, global delay line only, no quadrature");
-  $display("  16 fine positions of 4 ps: 64 ps against a 250 ps UI, about a quarter of one");
-
-  row = "";
-  open_points = 0;
-  total_points = 0;
-  for (int fi = 0; fi < 16; fi++) begin
-    set_clk_gate(0);
-    set_global_delay(fi * 4);
-    set_clk_gate(1);
-    run_lfsr(`TRAIN_PACKETS);
-    run_lfsr(`TRAIN_PACKETS);
-    // The burst takes four times as long at 4 Gb/s as at
-    // 16 GT/s, so `run_lfsr`'s own poll window expires before
-    // the packets land. Without this wait every point scores
-    // as "received nothing" and the row reads solid shut.
-    wait_for_packets();
-    score_lanes();
-    clean_any = 0;
-    for (int l = 0; l < `TRAIN_DATA_LANES; l++)
-      if (lane_framing[l] <= 2) clean_any = clean_any + 1;
-    row = {row, clean_any == `TRAIN_DATA_LANES ? "#" : "."};
-    if (clean_any == `TRAIN_DATA_LANES) open_points = open_points + 1;
-    total_points = total_points + 1;
-  end
-
-  $display("  4 Gb/s, delay line only: %s  %0d/%0d open", row, open_points, total_points);
-
-  // Only that the link runs somewhere in the line's reach. Whether the row is
-  // solid is the result, not a failure: 64 ps cannot walk a 250 ps UI, and a
-  // solid row is that limitation showing rather than a broken sweep.
-  assert(open_points > 0)
-    else $fatal(1, "4 Gb/s /1: nothing samples cleanly anywhere in the delay line's 64 ps");
-  if (open_points == total_points)
-    $display("  (solid: 64 ps never reaches an edge at this rate, so the divider based shifter is what covers the rest of the UI)");
+    else $fatal(1, "4 Gb/s /4: everything samples cleanly, so the eye is not being resolved");
 
   $display("TEST PASSED");
 end
@@ -1351,6 +1279,248 @@ class ManualSimpleTestDriver extends SVTestDriver {
     "ManualSimpleTestDriver",
     """
 manual_simple();
+          """.trim
+  )
+}
+
+/** The PhyTest and sideband clocks off either PLL, and the rate table with the
+  * PhyTest division out of it.
+  *
+  * Both clocks start on their bypass pins, move onto a divided PLL each, and
+  * then take one change at a time. Neither is gated, so what is checked is that
+  * each runs at the rate its own registers give it whatever the TX side does,
+  * and that the clock gate stops TX and nothing else. Rates and pauses are read
+  * off the clocking tile's outputs, a pause being a gap between edges far
+  * longer than any period. Hierarchical, because nothing on the register map
+  * shows either. Each domain then has to answer over MMIO, which is what
+  * software depends on.
+  */
+class ClkSrcSelTestDriver extends SVTestDriver {
+  setStimulus(
+    "ClkSrcSelTestDriver",
+    """
+begin : clk_src_sel
+  reg [63:0] rate;
+  watch = 1;
+
+  // 1. Off the bypass pins in one apply: PhyTest onto PLL12 /15, the sideband
+  // onto PLL8 /10, 800 MHz each, with both PLLs started. Neither has a gate,
+  // so once the PLLs lock the block is reset onto them, as bringup does.
+  `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
+  `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
+  clear_gaps();
+  use_internal_clk(64'h1, 64'h4);
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply onto the PLLs did not finish");
+  expect_clks(-1, -1, 1, "PhyTest and sideband onto the PLLs");
+  wait_pll_lock();
+  expect_periods(1250.0, 1250.0, "PhyTest PLL12 /15, sideband PLL8 /10");
+  reset_ucie();
+  expect_domains_answer(64'h1);
+
+  // 2. The main clock onto PLL12 /2. The apply gates TX, and nothing else:
+  // the PhyTest and sideband clocks neither pause nor change rate.
+  clear_gaps();
+  set_main_clk(64'h1, 64'h1);
+  expect_clks(0, 0, 1, "main clock onto PLL12 /2");
+  expect_periods(1250.0, 1250.0, "PhyTest and sideband with the main clock moved");
+  expect_tx_period(166.67, "TX PLL12 /2");
+
+  // 3. PhyTest onto PLL8 /8, 1 GHz, and the sideband onto PLL12 /15, 800 MHz.
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_SRC_SEL, 64'h0);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
+  clear_gaps();
+  apply_clk_cfg();
+  expect_clks(-1, -1, 1, "PhyTest onto PLL8 /8, sideband onto PLL12 /15");
+  expect_periods(1000.0, 1250.0, "PhyTest PLL8 /8, sideband PLL12 /15");
+  reset_ucie();
+  expect_domains_answer(64'h2);
+
+  // 4. The clock gate by hand stops TX and nothing else.
+  clear_gaps();
+  set_clk_gate(64'h0);
+  #50000;
+  expect_clks(0, 0, 1, "clock gate shut");
+  set_clk_gate(64'h1);
+
+  // 5. The rate table takes over the TX side: the doubler /4, everything on.
+  // Neither field is zero, so a packing off by a bit lands on a different
+  // rate. The PhyTest division is not in it, so PhyTest stays at PLL8 /8.
+  `READ_UCIE(regDrv, `FREQ_SEL_OBSERVED, rate);
+  rate = rate & 64'h7;
+  set_rate_cfg(rate, 64'h2, 64'h2, 64'h7);
+  set_freq_sel_auto(64'h1);
+  clear_gaps();
+  apply_clk_cfg();
+  expect_clks(0, 0, 1, "rate table entry, doubler /4");
+  expect_periods(1000.0, 1250.0, "PhyTest and sideband under the rate table");
+  expect_tx_period(250.0, "TX doubler /4 from the rate table");
+
+  // 6. An entry that switches off PLL12, under the sideband. The apply still
+  // finishes, and the sideband stops with its PLL; PhyTest does not.
+  set_rate_cfg(rate, 64'h2, 64'h2, 64'h5);
+  clear_gaps();
+  apply_clk_cfg();
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply that switched off the sideband's PLL did not finish");
+  #50000;
+  expect_clks(0, 1, 1, "PLL12 off under the sideband");
+
+  // 7. PLL12 back on, and the sideband with it.
+  set_rate_cfg(rate, 64'h2, 64'h2, 64'h7);
+  clear_gaps();
+  apply_clk_cfg();
+  wait_pll_lock();
+  expect_periods(1000.0, 1250.0, "sideband back on PLL12 /15");
+  set_freq_sel_auto(64'h0);
+  reset_ucie();
+  expect_domains_answer(64'h3);
+
+  // 8. Back onto the bypass pins.
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h1);
+  apply_clk_cfg();
+  expect_periods(1250.0, 1250.0, "both bypass pins");
+  reset_ucie();
+  expect_domains_answer(64'h4);
+end
+          """.trim,
+    moduleItems = """
+`define CLK_TILE SimTop.harness.ucieTL.phy.clkTile
+
+// The longest gap between rising edges on each of the clocking tile's three
+// outputs since `clear_gaps`, and the latest period.
+realtime pt_last = 0, sb_last = 0, tx_last = 0;
+realtime pt_gap = 0, sb_gap = 0, tx_gap = 0;
+realtime pt_period = 0, sb_period = 0, tx_period = 0;
+always @(posedge `CLK_TILE.PhyTestClk) begin
+  if ($realtime - pt_last > pt_gap) pt_gap = $realtime - pt_last;
+  pt_period = $realtime - pt_last;
+  pt_last = $realtime;
+end
+always @(posedge `CLK_TILE.SbClk) begin
+  if ($realtime - sb_last > sb_gap) sb_gap = $realtime - sb_last;
+  sb_period = $realtime - sb_last;
+  sb_last = $realtime;
+end
+always @(posedge `CLK_TILE.TxClk) begin
+  if ($realtime - tx_last > tx_gap) tx_gap = $realtime - tx_last;
+  tx_period = $realtime - tx_last;
+  tx_last = $realtime;
+end
+
+// Throughout: nothing between the main clock's source and the TX divider
+// moves with the clock gate open -- not the main clock select, not the
+// division, not the PLL under it -- and the gate only opens on a main clock
+// whose PLL is locked. Each is checked a picosecond after the move, once
+// whatever moves with it has.
+bit watch = 0;
+bit pll8_was = 0, pll12_was = 0, x2_was = 0;
+always @(`CLK_TILE.MainClkSel or `CLK_TILE.TxClkDiv) begin
+  #1;
+  if (watch && `CLK_TILE.ClkGateEn)
+    $fatal(1, "the main clock select or TX division moved with the clock gate open");
+end
+always @(`CLK_TILE.Pll8En or `CLK_TILE.Pll12En or `CLK_TILE.X2En) begin
+  #1;
+  if (watch && `CLK_TILE.ClkGateEn &&
+      (`CLK_TILE.MainClkSel == 2'd0 && pll8_was != `CLK_TILE.Pll8En ||
+       `CLK_TILE.MainClkSel == 2'd1 && pll12_was != `CLK_TILE.Pll12En ||
+       `CLK_TILE.MainClkSel == 2'd2 &&
+         (pll8_was != `CLK_TILE.Pll8En || x2_was != `CLK_TILE.X2En)))
+    $fatal(1, "the PLL under the main clock moved with the clock gate open");
+  pll8_was = `CLK_TILE.Pll8En;
+  pll12_was = `CLK_TILE.Pll12En;
+  x2_was = `CLK_TILE.X2En;
+end
+always @(posedge `CLK_TILE.ClkGateEn) begin
+  #1;
+  if (watch && (`CLK_TILE.MainClkSel == 2'd0 && !`CLK_TILE.Pll8Lock ||
+                `CLK_TILE.MainClkSel == 2'd1 && !`CLK_TILE.Pll12Lock ||
+                `CLK_TILE.MainClkSel == 2'd2 && !`CLK_TILE.Pll8Lock))
+    $fatal(1, "the clock gate opened on a PLL that is not locked");
+end
+
+task clear_gaps;
+  begin
+    pt_gap = 0;
+    sb_gap = 0;
+    tx_gap = 0;
+    pt_last = $realtime;
+    sb_last = $realtime;
+    tx_last = $realtime;
+  end
+endtask
+
+// An apply holds the gate for about its 4-cycle dwell of the 2 ns register
+// clock, 8 ns; running is under 2.5 periods of the slowest clock here. 5 ns
+// splits the two with room either side.
+task check_clk(input string clk, input int paused, input realtime gap, input string what);
+  begin
+    if (paused == 1 && gap < 5000.0)
+      $fatal(1, "%s: the %s clock was expected to pause but its longest gap was %0.2f ns", what, clk, gap / 1000.0);
+    if (paused == 0 && gap > 3000.0)
+      $fatal(1, "%s: the %s clock paused for %0.2f ns, though nothing it runs on changed", what, clk, gap / 1000.0);
+  end
+endtask
+
+// 1 for a clock expected to pause, 0 for one expected to keep running, -1 for
+// one that switches with no gate and may do either.
+task expect_clks(input int pt_paused, input int sb_paused, input int tx_paused, input string what);
+  begin
+    // Count a clock that is still stopped.
+    if ($realtime - pt_last > pt_gap) pt_gap = $realtime - pt_last;
+    if ($realtime - sb_last > sb_gap) sb_gap = $realtime - sb_last;
+    if ($realtime - tx_last > tx_gap) tx_gap = $realtime - tx_last;
+    $display("%s: longest gap PhyTest %0.2f ns, sideband %0.2f ns, TX %0.2f ns",
+             what, pt_gap / 1000.0, sb_gap / 1000.0, tx_gap / 1000.0);
+    check_clk("PhyTest", pt_paused, pt_gap, what);
+    check_clk("sideband", sb_paused, sb_gap, what);
+    check_clk("TX", tx_paused, tx_gap, what);
+  end
+endtask
+
+task expect_periods(input realtime pt, input realtime sb, input string what);
+  begin
+    #20000;
+    $display("%s: PhyTest period %0.1f ps, sideband %0.1f ps", what, pt_period, sb_period);
+    if (pt_period < pt - 1.0 || pt_period > pt + 1.0)
+      $fatal(1, "%s: PhyTest period %0.1f ps, expected %0.1f", what, pt_period, pt);
+    if (sb_period < sb - 1.0 || sb_period > sb + 1.0)
+      $fatal(1, "%s: sideband period %0.1f ps, expected %0.1f", what, sb_period, sb);
+  end
+endtask
+
+task expect_tx_period(input realtime tx, input string what);
+  begin
+    #20000;
+    $display("%s: TX period %0.2f ps", what, tx_period);
+    if (tx_period < tx - 1.0 || tx_period > tx + 1.0)
+      $fatal(1, "%s: TX period %0.2f ps, expected %0.2f", what, tx_period, tx);
+  end
+endtask
+
+// Both PLLs locked, as the clocking registers see it.
+task wait_pll_lock;
+  reg [63:0] lock;
+  begin
+    lock = 0;
+    while (lock != 64'h3)
+      `READ_UCIE(regDrv, `PLL_LOCK_OBSERVED, lock);
+  end
+endtask
+
+// A register on the PhyTest clock and one on the sideband clock, each
+// written and read back across its crossing.
+task expect_domains_answer(input [63:0] v);
+  begin
+    `WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, v);
+    `EXPECT_UCIE_MSG(regDrv, `TX_DATA_CHUNK_IN0, v, "PhyTest domain");
+    `WRITE_UCIE(regDrv, `UCIE_RETRY_TRAINING_AMT, v);
+    `EXPECT_UCIE_MSG(regDrv, `UCIE_RETRY_TRAINING_AMT, v, "sideband domain");
+  end
+endtask
           """.trim
   )
 }
@@ -1918,6 +2088,17 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
+    it(
+      "should run the PhyTest and sideband clocks off either PLL using Xcelium"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ClkSrcSelTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_run_phytest_and_sideband_clocks_off_either_pll"
+      )
+    }
+
     it("should support simple TL sideband test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
@@ -2114,19 +2295,6 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new EyeLowRateDividerTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_measure_a_4Gbps_eye_divider_quadrature",
-        amsLevel = Some(AmsLevel.Eye)
-      )
-    }
-
-    it(
-      "should measure a 4 Gbps eye with the delay line only using Xcelium with PHY analog models"
-    ) {
-      implicit val p = Parameters.empty
-      implicit val includeDefaultModels = false
-      Utils.simulate(
-        new SimTop(new EyeLowRateDelayTestDriver),
-        Utils.writeXrunSimScript,
-        Utils.buildRoot / "UcieTL_should_measure_a_4Gbps_eye_delay_line_only",
         amsLevel = Some(AmsLevel.Eye)
       )
     }
