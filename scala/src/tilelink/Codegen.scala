@@ -347,12 +347,10 @@ object Codegen {
     *
     * Chisel packs a bundle's first field into the most significant bits, so
     * these follow `ClkRateCfgIO`'s declaration order: main clock select, TX
-    * division, PhyTest division, then the PLL8, PLL12, and doubler enables in
-    * the low bits.
+    * division, then the PLL8, PLL12, and doubler enables in the low bits.
     */
-  val rateCfgMainClkSelLsb: Int = 8
-  val rateCfgTxClkDivLsb: Int = 6
-  val rateCfgPhyTestClkDivLsb: Int = 3
+  val rateCfgMainClkSelLsb: Int = 5
+  val rateCfgTxClkDivLsb: Int = 3
 
   /** Fine steps within one coarse phase position, and taps between them.
     *
@@ -820,7 +818,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
-        ("rateCfgPhyTestClkDivLsb", BigInt(Codegen.rateCfgPhyTestClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -1029,16 +1026,20 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * zero selects PLL8 with no PLL enabled, which is to say a rate the part has
     * not been told how to reach.
     *
+    * The PhyTest and sideband clocks are not in it: they keep the rate their
+    * own registers give them whatever training picks. The PLL enables are the
+    * whole part's, though, so an entry can switch off the PLL one of those
+    * dividers takes, and that clock stops with it -- and with it the PhyTest
+    * registers or the sideband.
+    *
     * Fields are packed as the bundle declares them, most significant first:
-    * main clock select, TX division, PhyTest division, then the PLL8, PLL12,
-    * and doubler enables.
+    * main clock select, TX division, then the PLL8, PLL12, and doubler enables.
     */
   def formatSetRateCfgFn(): String = {
     val body = new StringBuilder
     val packed =
       s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
         s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
-        s"(phytest_div << ${f.formatConstantRef("rateCfgPhyTestClkDivLsb")}) | " +
         s"pll_en)"
     body.append(
       f.formatWriteReg(
@@ -1054,7 +1055,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         Arg("rate", Datatype.Long),
         Arg("main_sel", Datatype.Long),
         Arg("tx_div", Datatype.Long),
-        Arg("phytest_div", Datatype.Long),
         Arg("pll_en", Datatype.Long)
       )
     )
@@ -1179,8 +1179,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     *
     * Together with the global delay line this reaches any phase: the coarse
     * step is half a main clock period, which is inside the line's range at
-    * every rate, so the two tile a whole UI with no gap. Below 16 GT/s the line
-    * alone cannot, which is what the shifter is for.
+    * every PLL rate, so the two tile a whole UI with no gap. Below 16 GT/s the
+    * line alone cannot, which is what the shifter is for. That holds only while
+    * the main clock is fast -- below about 7.2 GHz a step outruns the line --
+    * so a low rate comes from a larger division, not a slower main clock.
     */
   def formatSetTxPhaseFn(): String = {
     val body = new StringBuilder
@@ -1194,24 +1196,30 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Enables the PLLs and the doubler, and points the PhyTest clock at a
-    * divided main clock.
+  /** Enables the PLLs and the doubler, and points the PhyTest clock at PLL8
+    * (`phytest_src` 0) or PLL12 (1), divided.
     *
-    * The PhyTest domain has to keep running across this, so the ratio is set
-    * before the source is switched over.
+    * The PhyTest clock has no gate, so the switch off the bypass pin, and the
+    * PLL's wake-up behind it, reach the PhyTest domain as they are. This
+    * belongs before `setup_ucie`, whose `reset_ucie` restarts that domain on
+    * the new clock.
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("pll8En", f.formatLong(1)))
     body.append(formatWriteNamedReg("pll12En", f.formatLong(1)))
     body.append(formatWriteNamedReg("x2En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("phyTestClkSrcSel", "phytest_src"))
     body.append(formatWriteNamedReg("phyTestClkDiv", "phytest_div"))
     body.append(formatWriteNamedReg("phyTestClkBypassEn", f.formatLong(0)))
     body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "use_internal_clk",
       body.toString,
-      args = Seq(Arg("phytest_div", Datatype.Long))
+      args = Seq(
+        Arg("phytest_src", Datatype.Long),
+        Arg("phytest_div", Datatype.Long)
+      )
     )
   }
 

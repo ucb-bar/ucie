@@ -207,18 +207,20 @@ class PhyClkRstIO extends Bundle {
   val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
   val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
   val phyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
+  // Which PLL the PhyTest divider divides, and the same for the sideband's.
+  val phyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
   val phyTestClkBypassEn = Input(Bool())
   val sbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
+  val sbClkSrcSel = Input(UInt(ClockingTile.sbClkSrcSelWidth.W))
   val sbClkBypassEn = Input(Bool())
   // Runs the RX lanes from TXCLKQ rather than the recovered forwarded clock,
   // for when the far side's clock is not behaving.
   val rxClkFromTxQ = Input(Bool())
   // The global delay line on TXCLKQ.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
-  // Stops the main clock straight after its mux while low, and with it every
-  // divided clock -- TX, PhyTest, and sideband -- so a source, a ratio, or a
-  // delay code can be changed with no edge in flight. Clocks on a bypass pin
-  // keep running.
+  // Stops the main clock straight after its mux while low, and with it the TX
+  // divider, so a source, a ratio, or a delay code can be changed with no edge
+  // in flight. The PhyTest and sideband clocks keep running.
   val clkGateEn = Input(Bool())
   // Stops the recovered forwarded clock at the RX clock lanes, which keeps
   // the whole RX tree quiet rather than clocking lanes with nothing to
@@ -231,11 +233,12 @@ class PhyClkRstIO extends Bundle {
   val pll8Lock = Output(Bool())
   val pll12Lock = Output(Bool())
 
-  // PhyTest clock (~1.1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
+  // PhyTest clock (~1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
   // register block, and the lane controls.
   //
   // Should always be toggling when RX AFEs must be active, which means its
-  // bypass pin while the clock gate is shut.
+  // source -- a PLL or the bypass pin -- running. The clock gate does not
+  // reach it.
   val phyTestClk = Output(Clock())
   // PhyTest reset, released against `phyTestClk`.
   val phyTestRst = Output(Bool())
@@ -361,9 +364,11 @@ class Phy(
   clkTile.io.TxClkDiv := io.clkRst.txClkDiv
   clkTile.io.TxClkPhase := io.clkRst.txClkPhase
   clkTile.io.PhyTestClkDiv := io.clkRst.phyTestClkDiv
+  clkTile.io.PhyTestClkSrcSel := io.clkRst.phyTestClkSrcSel
   clkTile.io.ClkGateEn := io.clkRst.clkGateEn
   clkTile.io.PhyTestClkBypassEn := io.clkRst.phyTestClkBypassEn
   clkTile.io.SbClkDiv := io.clkRst.sbClkDiv
+  clkTile.io.SbClkSrcSel := io.clkRst.sbClkSrcSel
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbBypassClk := io.top.sidebandBypassClk
   clkTile.io.RefClk := io.top.refClk
@@ -373,8 +378,8 @@ class Phy(
 
   io.clkRst.phyTestClk := clkTile.io.PhyTestClk
   io.clkRst.sbClk := clkTile.io.SbClk
-  // The sideband clock is its own domain now -- divided from the main clock
-  // or taken from its own pin -- so the logic on it needs a reset released
+  // The sideband clock is its own domain now -- divided from a PLL or taken
+  // from its own pin -- so the logic on it needs a reset released
   // against that clock rather than against the PhyTest one.
   val sbRstSync = Module(new RstSync)
   sbRstSync.io.rstbAsync := !io.clkRst.reset

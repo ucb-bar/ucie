@@ -70,7 +70,9 @@ object ClockingTile {
   val txClkDivWidth = 2
   val txClkPhaseWidth = 4
   val phyTestClkDivWidth = 3
+  val phyTestClkSrcSelWidth = 1
   val sbClkDivWidth = 3
+  val sbClkSrcSelWidth = 1
 }
 
 class ClockingTileIO extends Bundle {
@@ -105,34 +107,42 @@ class ClockingTileIO extends Bundle {
   val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
 
   /** TXCLKQ's shift from TXCLK, in main clock half cycles, 0 to 2*div-1. Half a
-    * main clock period a step, which is inside the global delay line's range at
-    * every rate, so coarse and fine together reach any phase.
+    * main clock period a step, which is inside the global delay line's ~69 ps
+    * range for any main clock from about 7.2 GHz up -- every PLL rate -- so
+    * coarse and fine together reach any phase. A slower main clock off the
+    * bypass pin makes steps the line cannot bridge.
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** PhyTest clock division of the main clock: 0 /1, 1 /2, 2 /4, 3 /8, 4 /15 --
-    * the ratios that land a little over 1 GHz from an 8 or 16 GHz main clock.
-    * The divider stops on its own whenever the bypass pin is selected.
+  /** PhyTest clock division of whichever PLL `PhyTestClkSrcSel` picks: 0 /1, 1
+    * /2, 2 /4, 3 /8, 4 /15. 1 GHz is /8 off PLL8, 800 MHz /15 off PLL12. The
+    * divider stops on its own whenever the bypass pin is selected.
     */
   val PhyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
+
+  /** What the PhyTest divider divides: 0 PLL8, 1 PLL12. Not the main clock, so
+    * the PhyTest clock keeps its rate whatever the TX side runs on.
+    */
+  val PhyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
 
   /** Takes the PhyTest clock from the bypass pin rather than the divider. */
   val PhyTestClkBypassEn = Input(Bool())
 
-  /** Sideband division of the main clock: 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The
-    * sideband runs at a rate the PhyTest domain does not, so it divides the
-    * same main clock separately.
+  /** Sideband division of whichever PLL `SbClkSrcSel` picks: 0 /1, 1 /5, 2 /10,
+    * 3 /15, 4 /20. 800 MHz is /10 off PLL8, /15 off PLL12.
     */
   val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
+
+  /** What the sideband divider divides: 0 PLL8, 1 PLL12. */
+  val SbClkSrcSel = Input(UInt(ClockingTile.sbClkSrcSelWidth.W))
 
   /** Takes the sideband clock from its own bypass pin. */
   val SbClkBypassEn = Input(Bool())
 
   /** Active-high enable for the glitch-free clock gate straight after the main
-    * clock mux. Low stops the main clock between pulses, so all three dividers
-    * -- TX, PhyTest, and sideband -- stop together and hold their count. A
-    * clock taken from a bypass pin is past the gate and keeps running, which is
-    * how the PhyTest domain keeps servicing the RX AFEs with the gate shut.
+    * clock mux. Low stops the main clock between pulses, so the TX divider
+    * stops and holds its count. The PhyTest and sideband clocks do not come off
+    * the main clock, are not gated, and keep running.
     */
   val ClkGateEn = Input(Bool())
 
