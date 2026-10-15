@@ -20,18 +20,25 @@
 //   TXCLK        the main clock divided by 1, 2, 4 or 8
 //   TXCLKQ       the same division, phase shifted by a whole number of main
 //                clock half cycles, then through the global delay line
-//   PhyTestClk   the PhyTest bypass pin, or the main clock divided by
-//                1, 2, 4, 8 or 15 -- the ratios that land a little over 1 GHz
-//                from an 8 or 16 GHz main clock
-//   SbClk        the sideband bypass pin, or the main clock divided by
-//                1, 5, 10, 15 or 20, which is where 800 MHz comes from
+//   PhyTestClk   the PhyTest bypass pin, or pll8 or pll12 divided by
+//                1, 2, 4, 8 or 15 -- 1 GHz is /8 off pll8, 800 MHz /15 off
+//                pll12
+//   SbClk        the sideband bypass pin, or pll8 or pll12 divided by
+//                1, 5, 10, 15 or 20 -- 800 MHz is /10 off pll8, /15 off
+//                pll12
 //
-// The clock gate sits straight after the main clock mux, so it stops all three
-// dividers at once and they hold their count until it opens again. It is
-// glitch free: its enable is latched while the main clock is low, so the gate
-// only ever opens or closes between pulses, and whatever the mux does while
-// the gate is shut never reaches a divider. The bypass pins come in after the
-// dividers and are not gated.
+// The PhyTest and sideband dividers each pick a PLL for themselves rather than
+// dividing the main clock, so they keep their rate whatever the TX side runs
+// on -- the bypass pin at an arbitrary rate, say -- and gating the TX side
+// does not stop them.
+//
+// The clock gate sits straight after the main clock mux, so it stops the TX
+// divider, which holds its count until the gate opens again. It is glitch
+// free: its enable is latched while the main clock is low, so the gate only
+// ever opens or closes between pulses, and whatever the mux does while the
+// gate is shut never reaches the divider. The PhyTest and sideband clocks are
+// not gated, so moving one of their selects or dividers while it runs can
+// hand that domain a short pulse.
 //
 // A divider is held at zero while its bypass pin is selected, so deselecting
 // one starts a fresh period rather than landing mid-count.
@@ -44,9 +51,12 @@
 // behavioural equivalent and reaches exactly the same positions.
 //
 // Those positions are half a main clock period apart, which is what lets a
-// sweep tile a whole UI at any rate: 62.5 ps at 8 GHz, 41.7 at 12, 31.25 at
-// 16, all inside the range the global delay line covers. Without the shifter
-// the delay line alone falls short of a UI below 16 GT/s.
+// sweep tile a whole UI at any rate the PLLs make: 62.5 ps at 8 GHz, 41.7 at
+// 12, 31.25 at 16, all inside the ~69 ps the global delay line covers. Without
+// the shifter the delay line alone falls short of a UI below 16 GT/s. A main
+// clock below about 7.2 GHz, which only the bypass pin can supply, makes steps
+// longer than the line reaches and leaves gaps in a sweep, so a low rate is
+// reached by dividing a fast main clock further, not by slowing the main clock.
 //
 // At division 1 the counter has only two positions, 0 and 180 degrees. There
 // is no quadrature to be had from a divider that is not dividing, but 180 is
@@ -64,18 +74,23 @@ module clocking_tile(
   input [1:0] TxClkDiv,
   // TXCLKQ's lead over TXCLK, in main clock half cycles, 0 to 2*div-1.
   input [3:0] TxClkPhase,
-  // 0 /1, 1 /2, 2 /4, 3 /8, 4 /15. The ratios that land a little over 1 GHz
-  // from an 8 or 16 GHz main clock.
+  // 0 /1, 1 /2, 2 /4, 3 /8, 4 /15. 1 GHz is /8 off pll8, 800 MHz /15 off
+  // pll12.
   input [2:0] PhyTestClkDiv,
+  // What the PhyTest divider divides: 0 pll8, 1 pll12.
+  input PhyTestClkSrcSel,
   // High takes the PhyTest clock from the bypass pin instead of the divider.
   input PhyTestClkBypassEn,
-  // 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The sideband runs at 800 MHz, which is a
-  // different ratio off the same main clock, so it gets its own divider.
+  // 0 /1, 1 /5, 2 /10, 3 /15, 4 /20. The sideband runs at 800 MHz whatever
+  // the PhyTest clock runs at, so it gets its own divider: /10 off pll8, /15
+  // off pll12.
   input [2:0] SbClkDiv,
+  // What the sideband divider divides: 0 pll8, 1 pll12.
+  input SbClkSrcSel,
   // High takes the sideband clock from its own bypass pin.
   input SbClkBypassEn,
-  // Active high enable for the main clock, and so for every divided clock.
-  // A clock taken from a bypass pin keeps running.
+  // Active high enable for the main clock, and so for the TX divider. The
+  // PhyTest and sideband clocks keep running.
   input ClkGateEn,
   input RefClk,
   input DigBypassClk,
@@ -166,7 +181,7 @@ module clocking_tile(
                       (MainClkSel == 2'd2) ? x2 : BypassClk;
 
   // The enable is latched while the main clock is low, so changing `ClkGateEn`
-  // mid-pulse cannot chop that pulse short: a glitch here would reach every
+  // mid-pulse cannot chop that pulse short: a glitch here would reach the
   // divider as a real edge and defeat the point of gating.
   reg main_en = 1'b0;
   always @(*) begin
@@ -207,7 +222,8 @@ module clocking_tile(
   reg q_delayed = 1'b0;
   always @(tx_q) q_delayed <= #(phase_delay) tx_q;
 
-  // ---- PhyTest clock divider ----
+  // ---- PhyTest clock: source mux, divider, bypass mux ----
+  wire phytest_src = PhyTestClkSrcSel ? pll12 : pll8;
   wire [5:0] phytest_div = (PhyTestClkDiv == 3'd0) ? 6'd1 :
                            (PhyTestClkDiv == 3'd1) ? 6'd2 :
                            (PhyTestClkDiv == 3'd2) ? 6'd4 :
@@ -216,32 +232,34 @@ module clocking_tile(
   // Held at zero while the bypass pin is selected, so switching back to the
   // divider starts a fresh period.
   reg [5:0] phytest_cnt = 6'd0;
-  always @(posedge main_clk) begin
+  always @(posedge phytest_src) begin
     if (PhyTestClkBypassEn || (^phytest_cnt === 1'bx) ||
         (phytest_cnt + 6'd1 >= phytest_div)) phytest_cnt <= 6'd0;
     else phytest_cnt <= phytest_cnt + 6'd1;
   end
   // An odd ratio cannot give an even mark to space, which costs a behavioural
-  // model nothing: what the PhyTest domain needs is the edge rate.
-  wire phytest_divided = phytest_cnt < ((phytest_div + 6'd1) >> 1);
+  // model nothing: what the PhyTest domain needs is the edge rate. /1 has no
+  // count to compare and passes the source straight through.
+  wire phytest_divided = (phytest_div == 6'd1) ? phytest_src :
+                         (phytest_cnt < ((phytest_div + 6'd1) >> 1));
 
   assign PhyTestClk = PhyTestClkBypassEn ? DigBypassClk : phytest_divided;
 
-  // ---- Sideband clock divider ----
-  // Its own divider off the same main clock: the sideband runs at a rate the
-  // PhyTest domain does not.
+  // ---- Sideband clock: source mux, divider, bypass mux ----
+  wire sb_src = SbClkSrcSel ? pll12 : pll8;
   wire [5:0] sb_div = (SbClkDiv == 3'd0) ? 6'd1 :
                       (SbClkDiv == 3'd1) ? 6'd5 :
                       (SbClkDiv == 3'd2) ? 6'd10 :
                       (SbClkDiv == 3'd3) ? 6'd15 : 6'd20;
 
   reg [5:0] sb_cnt = 6'd0;
-  always @(posedge main_clk) begin
+  always @(posedge sb_src) begin
     if (SbClkBypassEn || (^sb_cnt === 1'bx) ||
         (sb_cnt + 6'd1 >= sb_div)) sb_cnt <= 6'd0;
     else sb_cnt <= sb_cnt + 6'd1;
   end
-  wire sb_divided = sb_cnt < ((sb_div + 6'd1) >> 1);
+  wire sb_divided = (sb_div == 6'd1) ? sb_src :
+                    (sb_cnt < ((sb_div + 6'd1) >> 1));
 
   assign SbClk = SbClkBypassEn ? SbBypassClk : sb_divided;
 
