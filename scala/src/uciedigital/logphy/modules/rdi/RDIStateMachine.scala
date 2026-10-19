@@ -33,6 +33,13 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
       val plStateSts = Output(RDIState())
     }
     val trainingTimeout = Input(Bool())
+    // The pl_clk_req/lp_clk_ack handshake is complete. No sideband traffic
+    // starts and no state changes until it is.
+    val clkReady = Input(Bool())
+    // A transition is pending or in progress, so the clock must be requested.
+    // Raised before any traffic, which waits for `clkReady`.
+    val clkNeeded = Output(Bool())
+    // Sideband traffic is in flight.
     val sidebandBusy = Output(Bool())
     val requesterSbLaneIo = new SidebandLaneIO(sbParams)
     val responderSbLaneIo = new SidebandLaneIO(sbParams)
@@ -57,6 +64,7 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
   requester.io.rdi.lpStateReq := io.rdi.lpStateReq
   requester.io.rdi.plWakeAck := io.rdi.plWakeAck
   requester.io.trainingTimeout := io.trainingTimeout
+  requester.io.clkReady := io.clkReady
   requester.io.sbLaneIo <> io.requesterSbLaneIo
 
   val responder = Module(new RDIStateMachineResponder(sbParams))
@@ -65,6 +73,7 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
   responder.io.rdi.lpStateReq := io.rdi.lpStateReq
   responder.io.rdi.plWakeAck := io.rdi.plWakeAck
   responder.io.trainingTimeout := io.trainingTimeout
+  responder.io.clkReady := io.clkReady
   responder.io.sbLaneIo <> io.responderSbLaneIo
 
   when(currentState === RDIState.activePmNak && !isPmReq(io.rdi.lpStateReq)) {
@@ -89,6 +98,7 @@ class RDIStateMachine(sbParams: SidebandParams) extends Module {
   )
 
   io.rdi.plStateSts := currentState
+  io.clkNeeded := requester.io.clkNeeded || responder.io.clkNeeded
   io.sidebandBusy := requester.io.busy || responder.io.busy
 }
 
@@ -101,14 +111,20 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
       val plWakeAck = Input(Bool())
     }
     val trainingTimeout = Input(Bool())
+    val clkReady = Input(Bool())
     val sbLaneIo = new SidebandLaneIO(sbParams)
+    val clkNeeded = Output(Bool())
     val busy = Output(Bool())
     val transitionDone = Output(Bool())
     val targetState = Output(RDIState())
   })
 
+  // sWaitClk holds a transition that has been decided on until the clock
+  // handshake completes. The request comes from that register rather than
+  // from the start condition, so it leads the traffic and stays up even when
+  // lp_state_req does not hold still.
   object Substate extends ChiselEnum {
-    val sIdle, sExchange = Value
+    val sIdle, sWaitClk, sExchange = Value
   }
 
   import RDIStateMachineHelpers._
@@ -131,7 +147,8 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
 
   io.transitionDone := false.B
   io.targetState := pendingTargetReg
-  io.busy := substateReg =/= Substate.sIdle
+  io.clkNeeded := substateReg =/= Substate.sIdle
+  io.busy := substateReg === Substate.sExchange
 
   val startKind = WireDefault(RDIStateMachineKind.none)
   val startTarget = WireDefault(io.currentState)
@@ -306,6 +323,11 @@ class RDIStateMachineRequester(sbParams: SidebandParams) extends Module {
       when(startTransition) {
         pendingKindReg := startKind
         pendingTargetReg := startTarget
+        substateReg := Substate.sWaitClk
+      }
+    }
+    is(Substate.sWaitClk) {
+      when(io.clkReady) {
         substateReg := Substate.sExchange
       }
     }
@@ -336,14 +358,18 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
       val plWakeAck = Input(Bool())
     }
     val trainingTimeout = Input(Bool())
+    val clkReady = Input(Bool())
     val sbLaneIo = new SidebandLaneIO(sbParams)
+    val clkNeeded = Output(Bool())
     val busy = Output(Bool())
     val transitionDone = Output(Bool())
     val targetState = Output(RDIState())
   })
 
+  // A request is claimed as soon as it arrives, so it is not lost to another
+  // reader, but answered only once the clock handshake completes (sWaitClk).
   object Substate extends ChiselEnum {
-    val sIdle, sRespond = Value
+    val sIdle, sWaitClk, sRespond = Value
   }
 
   val substateReg = RegInit(Substate.sIdle)
@@ -366,7 +392,8 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
 
   io.transitionDone := false.B
   io.targetState := pendingTargetReg
-  io.busy := substateReg =/= Substate.sIdle
+  io.clkNeeded := substateReg =/= Substate.sIdle
+  io.busy := substateReg === Substate.sRespond
   io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
 
   val rxIsReqActive =
@@ -448,7 +475,7 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.active
           pendingTargetReg := RDIState.active
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqL1) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.pmL1
@@ -457,7 +484,7 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
             RDIState.activePmNak,
             io.currentState
           )
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqL2) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.pmL2
@@ -466,28 +493,33 @@ class RDIStateMachineResponder(sbParams: SidebandParams) extends Module {
             RDIState.activePmNak,
             io.currentState
           )
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqLinkReset) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.linkReset
           pendingTargetReg := RDIState.linkReset
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqLinkError) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.linkError
           pendingTargetReg := RDIState.linkError
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqRetrain) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.retrain
           pendingTargetReg := RDIState.retrain
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }.elsewhen(rxIsReqDisabled) {
           io.sbLaneIo.rx.ready := true.B
           pendingKindReg := RDIStateMachineKind.disabled
           pendingTargetReg := RDIState.disabled
-          substateReg := Substate.sRespond
+          substateReg := Substate.sWaitClk
         }
+      }
+    }
+    is(Substate.sWaitClk) {
+      when(io.clkReady) {
+        substateReg := Substate.sRespond
       }
     }
     is(Substate.sRespond) {
