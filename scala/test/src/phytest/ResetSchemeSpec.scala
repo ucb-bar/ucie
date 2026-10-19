@@ -13,11 +13,11 @@ import edu.berkeley.cs.uciedigital.phy.Phy
 /** What each reset register is for, shown by what goes wrong without it.
   *
   * The PHY has three resets a direction, and which one a piece of state hangs
-  * off is a design decision rather than an accident: the dividers come off the
-  * main reset so their phase against each other is fixed, the datapath comes
-  * off a reset synchronized to the divided clock so it can be flushed while
-  * that clock keeps running, and the test FSM comes off a third so a datapath
-  * flush does not throw away the measurement being taken.
+  * off is a design decision rather than an accident: the dividers come off a
+  * reset on the chip's clock so their phase against each other is fixed, the
+  * datapath comes off a reset synchronized to the divided clock so it can be
+  * flushed while that clock keeps running, and the test FSM comes off a third
+  * so a datapath flush does not throw away the measurement being taken.
   *
   * Those distinctions are invisible in a test that only ever asserts all of
   * them together, which is what every other spec here does. Each case below

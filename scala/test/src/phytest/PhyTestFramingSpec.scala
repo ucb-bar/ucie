@@ -54,6 +54,10 @@ class PhyTestLfsrLoopback(
   // debug lane, and the loopback pair), so this needs their behavioral models.
   val dut = Module(new PhyTest(numLanes = numLanes)(true))
   dut.io.regs := DontCare
+  // In the full block the divider resets come from the clock register
+  // block; the harness reset stands in for it here.
+  dut.io.txDividerRstb := (!reset.asBool).asAsyncReset
+  dut.io.rxDividerRstb := (!reset.asBool).asAsyncReset
 
   dut.io.regs.testTarget := TestTarget.mainband
   dut.io.regs.txTestMode := TxTestMode.lfsr

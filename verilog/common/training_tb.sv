@@ -297,7 +297,7 @@ module training_tb;
         txclk_intf.DataIN = shuffle(CLK_PATTERN);
         txdata_intf.DataIN = shuffle(PATTERN);
 
-        // The recovered clock's gate open, as `rxClkGateEn` resets to. Shut, the
+        // The recovered clock's gate open, as `rxClkEn` = 1 sets it. Shut, the
         // clock lane hands the data lane no clock at all.
         rxclk_intf.clk_gate_en = 1'b1;
 

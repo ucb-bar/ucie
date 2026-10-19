@@ -617,6 +617,7 @@ class MmioSimpleTestDriver extends SVTestDriver {
   setStimulus(
     "MmioSimpleTestDriver",
     """
+`WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
 `EXPECT_UCIE(regDrv, `TEST_TARGET, 64'h0);
 `WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
 `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
@@ -672,9 +673,9 @@ begin : repro
   // 32 and finds it dirty. Either the approach direction matters -- a delay
   // line shortened under a running clock loses an edge -- or something else
   // sweep 2 leaves behind does. This asks the question directly.
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(12);
-  set_clk_gate(1);
+  set_clk_en(1);
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
@@ -694,9 +695,9 @@ begin : repro
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
   $display("REPRO code 12, vref 64:           nominal errors %0d", nom);
 
-  set_clk_gate(0);
+  set_clk_en(0);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, 0);
-  set_clk_gate(1);
+  set_clk_en(1);
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
@@ -705,13 +706,13 @@ begin : repro
   $display("REPRO code 12, vref 64 + trim 0:  nominal errors %0d", nom);
 
   // Now the same code, approached downwards from 32, as sweep 3 does.
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(32);
-  set_clk_gate(1);
+  set_clk_en(1);
   run_lfsr(`TRAIN_PACKETS);
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(12);
-  set_clk_gate(1);
+  set_clk_en(1);
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h1);
@@ -725,7 +726,7 @@ begin : repro
   // restore a receiver that counts every packet again -- everything on the RX
   // divided clock stopped too, the reset synchronizer and the queue's PHY side
   // among them, so coming back is the part worth checking.
-  set_rx_clk_gate(0);
+  set_rx_clk_en(0);
   run_lfsr(`TRAIN_PACKETS);
   `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
   `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
@@ -735,7 +736,7 @@ begin : repro
     fails = fails + 1;
   end
 
-  set_rx_clk_gate(1);
+  set_rx_clk_en(1);
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
   `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
@@ -751,13 +752,13 @@ begin : repro
   // at /2, and the first thing to separate is a phase the sweep missed from a
   // link that is not running at all. Packets sent against packets counted says
   // which: a receiver seeing nothing is not a phase problem.
-  set_rx_clk_gate(1);
+  set_rx_clk_en(1);
   for (i = 0; i < 4; i++) begin
     set_main_clk(3, 1);
     set_tx_phase(i);
-    set_clk_gate(0);
+    set_clk_en(0);
     set_global_delay(0);
-    set_clk_gate(1);
+    set_clk_en(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
@@ -1003,9 +1004,9 @@ begin : eye_lowrate_div
   for (int c = 0; c < 4; c++) begin
     set_tx_phase(c);
     for (int fi = 0; fi < 8; fi++) begin
-      set_clk_gate(0);
+      set_clk_en(0);
       set_global_delay(fi * 8);
-      set_clk_gate(1);
+      set_clk_en(1);
       run_lfsr(`TRAIN_PACKETS);
       run_lfsr(`TRAIN_PACKETS);
       // The burst takes four times as long at 4 Gb/s as at
@@ -1081,9 +1082,9 @@ begin : eye_lowrate_delay
   open_points = 0;
   total_points = 0;
   for (int fi = 0; fi < 16; fi++) begin
-    set_clk_gate(0);
+    set_clk_en(0);
     set_global_delay(fi * 4);
-    set_clk_gate(1);
+    set_clk_en(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     // The burst takes four times as long at 4 Gb/s as at
@@ -1179,9 +1180,9 @@ task automatic check_rate(input string label, input integer div);
     clean_at = -1;
 
     for (int t = 0; t < 4; t++) begin
-      set_clk_gate(0);
+      set_clk_en(0);
       set_global_delay(t * 16);
-      set_clk_gate(1);
+      set_clk_en(1);
       run_lfsr(`TRAIN_PACKETS);
       wait_for_packets();
       run_lfsr(`TRAIN_PACKETS);
@@ -1247,9 +1248,9 @@ begin : eye
     for (int c = 0; c < coarse_positions; c++) begin
       set_tx_phase(c);
       for (int fi = 0; fi < `TRAIN_EYE_FINE_POINTS; fi++) begin
-        set_clk_gate(0);
+        set_clk_en(0);
         set_global_delay(fi * `TRAIN_EYE_FINE_STEP);
-        set_clk_gate(1);
+        set_clk_en(1);
         run_lfsr(`TRAIN_PACKETS);
         run_lfsr(`TRAIN_PACKETS);
         wait_for_packets();
@@ -1475,9 +1476,9 @@ begin : train
   // run land near an edge, where a lane that has slipped into the next UI is
   // what `rxBitErrorsEarly` and `rxBitErrorsLate` are there to resolve.
   for (int g = 0; g < `TRAIN_GLOBAL_CODES; g++) begin
-    set_clk_gate(0);
+    set_clk_en(0);
     set_global_delay(g * `TRAIN_GLOBAL_STEP);
-    set_clk_gate(1);
+    set_clk_en(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     score_lanes();
@@ -1522,15 +1523,15 @@ begin : train
   // clean with. The eye closes in both directions at once, so at its edge the
   // vertical margin is as thin as the horizontal one and a single step of the
   // ladder is enough to read dirty -- which says nothing about the trim.
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(edge_global);
-  set_clk_gate(1);
+  set_clk_en(1);
 
   for (int c = 0; c < `TRAIN_LOCAL_CODES; c++) begin
-    set_clk_gate(0);
+    set_clk_en(0);
     for (int l = 0; l < `TRAIN_DATA_LANES; l++)
       set_tx_delay(l, c * `TRAIN_LOCAL_STEP);
-    set_clk_gate(1);
+    set_clk_en(1);
     run_lfsr(`TRAIN_PACKETS);
     run_lfsr(`TRAIN_PACKETS);
     score_lanes();
@@ -1556,10 +1557,10 @@ begin : train
              l, row, run_len, trained_local[l]);
   end
 
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(trained_global);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_local[l]);
-  set_clk_gate(1);
+  set_clk_en(1);
 
   // SWEEP 3: what level each data lane slices against, at the sampling point
   // and the trims the first two sweeps settled on.
@@ -1600,10 +1601,10 @@ begin : train
 
   // The link at the codes every lane picked for itself.
   $display("Trained:");
-  set_clk_gate(0);
+  set_clk_en(0);
   set_global_delay(trained_global);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_tx_delay(l, trained_local[l]);
-  set_clk_gate(1);
+  set_clk_en(1);
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) begin
     set_rx_vref(l, trained_vref[l]);
     $display("  lane %2d: trim %0d, vref_sel %0d",
@@ -1775,6 +1776,10 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         def addr(name: String): BigInt =
           BigInt(0x200000L) +
             (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
+        // The block comes out of chip reset held in the UCIe reset; release it
+        // before reaching past the clock register block.
+        regs.write(addr("ucieRst"), 0)
+        regs.step(20)
         assert(regs.read(addr("testTarget")) == 0, "testTarget reset value")
         regs.write(addr("txDataChunkIn0"), BigInt("deadbeef", 16))
         assert(
@@ -1831,6 +1836,10 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
             (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
         def wr(name: String, v: BigInt): Unit = regs.write(addr(name), v)
         def rd(name: String): BigInt = regs.read(addr(name))
+
+        // Held in the UCIe reset out of chip reset; release it first.
+        wr("ucieRst", 0)
+        regs.step(20)
 
         // One register either side of the boundary, each holding a value that
         // is not its reset value.

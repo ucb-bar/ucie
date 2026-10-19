@@ -33,6 +33,7 @@ import edu.berkeley.cs.uciedigital.phy.macros.{
   TxLaneCtlIO
 }
 import edu.berkeley.cs.uciedigital.phy.Phy
+import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 
 /** Backend-specific code formatter consumed by `Codegen`. Each method emits a
   * snippet in the target language; subclasses pick the syntax (SystemVerilog,
@@ -346,13 +347,17 @@ object Codegen {
   /** Where each field sits in a rate table entry.
     *
     * Chisel packs a bundle's first field into the most significant bits, so
-    * these follow `ClkRateCfgIO`'s declaration order: main clock select, TX
-    * division, PhyTest division, then the PLL8, PLL12, and doubler enables in
-    * the low bits.
+    * these follow `ClkRateCfgIO`'s declaration order: UCIe main clock select,
+    * TX division, PHY test clock division, TX sideband clock division, then the
+    * PLL8, PLL12, and X2 multiplier enables in the three low bits.
     */
-  val rateCfgMainClkSelLsb: Int = 8
-  val rateCfgTxClkDivLsb: Int = 6
-  val rateCfgPhyTestClkDivLsb: Int = 3
+  val rateCfgSbClkDivLsb: Int = 3
+  val rateCfgPhyTestClkDivLsb: Int =
+    rateCfgSbClkDivLsb + ClockingTile.sbClkDivWidth
+  val rateCfgTxClkDivLsb: Int =
+    rateCfgPhyTestClkDivLsb + ClockingTile.phyTestClkDivWidth
+  val rateCfgMainClkSelLsb: Int =
+    rateCfgTxClkDivLsb + ClockingTile.txClkDivWidth
 
   /** Fine steps within one coarse phase position, and taps between them.
     *
@@ -517,6 +522,10 @@ object Codegen {
 
     val reqs = scala.collection.mutable.Buffer[TLRequestDescriptor]()
 
+    // The block is held in the UCIe reset out of chip reset; the clocking
+    // defaults are what a testbench drives, so it can come straight out.
+    reqs += write("ucieRst", 0)
+
     for (lane <- 0 until ucieParams.numLanes + 4) {
       reqs += write(s"txctl_${lane}_tile", enableTxCtl)
       reqs += write(s"rxctl_${lane}_zen", 1)
@@ -533,6 +542,13 @@ object Codegen {
     }
 
     reqs += write("debugTxctlTile", enableTxCtl)
+
+    // The UCIe main clock and the RX forwarded clock are off out of reset, so
+    // the dividers came out of the UCIe reset, released above, with no clock
+    // present and are already in phase; turning the clocks on is all they
+    // need.
+    reqs += write("clkEn", 1)
+    reqs += write("rxClkEn", 1)
 
     // The selects, then the datapath reset a change of select needs.
     reqs += write("controllerSel", ControllerSel.phytest.litValue)
@@ -821,6 +837,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
         ("rateCfgPhyTestClkDivLsb", BigInt(Codegen.rateCfgPhyTestClkDivLsb)),
+        ("rateCfgSbClkDivLsb", BigInt(Codegen.rateCfgSbClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -978,7 +995,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Stops or starts the clock the clocking tile sends to the TX lanes.
+  /** Stops or starts the UCIe main clock, and with it the TX data and TX
+    * quadrature clocks the TX lanes run on. Off out of reset, so every sequence
+    * that uses the lanes turns it on.
     *
     * A delay code must only be changed with this off. The line's length moves
     * under whatever edge is travelling through it, and the tile's divider
@@ -987,11 +1006,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * sits a UI off the valid lane it is framed against. Nothing recovers that
     * on its own -- the dividers hold their phase until something resets them.
     */
-  def formatSetClkGateFn(): String = {
+  def formatSetClkEnFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("clkGateEn", "en"))
+    body.append(formatWriteNamedReg("clkEn", "en"))
     f.formatFn(
-      "set_clk_gate",
+      "set_clk_en",
       body.toString,
       args = Seq(Arg("en", Datatype.Long))
     )
@@ -1001,15 +1020,15 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * both directions.
     *
     * `txDividerRst` and `rxDividerRst` are separate registers so a direction
-    * can be retimed on its own; this resets both, which is what a delay change
-    * wants, since gating the TX clock also stops the forwarded clock the RX
-    * dividers run on.
+    * can be retimed on its own; this resets both.
     *
     * Asserted and released as a level rather than strobed, because it is meant
-    * to be held across a window with the TX clock gated off: the tile dividers
-    * take it with no clock present, and all of them then restart on the first
-    * edge after the clock comes back, which is what puts them back in a known
-    * phase with each other.
+    * to be held across a window with both clocks off -- `clkEn` low for TX,
+    * `rxClkEn` low for RX, since the RX dividers run on the RX forwarded clock,
+    * which this die's TX gate only stops in loopback. The tile dividers take it
+    * with no clock present, and all of them then restart on the first edge
+    * after the clocks come back, which is what puts them back in a known phase
+    * with each other.
     */
   def formatResetDividersFn(): String = {
     val body = new StringBuilder
@@ -1030,8 +1049,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * not been told how to reach.
     *
     * Fields are packed as the bundle declares them, most significant first:
-    * main clock select, TX division, PhyTest division, then the PLL8, PLL12,
-    * and doubler enables.
+    * UCIe main clock select, TX division, PHY test clock division, TX sideband
+    * clock division, then the PLL8, PLL12, and X2 multiplier enables.
     */
   def formatSetRateCfgFn(): String = {
     val body = new StringBuilder
@@ -1039,6 +1058,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
         s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
         s"(phytest_div << ${f.formatConstantRef("rateCfgPhyTestClkDivLsb")}) | " +
+        s"(sb_div << ${f.formatConstantRef("rateCfgSbClkDivLsb")}) | " +
         s"pll_en)"
     body.append(
       f.formatWriteReg(
@@ -1055,6 +1075,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         Arg("main_sel", Datatype.Long),
         Arg("tx_div", Datatype.Long),
         Arg("phytest_div", Datatype.Long),
+        Arg("sb_div", Datatype.Long),
         Arg("pll_en", Datatype.Long)
       )
     )
@@ -1064,7 +1085,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     *
     * With this low the direct registers are in charge, which is how a testbench
     * drives the clocking by hand. With it high the table decides, indexed by
-    * whatever rate training has settled on.
+    * whatever rate training has settled on, and the clock register block
+    * applies the entry on its own whenever that rate changes -- including the
+    * entry for the current rate as soon as this is turned on -- so software
+    * only has to have filled the table first.
     */
   def formatSetFreqSelAutoFn(): String = {
     val body = new StringBuilder
@@ -1106,10 +1130,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   /** Picks what releases the clock gate at the end of an apply.
     *
     * `clkUngateSrcPllLock` opens the gate as soon as the PLL `mainClkSel` names
-    * reports lock -- PLL8's for the doubler, which has none of its own -- and
-    * at once if the analog bypass pin is selected, which has no lock to report.
-    * `clkUngateSrcDelay` holds it for `delay` cycles of the register block's
-    * clock instead, for a part whose lock is not trustworthy or not wired.
+    * reports lock -- PLL8's for the X2 multiplier, which has none of its own --
+    * and at once if the analog bypass pin is selected, which has no lock to
+    * report. `clkUngateSrcDelay` holds it for `delay` cycles of the chip clock
+    * instead, for a part whose lock is not trustworthy or not wired.
     * `clkUngateSrcMmio` holds it until `release_clk_gate` is called. `delay` is
     * ignored by the other two.
     */
@@ -1126,11 +1150,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   /** Resets everything in the UCIe block except the clocking registers.
     *
-    * The clocking registers run on the chip's own digital clock and reset, so
-    * they survive this and can be set up first -- which is the point. At chip
-    * reset the rest of the block comes up on whatever clocking the defaults
-    * describe, which need not be what the part is wired for; this is how
-    * software restarts it once the clocking is right.
+    * The clocking registers run on the chip clock and reset, so they survive
+    * this and can be set up first -- which is the point. The UCIe reset is
+    * asserted out of chip reset, so the rest of the block waits in reset until
+    * the clocking is right and this releases it.
     *
     * Everything in `UcieTLRegs` goes with it, so this belongs before that block
     * is configured, not after.
@@ -1154,7 +1177,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     f.formatFn("release_clk_gate", body.toString)
   }
 
-  /** Points the main clock at a source and sets the TX division.
+  /** Points the UCIe main clock at a source and sets the TX division.
     *
     * The lane rate follows the division, so this is what a sweep changes to
     * walk the link across the rates the part supports. The apply gates the
@@ -1166,7 +1189,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("mainClkSel", "src"))
     body.append(formatWriteNamedReg("txClkDiv", "div"))
-    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    body.append(formatWriteNamedReg("clkEn", f.formatLong(1)))
     body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "set_main_clk",
@@ -1175,7 +1198,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Sets TXCLKQ's coarse phase, in main clock half cycles.
+  /** Sets the TX quadrature clock's coarse phase, in UCIe main clock half
+    * cycles.
     *
     * Together with the global delay line this reaches any phase: the coarse
     * step is half a main clock period, which is inside the line's range at
@@ -1184,9 +1208,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     */
   def formatSetTxPhaseFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(0)))
+    body.append(formatWriteNamedReg("clkEn", f.formatLong(0)))
     body.append(formatWriteNamedReg("txClkPhase", "half_cycles"))
-    body.append(formatWriteNamedReg("clkGateEn", f.formatLong(1)))
+    body.append(formatWriteNamedReg("clkEn", f.formatLong(1)))
     f.formatFn(
       "set_tx_phase",
       body.toString,
@@ -1194,11 +1218,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Enables the PLLs and the doubler, and points the PhyTest clock at a
-    * divided main clock.
+  /** Enables the PLLs and the X2 multiplier, and points the PHY test clock at a
+    * divided PLL8 clock.
     *
-    * The PhyTest domain has to keep running across this, so the ratio is set
-    * before the source is switched over.
+    * The ratio is set in the same apply as the switch, which shuts the PHY test
+    * clock's gate across both and keeps it shut until PLL8 has locked, so the
+    * PHY test clock domain sees one clean stop and restart.
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
@@ -1215,19 +1240,21 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Stops or starts the recovered forwarded clock at the RX clock lanes.
+  /** Stops or starts the recovered RX forwarded clock at the RX clock lanes.
+    * Off out of reset, like `clkEn`, so every sequence that receives turns it
+    * on.
     *
     * The gate is in the lanes themselves, so dropping it stops the clock before
-    * the distribution tree and none of the RX data lanes are clocked.
-    * Everything on the RX divided clock stops with it, the reset synchronizer
-    * and the PHY side of the async queue included, so a receiver is expected to
-    * be idle across the window rather than mid-burst.
+    * the RX clock tree and none of the RX data lanes are clocked. Everything on
+    * the RX divided clock stops with it, the reset synchronizer and the PHY
+    * side of the async queue included, so a receiver is expected to be idle
+    * across the window rather than mid-burst.
     */
-  def formatSetRxClkGateFn(): String = {
+  def formatSetRxClkEnFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("rxClkGateEn", "en"))
+    body.append(formatWriteNamedReg("rxClkEn", "en"))
     f.formatFn(
-      "set_rx_clk_gate",
+      "set_rx_clk_en",
       body.toString,
       args = Seq(Arg("en", Datatype.Long))
     )
@@ -1235,9 +1262,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   /** Sets the global delay line, thermometer coded over `clkPhaseSel`.
     *
-    * This is the coarse knob: it delays the quadrature clock, which is the one
-    * the forwarded clock lanes carry, so it moves where in the UI the far side
-    * samples every lane. A lane's own line only trims around whatever this
+    * This is the coarse knob: it delays the TX quadrature clock, which is the
+    * one the forwarded clock lanes carry, so it moves where in the UI the far
+    * side samples every lane. A lane's own line only trims around whatever this
     * picks.
     */
   def formatSetGlobalDelayFn(): String = {
@@ -1461,13 +1488,16 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
     // Put every divider -- the global ones and the one in each tile -- into a
     // known phase with each other, once. After this the clock gate alone is
-    // enough: it is latched on the clock's low phase, so gating and ungating
-    // loses no edge and the dividers pick up exactly where they left off. A
-    // delay code only needs the clock quiet while the line length moves, not
-    // the dividers restarted.
-    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
+    // enough: it is latched on the UCIe main clock's low phase, so gating and
+    // ungating loses no edge and the dividers pick up exactly where they left
+    // off. A delay code only needs the clock quiet while the line length moves,
+    // not the dividers restarted. Both directions' clocks are off across the
+    // restart, so no divider comes out of reset against a live edge.
+    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(0))))
     body.append(f.formatFnCall("reset_dividers"))
-    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
+    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(1))))
+    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(1))))
     // Leave both bands under PhyTest; each test selects what it needs. Before
     // `reset_fsms`, since its datapath reset is what a change of select needs.
     body.append(
@@ -1504,10 +1534,16 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val sb = new StringBuilder
     val body = new StringBuilder
 
+    // The block is held in the UCIe reset out of chip reset. Release it,
+    // without asserting it first: a caller may already have configured lanes
+    // it wants kept.
+    body.append(formatWriteNamedReg("ucieRst", f.formatLong(0)))
+
     // Same clock setup as `setup_ucie`, with the clocks gated: the global delay
     // (reset at its maximum) to a quarter period, and the dividers reset so
     // every TX lane, clock lanes included, restarts on the same edge.
-    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(0))))
     body.append(
       f.formatFnCall(
         "set_global_delay",
@@ -1515,7 +1551,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     )
     body.append(f.formatFnCall("reset_dividers"))
-    body.append(f.formatFnCall("set_clk_gate", args = Seq(f.formatLong(1))))
+    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(1))))
+    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(1))))
 
     {
       // Phy.scala's lane numbering: numLanes data lanes, then valid, then
@@ -2100,7 +2137,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatResetFsmsFn())
     sb.append(formatWriteTxctlFn())
     sb.append(formatWriteRxctlFn())
-    sb.append(formatSetClkGateFn())
+    sb.append(formatSetClkEnFn())
     sb.append(formatSetRateCfgFn())
     sb.append(formatSetFreqSelAutoFn())
     sb.append(formatApplyClkCfgFn())
@@ -2111,7 +2148,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetMainClkFn())
     sb.append(formatSetTxPhaseFn())
     sb.append(formatUseInternalClkFn())
-    sb.append(formatSetRxClkGateFn())
+    sb.append(formatSetRxClkEnFn())
     sb.append(formatSetGlobalDelayFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
@@ -2189,7 +2226,7 @@ object GenUcieHeader {
     sb.append("\n")
     sb.append(cg.formatWriteRxctlFn())
     sb.append("\n")
-    sb.append(cg.formatSetClkGateFn())
+    sb.append(cg.formatSetClkEnFn())
     sb.append(cg.formatSetRateCfgFn())
     sb.append(cg.formatSetFreqSelAutoFn())
     sb.append(cg.formatApplyClkCfgFn())
@@ -2200,7 +2237,7 @@ object GenUcieHeader {
     sb.append(cg.formatSetMainClkFn())
     sb.append(cg.formatSetTxPhaseFn())
     sb.append(cg.formatUseInternalClkFn())
-    sb.append(cg.formatSetRxClkGateFn())
+    sb.append(cg.formatSetRxClkEnFn())
     sb.append(cg.formatSetGlobalDelayFn())
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")
