@@ -132,12 +132,19 @@ verilator \\
       incDirs: Seq[Path] = Seq.empty
   ) = {
     os.makeDir.all(path / os.up)
+    // `-Xcflags` is for the C that VCS generates and compiles itself, which
+    // `-CFLAGS` never reaches. Its `rmapats.c` calls runtime functions it does
+    // not declare, which GCC 14 made an error rather than a warning; this puts
+    // the warning back, and VCS's `-w` already silences it. Older GCCs accept
+    // the flag too. `-Xcflags` is undocumented: `$VCS_HOME/bin/vcs` is the only
+    // place it is described.
     os.write.over(
       path,
       s"""#!/bin/bash
 set -ex -o pipefail
 vcs \\
   -full64 -j16 -fgp \\
+  -Xcflags=-Wno-error=implicit-function-declaration \\
   -CFLAGS "$$CXXFLAGS -std=c++17" \\
   -LDFLAGS "$$LDFLAGS" \\
   -notice -line +lint=all,noVCDE,noONGS,noUI -error=PCWM-L -error=noZMMCM \\

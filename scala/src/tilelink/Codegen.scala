@@ -348,14 +348,10 @@ object Codegen {
     *
     * Chisel packs a bundle's first field into the most significant bits, so
     * these follow `ClkRateCfgIO`'s declaration order: UCIe main clock select,
-    * TX division, PHY test clock division, TX sideband clock division, then the
-    * PLL8, PLL12, and X2 multiplier enables in the three low bits.
+    * TX division, then the PLL8, PLL12, and X2 multiplier enables in the three
+    * low bits.
     */
-  val rateCfgSbClkDivLsb: Int = 3
-  val rateCfgPhyTestClkDivLsb: Int =
-    rateCfgSbClkDivLsb + ClockingTile.sbClkDivWidth
-  val rateCfgTxClkDivLsb: Int =
-    rateCfgPhyTestClkDivLsb + ClockingTile.phyTestClkDivWidth
+  val rateCfgTxClkDivLsb: Int = 3
   val rateCfgMainClkSelLsb: Int =
     rateCfgTxClkDivLsb + ClockingTile.txClkDivWidth
 
@@ -836,8 +832,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
-        ("rateCfgPhyTestClkDivLsb", BigInt(Codegen.rateCfgPhyTestClkDivLsb)),
-        ("rateCfgSbClkDivLsb", BigInt(Codegen.rateCfgSbClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
         ("trainEyeFineStep", BigInt(Codegen.trainEyeFineStep)),
         ("trainEyeDivs", BigInt(Codegen.trainEyeDivs)),
@@ -1048,17 +1042,20 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * zero selects PLL8 with no PLL enabled, which is to say a rate the part has
     * not been told how to reach.
     *
+    * The PHY test and TX sideband clocks are not in it: they keep the rate
+    * their own registers give them whatever training picks. The PLL enables are
+    * the whole part's, though an entry cannot turn off a PLL either of those
+    * clocks divides: the clock register block keeps it running.
+    *
     * Fields are packed as the bundle declares them, most significant first:
-    * UCIe main clock select, TX division, PHY test clock division, TX sideband
-    * clock division, then the PLL8, PLL12, and X2 multiplier enables.
+    * UCIe main clock select, TX division, then the PLL8, PLL12, and X2
+    * multiplier enables.
     */
   def formatSetRateCfgFn(): String = {
     val body = new StringBuilder
     val packed =
       s"((main_sel << ${f.formatConstantRef("rateCfgMainClkSelLsb")}) | " +
         s"(tx_div << ${f.formatConstantRef("rateCfgTxClkDivLsb")}) | " +
-        s"(phytest_div << ${f.formatConstantRef("rateCfgPhyTestClkDivLsb")}) | " +
-        s"(sb_div << ${f.formatConstantRef("rateCfgSbClkDivLsb")}) | " +
         s"pll_en)"
     body.append(
       f.formatWriteReg(
@@ -1074,8 +1071,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         Arg("rate", Datatype.Long),
         Arg("main_sel", Datatype.Long),
         Arg("tx_div", Datatype.Long),
-        Arg("phytest_div", Datatype.Long),
-        Arg("sb_div", Datatype.Long),
         Arg("pll_en", Datatype.Long)
       )
     )
@@ -1203,8 +1198,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     *
     * Together with the global delay line this reaches any phase: the coarse
     * step is half a main clock period, which is inside the line's range at
-    * every rate, so the two tile a whole UI with no gap. Below 16 GT/s the line
-    * alone cannot, which is what the shifter is for.
+    * every PLL rate, so the two tile a whole UI with no gap. Below 16 GT/s the
+    * line alone cannot, which is what the shifter is for. That holds only while
+    * the main clock is fast -- below about 7.2 GHz a step outruns the line --
+    * so a low rate comes from a larger division, not a slower main clock.
     */
   def formatSetTxPhaseFn(): String = {
     val body = new StringBuilder
@@ -1218,25 +1215,30 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Enables the PLLs and the X2 multiplier, and points the PHY test clock at a
-    * divided PLL8 clock.
+  /** Enables the PLLs and the X2 multiplier, and points the PHY test clock at
+    * PLL8 (`phytest_src` 0) or PLL12 (1), divided.
     *
-    * The ratio is set in the same apply as the switch, which shuts the PHY test
-    * clock's gate across both and keeps it shut until PLL8 has locked, so the
-    * PHY test clock domain sees one clean stop and restart.
+    * The source and ratio are set in the same apply as the switch, which shuts
+    * the PHY test clock's gate across all of it and keeps it shut until that
+    * PLL has locked, so the PHY test clock domain sees one clean stop and
+    * restart.
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("pll8En", f.formatLong(1)))
     body.append(formatWriteNamedReg("pll12En", f.formatLong(1)))
     body.append(formatWriteNamedReg("x2En", f.formatLong(1)))
+    body.append(formatWriteNamedReg("phyTestClkSrcSel", "phytest_src"))
     body.append(formatWriteNamedReg("phyTestClkDiv", "phytest_div"))
     body.append(formatWriteNamedReg("phyTestClkBypassEn", f.formatLong(0)))
     body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "use_internal_clk",
       body.toString,
-      args = Seq(Arg("phytest_div", Datatype.Long))
+      args = Seq(
+        Arg("phytest_src", Datatype.Long),
+        Arg("phytest_div", Datatype.Long)
+      )
     )
   }
 

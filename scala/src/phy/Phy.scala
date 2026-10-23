@@ -211,12 +211,16 @@ class PhyClkRstIO extends Bundle {
   val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
   val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
   val phyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
+  // Which PLL the PHY test divider divides, and the same for the TX sideband's.
+  val phyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
   val phyTestClkBypassEn = Input(Bool())
   val sbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
+  val sbClkSrcSel = Input(UInt(ClockingTile.sbClkSrcSelWidth.W))
   val sbClkBypassEn = Input(Bool())
   // Enable the PHY test and TX sideband clocks, each at a glitch-free gate
   // after its bypass mux. Low stops that clock whichever input it is on, so
-  // its ratio or bypass select can be changed with no edge in flight.
+  // its PLL select, ratio or bypass select can be changed with no edge in
+  // flight.
   val phyTestClkEn = Input(Bool())
   val sbClkEn = Input(Bool())
   // Runs the RX lanes from the TX quadrature clock rather than the recovered
@@ -227,7 +231,7 @@ class PhyClkRstIO extends Bundle {
   // Enables the UCIe main clock, straight after its mux. Low stops it, and with
   // it the TX data and TX quadrature clocks divided from it, so a source, a
   // ratio, a phase, or a delay code can be changed with no edge in flight. The
-  // PHY test and TX sideband clocks divide PLL8 instead and keep running.
+  // PHY test and TX sideband clocks divide a PLL instead and keep running.
   val clkEn = Input(Bool())
   // Enables the recovered RX forwarded clock at the RX clock lanes. Low stops
   // it there, which keeps the whole RX clock tree quiet rather than clocking
@@ -241,11 +245,12 @@ class PhyClkRstIO extends Bundle {
   val pll8Lock = Output(Bool())
   val pll12Lock = Output(Bool())
 
-  // PHY test clock (~1.1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
+  // PHY test clock (~1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
   // register block, and the lane controls.
   //
-  // Should always be toggling when RX AFEs must be active, which means
-  // `phyTestClkEn` on.
+  // Should always be toggling when RX AFEs must be active, which means its
+  // source -- a PLL or the bypass pin -- running and `phyTestClkEn` on. The
+  // UCIe main clock's gate does not reach it.
   val phyTestClk = Output(Clock())
   // The UCIe reset for the PHY test clock domain, released against
   // `phyTestClk`.
@@ -373,11 +378,13 @@ class Phy(
   clkTile.io.TxClkDiv := io.clkRst.txClkDiv
   clkTile.io.TxClkPhase := io.clkRst.txClkPhase
   clkTile.io.PhyTestClkDiv := io.clkRst.phyTestClkDiv
+  clkTile.io.PhyTestClkSrcSel := io.clkRst.phyTestClkSrcSel
   // The tile pin keeps the IP's name; `clkEn` is the same enable.
   clkTile.io.ClkGateEn := io.clkRst.clkEn
   clkTile.io.PhyTestClkBypassEn := io.clkRst.phyTestClkBypassEn
   clkTile.io.PhyTestClkEn := io.clkRst.phyTestClkEn
   clkTile.io.SbClkDiv := io.clkRst.sbClkDiv
+  clkTile.io.SbClkSrcSel := io.clkRst.sbClkSrcSel
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbClkEn := io.clkRst.sbClkEn
   clkTile.io.SbBypassClk := io.top.sidebandBypassClk
@@ -388,9 +395,9 @@ class Phy(
 
   io.clkRst.phyTestClk := clkTile.io.PhyTestClk
   io.clkRst.sbClk := clkTile.io.SbClk
-  // The TX sideband clock is its own domain -- divided from the PLL8 clock or
-  // taken from its own pin -- so the logic on it needs the UCIe reset released
-  // against that clock rather than against the PHY test clock.
+  // The TX sideband clock is its own domain -- divided from a PLL or taken from
+  // its own pin -- so the logic on it needs the UCIe reset released against
+  // that clock rather than against the PHY test clock.
   val sbRstSync = Module(new RstSync)
   sbRstSync.io.rstbAsync := !io.clkRst.reset
   sbRstSync.io.clk := io.clkRst.sbClk
