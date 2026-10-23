@@ -176,82 +176,95 @@ class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
 
 // PHY clock and reset IOs.
 class PhyClkRstIO extends Bundle {
-  // Main digital reset, asynchronous to PHY clocks.
+  // The UCIe reset, from the clock register block on the chip clock, so
+  // asynchronous to every PHY clock. Every UCIe clock domain resets on it,
+  // through a synchronizer of its own; the chip reset does not reach them.
   val reset = Input(Bool())
-  // Divider holds, one per direction. These carry the main reset and the
-  // dedicated divider reset, nothing else, so the global divider and every
-  // tile divider start together and keep a fixed phase; between resets the
-  // divided clocks free-run.
+  // Divider holds, one per direction, from the clock register block on the
+  // chip clock. These carry the UCIe reset and the dedicated divider reset,
+  // nothing else, so the global divider and every tile divider start together
+  // and keep a fixed phase; between resets the divided clocks free-run.
   //
-  // Asserting one with the TX clock gated is how a delay code is changed: the
-  // tile dividers reset with no clock present, and every one of them restarts
-  // on the first edge after the clock comes back.
+  // They are asynchronous to every clock they hold, so a release only lands
+  // cleanly with that direction's clock stopped: `clkEn` low for TX,
+  // `rxClkEn` low for RX. The tile dividers then reset with no clock
+  // present, and every one of them restarts on the first edge after the clock
+  // comes back.
   val txDividerRstb = Input(AsyncReset())
   val rxDividerRstb = Input(AsyncReset())
   // Per-direction restarts. These do not touch a divider: they reset the logic
-  // on the divided clock -- the serdes handoff registers and the PHY side of
-  // the async queues -- while that clock keeps running, so the reset actually
-  // applies and then releases synchronously.
+  // on the TX or RX divided clock -- the serdes handoff registers and the PHY
+  // side of the async queues -- while that clock keeps running, so the reset
+  // actually applies and then releases synchronously.
   val txDatapathRst = Input(Bool())
   val rxDatapathRst = Input(Bool())
 
   // Clocking tile configuration. All of it decides where the PHY's clocks come
   // from, or has to be settled before they exist, so it is held in a register
-  // block on the chip's own digital clock rather than in one that runs on a PHY
-  // clock -- and it arrives here rather than through `PhyRegsIO`.
+  // block on the chip clock rather than in one that runs on a PHY clock -- and
+  // it arrives here rather than through `PhyRegsIO`.
   val mainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
   val pll8En = Input(Bool())
   val pll12En = Input(Bool())
-  // The x2 multiplier that makes 16 GHz from PLL8.
+  // The X2 multiplier, which makes the 16 GHz PLL8 X2 clock from PLL8.
   val x2En = Input(Bool())
   val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
   val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
   val phyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
-  // Which PLL the PhyTest divider divides, and the same for the sideband's.
+  // Which PLL the PHY test divider divides, and the same for the TX sideband's.
   val phyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
   val phyTestClkBypassEn = Input(Bool())
   val sbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
   val sbClkSrcSel = Input(UInt(ClockingTile.sbClkSrcSelWidth.W))
   val sbClkBypassEn = Input(Bool())
-  // Runs the RX lanes from TXCLKQ rather than the recovered forwarded clock,
-  // for when the far side's clock is not behaving.
+  // Enable the PHY test and TX sideband clocks, each at a glitch-free gate
+  // after its bypass mux. Low stops that clock whichever input it is on, so
+  // its PLL select, ratio or bypass select can be changed with no edge in
+  // flight.
+  val phyTestClkEn = Input(Bool())
+  val sbClkEn = Input(Bool())
+  // Runs the RX lanes from the TX quadrature clock rather than the recovered
+  // RX forwarded clock, for when the far side's clock is not behaving.
   val rxClkFromTxQ = Input(Bool())
-  // The global delay line on TXCLKQ.
+  // The global delay line on the TX quadrature clock.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
-  // Stops the main clock straight after its mux while low, and with it the TX
-  // divider, so a source, a ratio, or a delay code can be changed with no edge
-  // in flight. The PhyTest and sideband clocks keep running.
-  val clkGateEn = Input(Bool())
-  // Stops the recovered forwarded clock at the RX clock lanes, which keeps
-  // the whole RX tree quiet rather than clocking lanes with nothing to
-  // sample.
-  val rxClkGateEn = Input(Bool())
+  // Enables the UCIe main clock, straight after its mux. Low stops it, and with
+  // it the TX data and TX quadrature clocks divided from it, so a source, a
+  // ratio, a phase, or a delay code can be changed with no edge in flight. The
+  // PHY test and TX sideband clocks divide a PLL instead and keep running.
+  val clkEn = Input(Bool())
+  // Enables the recovered RX forwarded clock at the RX clock lanes. Low stops
+  // it there, which keeps the whole RX clock tree quiet rather than clocking
+  // lanes with nothing to sample. The TX quadrature clock, when `rxClkFromTxQ`
+  // selects it, joins after this gate and is stopped by `clkEn` instead.
+  val rxClkEn = Input(Bool())
 
   // Per-PLL lock, straight out of the clocking tile. The register block waits
   // on whichever one `mainClkSel` names before it lets a new configuration's
-  // clocks out; the doubler counts as locked when PLL8 is.
+  // clocks out; the X2 multiplier counts as locked when PLL8 is.
   val pll8Lock = Output(Bool())
   val pll12Lock = Output(Bool())
 
-  // PhyTest clock (~1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
+  // PHY test clock (~1 GHz), the clocking tile's `PhyTestClk`: PhyTest, its
   // register block, and the lane controls.
   //
   // Should always be toggling when RX AFEs must be active, which means its
-  // source -- a PLL or the bypass pin -- running. The clock gate does not
-  // reach it.
+  // source -- a PLL or the bypass pin -- running and `phyTestClkEn` on. The
+  // UCIe main clock's gate does not reach it.
   val phyTestClk = Output(Clock())
-  // PhyTest reset, released against `phyTestClk`.
+  // The UCIe reset for the PHY test clock domain, released against
+  // `phyTestClk`.
   val phyTestRst = Output(Bool())
 
-  // Sideband clock (800 MHz), the clocking tile's `SbClk`: the UCIe controller,
-  // its registers, and every sideband serializer. With its reset.
+  // TX sideband clock (800 MHz), the clocking tile's `SbClk`: the UCIe
+  // controller, its registers, and every sideband serializer. With its reset.
   val sbClk = Output(Clock())
   val sbRst = Output(Bool())
 
   val txDivClk = Output(Clock())
-  // Reset for the logic clocked by `txDivClk` -- the serdes handoff registers
-  // and the PHY side of the async queues. Not a divider reset; the dividers
-  // themselves are held by `txDividerRstb`.
+  // Reset for the logic clocked by the TX divided clock, `txDivClk` -- the
+  // serdes handoff registers and the PHY side of the async queues. Not a
+  // divider reset; the dividers themselves are held by `txDividerRstb`.
   // Synchronized here rather than by the consumer because `txDivClk` only
   // exists inside the PHY: the divided-clock ends of the async queues live
   // outside it and need this same reset.
@@ -347,14 +360,15 @@ class Phy(
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
-  // Bypass clock pad: ESD clamp, then the clock receiver that restores the
-  // single-ended pad signal to a full-swing clock.
+  // Analog bypass clock pad: ESD clamp, then the clock receiver that restores
+  // the single-ended pad signal to a full-swing clock.
   val bypassClkEsd = Module(new Esd)
   bypassClkEsd.io.IO_signal := io.top.bypassClk.asBool
   val bypassClkRx = Module(new ClkRx)
   bypassClkRx.io.Vin := io.top.bypassClk
 
-  // Clocking tile: sources the PhyTest, sideband, and I/Q TX clocks.
+  // Clocking tile: sources the PHY test, TX sideband, TX data, and TX
+  // quadrature clocks.
   val clkTile = Module(new ClockingTile)
   clkTile.io.PhaseSel := io.clkRst.clkPhaseSel
   clkTile.io.MainClkSel := io.clkRst.mainClkSel
@@ -365,11 +379,14 @@ class Phy(
   clkTile.io.TxClkPhase := io.clkRst.txClkPhase
   clkTile.io.PhyTestClkDiv := io.clkRst.phyTestClkDiv
   clkTile.io.PhyTestClkSrcSel := io.clkRst.phyTestClkSrcSel
-  clkTile.io.ClkGateEn := io.clkRst.clkGateEn
+  // The tile pin keeps the IP's name; `clkEn` is the same enable.
+  clkTile.io.ClkGateEn := io.clkRst.clkEn
   clkTile.io.PhyTestClkBypassEn := io.clkRst.phyTestClkBypassEn
+  clkTile.io.PhyTestClkEn := io.clkRst.phyTestClkEn
   clkTile.io.SbClkDiv := io.clkRst.sbClkDiv
   clkTile.io.SbClkSrcSel := io.clkRst.sbClkSrcSel
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
+  clkTile.io.SbClkEn := io.clkRst.sbClkEn
   clkTile.io.SbBypassClk := io.top.sidebandBypassClk
   clkTile.io.RefClk := io.top.refClk
 
@@ -378,9 +395,9 @@ class Phy(
 
   io.clkRst.phyTestClk := clkTile.io.PhyTestClk
   io.clkRst.sbClk := clkTile.io.SbClk
-  // The sideband clock is its own domain now -- divided from a PLL or taken
-  // from its own pin -- so the logic on it needs a reset released
-  // against that clock rather than against the PhyTest one.
+  // The TX sideband clock is its own domain -- divided from a PLL or taken from
+  // its own pin -- so the logic on it needs the UCIe reset released against
+  // that clock rather than against the PHY test clock.
   val sbRstSync = Module(new RstSync)
   sbRstSync.io.rstbAsync := !io.clkRst.reset
   sbRstSync.io.clk := io.clkRst.sbClk
@@ -391,9 +408,10 @@ class Phy(
   io.clkRst.phyTestRst := !phyTestRstSync.io.rstbSync
 
   // All lane clocks are single-ended; each tile does its own single-to-
-  // differential conversion. The network sends the in-phase clock to the data,
-  // valid, and track lanes and the quadrature clock to the two forwarded-clock
-  // lanes. It also carries both bypass clocks into the clocking tile.
+  // differential conversion. The network sends the TX data clock to the data,
+  // valid, and track lanes and the TX quadrature clock to the two
+  // forwarded-clock lanes. It also carries the analog and PHY test bypass
+  // clocks into the clocking tile.
   val clkDist = Module(new ClkDistNetwork(clkDistLayout))
   clkDist.io.bypassClk := bypassClkRx.io.Vout
   clkDist.io.digitalBypassClk := io.top.digitalBypassClk
@@ -423,8 +441,8 @@ class Phy(
   esdSbRxData.io.term := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
-  // The forwarded clock as actually transmitted, i.e. after the bump driver
-  // has serialized the half rate pair.
+  // The forwarded sideband clock as actually transmitted, i.e. after the bump
+  // driver has serialized the half rate pair.
   io.debug.sbTxClk := sbTxClk.io.out.asClock
 
   // Global clock dividers.
@@ -432,9 +450,9 @@ class Phy(
   // Both dividers come out of reset with every stage of the cascade toggling on
   // the first edge, so `clkout_3` rises on the same edge the lane serdes loads
   // its word on. Handing words over on that edge would sample them as they
-  // change, so both directions invert it: the divided clock then rises half a
-  // word period away from the load, in the middle of the stable window. The
-  // serdes shares each direction's reset, so that phase is fixed.
+  // change, so both directions invert it: the TX and RX divided clocks then
+  // rise half a word period away from the load, in the middle of the stable
+  // window. The serdes shares each direction's reset, so that phase is fixed.
   // TX
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
@@ -518,8 +536,8 @@ class Phy(
 
   // RX Lanes
   //
-  // RX AFE control is on the PhyTest clock to ensure that it is always toggling,
-  // even when forwarded clock is gated.
+  // RX AFE control is on the PHY test clock to ensure that it is always
+  // toggling, even when the RX forwarded clock is gated.
   //
   val rxLaneDout = Wire(
     Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
@@ -529,15 +547,15 @@ class Phy(
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
       RxAfeCtl.connect(rxClkP, io.regs.rxctl(Phy.clkPLane(numLanes)))
-    rxClkP.io.clk_gate_en := io.clkRst.rxClkGateEn
+    rxClkP.io.clk_gate_en := io.clkRst.rxClkEn
     rxClkP.io.clkin := io.top.rxClkP
-    // The forwarded clock arrives as a bump pair, but everything past the
+    // The RX forwarded clock arrives as a bump pair, but everything past the
     // clock lanes is single-ended, so the distribution network is driven from
     // the P lane alone. The N lane still terminates its bump and carries its
     // own AFE control.
-    // Either the clock the far side forwarded, or this die's own TXCLKQ --
-    // the copy after the global delay line, so the RX samples on the phase
-    // the TX is transmitting.
+    // The RX clock: either the RX forwarded clock, or this die's own TX
+    // quadrature clock -- the copy after the global delay line, so the RX
+    // samples on the phase the TX is transmitting.
     clkDist.io.rxClk := Mux(
       io.clkRst.rxClkFromTxQ,
       clkTile.io.TxClkQ,
@@ -547,7 +565,7 @@ class Phy(
     val rxClkN = Module(new RxClkLane)
     val rxClkNAfeCtl =
       RxAfeCtl.connect(rxClkN, io.regs.rxctl(Phy.clkNLane(numLanes)))
-    rxClkN.io.clk_gate_en := io.clkRst.rxClkGateEn
+    rxClkN.io.clk_gate_en := io.clkRst.rxClkEn
     rxClkN.io.clkin := io.top.rxClkN
 
     // Every lane that carries a word is the same: a deserializer, then a bit

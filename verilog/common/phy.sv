@@ -359,7 +359,7 @@ module phy_tb;
     assign intf.txtrk.ENN_EQ = 0;
     assign intf.txtrk.Dctrl = 0;
 
-    // Both recovered clocks' gates open, as `rxClkGateEn` resets to. Shut, the
+    // Both recovered clocks' gates open, as `rxClkEn` = 1 sets them. Shut, the
     // clock lane hands the distribution, and so every data lane, no clock.
     assign intf.rxclkp.clk_gate_en = 1;
     assign intf.rxclkn.clk_gate_en = 1;
