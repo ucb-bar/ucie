@@ -7,7 +7,7 @@ import chisel3.simulator.scalatest.ChiselSim
 
 import org.scalatest.funspec.AnyFunSpec
 
-import edu.berkeley.cs.uciedigital.tilelink.{UcieTL, UcieTLParams}
+import edu.berkeley.cs.uciedigital.tilelink.{UcieTLFrame, UcieTLParams}
 
 // Loops a link's TX bumps back to its own RX bumps, the way
 // `UcieBumpsIO.loopback` does, so every packet sent has to come back bit exact.
@@ -52,7 +52,7 @@ class SidebandSerialLoopback(packetBits: Int, rxQueueDepth: Int)
 class SidebandSerialSpec extends AnyFunSpec with ChiselSim {
   // The width the TileLink-over-sideband path runs at: wide, and not a power of
   // two, so an off-by-one in the bit counter shows up as a corrupted packet.
-  val frameBits = UcieTL.frameBits(UcieTLParams().creditBits)
+  val frameBits = UcieTLFrame.frameBits(UcieTLParams().creditBits)
   val queueDepth = UcieTLParams().sbRxQueueDepth
 
   // A packet takes `frameBits` gated cycles, plus the crossing back into the
