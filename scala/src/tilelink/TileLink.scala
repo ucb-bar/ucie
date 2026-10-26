@@ -1260,62 +1260,11 @@ object UcieController {
 }
 
 object UcieTL {
-  val dataBits = 256
-
   /** Width of the register port and every register block behind it, apart from
     * the mainband's: the registers are 64 bits apart, and a narrower port keeps
     * the async queues into the PhyTest and sideband clocks small.
     */
   val regBeatBytes = 8
-
-  /** Bits in a framed TL packet: the wider of the two channel payloads plus the
-    * one-bit tag that says which channel it is. The mainband pads this out to
-    * `numLanes * Phy.SerdesRatio` bits; the sideband shifts exactly this many.
-    */
-  def frameBits(creditBits: Int): Int =
-    math.max(
-      new UcieTXA(creditBits).getWidth,
-      new UcieTXD(creditBits).getWidth
-    ) + 1
-}
-
-class UcieTLBundleA extends Bundle {
-  val opcode = UInt(3.W)
-  val param = UInt(3.W)
-  val size = UInt(4.W)
-  val address = UInt(64.W) // to
-  val mask = UInt((UcieTL.dataBits / 8).W)
-  val data = UInt(UcieTL.dataBits.W)
-  val source = UInt(8.W) // to
-  val corrupt = Bool()
-}
-
-class UcieTLBundleD extends Bundle {
-  // fixed fields during multibeat:
-  val opcode = UInt(3.W)
-  val param = UInt(2.W)
-  val size = UInt(4.W)
-  val data = UInt(UcieTL.dataBits.W)
-  val source = UInt(8.W) // to
-  val sink = UInt(1.W) // from
-  val denied = Bool() // implies corrupt iff *Data
-  val corrupt = Bool()
-}
-
-class UcieTXA(creditBits: Int = 5) extends Bundle {
-  val tl_valid = Bool()
-  val credit_valid = Bool()
-  val credit_a = UInt(creditBits.W)
-  val credit_d = UInt(creditBits.W)
-  val tl = new UcieTLBundleA
-}
-
-class UcieTXD(creditBits: Int = 5) extends Bundle {
-  val tl_valid = Bool()
-  val credit_valid = Bool()
-  val credit_a = UInt(creditBits.W)
-  val credit_d = UInt(creditBits.W)
-  val tl = new UcieTLBundleD
 }
 
 class UcieTL(
@@ -1635,7 +1584,7 @@ class UcieTL(
     // instead, one frame at a time. The link sits in the digital clock domain
     // alongside the rest of the TL path; its serializer runs on the sideband TX
     // clock and its deserializer on the forwarded one, each behind a queue.
-    val sbTlFrameBits = UcieTL.frameBits(params.creditBits)
+    val sbTlFrameBits = UcieTLFrame.frameBits(params.creditBits)
     val sbTl = withClockAndReset(childClock, childReset) {
       Module(new SidebandSerial(sbTlFrameBits, params.sbRxQueueDepth))
     }
@@ -1685,103 +1634,21 @@ class UcieTL(
       val clientTl = clientNode.out(0)._1
       val managerTl = managerNode.in(0)._1
 
-      val ucieClientTlD = Wire(new UcieTLBundleD)
-      val ucieManagerTlA = Wire(new UcieTLBundleA)
-
-      require(ucieClientTlD.opcode.getWidth >= clientTl.d.bits.opcode.getWidth)
-      require(ucieClientTlD.param.getWidth >= clientTl.d.bits.param.getWidth)
-      require(ucieClientTlD.size.getWidth >= clientTl.d.bits.size.getWidth)
-      require(ucieClientTlD.data.getWidth >= clientTl.d.bits.data.getWidth)
-      require(ucieClientTlD.source.getWidth >= clientTl.d.bits.source.getWidth)
-      require(ucieClientTlD.denied.getWidth >= clientTl.d.bits.denied.getWidth)
-      require(
-        ucieClientTlD.corrupt.getWidth >= clientTl.d.bits.corrupt.getWidth
+      // TL <-> frames and credit flow; the rest of this block moves its frames
+      // over whichever of the mainband, the controller and the sideband carries
+      // TileLink.
+      val protocol = Module(
+        new UcieTLProtocol(params, managerTl.params, clientTl.params)
       )
-      ucieClientTlD.opcode := clientTl.d.bits.opcode
-      ucieClientTlD.param := clientTl.d.bits.param
-      ucieClientTlD.size := clientTl.d.bits.size
-      ucieClientTlD.data := clientTl.d.bits.data
-      ucieClientTlD.source := clientTl.d.bits.source
-      ucieClientTlD.sink := clientTl.d.bits.sink(
-        ucieClientTlD.sink.getWidth - 1,
-        0
-      ) // Truncate since sink will always be 0
-      ucieClientTlD.denied := clientTl.d.bits.denied
-      ucieClientTlD.corrupt := clientTl.d.bits.corrupt
-
-      require(
-        ucieManagerTlA.opcode.getWidth >= managerTl.a.bits.opcode.getWidth
-      )
-      require(ucieManagerTlA.param.getWidth >= managerTl.a.bits.param.getWidth)
-      require(ucieManagerTlA.size.getWidth >= managerTl.a.bits.size.getWidth)
-      require(
-        ucieManagerTlA.address.getWidth >= managerTl.a.bits.address.getWidth
-      )
-      require(ucieManagerTlA.mask.getWidth >= managerTl.a.bits.mask.getWidth)
-      require(ucieManagerTlA.data.getWidth >= managerTl.a.bits.data.getWidth)
-      require(
-        ucieManagerTlA.source.getWidth >= managerTl.a.bits.source.getWidth
-      )
-      require(
-        ucieManagerTlA.corrupt.getWidth >= managerTl.a.bits.corrupt.getWidth
-      )
-      ucieManagerTlA.opcode := managerTl.a.bits.opcode
-      ucieManagerTlA.param := managerTl.a.bits.param
-      ucieManagerTlA.size := managerTl.a.bits.size
-      ucieManagerTlA.address := managerTl.a.bits.address
-      ucieManagerTlA.mask := managerTl.a.bits.mask
-      ucieManagerTlA.data := managerTl.a.bits.data
-      ucieManagerTlA.source := managerTl.a.bits.source
-      ucieManagerTlA.corrupt := managerTl.a.bits.corrupt
-
-      val creditBits = params.creditBits
-
-      // Credits to return to the partner: first half = A channel, second half = D channel.
-      val aCreditsToReturn = RegInit(0.U(creditBits.W))
-      val dCreditsToReturn = RegInit(0.U(creditBits.W))
-      val creditRetValid = Wire(Bool())
-      val creditRetTimer =
-        RegInit(0.U(params.creditRetTimerWidth.W)) // Arbitrary width for now
-      val creditsFull = Wire(Bool())
-      val aAvail = Wire(Bool())
-      val dAvail = Wire(Bool())
-
-      creditRetTimer := creditRetTimer + 1.U
-      creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
-      creditRetValid := ((clientTl.d.fire ||
-        managerTl.a.fire ||
-        creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
-        aCreditsToReturn > params.creditRetThreshhold.U ||
-        dCreditsToReturn > params.creditRetThreshhold.U) &&
-        !creditsFull &&
-        (selUcie || selMbTl || selSbTl) &&
+      protocol.io.manager <> managerTl
+      clientTl <> protocol.io.client
+      protocol.io.creditFlowEnable := regs.module.io.creditFlowEnable
+      protocol.io.creditRetEnable := (selUcie || selMbTl || selSbTl) &&
         // The mainband carries a frame every cycle, so a return always gets a
         // ride. The sideband carries one frame at a time, and returning credits
         // clears the counters whether or not the frame goes out, so hold the
         // return off until the serializer can take it.
-        (!selSbTl || sbTl.io.tx.ready))
-
-      val ucieClientTxD = Wire(new UcieTXD(creditBits))
-      ucieClientTxD.tl_valid := clientTl.d.fire
-      ucieClientTxD.credit_valid := creditRetValid
-      ucieClientTxD.credit_a := aCreditsToReturn
-      ucieClientTxD.credit_d := dCreditsToReturn
-      dontTouch(ucieClientTxD.tl_valid)
-      dontTouch(ucieClientTxD.credit_valid)
-      dontTouch(ucieClientTxD.credit_a)
-      dontTouch(ucieClientTxD.credit_d)
-      ucieClientTxD.tl := ucieClientTlD
-
-      val ucieManagerTxA = Wire(new UcieTXA(creditBits))
-      ucieManagerTxA.tl_valid := managerTl.a.fire
-      ucieManagerTxA.credit_valid := creditRetValid
-      ucieManagerTxA.credit_a := aCreditsToReturn
-      ucieManagerTxA.credit_d := dCreditsToReturn
-      dontTouch(ucieManagerTxA.tl_valid)
-      dontTouch(ucieManagerTxA.credit_valid)
-      dontTouch(ucieManagerTxA.credit_a)
-      dontTouch(ucieManagerTxA.credit_d)
-      ucieManagerTxA.tl := ucieManagerTlA
+        (!selSbTl || sbTl.io.tx.ready)
 
       val lastSeenAddr = RegInit(0.U(64.W))
       when(managerTl.a.valid) {
@@ -1790,25 +1657,15 @@ class UcieTL(
       regs.module.io.lastSeenTLReq := lastSeenAddr
       regs.module.io.sbTlRxOverflow := sbTl.io.rxOverflow
 
-      val rxABuffer =
-        Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
-      val rxDBuffer =
-        Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock when tl path.
       txTlFifo.io.enq.valid := selMbTl
-      val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
-      txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
+      txTlFifo.io.enq.bits.valid := Mux(protocol.io.tx.valid, "h0000ffff".U, 0.U)
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
       txTlFifo.io.enq.bits.clkn := "haaaaaaaa".U
-      val txFramedData = Mux(
-        clientTl.d.valid,
-        Cat(ucieClientTxD.asUInt, 1.U),
-        Cat(ucieManagerTxA.asUInt, 0.U)
-      )
-      txTlFifo.io.enq.bits.data := txFramedData.asTypeOf(
+      txTlFifo.io.enq.bits.data := protocol.io.tx.bits.asTypeOf(
         txTlFifo.io.enq.bits.data
       )
 
@@ -1821,11 +1678,8 @@ class UcieTL(
         )
       )
 
-      val ucieTxBeat = (clientTl.d.valid && dAvail) ||
-        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
-        creditRetValid
-      txAQ.io.enq.valid := selUcie && ucieTxBeat
-      txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
+      txAQ.io.enq.valid := selUcie && protocol.io.tx.valid
+      txAQ.io.enq.bits.data := protocol.io.tx.bits.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset
       txAQ.io.deq_clock := phy.io.clkRst.sbClk
@@ -1837,15 +1691,13 @@ class UcieTL(
       // Sideband TX: the same framed data, but offered only when there is
       // something to send, since the sideband has no idle frame to hide a beat
       // in. `sbTl.io.tx.ready` is a plain register, so letting it feed back into
-      // the offer through `creditRetValid` cannot close a combinational loop.
-      sbTl.io.tx.valid := selSbTl && ((clientTl.d.valid && dAvail) ||
-        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
-        creditRetValid)
-      sbTl.io.tx.bits := txFramedData
+      // the offer through `creditRetEnable` cannot close a combinational loop.
+      sbTl.io.tx.valid := selSbTl && protocol.io.tx.valid
+      sbTl.io.tx.bits := protocol.io.tx.bits
 
       // With no TL path selected there is nowhere for a beat to go, so hold
       // the channels off rather than accepting beats that would be dropped.
-      val txEnqReady = Mux(
+      protocol.io.tx.ready := Mux(
         selUcie,
         txAQ.io.enq.ready,
         Mux(
@@ -1854,22 +1706,6 @@ class UcieTL(
           Mux(selSbTl, sbTl.io.tx.ready, false.B)
         )
       )
-
-      clientTl.d.ready := txEnqReady && dAvail
-      managerTl.a.ready := txEnqReady && aAvail && !clientTl.d.valid
-
-      when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
-        aCreditsToReturn := aCreditsToReturn + 1.U
-      }
-      when(creditRetValid) {
-        aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
-      }
-      when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
-        dCreditsToReturn := dCreditsToReturn + 1.U
-      }
-      when(creditRetValid) {
-        dCreditsToReturn := Mux(rxDBuffer.io.deq.fire, 1.U, 0.U)
-      }
 
       txTlFifo.io.enq_clock := childClock
       txTlFifo.io.enq_reset := childReset
@@ -1895,8 +1731,6 @@ class UcieTL(
       rxTlFifo.io.deq_reset := childReset
       // Replace decoupled IOs that need ready to be true with validIO
       validFramer.io.digital.ready := true.B
-      rxABuffer.io.enq.valid := false.B
-      rxDBuffer.io.enq.valid := false.B
 
       // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path, crossing
       // Sideband clock -> childClock. Muxed with the tl-path ValidFramer output by mode.
@@ -1935,44 +1769,8 @@ class UcieTL(
         Mux(selUcie, rxAQ.io.deq.valid, validFramer.io.digital.valid)
       )
 
-      val tlBits = framedBits(framedBits.getWidth - 1, 1)
-      rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
-      rxDBuffer.io.enq.bits := tlBits.asTypeOf(rxDBuffer.io.enq.bits)
-      when(framedValid) {
-        when(framedBits.asUInt(0)) {
-          rxDBuffer.io.enq.valid := true.B
-        }.otherwise {
-          rxABuffer.io.enq.valid := true.B
-        }
-      }
-
-      clientTl.a <> rxABuffer.io.deq.map(bits => {
-        val tlBundleA = Wire(chiselTypeOf(clientTl.a.bits))
-        tlBundleA.opcode := bits.tl.opcode
-        tlBundleA.param := bits.tl.param
-        tlBundleA.size := bits.tl.size
-        tlBundleA.address := bits.tl.address
-        tlBundleA.mask := bits.tl.mask
-        tlBundleA.data := bits.tl.data
-        tlBundleA.source := bits.tl.source
-        tlBundleA.corrupt := bits.tl.corrupt
-        tlBundleA
-      })
-      clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
-      managerTl.d <> rxDBuffer.io.deq.map(bits => {
-        val tlBundleD = Wire(chiselTypeOf(managerTl.d.bits))
-        tlBundleD.opcode := bits.tl.opcode
-        tlBundleD.param := bits.tl.param
-        tlBundleD.size := bits.tl.size
-        tlBundleD.data := bits.tl.data
-        tlBundleD.source := bits.tl.source
-        tlBundleD.sink := bits.tl.sink
-        tlBundleD.denied := bits.tl.denied
-        tlBundleD.corrupt := bits.tl.corrupt
-        tlBundleD
-      })
-      managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
-      dontTouch(managerTl.d.bits.opcode)
+      protocol.io.rx.valid := framedValid
+      protocol.io.rx.bits := framedBits(protocol.frameBits - 1, 0)
 
       // The word the TL path puts on the lanes. Data and valid come through the
       // queue; the clock and track lanes are forced to their fixed patterns
@@ -2005,37 +1803,6 @@ class UcieTL(
           )
         )
       )
-
-      val creditAValid =
-        rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
-      val creditDValid =
-        rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
-
-      val aCreditCounter = Module(
-        new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
-      )
-      aCreditCounter.io.used := managerTl.a.fire
-      aCreditCounter.io.ret.valid := creditAValid || creditDValid
-      aCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_a,
-        rxDBuffer.io.deq.bits.credit_a
-      )
-      aCreditCounter.io.mode := regs.module.io.creditFlowEnable
-      aAvail := aCreditCounter.io.avail
-
-      val dCreditCounter = Module(
-        new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
-      )
-      dCreditCounter.io.used := clientTl.d.fire
-      dCreditCounter.io.ret.valid := creditAValid || creditDValid
-      dCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_d,
-        rxDBuffer.io.deq.bits.credit_d
-      )
-      dCreditCounter.io.mode := regs.module.io.creditFlowEnable
-      dAvail := dCreditCounter.io.avail
     }
   }
 }
