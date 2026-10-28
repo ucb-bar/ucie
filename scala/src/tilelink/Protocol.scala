@@ -27,9 +27,9 @@ class UcieTLProtocolIO(
     * disabled).
     */
   val creditFlowEnable = Input(Bool())
-  /** Whether a credit return may go out this cycle. Returning credits clears
-    * the counters whether or not the frame is taken, so the link holds this
-    * low when it could not carry the frame.
+  /** Whether credit returns may be sent at all (e.g. a TL path is selected).
+    * Owed credits are only cleared when the frame carrying them is taken, so
+    * this need not follow `tx.ready`.
     */
   val creditRetEnable = Input(Bool())
 }
@@ -38,9 +38,10 @@ class UcieTLProtocolIO(
   * and runs credit flow control over them.
   *
   * Each cycle at most one frame goes out: a D beat if the client D channel is
-  * valid, else an A beat, carrying any credits owed to the partner. Received
-  * frames land in per-channel buffers and the credits they carry go to the
-  * credit counters. Nothing here depends on how frames cross the link.
+  * valid, else an A beat, carrying any credits owed to the partner. Credits on
+  * received frames go straight to the credit counters, and only frames
+  * carrying a beat land in the per-channel buffers. Nothing here depends on
+  * how frames cross the link.
   */
 class UcieTLProtocol(
     params: UcieTLParams,
@@ -100,10 +101,13 @@ class UcieTLProtocol(
   dontTouch(ucieManagerTxA.credit_d)
   ucieManagerTxA.tl := ucieManagerTlA
 
+  // Only TL beats are buffered: credits are taken off frames as they arrive
+  // (below), so credit-only frames never occupy a slot. The partner spends a
+  // credit per beat, so each buffer holds at most tlBufferDepth entries.
   val rxABuffer =
-    Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
+    Module(new Queue(new UcieTLBundleA, params.tlBufferDepth))
   val rxDBuffer =
-    Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
+    Module(new Queue(new UcieTLBundleD, params.tlBufferDepth))
 
   io.tx.valid := (clientTl.d.valid && dAvail) ||
     (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
@@ -113,50 +117,49 @@ class UcieTLProtocol(
   clientTl.d.ready := io.tx.ready && dAvail
   managerTl.a.ready := io.tx.ready && aAvail && !clientTl.d.valid
 
-  when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
+  // Each beat dequeued frees a slot in the buffer, which the partner gets
+  // back as a credit.
+  when(rxABuffer.io.deq.fire) {
     aCreditsToReturn := aCreditsToReturn + 1.U
   }
-  when(creditRetValid) {
+  // Owed credits are cleared only once the frame carrying them is taken;
+  // otherwise they stay owed and go out with a later frame.
+  val creditRetSent = creditRetValid && io.tx.fire
+  when(creditRetSent) {
     aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
   }
-  when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
+  when(rxDBuffer.io.deq.fire) {
     dCreditsToReturn := dCreditsToReturn + 1.U
   }
-  when(creditRetValid) {
+  when(creditRetSent) {
     dCreditsToReturn := Mux(rxDBuffer.io.deq.fire, 1.U, 0.U)
   }
 
   val rxPayload = UcieTLFrame.payload(io.rx.bits)
-  rxABuffer.io.enq.bits := rxPayload.asTypeOf(rxABuffer.io.enq.bits)
-  rxDBuffer.io.enq.bits := rxPayload.asTypeOf(rxDBuffer.io.enq.bits)
-  rxABuffer.io.enq.valid := io.rx.valid && !UcieTLFrame.isD(io.rx.bits)
-  rxDBuffer.io.enq.valid := io.rx.valid && UcieTLFrame.isD(io.rx.bits)
+  val rxIsD = UcieTLFrame.isD(io.rx.bits)
+  val rxA = rxPayload.asTypeOf(new UcieTXA(creditBits))
+  val rxD = rxPayload.asTypeOf(new UcieTXD(creditBits))
+  val rxTlValid = Mux(rxIsD, rxD.tl_valid, rxA.tl_valid)
+  rxABuffer.io.enq.bits := rxA.tl
+  rxDBuffer.io.enq.bits := rxD.tl
+  rxABuffer.io.enq.valid := io.rx.valid && !rxIsD && rxTlValid
+  rxDBuffer.io.enq.valid := io.rx.valid && rxIsD && rxTlValid
 
-  clientTl.a <> rxABuffer.io.deq.map(bits =>
-    UcieTLFrame.toTL(bits.tl, clientTl.a.bits)
-  )
-  clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
-  managerTl.d <> rxDBuffer.io.deq.map(bits =>
-    UcieTLFrame.toTL(bits.tl, managerTl.d.bits)
-  )
-  managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
+  clientTl.a <> rxABuffer.io.deq.map(UcieTLFrame.toTL(_, clientTl.a.bits))
+  managerTl.d <> rxDBuffer.io.deq.map(UcieTLFrame.toTL(_, managerTl.d.bits))
   dontTouch(managerTl.d.bits.opcode)
 
-  val creditAValid =
-    rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
-  val creditDValid =
-    rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
+  // Credits are counted once, when their frame arrives, whether piggybacked on
+  // a beat or in a credit-only frame. They don't wait on the TL sinks.
+  val rxCreditValid =
+    io.rx.valid && Mux(rxIsD, rxD.credit_valid, rxA.credit_valid)
 
   val aCreditCounter = Module(
     new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
   )
   aCreditCounter.io.used := managerTl.a.fire
-  aCreditCounter.io.ret.valid := creditAValid || creditDValid
-  aCreditCounter.io.ret.bits := Mux(
-    creditAValid,
-    rxABuffer.io.deq.bits.credit_a,
-    rxDBuffer.io.deq.bits.credit_a
-  )
+  aCreditCounter.io.ret.valid := rxCreditValid
+  aCreditCounter.io.ret.bits := Mux(rxIsD, rxD.credit_a, rxA.credit_a)
   aCreditCounter.io.mode := io.creditFlowEnable
   aAvail := aCreditCounter.io.avail
 
@@ -164,12 +167,8 @@ class UcieTLProtocol(
     new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
   )
   dCreditCounter.io.used := clientTl.d.fire
-  dCreditCounter.io.ret.valid := creditAValid || creditDValid
-  dCreditCounter.io.ret.bits := Mux(
-    creditAValid,
-    rxABuffer.io.deq.bits.credit_d,
-    rxDBuffer.io.deq.bits.credit_d
-  )
+  dCreditCounter.io.ret.valid := rxCreditValid
+  dCreditCounter.io.ret.bits := Mux(rxIsD, rxD.credit_d, rxA.credit_d)
   dCreditCounter.io.mode := io.creditFlowEnable
   dAvail := dCreditCounter.io.avail
 }
