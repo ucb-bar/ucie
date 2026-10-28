@@ -1643,12 +1643,9 @@ class UcieTL(
       protocol.io.manager <> managerTl
       clientTl <> protocol.io.client
       protocol.io.creditFlowEnable := regs.module.io.creditFlowEnable
-      protocol.io.creditRetEnable := (selUcie || selMbTl || selSbTl) &&
-        // The mainband carries a frame every cycle, so a return always gets a
-        // ride. The sideband carries one frame at a time, and returning credits
-        // clears the counters whether or not the frame goes out, so hold the
-        // return off until the serializer can take it.
-        (!selSbTl || sbTl.io.tx.ready)
+      // The protocol only clears owed credits when the frame carrying them is
+      // taken, so returns need no gating on the path's ready.
+      protocol.io.creditRetEnable := selUcie || selMbTl || selSbTl
 
       val lastSeenAddr = RegInit(0.U(64.W))
       when(managerTl.a.valid) {
@@ -1690,8 +1687,7 @@ class UcieTL(
 
       // Sideband TX: the same framed data, but offered only when there is
       // something to send, since the sideband has no idle frame to hide a beat
-      // in. `sbTl.io.tx.ready` is a plain register, so letting it feed back into
-      // the offer through `creditRetEnable` cannot close a combinational loop.
+      // in.
       sbTl.io.tx.valid := selSbTl && protocol.io.tx.valid
       sbTl.io.tx.bits := protocol.io.tx.bits
 
