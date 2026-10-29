@@ -1,4 +1,7 @@
-// Factory library for UCIe register-field attributes and their dual-reset sticky backing storage.
+/*
+  The Chapter 9 register attributes (Table 9-4) as RegField factories.
+ */
+
 package edu.berkeley.cs.uciedigital.regs
 
 import chisel3._
@@ -7,12 +10,15 @@ import freechips.rocketchip.regmapper.{
   RegFieldAccessType,
   RegFieldDesc,
   RegFieldWrType,
+  RegReadFn,
   RegWriteFn
 }
 
 final case class UcieRegField(field: RegField, reg: UInt)
 
 final case class UcieAutoClear(field: RegField, fire: Bool, pending: Bool)
+
+final case class UcieOverrideField(field: RegField, reg: UInt, refused: Bool)
 
 object UcieResets {
   def apply(implicitReset: Reset, linkReset: Bool): (Bool, Bool) = {
@@ -35,7 +41,13 @@ object UcieResets {
 class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
   import RegFieldAccessType.{R, RW => RWacc}
 
-  private def desc(
+  // RegFieldDesc has no sticky flag, so the sticky helpers add this text.
+  val StickyNote = " [sticky: survives a link reset]"
+
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
+  def desc(
       name: String,
       description: String,
       access: RegFieldAccessType.RegFieldAccessType,
@@ -52,11 +64,14 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
       volatile = volatile
     )
 
-  private def stickyReg(width: Int, init: BigInt): UInt =
+  def stickyReg(width: Int, init: BigInt): UInt =
     withReset(stickyReset)(RegInit(init.U(width.W)))
-  private def nonStickyReg(width: Int, init: BigInt): UInt =
+  def nonStickyReg(width: Int, init: BigInt): UInt =
     withReset(nonStickyReset)(RegInit(init.U(width.W)))
 
+  // ===========================================================================
+  // Read-only
+  // ===========================================================================
   def RO(width: Int, value: UInt, name: String, description: String): RegField =
     RegField.r(width, value, desc(name, description, R, volatile = true))
 
@@ -85,6 +100,9 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
       desc(name, "Reserved and Zero (RsvdZ)", R, Some(0))
     )
 
+  // ===========================================================================
+  // Read-write
+  // ===========================================================================
   def RW(
       width: Int,
       init: BigInt,
@@ -106,11 +124,55 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
   ): UcieRegField = {
     val reg = stickyReg(width, init)
     UcieRegField(
-      RegField(width, reg, desc(name, description, RWacc, Some(init))),
+      RegField(
+        width,
+        reg,
+        desc(name, description + StickyNote, RWacc, Some(init))
+      ),
       reg
     )
   }
 
+  // The read returns applied. allow gates the write, and refused flags a drop.
+  def RWOverride(
+      width: Int,
+      init: BigInt,
+      applied: UInt,
+      allow: Bool,
+      name: String,
+      description: String
+  ): UcieOverrideField = {
+    val reg = stickyReg(width, init)
+    val refused = WireDefault(false.B)
+    val write = RegWriteFn { (valid, data) =>
+      when(valid) {
+        when(allow) { reg := data }.otherwise { refused := true.B }
+      }
+      true.B
+    }
+    UcieOverrideField(
+      RegField(
+        width,
+        RegReadFn(applied),
+        write,
+
+        // Volatile, because the read returns a live hardware value.
+        desc(
+          name,
+          description + StickyNote,
+          RWacc,
+          Some(init),
+          volatile = true
+        )
+      ),
+      reg,
+      refused
+    )
+  }
+
+  // ===========================================================================
+  // Status
+  // ===========================================================================
   def ROS(
       width: Int,
       init: BigInt,
@@ -161,6 +223,57 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
     UcieRegField(RegField.w1ToClear(width, reg, hwSet, Some(d)), reg)
   }
 
+  // ===========================================================================
+  // Gated and handshake
+  // ===========================================================================
+  // Like RWOverride, but the read returns the stored register.
+  def RWGated(
+      width: Int,
+      init: BigInt,
+      allow: Bool,
+      name: String,
+      description: String
+  ): UcieOverrideField = {
+    val reg = stickyReg(width, init)
+    val refused = WireDefault(false.B)
+    val write = RegWriteFn { (valid, data) =>
+      when(valid) {
+        when(allow)(reg := data).otherwise(refused := true.B)
+      }
+      true.B
+    }
+    UcieOverrideField(
+      RegField(
+        width,
+        RegReadFn(reg),
+        write,
+        desc(name, description + StickyNote, RWacc, Some(init))
+      ),
+      reg,
+      refused
+    )
+  }
+
+  // A W1S held until taken. The set wins, so a write at the take is a new one.
+  def W1SPending(
+      hwDone: Bool,
+      name: String,
+      description: String
+  ): UcieAutoClear = {
+    val pending = nonStickyReg(1, 0)
+    val fire = WireDefault(false.B)
+    val write = RegWriteFn { (valid, data) =>
+      when(valid && data(0))(fire := true.B)
+      true.B
+    }
+
+    // Use the edge, because the bus can hold a write's valid for many cycles.
+    val fireEdge = fire && !RegNext(fire, false.B)
+    when(fireEdge)(pending := 1.U).elsewhen(hwDone)(pending := 0.U)
+    val d = desc(name, description, RWacc, Some(0), volatile = true)
+    UcieAutoClear(RegField(1, pending, write, Some(d)), fire, pending(0))
+  }
+
   def RWautoClear(
       hwDone: Bool,
       ignoreWhen: Bool,
@@ -181,6 +294,9 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
     UcieAutoClear(RegField(1, pending, write, Some(d)), fire, pending(0))
   }
 
+  // ===========================================================================
+  // Lock
+  // ===========================================================================
   def RWL(
       width: Int,
       init: BigInt,
@@ -225,12 +341,23 @@ class RegFieldTypes(val stickyReset: Bool, val nonStickyReset: Bool) {
         width,
         reg,
         write,
-        Some(desc(name, description, RWacc, Some(init)))
+        Some(
+          desc(
+            name,
+            description,
+            RWacc,
+            Some(init),
+            Some(RegFieldWrType.MODIFY)
+          )
+        )
       ),
       reg
     )
   }
 
+  // ===========================================================================
+  // Rows
+  // ===========================================================================
   def paddedRow(
       offset: Int,
       field: RegField,

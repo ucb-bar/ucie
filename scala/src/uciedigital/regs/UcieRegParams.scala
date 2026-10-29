@@ -1,7 +1,11 @@
-// Elaboration params and memory-map allocation for the UCIe register block.
+/*
+  The UCIe register block parameters and their memory map (sec 9.5).
+ */
+
 package edu.berkeley.cs.uciedigital.regs
 
 import chisel3.util.log2Ceil
+import edu.berkeley.cs.uciedigital.common.{PhyBridgeParams, PhySlots, SpeedMode}
 
 object UcieDeviceType extends Enumeration {
   val RP, DSP, EP, USP, Retimer = Value
@@ -12,7 +16,8 @@ object UciePackageType extends Enumeration {
 }
 
 case class PhyCapabilityRegParams(
-    terminatedLink: Boolean,
+    // Per rate (Tables 5-10, 5-11). A rate not in the map is unterminated.
+    terminatedAtRate: Map[Int, Boolean],
     txEqSupport: Boolean,
     txVswingCode: Int,
     rxClockModeSupport: Int,
@@ -21,6 +26,15 @@ case class PhyCapabilityRegParams(
     tcmSupport: Boolean = false,
     tarrSupport: Boolean = false
 ) {
+  // A capability, so true if any rate terminates (sec 9.5.3.22 bit 3).
+  def terminatedLink: Boolean = terminatedAtRate.values.exists(identity)
+
+  require(
+    terminatedAtRate.keys.forall(SpeedMode.gtsPerCode.contains),
+    "terminatedAtRate keys must be Table 9-8 data rates " +
+      s"(${SpeedMode.gtsPerCode.mkString(", ")}), got " +
+      s"(${terminatedAtRate.keys.toSeq.sorted.mkString(", ")})"
+  )
   require(
     txVswingCode >= 0x1 && txVswingCode <= 0x10,
     s"txVswingCode must be a valid Tx Vswing encoding 0x1..0x10 (Table 9-47), got 0x${txVswingCode.toHexString}"
@@ -43,13 +57,15 @@ case class UcieRegParams(
     maxLinkWidth: Int = 16,
     maxLinkSpeedGTs: Int = 24,
     hasSbMailbox: Boolean = true,
-    hasCxlLogs: Boolean = false,
     rawFormatCapable: Boolean = true,
+
+    // The vendor's own ID (sec 9.5.5). Only the two vendor blocks use it.
     vendorId: Int = 0xd2de,
     hasVendorPhyBlock: Boolean = true,
     hasVendorD2dBlock: Boolean = false,
     includeRegNode: Boolean = true,
-    includeInterruptNode: Boolean = false
+    includeInterruptNode: Boolean = false,
+    phyBridge: PhyBridgeParams = PhyBridgeParams()
 ) {
   def packageType: UciePackageType.Value = phyCapability.packageType
   require(
@@ -60,16 +76,31 @@ case class UcieRegParams(
     numModules >= 1 && numModules <= 4,
     s"numModules must be in 1..4, got $numModules"
   )
+
+  // A Switch DSP needs a UiSRB (sec 9.5.1.18), which this block does not build.
+  require(
+    deviceType != UcieDeviceType.DSP,
+    "deviceType DSP needs the UiSRB Associated Port Numbers, not built here"
+  )
   if (packageType == UciePackageType.Standard) {
     require(
       Seq(8, 16).contains(maxLinkWidth),
       s"Standard package supports only x8/x16, got x$maxLinkWidth"
+    )
+  } else {
+    // APMW (sec 9.5.1.4 bit 20) allows only x32 or x64 for Advanced Package.
+    require(
+      Seq(32, 64).contains(maxLinkWidth),
+      s"Advanced package supports only x32/x64 (sec 9.5.1.4 APMW), " +
+        s"got x$maxLinkWidth"
     )
   }
   require(
     UcieRegParams.speedEncoding.contains(maxLinkSpeedGTs),
     s"maxLinkSpeedGTs must be one of ${UcieRegParams.speedEncoding.keys.toSeq.sorted}, got $maxLinkSpeedGTs"
   )
+
+  def slots: PhySlots = PhySlots(maxLinkWidth)
 
   lazy val allocation: UcieRegAllocation = UcieRegMap(this)
 
@@ -81,6 +112,9 @@ case class UcieRegParams(
 }
 
 object UcieRegParams {
+  // Table 9-6 and Table 9-26 fix these headers to the Consortium's Vendor ID.
+  val ConsortiumVendorId = 0xd2de
+
   val widthEncoding: Map[Int, Int] =
     Map(16 -> 0x0, 32 -> 0x1, 64 -> 0x2, 128 -> 0x3, 256 -> 0x4, 8 -> 0x7)
   val speedEncoding: Map[Int, Int] =
@@ -111,19 +145,25 @@ case class UcieRegAllocation(
     dvsecBase: BigInt,
     d2dPhyBase: BigInt,
     phyVendorBase: Option[BigInt],
+    phyVendorSize: BigInt,
     d2dVendorBase: Option[BigInt],
     numLocators: Int,
     capabilityDescriptorLocatorCode: Int,
     usedBytes: BigInt,
     regionSize: BigInt
-)
+) {
+  def locators: Seq[(Int, BigInt, BigInt)] =
+    Seq((0x0, d2dPhyBase, UcieRegMap.D2dPhySize)) ++
+      phyVendorBase.map(base => (0x3, base, phyVendorSize)) ++
+      d2dVendorBase.map(base => (0x2, base, UcieRegMap.VendorBlockSize))
+}
 
 object UcieRegMap {
   val DvsecPageSize: BigInt = 0x1000
   val D2dPhySize: BigInt = 0x2000
   val VendorBlockSize: BigInt = 0x1000
 
-  private def nextPow2(n: BigInt): BigInt = BigInt(1) << log2Ceil(n)
+  def nextPow2(n: BigInt): BigInt = BigInt(1) << log2Ceil(n)
 
   def apply(params: UcieRegParams): UcieRegAllocation = {
     val dvsecBase = BigInt(0x0)
@@ -131,10 +171,14 @@ object UcieRegMap {
     val vendorBase = d2dPhyBase + D2dPhySize
 
     val phyVendorBase = if (params.hasVendorPhyBlock) Some(vendorBase) else None
+
+    // Sized from the knob table, so the map never limits the knobs.
+    val phyVendorSize =
+      PhyVendorRegBlock.blockSize(params.phyBridge, params.slots)
     val d2dVendorBase =
       if (params.hasVendorD2dBlock) {
         Some(
-          if (params.hasVendorPhyBlock) vendorBase + VendorBlockSize
+          if (params.hasVendorPhyBlock) vendorBase + phyVendorSize
           else vendorBase
         )
       } else None
@@ -143,7 +187,9 @@ object UcieRegMap {
       (if (params.hasVendorPhyBlock) 1 else 0) + (if (params.hasVendorD2dBlock)
                                                     1
                                                   else 0)
-    val usedBytes = vendorBase + numVendorBlocks * VendorBlockSize
+    val usedBytes = vendorBase +
+      (if (params.hasVendorPhyBlock) phyVendorSize else BigInt(0)) +
+      (if (params.hasVendorD2dBlock) VendorBlockSize else BigInt(0))
 
     val numLocators = 1 + numVendorBlocks
 
@@ -151,6 +197,7 @@ object UcieRegMap {
       dvsecBase = dvsecBase,
       d2dPhyBase = d2dPhyBase,
       phyVendorBase = phyVendorBase,
+      phyVendorSize = phyVendorSize,
       d2dVendorBase = d2dVendorBase,
       numLocators = numLocators,
       capabilityDescriptorLocatorCode =

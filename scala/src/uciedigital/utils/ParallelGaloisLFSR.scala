@@ -1,17 +1,6 @@
 /*
-  Description:
-    Produces `dataWidth` bits worth of LFSR output in one cycle using an XOR tree.
-    It will combinationally calculate the output bits based on the current state. When it is
-    time to increment, it will step `dataWidth` times in a cycle. The next state is also
-    calculated combinationally based on current state.
-
-    Note:
- * This LFSR is based on Galois architecture.
- * The polynomial arguments corresponds to the taps.
-        !!! Forgo the leading term bit in polynomial !!!
-        Ex: If polynomial is G(X) = X^3 + X^2 + 1
-            Polynomial in binary: 1101 (X^3, X^2, X, 1)
-            The value used for polynomial will be: 0x5, NOT 0xD
+  A Galois LFSR that gives `dataWidth` output bits per cycle with an XOR tree.
+  The polynomial omits the leading term, so pass X^3 + X^2 + 1 as 0x5.
  */
 
 package edu.berkeley.cs.uciedigital.utils
@@ -34,39 +23,42 @@ class ParallelGaloisLFSR(
   require(seed > 0, "Seed needs to be positive")
   require(dataWidth > 0, "Dath width needs to be positive")
 
-  // rows: lfsrWidth, cols: lfsrWidth
+  // ===========================================================================
+  // Matrices from the serial model
+  // ===========================================================================
   var stateUpdateMatrix: Array[Array[Int]] =
     Array.ofDim[Int](lfsrWidth, lfsrWidth)
 
-  // rows: lfsrWidth, cols: dataWidth
   var dataOutMatrix: Array[Array[Int]] = Array.ofDim[Int](lfsrWidth, dataWidth)
 
   val serialGalois =
     new SerialGaloisLFSR(initSeed = seed, poly = polynomial, width = lfsrWidth)
 
-  // construct the matrix
+  // Step the serial model from each one-hot state to fill both matrices.
   for (i <- 0 until lfsrWidth) {
     val oneHot = 1 << i
     serialGalois.reseed(oneHot)
     val (state, outputs) = serialGalois.doCycleOutput(dataWidth)
 
-    // populate state update matrix columns
     for (j <- 0 until lfsrWidth) {
       stateUpdateMatrix(i)(j) = if (state(j) == '1') 1 else 0
     }
 
-    // populate data out matrix columns
     for (j <- 0 until dataWidth) {
       dataOutMatrix(i)(j) = if (outputs(j) == '1') 1 else 0
     }
   }
 
-  val stateReg = Reg(UInt(lfsrWidth.W))
+  // ===========================================================================
+  // State and outputs
+  // ===========================================================================
+  // The seed is the reset value, so an asynchronous reset loads it with no
+  // clock edge. sec 4.5.3.5 needs that while rxDivClk is parked.
+  val stateReg = RegInit(seed.U(lfsrWidth.W))
 
   val stateUpdateWire = WireInit(VecInit(Seq.fill(lfsrWidth)(0.U)))
   val dataOutputWire = WireInit(VecInit(Seq.fill(dataWidth)(0.U)))
 
-  // Compute stateUpdate combinationally based on current lfsr state
   for (j <- 0 until lfsrWidth) {
     val terms = scala.collection.mutable.ArrayBuffer[Bool]()
     for (i <- 0 until lfsrWidth) {
@@ -78,7 +70,6 @@ class ParallelGaloisLFSR(
     stateUpdateWire(lfsrWidth - 1 - j) := terms.reduce(_ ^ _)
   }
 
-  // Compute dataOutput combinationally based on current lfsr state
   for (j <- 0 until dataWidth) {
     val terms = scala.collection.mutable.ArrayBuffer[Bool]()
     for (i <- 0 until lfsrWidth) {
@@ -90,12 +81,10 @@ class ParallelGaloisLFSR(
     dataOutputWire(dataWidth - 1 - j) := terms.reduce(_ ^ _)
   }
 
-  when(reset.asBool || io.resetLfsr) {
+  when(io.resetLfsr) {
     stateReg := seed.U
-  }.otherwise {
-    when(io.increment) {
-      stateReg := stateUpdateWire.asUInt
-    }
+  }.elsewhen(io.increment) {
+    stateReg := stateUpdateWire.asUInt
   }
 
   io.state := stateReg
@@ -103,31 +92,18 @@ class ParallelGaloisLFSR(
 }
 
 class SerialGaloisLFSR(initSeed: Int, poly: Int, width: Int) {
-  private val polynomial: Int = poly
-  private var state: Int = initSeed
-  private var seed: Int = initSeed
-  private val mask: Int = (1 << width) - 1
+  val polynomial: Int = poly
+  var state: Int = initSeed
+  val mask: Int = (1 << width) - 1
 
-  def getState(): Int = state
-  def getStateHex(): String = f"0x${state}%X"
   def getStateBitStr(): String =
     state.toBinaryString.reverse.padTo(width, '0').reverse
 
-  def reset(): Unit = {
-    state = seed
-  }
-
   def reseed(newSeed: Int): Unit = {
     state = newSeed
-    seed = newSeed
-  }
-
-  def getMsb(): Int = {
-    (state >> (width - 1)) & 1
   }
 
   def increment(): Int = {
-    // returns the MSB
     val msb = (state >> (width - 1)) & 1
 
     state = (state << 1) & mask
