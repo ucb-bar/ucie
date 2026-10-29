@@ -1,23 +1,18 @@
 /*
-  Description:
-    UcieDigitalTop wires together the protocol layer,
-    die-to-die adapter, logical PHY, and the UCIe register block.
-
-    The main interface parameters live in UcieDigitalTopParams. In general:
-    - FDI/RDI/sideband width parameters define the top-level interface shape.
-    - LogicalPhyTopParams contains the primary tuning knobs for bring-up and
-      training experiments, such as retry width and sideband timeout depth.
+  The top level of the UCIe digital stack.
  */
 package edu.berkeley.cs.uciedigital.top
 
+import edu.berkeley.cs.uciedigital.sideband._
 import chisel3._
-import chisel3.util.Decoupled
+import chisel3.util.{Decoupled, Valid}
 import org.chipsalliance.cde.config.Parameters
 import org.chipsalliance.diplomacy.lazymodule._
 import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 import edu.berkeley.cs.uciedigital.d2dadapter.D2DAdapter
+import edu.berkeley.cs.uciedigital.common.MainbandClkRstIO
 import edu.berkeley.cs.uciedigital.logphy._
-import edu.berkeley.cs.uciedigital.protocol._
+import edu.berkeley.cs.uciedigital.protocollayer._
 import edu.berkeley.cs.uciedigital.regs._
 import edu.berkeley.cs.uciedigital.sideband.SidebandParams
 
@@ -25,35 +20,32 @@ class UcieDigitalTopChipIO(protocolParams: ProtocolTopParams) extends Bundle {
   val mainbandTx = Flipped(
     Decoupled(new ProtocolRawBeat(protocolParams.fdi.nBytes))
   )
-  val mainbandRx = Decoupled(new ProtocolRawBeat(protocolParams.fdi.nBytes))
+  val mainbandRx = Valid(new ProtocolRawBeat(protocolParams.fdi.nBytes))
+  val clkRst = Output(new MainbandClkRstIO)
+
+  val rxOverflow = Input(Bool())
 }
 
-class UcieDigitalTopPhyIO(afeParams: AfeParams, sbParams: SidebandParams)
-    extends Bundle {
+class UcieDigitalTopPhyIO(
+    afeParams: AfeParams,
+    sbParams: SidebandParams,
+    separateDivClocks: Boolean = false
+) extends Bundle {
   val mainbandLink = new MainbandLaneIO(afeParams)
   val sidebandLink = new SidebandPhyLinkIO(sbParams.sbLinkWidth)
-
-  /** What link training asks of the PHY macro: the negotiated rate, the
-    * sampling phase, the per-lane enables, electrical idle.
-    *
-    * Only `freqSel` is consumed today, by the clocking configuration registers,
-    * which translate it into the analog controls that realise the rate. The
-    * rest reaches this port and no further.
-    */
-  val ctrl = Output(new PhyControlToPhyIO(afeParams))
-
-  /** What the PHY's clocking reports back: whether the PLL is locked at the
-    * rate `ctrl.freqSel` asks for, which training waits on to leave RESET and
-    * to finish a rate change, and whether the clocks are ungated, which the RDI
-    * wake handshake waits on. Synchronous to this block's clock.
-    */
-  val status = Input(new PhyStatusFromPhyIO)
+  val phy = new PhyBridgeAnalogIO(afeParams)
+  val clkRst =
+    if (separateDivClocks) Some(new MainbandClkRstIO) else None
 }
 
 class UcieDigitalTopIO(params: UcieDigitalTopParams) extends Bundle {
   val chipFacingIo = new UcieDigitalTopChipIO(params.protocol)
   val phyFacingIo =
-    new UcieDigitalTopPhyIO(params.logPhy.afe, params.logPhy.sideband)
+    new UcieDigitalTopPhyIO(
+      params.logPhy.afe,
+      params.logPhy.sideband,
+      params.logPhy.separateDivClocks
+    )
   val regBlockIo =
     if (!params.regs.includeRegNode)
       Some(Flipped(new UcieRegBlockIO(params.regs)))
@@ -65,7 +57,7 @@ class UcieDigitalTop(
     params: UcieDigitalTopParams = UcieDigitalTopParams.default()
 )(implicit p: Parameters)
     extends LazyModule {
-  private val validatedParams = params.validate()
+  val validatedParams = params.validate()
   require(
     validatedParams.regs.includeRegNode ||
       !validatedParams.regs.includeInterruptNode,
@@ -73,7 +65,7 @@ class UcieDigitalTop(
   )
   override lazy val desiredName = "UcieDigitalTop"
 
-  // With no node the map is spliced into an outer TLRegisterNode; expose the allocation so it can size it.
+  // With no node, an outer TLRegisterNode takes the map and sizes it from this.
   val ucieRegAllocation = validatedParams.regs.allocation
   val regs: Option[UcieRegTop] =
     if (
@@ -83,7 +75,7 @@ class UcieDigitalTop(
     else None
   val regNode = regs.flatMap(_.node)
   val intNode = regs.flatMap(_.intNode)
-  private val regClockSource = regs.map { r =>
+  val regClockSource = regs.map { r =>
     val src = ClockSourceNode(Seq(ClockSourceParameters()))
     r.clockNode := src
     src
@@ -99,18 +91,26 @@ class UcieDigitalTop(
       regClk.reset := reset
     }
 
+    // =========================================================================
+    // Modules
+    // =========================================================================
+    val separateDivClocks = validatedParams.logPhy.separateDivClocks
     val protocolLayer = Module(
       new ProtocolLayer(
-        params = validatedParams.protocol.layer,
         fdiParams = validatedParams.protocol.fdi,
-        sbParams = validatedParams.adapter.sideband
+        sbParams = validatedParams.adapter.sideband,
+        separateDivClocks = separateDivClocks
       )
     )
     val d2dAdapter = Module(
       new D2DAdapter(
         fdiParams = validatedParams.adapter.fdi,
         rdiParams = validatedParams.adapter.rdi,
-        sbParams = validatedParams.adapter.sideband
+        sbParams = validatedParams.adapter.sideband,
+        regLocators = validatedParams.regs.allocation.locators.map {
+          case (_, base, size) => (base, size)
+        },
+        separateDivClocks = separateDivClocks
       )
     )
     val logicalPhy = Module(
@@ -120,22 +120,50 @@ class UcieDigitalTop(
         rdiParams = validatedParams.logPhy.rdi,
         retryW = validatedParams.logPhy.retryW,
         desTimeoutCycles = validatedParams.logPhy.desTimeoutCycles,
-        queueDepths = validatedParams.logPhy.queueDepths
-      )(validatedParams.logPhy.sim)
+        queueDepths = validatedParams.logPhy.queueDepths,
+        separateDivClocks = separateDivClocks
+      )
     )
 
-    // Internal connection
+    // =========================================================================
+    // Clocks and resets
+    // =========================================================================
+    // The chip's mainband queue ends take these too. With no PHY port (an
+    // undriven Input Clock fails elaboration), tie both domains to the control
+    // clock, the single-lclk RDI of sec 10.1.2.
+    val clkRst = io.chipFacingIo.clkRst
+    io.phyFacingIo.clkRst match {
+      case Some(phyClkRst) =>
+        clkRst := phyClkRst
+      case None =>
+        clkRst.txDivClk := clock
+        clkRst.txDivRst := reset.asBool
+        clkRst.rxDivClk := clock
+        clkRst.rxDivRst := reset.asBool
+    }
+    logicalPhy.io.clkRst.txDivClk := clkRst.txDivClk
+    logicalPhy.io.clkRst.txDivRst := clkRst.txDivRst
+    logicalPhy.io.clkRst.rxDivClk := clkRst.rxDivClk
+    logicalPhy.io.clkRst.rxDivRst := clkRst.rxDivRst
+    protocolLayer.io.clkRst := clkRst
+    d2dAdapter.io.clkRst := clkRst
+
+    // =========================================================================
+    // Connections
+    // =========================================================================
     protocolLayer.io.fdi <> d2dAdapter.io.fdi
     d2dAdapter.io.rdi <> logicalPhy.io.rdi
 
-    // Chip-facing connection
     protocolLayer.io.mainbandTx <> io.chipFacingIo.mainbandTx
     io.chipFacingIo.mainbandRx <> protocolLayer.io.mainbandRx
 
-    // PHY-facing connection
     io.phyFacingIo.mainbandLink <> logicalPhy.io.analog.mainband
     io.phyFacingIo.sidebandLink <> logicalPhy.io.analog.sidebandLink
+    io.phyFacingIo.phy <> logicalPhy.io.analog.phy
 
+    // =========================================================================
+    // Register bridge
+    // =========================================================================
     val regBridge = Module(
       new UcieRegBridge(
         params = validatedParams.regs,
@@ -144,13 +172,17 @@ class UcieDigitalTop(
       )
     )
     regBridge.io.ctrl <> io.ctrl
+
+    // sec 10.2.4 gives no receive buffer, so the chip reports its own overflow.
+    // A level, because a one-rxDivClk pulse can fall between two control edges.
+    regBridge.io.chip.rxOverflow := io.chipFacingIo.rxOverflow
     regBridge.io.phyCtrl <> logicalPhy.io.ctrl
     regBridge.io.phyStatus <> logicalPhy.io.status
     regBridge.io.protoCtrl <> protocolLayer.io.ctrl
     regBridge.io.protoStatus <> protocolLayer.io.status
     regBridge.io.adapter <> d2dAdapter.io.regs
 
-    // The internal register block and the external splice port are mutually exclusive.
+    // The register block and the splice port are mutually exclusive.
     regs match {
       case Some(r) => UcieRegBridge.attach(r.module.io, regBridge.io.regs)
       case None =>
@@ -160,8 +192,5 @@ class UcieDigitalTop(
       r.module.io.linkEventIrq.foreach(dontTouch(_))
       r.module.io.linkErrorIrq.foreach(dontTouch(_))
     }
-
-    logicalPhy.io.analog.status := io.phyFacingIo.status
-    io.phyFacingIo.ctrl := logicalPhy.io.analog.ctrl
   }
 }

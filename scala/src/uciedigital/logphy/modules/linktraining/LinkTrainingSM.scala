@@ -1,14 +1,14 @@
 /*
-  Description:
-    Link Training State Machine for the Logical PHY.
-    Currently scoped to Standard Package operation in Streaming RAW mode.
+  The Link Training State Machine (sec 4.5), for Standard Package Raw Format.
  */
+
 package edu.berkeley.cs.uciedigital.logphy
 
+import edu.berkeley.cs.uciedigital.rdi._
 import edu.berkeley.cs.uciedigital.sideband._
-import edu.berkeley.cs.uciedigital.interfaces._
+import edu.berkeley.cs.uciedigital.common._
 import chisel3._
-import chisel3.layer.{Layer, LayerConfig, block}
+import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.util._
 
@@ -16,152 +16,141 @@ class LinkTrainingSM(
     sbParams: SidebandParams,
     afeParams: AfeParams,
     retryW: Int
-)(implicit sim: Boolean = false)
-    extends Module {
+) extends Module {
   val io = IO(new Bundle {
-    // ========================================================================
-    // IN
-    // ========================================================================
-    val pwrGood = Input(Bool()) // TODO: DVSEC, custom
-    val retryTrainingAmt = Input(UInt(retryW.W)) // TODO: DVSEC, custom
+    val pwrGood = Input(Bool())
+    val retryTrainingAmt = Input(UInt(retryW.W))
     val localPhyParamSettings = Flipped(Valid(new PHYParamExchangeIO()))
     val linkTrainingParameters = new LinkOperationParameters()
-    val swStartLinkTraining = Input(Bool()) // TODO: DVSEC
+    val swStartLinkTraining = Input(Bool())
+    val phyInitControl = Input(UInt(3.W))
+    val resumeTrainingPending = Input(Bool())
     val maxErrorThresholdPerLane = Input(UInt(16.W))
-    // val trainingBypass    = Input(Bool())      TODO: Need to add bypassing
-    // val selectStateBypass = Input(LTState())   TODO: Need to add bypassing
     val changeInRuntimeLinkCtrlRegsDetected = Input(Bool())
     val runtimeLinkCtrlBusyBit = Input(Bool())
     val runtimeRequestForRepair = Input(Bool())
-    val swRetrainRequest = Input(Bool())
-    // When set, linkTrainingParameters replaces the per-substate defaults MBInit/MBTrain supply.
+    val runtimeLaneRepairId = Input(UInt(7.W))
+    val injectStuckAt = Input(Bool())
     val linkOpParamOverride = Input(Bool())
+    val remoteRxTerminated = Input(Bool())
 
-    // ========================================================================
-    // OUT
-    // ========================================================================
     val ltState = Output(LTState())
-    val currentState = Output(LTSMState()) // Out to logphytop
+    val currentState = Output(LTSMState())
+    val trainingPaused = Output(Bool())
+    val resumeTrainingDone = Output(Bool())
     val trainingTimedout = Output(Bool())
+    val clearRuntimeLinkCtrlBusyBit = Output(Bool())
     val fatalTrainingError = Output(Bool())
     val forceRdiLinkError = Output(Bool())
     val doLaneReversal = Output(Bool())
+    val negotiatedBy8 = Output(Bool())
+    val stuckAtLaneMask = Output(UInt(afeParams.mbLanes.W))
+    val currLocalTxFunctionalLanes = Input(UInt(3.W))
+    val currRemoteTxFunctionalLanes = Input(UInt(3.W))
+    val widthWrite = Output(new MainbandWidthWrite)
+    val widthReset = Output(Bool())
+    val initWidthCode = Input(UInt(3.W))
     val localTxFunctionalLanes = Output(UInt(3.W))
     val remoteTxFunctionalLanes = Output(UInt(3.W))
-    val txLaneMask = Output(UInt(16.W))
     val rxLaneMask = Output(UInt(16.W))
     val widthDegraded = Output(Bool())
-    val remoteRequestingTrainError = Output(Bool())
+    val linkInitWidthCode = Output(UInt(3.W))
     val negotiatedPhyParamSettings = Valid(new PHYParamExchangeIO())
+    val remoteAdvertisedClockPhase = Output(UInt(1.W))
+    val partnerEyeEdges = Valid(new PartnerEyeEdges)
     val rxClkCalSendFwClkPattern = Output(Bool())
     val rxClkCalSendTrkPattern = Output(Bool())
-    val scramblerReset =
-      Output(Bool()) // Same reset for scrambler and descrambler
+    val scramblerReset = Output(Bool())
+    val recalInProgress = Output(Bool())
+    val sbInitParityError = Output(Bool())
 
-    // ========================================================================
-    // RDI IO
-    // ========================================================================
     val rdi = new Bundle {
-      // val lpStateReq = Input(RDIStateReq())
       val plStateSts = Input(RDIState())
       val lpStateReq = Input(RDIStateReq())
       val doRdiBringup = Output(Bool())
-      val doingRdiBringUp = Input(Bool())
     }
 
-    // ========================================================================
-    // CONTROL BUNDLES
-    // ========================================================================
     val sbCtrlIo = new SidebandCtrlIO()
     val mbCtrlIo = new MainbandLaneCtrlIO(afeParams)
     val phyCtrlIo = new PhyCtrlIO()
 
-    // ========================================================================
-    // PHY TRAINING IO
-    // ========================================================================
     val phyTrainIo = Flipped(new PhyTrainIO(afeParams))
 
-    // ========================================================================
-    // LANE IO BUNDLES (Mixed Decoupled TX/RX)
-    // ========================================================================
     val sbLaneIo = new SidebandLaneIO(sbParams)
 
-    // ========================================================================
-    // SHARED PATTERN RESOURCES
-    // ========================================================================
     val patternWriterIo = Flipped(new PatternWriterIO())
     val patternReaderIo = Flipped(new PatternReaderIO(afeParams.mbLanes))
   })
 
-  // ==============================================================================================
-  // Variables
-  // ==============================================================================================
   val mbSerializerRatio = afeParams.mbSerializerRatio
-  val timeoutMs = if (sim) 0.00005 else 0.008
-  val operatingFreq = 800000000 // TODO: Put this into an object
-  val retryAmtW = retryW // TODO: Need to put retryW into an object
+  val retryAmtW = retryW // TODO: Put retryW into an object.
 
-  // ==============================================================================================
-  // FSM state register
-  // ==============================================================================================
   val currentState = RegInit(LTState.sRESET)
   val nextState = WireInit(currentState)
   currentState := nextState
 
-  // Full detailed states, used for debugging
   val currentStateSpecific = WireDefault(LTSMState.sRESET)
   io.currentState := currentStateSpecific
   io.ltState := currentState
 
-  // ==============================================================================================
-  // Timeout Logic
-  // ==============================================================================================
-  // If operating frequency is 800 MHz and timeout at 8ms, timeout cycles is 6,400,000
-  // log2ceil(6,400,000) == 23
-  val timeoutCycles = (operatingFreq * timeoutMs).toInt
-  val timeoutWidth = log2Ceil(timeoutCycles)
+  // ===========================================================================
+  // Timeouts
+  // ===========================================================================
+  val timeoutCycles = sbParams.trainingTimeoutCycles
+
+  // The counter reaches timeoutCycles, which log2Ceil misses at a power of two.
+  val timeoutWidth = log2Ceil(timeoutCycles + 1)
   val timeoutCounter = RegInit(0.U(timeoutWidth.W))
   val timeoutMaxCycles = timeoutCycles.U
-  val timeoutCntEn = Wire(Bool()) // disable next cycle
-  val timeoutCntReset = Wire(Bool()) // reset next cycle
+  val timeoutCntEn = Wire(Bool())
+  val timeoutCntReset = Wire(Bool())
   val trainingTimedout = RegInit(
     false.B
-  ) // sticky the training timed out flag since counter reuse
+  )
   val resetMinWait = RegInit(false.B)
-  val resetMinWaitMaxCycles = (timeoutCycles / 2).U // 4ms
+  val resetMinWaitMaxCycles = sbParams.resetMinResidencyCycles.U
   val substateTransitioning = Wire(Bool())
+
+  // Only the sub-state machine that owns the exchange restarts it on a Stall.
+  val sbStallReceived = Wire(Bool())
   val trainErrorHandshakeTimedout = WireInit(false.B)
 
-  // TrainError signals used for counter reuse
+  // sec 9.5.3.25 disables the state timeouts while training is paused.
+  val trainingPaused = Wire(Bool())
+
   val triggerTrainErrorReq = WireInit(
     false.B
-  ) // Goes HIGH when TrainError requester sends REQ
+  )
   val waitTrainErrorResp = RegInit(
     false.B
-  ) // Stays HIGH while waiting for Remote to respond
+  )
 
-  // Reuse timeout counter for reset wait counting
-  timeoutCntEn := ((currentState =/= LTState.sRESET) &&
-    (currentState =/= LTState.sACTIVE) &&
-    (currentState =/= LTState.sL1_L2) &&
-    (currentState =/= LTState.sTRAINERROR) &&
-    (timeoutCounter =/= timeoutMaxCycles)) ||
-    (currentState === LTState.sRESET && !resetMinWait) ||
-    (waitTrainErrorResp && (timeoutCounter =/= timeoutMaxCycles))
+  // This counter also times the 4 ms RESET and the TRAINERROR handshake.
+  timeoutCntEn := !trainingPaused &&
+    (((currentState =/= LTState.sRESET) &&
+      (currentState =/= LTState.sACTIVE) &&
+      (currentState =/= LTState.sL1_L2) &&
+      (currentState =/= LTState.sTRAINERROR) &&
+      (timeoutCounter =/= timeoutMaxCycles)) ||
+      (currentState === LTState.sRESET && !resetMinWait) ||
+      (waitTrainErrorResp && (timeoutCounter =/= timeoutMaxCycles)))
 
-  // Spec defined substates have a 8ms residency timeout
+  // sec 4.5 times each sub-state separately, so a sub-state change restarts it.
   substateTransitioning := false.B
-  timeoutCntReset := (nextState =/= currentState) || substateTransitioning || triggerTrainErrorReq
+  sbStallReceived := false.B
+  timeoutCntReset := (nextState =/= currentState) || substateTransitioning ||
+    triggerTrainErrorReq || sbStallReceived
 
   trainErrorHandshakeTimedout := waitTrainErrorResp && (timeoutCounter === timeoutMaxCycles)
 
-  when(timeoutCounter === timeoutMaxCycles) {
-    trainingTimedout := true.B
-  }.elsewhen(currentState === LTState.sRESET && nextState =/= LTState.sRESET) {
+  // Latch the timeout, because the counter restarts.
+  // Clear it in TRAINERROR, so RDI can leave LinkError (sec 10.3.3.7).
+  when(currentState === LTState.sTRAINERROR) {
     trainingTimedout := false.B
+  }.elsewhen(timeoutCounter === timeoutMaxCycles) {
+    trainingTimedout := true.B
   }
 
-  // Timeout counter logic
   when(timeoutCntReset) {
     timeoutCounter := 0.U
   }.otherwise {
@@ -170,20 +159,20 @@ class LinkTrainingSM(
     }
   }
 
-  // Wait a minimum of 4ms upon entering RESET  -- reuses timeout counter
+  val enteringReset =
+    (currentState =/= LTState.sRESET) && (nextState === LTState.sRESET)
+
   when(
     (timeoutCounter === resetMinWaitMaxCycles) && (currentState === LTState.sRESET)
   ) {
     resetMinWait := true.B
-  }.elsewhen(
-    (currentState =/= LTState.sRESET) && (nextState === LTState.sRESET)
-  ) {
+  }.elsewhen(enteringReset) {
     resetMinWait := false.B
   }
 
-  // ==============================================================================================
-  // Training Retrigger Logic
-  // ==============================================================================================
+  // ===========================================================================
+  // Registers and defaults
+  // ===========================================================================
   val prevTrigger = RegInit(false.B)
   val trainingRetryCounter = RegInit(0.U(retryAmtW.W))
   val autoRetrain = Wire(Bool())
@@ -195,10 +184,6 @@ class LinkTrainingSM(
   val fatalTrainingSawLinkError = RegInit(false.B)
   val forceRdiLinkError = RegInit(false.B)
 
-  // ==============================================================================================
-  // Top-Level Defaults and Registers
-  // ==============================================================================================
-  // Defaults to PACKET, overridden by sRESET and sSBINIT
   val sbRxTxMode = WireDefault(SBRxTxMode.PACKET)
 
   io.trainingTimedout := trainingTimedout
@@ -208,12 +193,14 @@ class LinkTrainingSM(
   io.sbCtrlIo.txEn := true.B
   io.sbCtrlIo.rxEn := true.B
   io.sbCtrlIo.rxTxMode := sbRxTxMode
-  io.sbCtrlIo.sbReset := (currentState === LTState.sRESET) && !resetMinWait
 
-  // SB Link Serdes freezes accepting packets when transitioned TrainError
-  io.sbCtrlIo.freezeAcceptingPackets := false.B
+  // RESET keeps Sideband Receivers on (sec 4.5.3.1), so reset only on entry.
+  io.sbCtrlIo.sbReset := RegNext(enteringReset, false.B)
 
-  // Frequency register
+  // sec 4.5.3.1 holds the Sideband Transmitters low in RESET.
+  io.sbCtrlIo.freezeAcceptingPackets := currentState === LTState.sRESET
+
+  // RESET returns to 4 GT/s, the slowest data rate (sec 4.5.3.1).
   val freqSel = RegInit(SpeedMode.speed4)
   val doFreqChange = WireInit(false.B)
   val newFreqSel = WireInit(SpeedMode.speed4)
@@ -228,17 +215,16 @@ class LinkTrainingSM(
 
   io.rdi.doRdiBringup := false.B
 
-  // ==============================================================================================
-  // Mainband Trigger Training Logic
-  // ==============================================================================================
-  // Remote triggered training -- SBINIT pattern detection from remote is done in LTState.sRESET
+  // ===========================================================================
+  // Training triggers
+  // ===========================================================================
+  // Two consecutive SBINIT pattern iterations are a trigger (sec 4.5).
   val sbInitPatternCounter = RegInit(0.U(2.W))
   val remoteTriggerTraining = Wire(Bool())
   val sbInitClkPattern =
-    BigInt("5555555555555555", 16).U(64.W) // 0b0101_0101_..._0101
+    PatternDefs.sbInitClock.U(64.W)
   remoteTriggerTraining := sbInitPatternCounter === 2.U
 
-  // RDI triggered training
   val rdiTriggerTrainingWire = Wire(Bool())
   val rdiTriggerTraining = RegInit(false.B)
   val prevRdiStateReq = RegInit(RDIStateReq.nop)
@@ -247,42 +233,54 @@ class LinkTrainingSM(
     (prevRdiStateReq === RDIStateReq.nop) &&
     (io.rdi.lpStateReq === RDIStateReq.active)
 
-  //  Adapter triggers Link Training on the RDI (RDI status is Reset and there is a NOP to Active
-  //  transition on the state request)
-  when(rdiTriggerTraining) {
-    rdiTriggerTraining := true.B
+  // The Adapter may return to NOP after its trigger (sec 10.3.3.8), so hold it.
+  when(
+    (currentState =/= LTState.sRESET) && (currentState =/= LTState.sTRAINERROR)
+  ) {
+    rdiTriggerTraining := false.B
   }.elsewhen(rdiTriggerTrainingWire) {
     rdiTriggerTraining := true.B
-  }.elsewhen(nextState =/= LTState.sRESET && currentState === LTState.sRESET) {
-    rdiTriggerTraining := false.B
   }
 
-  // SW triggered training: the DVSEC Start Link Training bit, held until
-  // training is over either way (see `trainingDone` in `UcieRegBridge`), so
-  // only its rising edge starts an episode.
+  // Start (sec 9.5.1.5) stays set through training, so only its edge counts.
   val swTriggerTraining = Wire(Bool())
   swTriggerTraining := io.swStartLinkTraining
-
-  // SW triggered retrain, latched until PHYRETRAIN is entered so a held request retrains once
-  val swRetrainReq = RegInit(false.B)
-  when(
-    currentState === LTState.sPHYRETRAIN || currentState === LTState.sRESET
-  ) {
-    swRetrainReq := false.B
-  }.elsewhen(io.swRetrainRequest) {
-    swRetrainReq := true.B
-  }
 
   val triggerTraining = Wire(Bool())
   triggerTraining := swTriggerTraining || rdiTriggerTraining || remoteTriggerTraining
   val freshTrainingTrigger = Wire(Bool())
   freshTrainingTrigger := triggerTraining && !prevTrigger
-  prevTrigger := triggerTraining
 
-  // ==============================================================================================
-  // Phy Parameters
-  // ==============================================================================================
-  // Local parameters
+  // The history falls only outside RESET, so a held trigger counts again there.
+  prevTrigger := triggerTraining &&
+    (prevTrigger || (currentState === LTState.sRESET))
+
+  // The sec 9.5.1.5 link-up rule is for Start only, so it has its own edge.
+  val prevSwTrigger = RegInit(false.B)
+  prevSwTrigger := swTriggerTraining
+  val freshSwStartTrigger = swTriggerTraining && !prevSwTrigger
+
+  // A Start on an up Link means full training through Link Down (sec 9.5.1.5).
+  val rdiUp = (io.rdi.plStateSts === RDIState.active) ||
+    (io.rdi.plStateSts === RDIState.activePmNak) ||
+    (io.rdi.plStateSts === RDIState.retrain)
+  val liveStart = freshSwStartTrigger && rdiUp &&
+    (currentState =/= LTState.sRESET) &&
+    (currentState =/= LTState.sSBINIT) &&
+    (currentState =/= LTState.sTRAINERROR)
+  val liveStartPending = RegInit(false.B)
+  when(
+    (currentState === LTState.sRESET) ||
+      (currentState === LTState.sTRAINERROR)
+  ) {
+    liveStartPending := false.B
+  }.elsewhen(liveStart) {
+    liveStartPending := true.B
+  }
+
+  // ===========================================================================
+  // PHY parameters
+  // ===========================================================================
   val localModuleId = RegInit(0.U(2.W))
   val localVoltageSwing = RegInit(0.U(5.W))
   val localMaxDataRate = RegInit(0.U(4.W))
@@ -293,12 +291,12 @@ class LinkTrainingSM(
   val localTxAdjRuntime = RegInit(0.U(1.W))
   val localSettingsValid = RegInit(false.B)
 
-  // Negotiated parameters
-  val remoteModuleId = RegInit(0.U(2.W)) // remote module ID
+  val remoteModuleId = RegInit(0.U(2.W))
   val negotiatedVoltageSwing = RegInit(0.U(5.W))
   val negotiatedMaxDataRate = RegInit(0.U(4.W))
   val negotiatedClockMode = RegInit(0.U(1.W))
   val negotiatedClockPhase = RegInit(0.U(1.W))
+  val remoteAdvertisedClockPhase = RegInit(0.U(1.W))
   val negotiatedUcieSx8 = RegInit(0.U(1.W))
   val negotiatedSbFeatExt = RegInit(0.U(1.W))
   val negotiatedTxAdjRuntime = RegInit(0.U(1.W))
@@ -325,28 +323,31 @@ class LinkTrainingSM(
   io.negotiatedPhyParamSettings.bits.maxDataRate := negotiatedMaxDataRate
   io.negotiatedPhyParamSettings.bits.clockMode := negotiatedClockMode
   io.negotiatedPhyParamSettings.bits.clockPhase := negotiatedClockPhase
+  io.remoteAdvertisedClockPhase := remoteAdvertisedClockPhase
   io.negotiatedPhyParamSettings.bits.ucieSx8 := negotiatedUcieSx8
+
+  // Narrow only after PARAM, or the MBINIT patterns lose Lanes 8 to 15.
+  val negotiatedBy8 = negotiatedSettingsValid && negotiatedUcieSx8.asBool
+  io.negotiatedBy8 := negotiatedBy8
   io.negotiatedPhyParamSettings.bits.sbFeatExt := negotiatedSbFeatExt
   io.negotiatedPhyParamSettings.bits.txAdjRuntime := negotiatedTxAdjRuntime
   io.negotiatedPhyParamSettings.valid := negotiatedSettingsValid
 
-  // ==============================================================================================
-  // Sub FSM Modules
-  // ==============================================================================================
-  val ltsmInReset = Wire(Bool())
-  ltsmInReset := false.B
+  // ===========================================================================
+  // Sub-state machines
+  // ===========================================================================
+  // A flop from nextState adds no delay and keeps glitches off the async reset.
+  val ltsmInReset = RegInit(true.B)
+  ltsmInReset := nextState === LTState.sRESET
 
   val subFsmModuleReset = (reset.asBool || ltsmInReset).asAsyncReset
 
-  // ==============================================================================================
-  // SBInit
-  // ==============================================================================================
   val sbInitSM = withReset(subFsmModuleReset) {
     Module(new SBInitSM(sbParams, timeoutCycles))
   }
 
-  // Defaults
   sbInitSM.io.fsmCtrl.start := false.B
+  io.sbInitParityError := sbInitSM.io.parityError
 
   sbInitSM.io.requesterSbLaneIo.rx.valid := false.B
   sbInitSM.io.requesterSbLaneIo.rx.bits := 0.U.asTypeOf(
@@ -360,20 +361,29 @@ class LinkTrainingSM(
   )
   sbInitSM.io.responderSbLaneIo.tx.ready := false.B
 
-  // ==============================================================================================
-  // MBInit
-  // ==============================================================================================
   val mbInitSM = withReset(subFsmModuleReset) {
     Module(new MBInitSM(afeParams, sbParams))
   }
 
-  // Defaults
-  mbInitSM.io.fsmCtrl.start := false.B
+  // sec 9.5.3.25 [2:0]. 011b and 100b need a Test and Compliance block.
+  val pauseAtMbInitParam = io.phyInitControl === 1.U
+  val pauseAtMbTrainValVref = io.phyInitControl === 2.U
 
-  mbInitSM.io.mbInitCalDone := io.phyTrainIo.mbInit.selfCalDone
-  io.phyTrainIo.mbInit.selfCalStart := mbInitSM.io.mbInitCalStart
+  // One latch covers the episode, as sec 9.5.3.25 bit 5 resumes until ACTIVE.
+  val trainingResumed = RegInit(false.B)
+  val resumeFromRegister = io.resumeTrainingPending && trainingPaused
+  io.trainingPaused := trainingPaused
+  io.resumeTrainingDone := resumeFromRegister
+
+  mbInitSM.io.fsmCtrl.start := false.B
+  mbInitSM.io.pauseAfterParam := pauseAtMbInitParam && !trainingResumed
+
+  // MBINIT.CAL is implementation specific (sec 4.5.3.3.2), so software ends it.
+  mbInitSM.io.mbInitCalDone := io.phyTrainIo.mbInitCalDone
+  io.phyTrainIo.mbInitCalStart := mbInitSM.io.mbInitCalStart
 
   mbInitSM.io.localPhySettings.bits.moduleId := localModuleId
+  mbInitSM.io.initWidthCode := io.initWidthCode
   mbInitSM.io.localPhySettings.bits.voltageSwing := localVoltageSwing
   mbInitSM.io.localPhySettings.bits.maxDataRate := localMaxDataRate
   mbInitSM.io.localPhySettings.bits.clockMode := localClockMode
@@ -389,6 +399,7 @@ class LinkTrainingSM(
     negotiatedMaxDataRate := mbInitSM.io.negotiatedPhySettings.bits.maxDataRate
     negotiatedClockMode := mbInitSM.io.negotiatedPhySettings.bits.clockMode
     negotiatedClockPhase := mbInitSM.io.negotiatedPhySettings.bits.clockPhase
+    remoteAdvertisedClockPhase := mbInitSM.io.remoteAdvertisedClockPhase
     negotiatedUcieSx8 := mbInitSM.io.negotiatedPhySettings.bits.ucieSx8
     negotiatedSbFeatExt := mbInitSM.io.negotiatedPhySettings.bits.sbFeatExt
     negotiatedTxAdjRuntime := mbInitSM.io.negotiatedPhySettings.bits.txAdjRuntime
@@ -399,7 +410,6 @@ class LinkTrainingSM(
     negotiatedSettingsValid := false.B
   }
 
-  // Sideband defaults
   mbInitSM.io.requesterSbLaneIo.rx.valid := false.B
   mbInitSM.io.requesterSbLaneIo.rx.bits :=
     0.U.asTypeOf(chiselTypeOf(mbInitSM.io.requesterSbLaneIo.rx.bits))
@@ -410,7 +420,6 @@ class LinkTrainingSM(
     0.U.asTypeOf(chiselTypeOf(mbInitSM.io.responderSbLaneIo.rx.bits))
   mbInitSM.io.responderSbLaneIo.tx.ready := false.B
 
-  // Test defaults
   mbInitSM.io.txPtTestReqInterfaceIo.done := false.B
   mbInitSM.io.txPtTestReqInterfaceIo.ptTestResults.valid := false.B
   mbInitSM.io.txPtTestReqInterfaceIo.ptTestResults.bits :=
@@ -419,14 +428,11 @@ class LinkTrainingSM(
     )
 
   mbInitSM.io.txPtTestRespInterfaceIo.done := false.B
-  // ==============================================================================================
-  // MBTrain
-  // ==============================================================================================
+
   val mbTrainSM = withReset(subFsmModuleReset) {
     Module(new MBTrainSM(afeParams, sbParams))
   }
 
-  // The parameters are known from outside (DVSEC, or elaboration) see where they come from
   mbTrainSM.io.negotiatedMaxDataRate := negotiatedMaxDataRate(2, 0).asTypeOf(
     SpeedMode()
   )
@@ -445,8 +451,19 @@ class LinkTrainingSM(
   io.phyCtrlIo.doElectricalIdleTx := mbTrainSM.io.doElectricalIdleTx
 
   mbTrainSM.io.fsmCtrl.start := false.B
+  mbTrainSM.io.pauseAfterValVrefStart :=
+    pauseAtMbTrainValVref && !trainingResumed
 
-  // Sideband defaults
+  trainingPaused := mbInitSM.io.pausedAtParam ||
+    mbTrainSM.io.pausedAtValVrefStart
+  val resumeFromPartner = mbInitSM.io.pauseSidebandResume ||
+    mbTrainSM.io.pauseSidebandResume
+  when(currentState === LTState.sRESET) {
+    trainingResumed := false.B
+  }.elsewhen(resumeFromRegister || resumeFromPartner) {
+    trainingResumed := true.B
+  }
+
   mbTrainSM.io.requesterSbLaneIo.rx.valid := false.B
   mbTrainSM.io.requesterSbLaneIo.rx.bits :=
     0.U.asTypeOf(chiselTypeOf(mbTrainSM.io.requesterSbLaneIo.rx.bits))
@@ -457,7 +474,6 @@ class LinkTrainingSM(
     0.U.asTypeOf(chiselTypeOf(mbTrainSM.io.responderSbLaneIo.rx.bits))
   mbTrainSM.io.responderSbLaneIo.tx.ready := false.B
 
-  // TX Point Test Defaults
   mbTrainSM.io.txPtTestReqIntfIo.done := false.B
   mbTrainSM.io.txPtTestReqIntfIo.ptTestResults.valid := false.B
   mbTrainSM.io.txPtTestReqIntfIo.ptTestResults.bits :=
@@ -467,7 +483,6 @@ class LinkTrainingSM(
 
   mbTrainSM.io.txPtTestRespIntfIo.done := false.B
 
-  // TX Eye Sweep Defaults
   mbTrainSM.io.txEyeSweepReqIntfIo.done := false.B
   mbTrainSM.io.txEyeSweepReqIntfIo.eyeSweepTestResults.valid := false.B
   mbTrainSM.io.txEyeSweepReqIntfIo.eyeSweepTestResults.bits :=
@@ -477,7 +492,6 @@ class LinkTrainingSM(
 
   mbTrainSM.io.txEyeSweepRespIntfIo.done := false.B
 
-  // RX Point Test Defaults
   mbTrainSM.io.rxPtTestReqIntfIo.done := false.B
   mbTrainSM.io.rxPtTestReqIntfIo.ptTestResults.valid := false.B
   mbTrainSM.io.rxPtTestReqIntfIo.ptTestResults.bits :=
@@ -487,7 +501,6 @@ class LinkTrainingSM(
 
   mbTrainSM.io.rxPtTestRespIntfIo.done := false.B
 
-  // RX Eye Sweep Defaults
   mbTrainSM.io.rxEyeSweepReqIntfIo.done := false.B
   mbTrainSM.io.rxEyeSweepReqIntfIo.eyeSweepTestResults.valid := false.B
   mbTrainSM.io.rxEyeSweepReqIntfIo.eyeSweepTestResults.bits :=
@@ -504,17 +517,19 @@ class LinkTrainingSM(
       )
     )
 
-  mbTrainSM.io.trainingCtrl <> io.phyTrainIo.mbTrain
+  mbTrainSM.io.trainingCtrl.action <> io.phyTrainIo.action
+  io.phyTrainIo.result <> mbTrainSM.io.trainingCtrl.result
+  io.phyTrainIo.remoteResult <> mbTrainSM.io.trainingCtrl.remoteResult
+  io.phyTrainIo.txSelfCalStart :=
+    mbTrainSM.io.currentState === MBTrainState.sTXSELFCAL
+  io.phyTrainIo.rxClkCalStart := mbTrainSM.io.rxClkCalStart
 
-  // Basic Training Operations
-  // ==============================================================================================
-  // TX-initiated D2C Point Test
-  // ==============================================================================================
-  // Interface Wires
+  // ===========================================================================
+  // Training operations
+  // ===========================================================================
   val txPtReqIntf = Wire(new TxInitPtTestRequesterInterfaceIO(afeParams))
   val txPtRespIntf = Wire(new TxInitPtTestResponderInterfaceIO())
 
-  // Defaults
   txPtReqIntf.start := false.B
   txPtReqIntf.patternType := DontCare
   txPtReqIntf.linkTrainingParameters := DontCare
@@ -522,15 +537,14 @@ class LinkTrainingSM(
   txPtRespIntf.start := false.B
   txPtRespIntf.patternType := DontCare
 
-  // Module
-  val txPtTestRequester = Module(
-    new TxD2CPointTestRequester(afeParams, sbParams)
-  )
-  val txPtTestResponder = Module(
-    new TxD2CPointTestResponder(afeParams, sbParams)
-  )
+  // Reset with the sub-state machines, so no engine survives a TRAINERROR.
+  val txPtTestRequester = withReset(subFsmModuleReset) {
+    Module(new TxD2CPointTestRequester(afeParams, sbParams))
+  }
+  val txPtTestResponder = withReset(subFsmModuleReset) {
+    Module(new TxD2CPointTestResponder(afeParams, sbParams))
+  }
 
-  // Requester <-> Interface Connections
   txPtTestRequester.io.start := txPtReqIntf.start
   txPtTestRequester.io.patternType := txPtReqIntf.patternType
   txPtTestRequester.io.linkTrainingParameters := txPtReqIntf.linkTrainingParameters
@@ -538,26 +552,20 @@ class LinkTrainingSM(
   txPtReqIntf.done := txPtTestRequester.io.done
   txPtReqIntf.ptTestResults := txPtTestRequester.io.txInitPtTestResults
 
-  txPtTestRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  txPtTestRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   txPtTestRequester.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // Responder <-> Interface Connections
   txPtTestResponder.io.start := txPtRespIntf.start
   txPtTestResponder.io.patternType := txPtRespIntf.patternType
 
   txPtRespIntf.done := txPtTestResponder.io.done
 
-  txPtTestResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  txPtTestResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   txPtTestResponder.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // ==============================================================================================
-  // TX-initiated D2C Eye Width Sweep
-  // ==============================================================================================
-  // Interface Wires
   val txEwReqIntf = Wire(new TxInitEyeWidthSweepRequesterInterfaceIO(afeParams))
   val txEwRespIntf = Wire(new TxInitEyeWidthSweepResponderInterfaceIO())
 
-  // Defaults
   txEwReqIntf.start := false.B
   txEwReqIntf.patternType := DontCare
   txEwReqIntf.linkTrainingParameters := DontCare
@@ -565,15 +573,13 @@ class LinkTrainingSM(
   txEwRespIntf.start := false.B
   txEwRespIntf.patternType := DontCare
 
-  // Module
-  val txEwSweepRequester = Module(
-    new TxD2CEyeWidthSweepRequester(afeParams, sbParams)
-  )
-  val txEwSweepResponder = Module(
-    new TxD2CEyeWidthSweepResponder(afeParams, sbParams)
-  )
+  val txEwSweepRequester = withReset(subFsmModuleReset) {
+    Module(new TxD2CEyeWidthSweepRequester(afeParams, sbParams))
+  }
+  val txEwSweepResponder = withReset(subFsmModuleReset) {
+    Module(new TxD2CEyeWidthSweepResponder(afeParams, sbParams))
+  }
 
-  // Requester <-> Interface Connections
   txEwSweepRequester.io.start := txEwReqIntf.start
   txEwSweepRequester.io.patternType := txEwReqIntf.patternType
   txEwSweepRequester.io.linkTrainingParameters := txEwReqIntf.linkTrainingParameters
@@ -581,26 +587,20 @@ class LinkTrainingSM(
   txEwReqIntf.done := txEwSweepRequester.io.done
   txEwReqIntf.eyeSweepTestResults := txEwSweepRequester.io.txInitEyeWidthSweepResults
 
-  txEwSweepRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  txEwSweepRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   txEwSweepRequester.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // Responder <-> Interface Connections
   txEwSweepResponder.io.start := txEwRespIntf.start
   txEwSweepResponder.io.patternType := txEwRespIntf.patternType
 
   txEwRespIntf.done := txEwSweepResponder.io.done
 
-  txEwSweepResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  txEwSweepResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   txEwSweepResponder.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // ==============================================================================================
-  // RX-initiated D2C Point Test
-  // ==============================================================================================
-  // Interface Wires
   val rxPtReqIntf = Wire(new RxInitPtTestRequesterInterfaceIO(afeParams))
   val rxPtRespIntf = Wire(new RxInitPtTestResponderInterfaceIO())
 
-  // Defaults
   rxPtReqIntf.start := false.B
   rxPtReqIntf.patternType := DontCare
   rxPtReqIntf.linkTrainingParameters := DontCare
@@ -608,15 +608,13 @@ class LinkTrainingSM(
   rxPtRespIntf.start := false.B
   rxPtRespIntf.patternType := DontCare
 
-  // Modules
-  val rxPtTestRequester = Module(
-    new RxD2CPointTestRequester(afeParams, sbParams)
-  )
-  val rxPtTestResponder = Module(
-    new RxD2CPointTestResponder(afeParams, sbParams)
-  )
+  val rxPtTestRequester = withReset(subFsmModuleReset) {
+    Module(new RxD2CPointTestRequester(afeParams, sbParams))
+  }
+  val rxPtTestResponder = withReset(subFsmModuleReset) {
+    Module(new RxD2CPointTestResponder(afeParams, sbParams))
+  }
 
-  // Requester <-> Interface Connections
   rxPtTestRequester.io.start := rxPtReqIntf.start
   rxPtTestRequester.io.patternType := rxPtReqIntf.patternType
   rxPtTestRequester.io.linkTrainingParameters := rxPtReqIntf.linkTrainingParameters
@@ -624,29 +622,35 @@ class LinkTrainingSM(
   rxPtReqIntf.done := rxPtTestRequester.io.done
   rxPtReqIntf.ptTestResults := rxPtTestRequester.io.rxInitPtTestLocalResults
 
-  rxPtTestRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  rxPtTestRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   rxPtTestRequester.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // Responder <-> Interface Connections
   rxPtTestResponder.io.start := rxPtRespIntf.start
   rxPtTestResponder.io.patternType := rxPtRespIntf.patternType
 
   rxPtRespIntf.done := rxPtTestResponder.io.done
 
-  rxPtTestResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  rxPtTestResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   rxPtTestResponder.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
-  // TODO: rxPtTestResponder.io.clockPhaseSelect is available here if needed by top-level PHY clocking
 
-  // ==============================================================================================
-  // RX-initiated D2C Eye Width Sweep
-  // ==============================================================================================
-  // Interface Wires
+  io.phyTrainIo.semanticPhase.request.valid :=
+    rxPtTestResponder.io.semanticPhase.request.valid
+  io.phyTrainIo.semanticPhase.request.bits :=
+    rxPtTestResponder.io.semanticPhase.request.bits
+  rxPtTestResponder.io.semanticPhase.request.ready :=
+    io.phyTrainIo.semanticPhase.request.ready
+  rxPtTestResponder.io.semanticPhase.completion.valid :=
+    io.phyTrainIo.semanticPhase.completion.valid
+  rxPtTestResponder.io.semanticPhase.completion.bits :=
+    io.phyTrainIo.semanticPhase.completion.bits
+  io.phyTrainIo.semanticPhase.completion.ready :=
+    rxPtTestResponder.io.semanticPhase.completion.ready
+
   val rxEwReqIntf = Wire(new RxInitEyeWidthSweepRequesterInterfaceIO(afeParams))
   val rxEwRespIntf = Wire(
     new RxInitEyeWidthSweepResponderInterfaceIO(afeParams)
   )
 
-  // Defaults
   rxEwReqIntf.start := false.B
   rxEwReqIntf.patternType := DontCare
   rxEwReqIntf.linkTrainingParameters := DontCare
@@ -654,15 +658,13 @@ class LinkTrainingSM(
   rxEwRespIntf.start := false.B
   rxEwRespIntf.patternType := DontCare
 
-  // Modules
-  val rxEwSweepRequester = Module(
-    new RxD2CEyeWidthSweepRequester(afeParams, sbParams)
-  )
-  val rxEwSweepResponder = Module(
-    new RxD2CEyeWidthSweepResponder(afeParams, sbParams)
-  )
+  val rxEwSweepRequester = withReset(subFsmModuleReset) {
+    Module(new RxD2CEyeWidthSweepRequester(afeParams, sbParams))
+  }
+  val rxEwSweepResponder = withReset(subFsmModuleReset) {
+    Module(new RxD2CEyeWidthSweepResponder(afeParams, sbParams))
+  }
 
-  // Requester <-> Interface Connections
   rxEwSweepRequester.io.start := rxEwReqIntf.start
   rxEwSweepRequester.io.patternType := rxEwReqIntf.patternType
   rxEwSweepRequester.io.linkTrainingParameters := rxEwReqIntf.linkTrainingParameters
@@ -670,69 +672,71 @@ class LinkTrainingSM(
   rxEwReqIntf.done := rxEwSweepRequester.io.done
   rxEwReqIntf.eyeSweepTestResults := rxEwSweepRequester.io.rxInitEyeWidthSweepResults
 
-  rxEwSweepRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  io.partnerEyeEdges := rxEwSweepRequester.io.partnerEyeEdges
+
+  rxEwSweepRequester.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   rxEwSweepRequester.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // Responder <-> Interface Connections
   rxEwSweepResponder.io.start := rxEwRespIntf.start
   rxEwSweepResponder.io.patternType := rxEwRespIntf.patternType
 
   rxEwRespIntf.done := rxEwSweepResponder.io.done
   rxEwRespIntf.remoteEyeSweepTestResults := rxEwSweepResponder.io.rxEyeWidthSweepRemoteResults
 
-  rxEwSweepResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits // Broadcast sideband RX lane
+  rxEwSweepResponder.io.sbLaneIo.rx.bits := io.sbLaneIo.rx.bits
   rxEwSweepResponder.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
 
-  // ==============================================================================================
-  // PHY Lane Trainer Connections (TX & RX)
-  // ==============================================================================================
-  // Broadcast step / doneStepping. Note for RX Eye Sweep, Responder steps the PHY.
-  txEwSweepRequester.io.phyTrainIo.step := io.phyTrainIo.eyeSweepCtrl.step
-  txEwSweepRequester.io.phyTrainIo.doneStepping := io.phyTrainIo.eyeSweepCtrl.doneStepping
+  val decisionTargetsTx = io.phyTrainIo.eyeDecision.bits.target ===
+    PhyEyeDecisionTarget.TxRequester
+  txEwSweepRequester.io.decision.valid :=
+    io.phyTrainIo.eyeDecision.valid && decisionTargetsTx
+  txEwSweepRequester.io.decision.bits := io.phyTrainIo.eyeDecision.bits.kind
+  rxEwSweepResponder.io.decision.valid :=
+    io.phyTrainIo.eyeDecision.valid && !decisionTargetsTx
+  rxEwSweepResponder.io.decision.bits := io.phyTrainIo.eyeDecision.bits.kind
 
-  rxEwSweepResponder.io.phyTrainIo.step := io.phyTrainIo.eyeSweepCtrl.step
-  rxEwSweepResponder.io.phyTrainIo.doneStepping := io.phyTrainIo.eyeSweepCtrl.doneStepping
+  rxEwSweepResponder.io.localEyeEdges := io.phyTrainIo.eyeEdges
 
-  val fsmTxPtReqRunning = txPtReqIntf.start
-  val fsmTxEwReqRunning = txEwReqIntf.start
-  val fsmRxPtReqRunning = rxPtReqIntf.start
-  val fsmRxEwReqRunning = rxEwReqIntf.start
-
-  val fsmTxPtRespRunning = txPtTestResponder.io.usingPatternReader
-  val fsmTxEwRespRunning = txEwSweepResponder.io.usingPatternReader
-  val fsmRxPtRespRunning = rxPtTestResponder.io.usingPatternWriter
-  val fsmRxEwRespRunning = rxEwSweepResponder.io.usingPatternWriter
-
-  io.phyTrainIo.eyeSweepCtrl.waitingForCommand :=
-    (fsmTxEwReqRunning && txEwSweepRequester.io.phyTrainIo.waitingForCommand) ||
-      (fsmRxEwReqRunning && rxEwSweepResponder.io.phyTrainIo.waitingForCommand)
-
-  io.phyTrainIo.localStatus.doingTxPointTest := fsmTxPtReqRunning
-  io.phyTrainIo.localStatus.doingTxEyeWidthSweep := fsmTxEwReqRunning
-  io.phyTrainIo.localStatus.doingRxPointTest := fsmRxPtReqRunning
-  io.phyTrainIo.localStatus.doingRxEyeWidthSweep := fsmRxEwReqRunning
-
-  io.phyTrainIo.remoteStatus.doingTxPointTest := fsmTxPtRespRunning
-  io.phyTrainIo.remoteStatus.doingTxEyeWidthSweep := fsmTxEwRespRunning
-  io.phyTrainIo.remoteStatus.doingRxPointTest := fsmRxPtRespRunning
-  io.phyTrainIo.remoteStatus.doingRxEyeWidthSweep := fsmRxEwRespRunning
+  io.phyTrainIo.eyeDecision.ready := Mux(
+    decisionTargetsTx,
+    txEwSweepRequester.io.decision.ready,
+    rxEwSweepResponder.io.decision.ready
+  )
 
   io.phyTrainIo.ltsmState := currentStateSpecific
+  io.phyTrainIo.speedMode := freqSel
 
-  // ==============================================================================================
-  // Lane Repair Registers
-  // ==============================================================================================
-  val localTxFunctionalLanes = RegInit(
-    "b011".U(3.W)
-  ) // Which local TX data lanes to disable
-  val remoteTxFunctionalLanes = RegInit(
-    "b011".U(3.W)
-  ) // Which local RX data lanes to disable
+  // Saturate, because a wrap to near zero would make software finish early.
+  io.phyTrainIo.residencyLeft := {
+    val left = timeoutMaxCycles - timeoutCounter
+    val w = LogPhyTrainerParams.residencyWidth
+    if (timeoutWidth > w)
+      Mux(
+        left > ((BigInt(1) << w) - 1).U,
+        ((BigInt(1) << w) - 1).U(w.W),
+        left(w - 1, 0)
+      )
+    else left.pad(w)
+  }
 
-  // ==============================================================================================
-  // Pattern Writer/Reader Arbitration
-  // ==============================================================================================
-  // Setup
+  // ===========================================================================
+  // Width codes and pattern arbitration
+  // ===========================================================================
+  val localTxFunctionalLanes = io.currLocalTxFunctionalLanes
+  val remoteTxFunctionalLanes = io.currRemoteTxFunctionalLanes
+
+  val txDatapathCode =
+    PatternLaneMap.datapathCode(localTxFunctionalLanes, negotiatedBy8)
+  val rxDatapathCode =
+    PatternLaneMap.datapathCode(remoteTxFunctionalLanes, negotiatedBy8)
+
+  // REVERSALMB uses all N Lanes (sec 4.5.3.3.5), even at a smaller start width.
+  val reversalMb = currentState === LTState.sMBINIT &&
+    mbInitSM.io.currentState === MBInitState.sREVERSALMB
+  val moduleCode = PatternLaneMap.datapathCode("b011".U(3.W), negotiatedBy8)
+  val txEnCode = Mux(reversalMb, moduleCode, txDatapathCode)
+  val rxEnCode = Mux(reversalMb, moduleCode, rxDatapathCode)
+
   val patternWriterClients = Seq(
     (mbInitSM.io.usingPatternWriter, mbInitSM.io.patternWriterIo),
     (
@@ -772,29 +776,7 @@ class LinkTrainingSM(
       rxEwSweepRequester.io.patternReaderIo
     )
   )
-  block(Verification) {
-    block(Verification.Assert) {
-      // Hardware only exists in the verification layer
-      val activeWriterClients = PopCount(patternWriterClients.map {
-        case (isUsing, _) => isUsing
-      })
-      assert(
-        activeWriterClients <= 1.U,
-        "FATAL: Multiple clients are trying to use the Pattern Writer at the same time"
-      )
 
-      val activeReaderClients = PopCount(patternReaderClients.map {
-        case (isUsing, _) => isUsing
-      })
-      assert(
-        activeReaderClients <= 1.U,
-        "FATAL: Multiple clients are trying to use the Pattern Reader at the same time"
-      )
-    }
-  }
-
-  // Pattern Writer Arbitration
-  // Default assignments
   io.patternWriterIo.req.valid := false.B
   io.patternWriterIo.req.bits := DontCare
 
@@ -802,7 +784,6 @@ class LinkTrainingSM(
     clientIo.resp := io.patternWriterIo.resp
     clientIo.req.ready := false.B
 
-    // If this specific client is using the writer, route its req to the top level
     when(isUsing) {
       io.patternWriterIo.req.valid := clientIo.req.valid
       io.patternWriterIo.req.bits := clientIo.req.bits
@@ -810,19 +791,16 @@ class LinkTrainingSM(
     }
   }
 
-  // Pattern Reader Arbitration
-  // Default assignments
   io.patternReaderIo.req.valid := false.B
   io.patternReaderIo.req.bits := DontCare
   io.patternReaderIo.done := false.B
   io.patternReaderIo.resp.ready := false.B
-  io.patternReaderIo.remoteFuncLanes := remoteTxFunctionalLanes
+  io.patternReaderIo.remoteFuncLanes := rxEnCode
 
   patternReaderClients.foreach { case (isUsing, clientIo) =>
-    // resp is broadcast to every client; only the active one drives the
-    // request, done strobe, and resp.ready back up to the reader.
     clientIo.resp.valid := io.patternReaderIo.resp.valid
     clientIo.resp.bits := io.patternReaderIo.resp.bits
+    clientIo.verdictFinal := io.patternReaderIo.verdictFinal
     clientIo.req.ready := false.B
 
     when(isUsing) {
@@ -834,127 +812,136 @@ class LinkTrainingSM(
     }
   }
 
-  // ==============================================================================================
-  // Lane Repair Logic
-  // ==============================================================================================
-  // These wires get muxed in MBInit and MBTrain
+  // ===========================================================================
+  // Lane width and reversal
+  // ===========================================================================
   val updateLocalTxFuncLanes = WireInit(false.B)
   val updateRemoteTxFuncLanes = WireInit(false.B)
   val newLocalTxFuncLanes = WireInit("b011".U(3.W))
   val newLocalRxFuncLanes = WireInit("b011".U(3.W))
 
-  val outOfSpareTxLanes = Wire(Bool())
-  outOfSpareTxLanes := Mux(
-    negotiatedUcieSx8.asBool,
-    // If negotiated as x8: Out of spares if already degraded to x4 (100, 101) or dead (000)
-    localTxFunctionalLanes === "b100".U(3.W) ||
-      localTxFunctionalLanes === "b101".U(3.W) ||
-      localTxFunctionalLanes === "b000".U(3.W),
+  // sec 9.5.3.36 bits 14:8 name a logical transmit Lane.
+  val swRepairLane =
+    PatternLaneMap.laneHalf(
+      io.runtimeLaneRepairId,
+      negotiatedUcieSx8.asBool,
+      afeParams.mbLanes
+    )
+  val swRepairLaneRelevant = swRepairLane.relevant
 
-    // If negotiated as x16: Out of spares if already degraded to x8 (001, 010) or dead (000)
-    localTxFunctionalLanes === "b001".U(3.W) ||
-      localTxFunctionalLanes === "b010".U(3.W) ||
-      localTxFunctionalLanes === "b000".U(3.W)
+  // Repair resources (Table 4-10) mean a width without the Lane (sec 4.3.7).
+  val swTxDegradeTarget = PatternLaneMap.degradeTarget(
+    localTxFunctionalLanes,
+    swRepairLane.lower,
+    swRepairLane.upper,
+    negotiatedUcieSx8.asBool
+  )
+  val swRxDegradeTarget = PatternLaneMap.degradeTarget(
+    remoteTxFunctionalLanes,
+    swRepairLane.lower,
+    swRepairLane.upper,
+    negotiatedUcieSx8.asBool
   )
 
-  val outOfSpareRxLanes = Wire(Bool())
-  outOfSpareRxLanes := Mux(
-    negotiatedUcieSx8.asBool,
-    // If negotiated as x8: Out of spares if already degraded to x4 (100, 101) or dead (000)
-    remoteTxFunctionalLanes === "b100".U(3.W) ||
-      remoteTxFunctionalLanes === "b101".U(3.W) ||
-      remoteTxFunctionalLanes === "b000".U(3.W),
-
-    // If negotiated as x16: Out of spares if already degraded to x8 (001, 010) or dead (000)
-    remoteTxFunctionalLanes === "b001".U(3.W) ||
-      remoteTxFunctionalLanes === "b010".U(3.W) ||
-      remoteTxFunctionalLanes === "b000".U(3.W)
-  )
-
-  // Update the lane repair results
-  when(updateLocalTxFuncLanes) {
-    localTxFunctionalLanes := newLocalTxFuncLanes
-  }
-  when(updateRemoteTxFuncLanes) {
-    remoteTxFunctionalLanes := newLocalRxFuncLanes
-  }
+  // Latch at RESET, because sec 9.5.1.5 trains with the bits set at the start.
+  val linkInitWidthCode = RegInit("b011".U(3.W))
   when(currentState === LTState.sRESET) {
-    localTxFunctionalLanes := "b011".U(3.W) // default
-    remoteTxFunctionalLanes := "b011".U(3.W)
+    linkInitWidthCode := io.initWidthCode
   }
+
+  // MBTRAIN.REPAIR starts at full width, because sec 4.3.7 degrades from it.
+  val restoreFullWidth = WireInit(false.B)
+  io.widthWrite.txValid := updateLocalTxFuncLanes || restoreFullWidth
+
+  // Full width means the start width, so Lanes Target Link Width cut stay off.
+  // sec 4.3.7 does not say, so this is a reading.
+  io.widthWrite.txCode :=
+    Mux(restoreFullWidth, linkInitWidthCode, newLocalTxFuncLanes)
+  io.widthWrite.rxValid := updateRemoteTxFuncLanes || restoreFullWidth
+  io.widthWrite.rxCode :=
+    Mux(restoreFullWidth, linkInitWidthCode, newLocalRxFuncLanes)
+  io.widthReset := currentState === LTState.sRESET
   io.localTxFunctionalLanes := localTxFunctionalLanes
   io.remoteTxFunctionalLanes := remoteTxFunctionalLanes
 
-  def decodeLaneMap(code: UInt): UInt = {
-    MuxLookup(code, "hFFFF".U(16.W))(
-      Seq(
-        "b000".U -> "h0000".U(
-          16.W
-        ), // Degrade not possible (No functional lanes)
-        "b001".U -> "h00FF".U(16.W), // Lanes 0 to 7
-        "b010".U -> "hFF00".U(16.W), // Lanes 8 to 15
-        "b011".U -> "hFFFF".U(16.W), // Lanes 0 to 15 (All lanes functional)
-        "b100".U -> "h000F".U(16.W), // Lanes 0 to 3
-        "b101".U -> "h00F0".U(16.W) // Lanes 4 to 7
-      )
-    )
-  }
+  val rxLaneMask = PatternLaneMap.decodeLaneMap(rxDatapathCode, 16)
 
-  val txLaneMask = decodeLaneMap(localTxFunctionalLanes)
-  val rxLaneMask = decodeLaneMap(remoteTxFunctionalLanes)
-
-  io.txLaneMask := txLaneMask
   io.rxLaneMask := rxLaneMask
-  io.widthDegraded := localTxFunctionalLanes =/= "b011".U(3.W)
+
+  // sec 9.5.3.34 bit 9. A width that Link Control asked for is not a degrade.
+  io.widthDegraded := localTxFunctionalLanes =/= linkInitWidthCode
+  io.linkInitWidthCode := linkInitWidthCode
 
   val mbLaneCtrlIo = Wire(new MainbandLaneCtrlIO(afeParams))
 
+  // Tri-state by default, as RESET, SBINIT and TRAINERROR require (sec 4.5.3).
   mbLaneCtrlIo.txDataEn.foreach(_ := false.B)
   mbLaneCtrlIo.txClkEn := false.B
   mbLaneCtrlIo.txValidEn := false.B
   mbLaneCtrlIo.txTrackEn := false.B
+  mbLaneCtrlIo.txClkHeldLow := false.B
+  mbLaneCtrlIo.txTrackPattern := false.B
+  mbLaneCtrlIo.txTrackLevel := false.B
   mbLaneCtrlIo.rxDataEn.foreach(_ := false.B)
   mbLaneCtrlIo.rxClkEn := false.B
   mbLaneCtrlIo.rxValidEn := false.B
   mbLaneCtrlIo.rxTrackEn := false.B
 
-  // Each state has default settings for the `enable` of the lanes but once lane
-  // repair is applied mask the `enable` signals based on the lane repair results
+  val doLaneReversal = RegInit(false.B)
+
+  val txEnMask = PatternLaneMap.decodeLaneMap(txEnCode, 16)
+  val rxEnMask = PatternLaneMap.decodeLaneMap(rxEnCode, 16)
   for (i <- 0 until afeParams.mbLanes) {
-    io.mbCtrlIo.txDataEn(i) := mbLaneCtrlIo.txDataEn(i) && txLaneMask(i)
-    io.mbCtrlIo.rxDataEn(i) := mbLaneCtrlIo.rxDataEn(i) && rxLaneMask(i)
+    // Only the Transmitter reverses (sec 4.2), so its enables are mirrored.
+    def mirror(n: Int): Int = if (i < n) n - 1 - i else i
+    val txEn = Mux(
+      doLaneReversal,
+      Mux(
+        negotiatedBy8,
+        txEnMask(mirror(8)),
+        txEnMask(mirror(afeParams.mbLanes))
+      ),
+      txEnMask(i)
+    )
+    io.mbCtrlIo.txDataEn(i) := mbLaneCtrlIo.txDataEn(i) && txEn
+    io.mbCtrlIo.rxDataEn(i) := mbLaneCtrlIo.rxDataEn(i) && rxEnMask(i)
   }
 
   io.mbCtrlIo.txClkEn := mbLaneCtrlIo.txClkEn
+  io.mbCtrlIo.txClkHeldLow := mbLaneCtrlIo.txClkHeldLow
   io.mbCtrlIo.txValidEn := mbLaneCtrlIo.txValidEn
   io.mbCtrlIo.txTrackEn := mbLaneCtrlIo.txTrackEn
+  io.mbCtrlIo.txTrackPattern := mbLaneCtrlIo.txTrackPattern
+  io.mbCtrlIo.txTrackLevel := mbLaneCtrlIo.txTrackLevel
 
   io.mbCtrlIo.rxClkEn := mbLaneCtrlIo.rxClkEn
   io.mbCtrlIo.rxValidEn := mbLaneCtrlIo.rxValidEn
   io.mbCtrlIo.rxTrackEn := mbLaneCtrlIo.rxTrackEn
 
-  // Relevant module connections:
-  // MBTrain
   mbTrainSM.io.currLocalTxFunctionalLanes := localTxFunctionalLanes
   mbTrainSM.io.currRemoteTxFunctionalLanes := remoteTxFunctionalLanes
 
-  // ==============================================================================================
-  // Lane Reversal Logic
-  // ==============================================================================================
-  val doLaneReversal = RegInit(false.B)
+  // sec 4.5.3.3.5 step 9 keeps this order, and only a domain reset clears it.
+  val laneReversalKept = RegInit(false.B)
+  val reversalTried = RegNext(mbInitSM.io.applyLaneReversal, false.B)
 
-  // Lane reversal is detected in MBInit
-  when(mbInitSM.io.applyLaneReversal) {
-    doLaneReversal := true.B
-  }.elsewhen(currentState === LTState.sRESET) {
-    doLaneReversal := false.B
+  // Test again with the other Lane order (sec 4.5.3.3.5 step 7).
+  when(mbInitSM.io.applyLaneReversal && !reversalTried) {
+    doLaneReversal := !doLaneReversal
+  }
+
+  // In TRAINERROR, as at step 10, go back to the order that step 9 kept last.
+  when(currentState === LTState.sTRAINERROR) {
+    doLaneReversal := laneReversalKept
+  }.elsewhen(mbInitSM.io.currentState === MBInitState.sREPAIRMB) {
+    laneReversalKept := doLaneReversal
   }
 
   io.doLaneReversal := doLaneReversal
 
-  // ==============================================================================================
-  // Phy Retrain Logic
-  // ==============================================================================================
+  // ===========================================================================
+  // PHY retrain
+  // ===========================================================================
   val retrainSbModule = withReset(subFsmModuleReset) {
     Module(new PhyRetrainSidebandHandshake(sbParams))
   }
@@ -962,7 +949,6 @@ class LinkTrainingSM(
   retrainSbModule.io.startPhyRetrainMsgExch := false.B
   retrainSbModule.io.waitForRemoteRequest := false.B
 
-  // Sideband defaults
   retrainSbModule.io.requesterSbLaneIo.rx.valid := false.B
   retrainSbModule.io.requesterSbLaneIo.rx.bits :=
     0.U.asTypeOf(chiselTypeOf(retrainSbModule.io.requesterSbLaneIo.rx.bits))
@@ -974,113 +960,66 @@ class LinkTrainingSM(
   retrainSbModule.io.responderSbLaneIo.tx.ready := false.B
 
   val phyInRetrain = RegInit(false.B)
-  val phyRetrainFromLinkspeed = RegInit(false.B)
 
   when(currentState === LTState.sRESET || mbTrainSM.io.clearPhyInRetrainFlag) {
     phyInRetrain := false.B
   }
 
-  // MBTrain IOs
   mbTrainSM.io.phyInRetrain := phyInRetrain
+  io.clearRuntimeLinkCtrlBusyBit := mbTrainSM.io.clearRuntimeLinkCtrlBusyBit
 
-  // Table 4-10/11: Local Encoding Generation
   val busyBit = WireInit(io.runtimeLinkCtrlBusyBit.asUInt)
-  val repairNeeded = WireInit(io.runtimeRequestForRepair)
+  val repairNeeded =
+    WireInit(io.runtimeRequestForRepair && swRepairLaneRelevant)
+
+  // Both directions need a target, because pl_lnk_cfg has one width.
   val repairResourcesAvailable = WireInit(
-    outOfSpareTxLanes && outOfSpareRxLanes
+    (swTxDegradeTarget =/= "b000".U) && (swRxDegradeTarget =/= "b000".U)
   )
 
-  val localEncoding = WireInit(
-    RetrainEncoding.TXSELFCAL
-  ) // Default for Busy = 0b
+  mbTrainSM.io.swDegradeTarget.valid := io.runtimeLinkCtrlBusyBit &&
+    repairNeeded && repairResourcesAvailable
 
-  when(busyBit === 1.U) {
-    when(repairNeeded) {
-      when(repairResourcesAvailable) {
-        localEncoding := RetrainEncoding.REPAIR
-      }.otherwise {
-        localEncoding := RetrainEncoding.SPEEDIDLE
-      }
-    }.otherwise { // No repair needed
-      localEncoding := RetrainEncoding.TXSELFCAL
-    }
-  }
+  // sec 9.5.3.36 bit 7 waits for the next retrain, so it needs PHY_IN_RETRAIN.
+  val stuckAtActive = io.injectStuckAt && io.runtimeLinkCtrlBusyBit &&
+    phyInRetrain && swRepairLaneRelevant
 
-  // Remote's Initial Retrain Encoding Bundle
+  // Inject on Tx (sec 9.5.3.36 allows either), so LINKSPEED's results see it.
+  io.stuckAtLaneMask := Mux(
+    stuckAtActive,
+    UIntToOH(io.runtimeLaneRepairId, afeParams.mbLanes),
+    0.U(afeParams.mbLanes.W)
+  )
+  mbTrainSM.io.swDegradeTarget.bits := swTxDegradeTarget
+
+  val localEncoding = RetrainResolution.localEncoding(
+    busyBit === 1.U,
+    repairNeeded,
+    repairResourcesAvailable
+  )
+
   val remoteReqEncoding = retrainSbModule.io.responderRemoteRetrainEncoding
 
   val resolutionDone = RegInit(false.B)
   val resolvedEncoding = RegInit(0.U(3.W))
 
-  // Table 4-12: (Local Die, Remote Die) -> Resolved Exit State
-  val resolutionTable = Seq(
-    (
-      RetrainEncoding.TXSELFCAL,
-      RetrainEncoding.TXSELFCAL
-    ) -> RetrainEncoding.TXSELFCAL,
-    (
-      RetrainEncoding.TXSELFCAL,
-      RetrainEncoding.REPAIR
-    ) -> RetrainEncoding.REPAIR,
-    (
-      RetrainEncoding.TXSELFCAL,
-      RetrainEncoding.SPEEDIDLE
-    ) -> RetrainEncoding.SPEEDIDLE,
-    (
-      RetrainEncoding.REPAIR,
-      RetrainEncoding.TXSELFCAL
-    ) -> RetrainEncoding.REPAIR,
-    (RetrainEncoding.REPAIR, RetrainEncoding.REPAIR) -> RetrainEncoding.REPAIR,
-    (
-      RetrainEncoding.REPAIR,
-      RetrainEncoding.SPEEDIDLE
-    ) -> RetrainEncoding.SPEEDIDLE,
-    (
-      RetrainEncoding.SPEEDIDLE,
-      RetrainEncoding.TXSELFCAL
-    ) -> RetrainEncoding.SPEEDIDLE,
-    (
-      RetrainEncoding.SPEEDIDLE,
-      RetrainEncoding.REPAIR
-    ) -> RetrainEncoding.SPEEDIDLE,
-    (
-      RetrainEncoding.SPEEDIDLE,
-      RetrainEncoding.SPEEDIDLE
-    ) -> RetrainEncoding.SPEEDIDLE
-  )
-
-  // Wait for Remote to send its encoding. Only in PHYRETRAIN: the handshake
-  // still shows the remote's encoding as valid the cycle after `done`, once the
-  // LTSM has left and cleared `resolutionDone`, and taking it then would carry
-  // a resolved encoding into the next retrain before its request has arrived.
+  // Only in PHYRETRAIN, or a late encoding carries into the next retrain.
   when(remoteReqEncoding.valid && (currentState === LTState.sPHYRETRAIN)) {
     resolutionDone := true.B
-
-    when(remoteReqEncoding.bits === localEncoding) {
-      // No conflict: Encodings match
-      resolvedEncoding := localEncoding
-    }.otherwise {
-      // Conflict: Resolve using the Table 4-12
-      resolvedEncoding := localEncoding // Fallback latch
-
-      for (((loc, rem), res) <- resolutionTable) {
-        when(localEncoding === loc && remoteReqEncoding.bits === rem) {
-          resolvedEncoding := res
-        }
-      }
-    }
+    resolvedEncoding := RetrainResolution.resolve(
+      localEncoding,
+      remoteReqEncoding.bits
+    )
   }
 
-  // Responder sends resolved encoding in RESP message
   retrainSbModule.io.responderLocalRetrainEncoding.valid := resolutionDone
   retrainSbModule.io.responderLocalRetrainEncoding.bits := resolvedEncoding
 
-  // Send the Table 4-10 result in send the REQ message
   retrainSbModule.io.requesterLocalRetrainEncoding.valid := (currentState === LTState.sPHYRETRAIN)
   retrainSbModule.io.requesterLocalRetrainEncoding.bits := localEncoding
 
   mbTrainSM.io.goToState.valid := false.B
-  mbTrainSM.io.goToState.bits := MBTrainGoToState.goToSPEEDIDLE // Default
+  mbTrainSM.io.goToState.bits := MBTrainGoToState.goToSPEEDIDLE
 
   switch(resolvedEncoding) {
     is(RetrainEncoding.TXSELFCAL) {
@@ -1094,39 +1033,24 @@ class LinkTrainingSM(
     }
   }
 
+  // Only REPAIR restores, as SPEEDIDLE keeps the width (sec 4.5.3.4.3 rule 2).
   when(mbTrainSM.io.goToState.valid) {
     switch(mbTrainSM.io.goToState.bits) {
-      is(MBTrainGoToState.goToREPAIR) {
-        localTxFunctionalLanes := "b011".U(3.W)
-        remoteTxFunctionalLanes := "b011".U(3.W)
-      }
-      is(MBTrainGoToState.goToSPEEDIDLE) {
-        localTxFunctionalLanes := "b011".U(3.W)
-        remoteTxFunctionalLanes := "b011".U(3.W)
-      }
+      is(MBTrainGoToState.goToREPAIR) { restoreFullWidth := true.B }
     }
   }
 
-  // ==============================================================================================
-  // Error Detection Classification Logic
-  // ==============================================================================================
-  // TODO: Have error handling logic from the modules here
-  // TODO: need to use signal from trainerror responder and likely do a reset on the modules and transition to trainerror
-  // TODO: when coming into reset, we reset any state register in the LTSM
-  // TODO: note we may have to let sb and mb messages through if there are pending
-  // TODO: Need to make sure to classify the errors appropriately, correctable, uncorrectable fatel, uncorrectable non-fatel
+  // ===========================================================================
+  // Errors and TRAINERROR
+  // ===========================================================================
   val errorDetected = Wire(Bool())
 
-  errorDetected := mbInitSM.io.fsmCtrl.error || mbTrainSM.io.fsmCtrl.error
-
-  // mbInitSM.io.interoperableParamsNotFound   // TODO: (OUT) used to escalate an error (mbInit.io.fsmCtrl.error also goes high)
+  errorDetected := mbInitSM.io.fsmCtrl.error || mbTrainSM.io.fsmCtrl.error ||
+    rxPtTestResponder.io.error
 
   val localError = Wire(Bool())
   localError := trainingTimedout || errorDetected
 
-  // ==============================================================================================
-  // TrainError Logic
-  // ==============================================================================================
   val trainErrorRequester = withReset(subFsmModuleReset) {
     Module(new TrainErrorRequester(sbParams))
   }
@@ -1134,21 +1058,28 @@ class LinkTrainingSM(
     Module(new TrainErrorResponder(sbParams))
   }
 
-  // Requester Inputs
-  //
-  // Not from RESET, which is where a train error ends up anyway. The timeout
-  // flag is sticky until RESET is left, so asking from there would fire every
-  // other cycle -- `waitTrainErrorResp` drops again in RESET -- and each
-  // request zeroes the counter the 4ms minimum wait counts on. RESET would
-  // never end.
+  // RDI LinkReset, Disabled or LinkError leads to TRAINERROR (sec 4.5.3.8).
+  val linkDownRequested =
+    ((io.rdi.plStateSts === RDIState.linkReset) ||
+      (io.rdi.plStateSts === RDIState.disabled) ||
+      (io.rdi.plStateSts === RDIState.linkError)) &&
+      !trainingEpisodeActive && (currentState =/= LTState.sRESET)
+
+  // On an up Link, RDI goes to LinkError first, so the partner hears it first.
   when(
-    localError && !waitTrainErrorResp &&
+    ((localError && !rdiUp) || linkDownRequested) &&
+      !waitTrainErrorResp &&
       (currentState =/= LTState.sTRAINERROR) &&
+
+      // sec 4.5.3.8 needs no handshake from SBINIT, where a req goes out RAW.
+      (currentState =/= LTState.sSBINIT) &&
+
+      // Not from RESET, where a request would restart the 4 ms residency count.
       (currentState =/= LTState.sRESET)
   ) {
     triggerTrainErrorReq := true.B
   }
-  when(triggerTrainErrorReq) { // Flags when the TrainError RESP is received
+  when(triggerTrainErrorReq) {
     waitTrainErrorResp := true.B
   }.elsewhen(
     trainErrorRequester.io.done ||
@@ -1159,7 +1090,6 @@ class LinkTrainingSM(
   }
   trainErrorRequester.io.sendReq := waitTrainErrorResp
 
-  // Responder Inputs
   trainErrorResponder.io.wakeUp := (currentState =/= LTState.sRESET) &&
     (currentState =/= LTState.sTRAINERROR)
   trainErrorResponder.io.sendResp := (currentState === LTState.sTRAINERROR) &&
@@ -1174,10 +1104,12 @@ class LinkTrainingSM(
   val responderFinished = !trainErrorResponder.io.remoteRequestingTrainError ||
     trainErrorResponder.io.done
 
-  io.remoteRequestingTrainError := trainErrorResponder.io.remoteRequestingTrainError
-
+  // sec 4.5.3.8 holds TRAINERROR for packets in flight and for RDI LinkError.
+  // forceRdiLinkError covers the cycles before RDI gets there.
   val transitionToReset = Wire(Bool())
-  transitionToReset := io.sbCtrlIo.allPacketsSent
+  transitionToReset := io.sbCtrlIo.allPacketsSent &&
+    (io.rdi.plStateSts =/= RDIState.linkError) &&
+    !forceRdiLinkError
 
   val succeededThisCycle = Wire(Bool())
   succeededThisCycle := (currentState === LTState.sLINKINIT) && (nextState === LTState.sACTIVE)
@@ -1186,11 +1118,21 @@ class LinkTrainingSM(
     (nextState === LTState.sRESET) &&
     trainingEpisodeActive
 
+  // Decide on entry, or an escalation lands as the PHY leaves (sec 4.5.3.8).
+  val enteringTrainError = (currentState =/= LTState.sTRAINERROR) &&
+    (nextState === LTState.sTRAINERROR)
+  val episodeExhausted = enteringTrainError && trainingEpisodeActive &&
+    (trainingRetryCounter === retryAmtMax)
+
   autoRetrain := (currentState === LTState.sRESET) &&
     trainingEpisodeActive &&
     (trainingRetryCounter <= retryAmtMax)
 
-  when(freshTrainingTrigger && (currentState === LTState.sRESET)) {
+  // A trigger in RESET between retries belongs to the current episode.
+  when(
+    freshTrainingTrigger && (currentState === LTState.sRESET) &&
+      !trainingEpisodeActive
+  ) {
     trainingEpisodeActive := true.B
     currentEpisodeIsLocal := swTriggerTraining || rdiTriggerTraining
     trainingRetryCounter := 0.U
@@ -1202,16 +1144,32 @@ class LinkTrainingSM(
     trainingEpisodeActive := false.B
     currentEpisodeIsLocal := false.B
     trainingRetryCounter := 0.U
+  }.elsewhen(episodeExhausted) {
+    trainingEpisodeActive := false.B
+    when(currentEpisodeIsLocal) {
+      fatalTrainingError := true.B
+      forceRdiLinkError := true.B
+    }
+    currentEpisodeIsLocal := false.B
   }.elsewhen(retryCounterEn) {
     trainingRetryCounter := trainingRetryCounter + 1.U
-    when(trainingRetryCounter === retryAmtMax) {
-      trainingEpisodeActive := false.B
-      when(currentEpisodeIsLocal) {
-        fatalTrainingError := true.B
-        forceRdiLinkError := true.B
-      }
-      currentEpisodeIsLocal := false.B
-    }
+  }
+
+  // RDI goes to LinkError first, so its request reaches the partner.
+  // A Start is not a failure, so fatalTrainingError stays low.
+  when(liveStart) {
+    forceRdiLinkError := true.B
+  }
+
+  // sec 4.5 and Table 10-1 escalate a failure that takes an up Link down.
+  when(localError && rdiUp) {
+    fatalTrainingError := true.B
+    forceRdiLinkError := true.B
+  }
+
+  // A partner's TRAINERROR takes RDI to LinkError, with no fatal escalation.
+  when(trainErrorResponder.io.remoteRequestingTrainError && rdiUp) {
+    forceRdiLinkError := true.B
   }
 
   when(fatalTrainingError && (io.rdi.plStateSts === RDIState.linkError)) {
@@ -1232,10 +1190,41 @@ class LinkTrainingSM(
     fatalTrainingSawLinkError := false.B
   }
 
-  // ==============================================================================================
-  // Sideband Arbitration
-  // ==============================================================================================
-  // Setup
+  // sec 4.5.3.3.1 recommends an Internal Error, LinkError and pl_trainerror.
+  val interopFailPrev =
+    RegNext(mbInitSM.io.interoperableParamsNotFound, false.B)
+
+  // A retry cannot change the parameters, so escalate at once (sec 4.5).
+  when(
+    mbInitSM.io.interoperableParamsNotFound && !interopFailPrev &&
+      currentEpisodeIsLocal
+  ) {
+    fatalTrainingError := true.B
+    forceRdiLinkError := true.B
+
+    // The episode ends here, so the escalation happens once.
+    trainingEpisodeActive := false.B
+  }
+
+  // ===========================================================================
+  // Runtime recalibration
+  // ===========================================================================
+  val runtimeRecal = withReset(subFsmModuleReset) {
+    Module(new RuntimeRecalResponder(sbParams))
+  }
+  runtimeRecal.io.inActive := currentState === LTState.sACTIVE
+  io.recalInProgress := runtimeRecal.io.recalInProgress
+
+  // Outside the sub-state reset, so a retrain cannot favor one level.
+  val trackParkLevel = RegInit(false.B)
+  val recalWasInProgress = RegNext(runtimeRecal.io.recalInProgress, false.B)
+  when(recalWasInProgress && !runtimeRecal.io.recalInProgress) {
+    trackParkLevel := !trackParkLevel
+  }
+
+  // ===========================================================================
+  // Sideband arbitration
+  // ===========================================================================
   val activeReqSbLane = Wire(new SidebandLaneIO(sbParams))
   val activeRespSbLane = Wire(new SidebandLaneIO(sbParams))
 
@@ -1261,20 +1250,11 @@ class LinkTrainingSM(
     rxPtTestRequester.io.sbLaneIo,
     rxPtTestResponder.io.sbLaneIo,
     rxEwSweepRequester.io.sbLaneIo,
-    rxEwSweepResponder.io.sbLaneIo
+    rxEwSweepResponder.io.sbLaneIo,
+    runtimeRecal.io.patternSbLaneIo,
+    runtimeRecal.io.adjustSbLaneIo
   )
-  block(Verification) {
-    block(Verification.Assert) {
-      // Assert that at most one module claims to consume an RX message
-      val activeReaderClients = PopCount(sidebandClients.map(_.rx.ready))
-      assert(
-        activeReaderClients <= 1.U,
-        "FATAL: Multiple modules asserting RX ready for a Sideband message at the same time"
-      )
-    }
-  }
 
-  // RX Arbitration
   sidebandClients.foreach { client =>
     client.rx.valid := io.sbLaneIo.rx.valid
     client.rx.bits := io.sbLaneIo.rx.bits
@@ -1282,7 +1262,6 @@ class LinkTrainingSM(
 
   io.sbLaneIo.rx.ready := sidebandClients.map(_.rx.ready).reduce(_ || _)
 
-  // TX Arbitration
   val txArbiter = Module(
     new RRArbiter(chiselTypeOf(io.sbLaneIo.tx.bits), sidebandClients.length)
   )
@@ -1293,21 +1272,12 @@ class LinkTrainingSM(
 
   io.sbLaneIo.tx <> txArbiter.io.out
 
-  // ==============================================================================================
-  // State Machine
-  // ==============================================================================================
+  // ===========================================================================
+  // State machine
+  // ===========================================================================
   switch(currentState) {
     is(LTState.sRESET) {
-      /*
-      Default signals:
-        Data, Valid, Clock TX are tri-stated (en == 0)
-        Data, Valid, Clock RX are disabled (en == 0)
-        Sideband TX is enabled (en == 1)
-        Sideband RX is enabled (en == 1)
-        Set Mainband Clock Speed to lowest (4 GT/s)
-       */
       currentStateSpecific := LTSMState.sRESET
-      ltsmInReset := true.B // This asserts reset on submodules until out of reset
       sbRxTxMode := SBRxTxMode.RAW
       io.sbLaneIo.rx.ready := true.B
       when(io.sbLaneIo.rx.valid) {
@@ -1316,7 +1286,7 @@ class LinkTrainingSM(
             sbInitPatternCounter := sbInitPatternCounter + 1.U
           }
         }.otherwise {
-          when(sbInitPatternCounter === 1.U) { // pattern not consecutively seen, so reset counter
+          when(sbInitPatternCounter === 1.U) {
             sbInitPatternCounter := 0.U
           }
         }
@@ -1333,14 +1303,16 @@ class LinkTrainingSM(
       }
     }
     is(LTState.sSBINIT) {
-      // SBInit doesn't use mainband ctrl IO, so defaults are kept
       currentStateSpecific := LTSMState.sSBINIT
       sbInitSM.io.fsmCtrl.start := !trainingTimedout && !sbInitSM.io.fsmCtrl.done
-      sbRxTxMode := sbInitSM.io.sbRxTxMode
+
+      // SBINIT stays RAW, or a pattern in flight goes out as a 2-beat packet.
+      sbRxTxMode := SBRxTxMode.RAW
       activeReqSbLane <> sbInitSM.io.requesterSbLaneIo
       activeRespSbLane <> sbInitSM.io.responderSbLaneIo
 
-      when(transitionToTrainError) {
+      // A local error needs no handshake here (sec 4.5.3.8).
+      when(transitionToTrainError || localError) {
         nextState := LTState.sTRAINERROR
       }.elsewhen(sbInitSM.io.fsmCtrl.done) {
         nextState := LTState.sMBINIT
@@ -1357,14 +1329,14 @@ class LinkTrainingSM(
       activeReqSbLane <> mbInitSM.io.requesterSbLaneIo
       activeRespSbLane <> mbInitSM.io.responderSbLaneIo
 
-      updateLocalTxFuncLanes := mbInitSM.io.txWidthChanged
-      updateRemoteTxFuncLanes := mbInitSM.io.rxWidthChanged
-      newLocalTxFuncLanes := mbInitSM.io.localFunctionalLanes
-      newLocalRxFuncLanes := mbInitSM.io.remoteFunctionalLanes
+      updateLocalTxFuncLanes := mbInitSM.io.widthApply.valid
+      updateRemoteTxFuncLanes := mbInitSM.io.widthApply.valid
+      newLocalTxFuncLanes := mbInitSM.io.widthApply.txCode
+      newLocalRxFuncLanes := mbInitSM.io.widthApply.rxCode
 
       substateTransitioning := mbInitSM.io.fsmCtrl.substateTransitioning
+      sbStallReceived := mbInitSM.io.fsmCtrl.stallReceived
 
-      // Extract MBInit specific substate
       switch(mbInitSM.io.currentState) {
         is(MBInitState.sPARAM) {
           currentStateSpecific := LTSMState.sMBINIT_PARAM
@@ -1382,8 +1354,8 @@ class LinkTrainingSM(
         is(MBInitState.sREPAIRMB) {
           currentStateSpecific := LTSMState.sMBINIT_REPAIRMB
         }
-        // Ignore TOMBTRAIN transition state: hold the last value to prevent the output from
-        // glitching to a default value
+
+        // Report the last sub-state, so the output does not glitch.
         is(MBInitState.sTOMBTRAIN) {
           currentStateSpecific := LTSMState.sMBINIT_REPAIRMB
         }
@@ -1418,8 +1390,8 @@ class LinkTrainingSM(
       newLocalRxFuncLanes := mbTrainSM.io.newRemoteFunctionalLanes
 
       substateTransitioning := mbTrainSM.io.fsmCtrl.substateTransitioning
+      sbStallReceived := mbTrainSM.io.fsmCtrl.stallReceived
 
-      // Extract MBTrain specific substate
       switch(mbTrainSM.io.currentState) {
         is(MBTrainState.sVALVREF) {
           currentStateSpecific := LTSMState.sMBTRAIN_VALVREF
@@ -1460,8 +1432,6 @@ class LinkTrainingSM(
         is(MBTrainState.sREPAIR) {
           currentStateSpecific := LTSMState.sMBTRAIN_REPAIR
         }
-        // Ignore transition states: hold the last value to prevent the output from
-        // glitching to a default value
         is(MBTrainState.sTOPHYRETRAIN) {
           currentStateSpecific := LTSMState.sMBTRAIN_LINKSPEED
         }
@@ -1473,22 +1443,30 @@ class LinkTrainingSM(
       when(transitionToTrainError) {
         nextState := LTState.sTRAINERROR
       }.elsewhen(mbTrainSM.io.currentState === MBTrainState.sTOPHYRETRAIN) {
+        // sec 4.5.3.7.4 has no RDI handshake, so do not wait for RDI Retrain.
         nextState := LTState.sPHYRETRAIN
-        phyRetrainFromLinkspeed := true.B
       }.elsewhen(mbTrainSM.io.currentState === MBTrainState.sTOLINKINIT) {
         nextState := LTState.sLINKINIT
-        io.scramblerReset := true.B // Reset scrambler upon entering LinkInit
+
+        // sec 4.5.3.5 resets the scrambler LFSR on entry to LINKINIT.
+        io.scramblerReset := true.B
       }
     }
     is(LTState.sLINKINIT) {
-      // Mainband Track, Data, and Valid Transmitters are held low (defaults)
+      // sec 4.5.3.5 holds Track, Data and Valid low, so they are driven.
+      mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
+      mbLaneCtrlIo.txClkEn := true.B
+      mbLaneCtrlIo.txValidEn := true.B
+      mbLaneCtrlIo.txTrackEn := true.B
+      mbLaneCtrlIo.rxClkEn := true.B
 
       currentStateSpecific := LTSMState.sLINKINIT
       io.rdi.doRdiBringup := true.B
 
       when(transitionToTrainError) {
         nextState := LTState.sTRAINERROR
-      }.elsewhen(io.rdi.plStateSts === RDIState.active) { // Indicates RDI SM went to Active
+      }.elsewhen(io.rdi.plStateSts === RDIState.active) {
+        // Do not wait on a divided clock, which can stop.
         nextState := LTState.sACTIVE
       }
     }
@@ -1497,23 +1475,40 @@ class LinkTrainingSM(
       mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
       mbLaneCtrlIo.txClkEn := true.B
       mbLaneCtrlIo.txValidEn := true.B
-      mbLaneCtrlIo.txTrackEn := true.B
+
+      // Hi-Z for a terminated partner (sec 4.6), else drive the park level.
+      mbLaneCtrlIo.txTrackEn :=
+        runtimeRecal.io.recalInProgress || !io.remoteRxTerminated
+
+      // One signal sends Track (sec 5.3) and keeps the clock ungated.
+      mbLaneCtrlIo.txTrackPattern := runtimeRecal.io.recalInProgress
+      mbLaneCtrlIo.txTrackLevel := trackParkLevel
       mbLaneCtrlIo.rxDataEn.foreach(_ := true.B)
       mbLaneCtrlIo.rxClkEn := true.B
       mbLaneCtrlIo.rxValidEn := true.B
       mbLaneCtrlIo.rxTrackEn := true.B
 
+      // A Start blocks the retrain arc, as full training replaces PHYRETRAIN.
       when(transitionToTrainError) {
         nextState := LTState.sTRAINERROR
-      }.elsewhen(io.rdi.plStateSts === RDIState.retrain || swRetrainReq) {
+      }.elsewhen(
+        (io.rdi.plStateSts === RDIState.retrain) && !liveStart &&
+          !liveStartPending
+      ) {
+        // Follow RDI Retrain (sec 4.5.3.7.2), as the runtime link test does.
         nextState := LTState.sPHYRETRAIN
       }
-      // }.elsewhen() {
-      //   nextState := LTState.sL1_L2
-      // }
     }
     is(LTState.sPHYRETRAIN) {
-      // Mainband Track, Data, and Valid Transmitters are held low (defaults)
+      // sec 4.5.3.7 holds Track, Data, Valid and Clock low, so they are driven.
+      mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
+      mbLaneCtrlIo.txClkEn := true.B
+
+      // No pattern runs here, so hold the clock pair low for the whole state.
+      mbLaneCtrlIo.txClkHeldLow := true.B
+      mbLaneCtrlIo.txValidEn := true.B
+      mbLaneCtrlIo.txTrackEn := true.B
+      mbLaneCtrlIo.rxClkEn := true.B
       currentStateSpecific := LTSMState.sPHYRETRAIN
       phyInRetrain := true.B
 
@@ -1525,26 +1520,19 @@ class LinkTrainingSM(
 
       when(retrainSbModule.io.done) {
         resolutionDone := false.B
-        phyRetrainFromLinkspeed := false.B
-        mbTrainSM.io.goToState.valid := true.B // Logic for which state to jump to is done above
+        mbTrainSM.io.goToState.valid := true.B
         nextState := LTState.sMBTRAIN
       }.elsewhen(transitionToTrainError) {
         resolutionDone := false.B
-        phyRetrainFromLinkspeed := false.B
         nextState := LTState.sTRAINERROR
       }
     }
     is(LTState.sTRAINERROR) {
-      /*
-      Default signals:
-        Data, Valid, Clock TX are tri-stated (en == 0)
-        Data, Valid, Clock RX are disabled (en == 0)
-        Sideband TX is enabled (en == 1)
-        Sideband RX is enabled (en == 1)
-       */
-
       currentStateSpecific := LTSMState.sTRAINERROR
-      io.sbCtrlIo.freezeAcceptingPackets := responderFinished
+
+      // Freeze last, so LinkError messages still go out (sec 4.5.3.8).
+      io.sbCtrlIo.freezeAcceptingPackets := responderFinished &&
+        (io.rdi.plStateSts =/= RDIState.linkError) && !forceRdiLinkError
 
       when(transitionToReset) {
         nextState := LTState.sRESET
@@ -1552,15 +1540,50 @@ class LinkTrainingSM(
     }
     is(LTState.sL1_L2) {
       currentStateSpecific := LTSMState.sL1_L2
+
       // TODO: Need to implement power management state logic
       nextState := LTState.sTRAINERROR
     }
   }
 
+  // Note: Keep this after the state switch, because the last connect wins.
   when(io.linkOpParamOverride) {
     txPtReqIntf.linkTrainingParameters := io.linkTrainingParameters
     txEwReqIntf.linkTrainingParameters := io.linkTrainingParameters
     rxPtReqIntf.linkTrainingParameters := io.linkTrainingParameters
     rxEwReqIntf.linkTrainingParameters := io.linkTrainingParameters
+  }
+
+  // ===========================================================================
+  // Verification
+  // ===========================================================================
+  block(Verification) {
+    block(Verification.Assert) {
+      val activeWriterClients = PopCount(patternWriterClients.map {
+        case (isUsing, _) => isUsing
+      })
+      assert(
+        activeWriterClients <= 1.U,
+        "FATAL: Multiple clients are trying to use the Pattern Writer at the same time"
+      )
+
+      val activeReaderClients = PopCount(patternReaderClients.map {
+        case (isUsing, _) => isUsing
+      })
+      assert(
+        activeReaderClients <= 1.U,
+        "FATAL: Multiple clients are trying to use the Pattern Reader at the same time"
+      )
+    }
+  }
+
+  block(Verification) {
+    block(Verification.Assert) {
+      val activeReaderClients = PopCount(sidebandClients.map(_.rx.ready))
+      assert(
+        activeReaderClients <= 1.U,
+        "FATAL: Multiple modules asserting RX ready for a Sideband message at the same time"
+      )
+    }
   }
 }

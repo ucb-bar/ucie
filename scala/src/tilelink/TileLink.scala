@@ -1,8 +1,15 @@
 package edu.berkeley.cs.uciedigital.tilelink
 
 import chisel3._
-import chisel3.layer.block
-import chisel3.layers.Verification
+import edu.berkeley.cs.uciedigital.phybridge.{
+  PhyTrainingImpairmentWindow,
+  PhyTrainingRxImpairmentModel,
+  PhyTrainingTxImpairmentModel,
+  SerdesBitOrder
+}
+import edu.berkeley.cs.uciedigital.common.PhyBridgeParams
+import edu.berkeley.cs.uciedigital.logphy.PatternDefs
+import edu.berkeley.cs.uciedigital.sideband.SidebandParams
 import chisel3.util._
 import chisel3.experimental.BundleLiterals._
 import freechips.rocketchip.prci._
@@ -23,8 +30,13 @@ import edu.berkeley.cs.uciedigital.top.{
   UcieDigitalTopParams,
   UcieDigitalTopPhyIO
 }
-import edu.berkeley.cs.uciedigital.regs.UcieRegBlock
+import edu.berkeley.cs.uciedigital.regs.{
+  UcieIrqs,
+  UcieRegBlock,
+  SidebandRegTargetResp
+}
 import freechips.rocketchip.diplomacy.{SimpleDevice, AddressSet}
+import freechips.rocketchip.interrupts.{IntSourceNode, IntSourcePortSimple}
 import org.chipsalliance.diplomacy._
 import org.chipsalliance.diplomacy.lazymodule._
 import edu.berkeley.cs.uciedigital.phy.macros.{
@@ -33,6 +45,7 @@ import edu.berkeley.cs.uciedigital.phy.macros.{
   TxLaneCtlIO
 }
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
+import edu.berkeley.cs.uciedigital.utils.Sync3
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
 import freechips.rocketchip.diplomacy.RegionType
@@ -61,11 +74,20 @@ case class UcieTLParams(
     maxInflight: Int = 1,
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
-    sim: Boolean = false,
+    // Keep Adapter and Logical PHY sideband timing identical. The defaults
+    // retain production timing; simulations can shorten reset residency.
+    sidebandParams: SidebandParams = SidebandParams(),
+    // Opt-in channel model, off by default. The Chisel PHY has no eye, so every
+    // swept code passes. With the model a sweep has a window to find. Test
+    // scaffolding, inside UcieTL for the reason in PhyTrainingImpairmentModel.
+    trainingImpairment: Option[PhyTrainingImpairmentWindow] = None,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
     sbRxQueueDepth: Int = 4,
+    // UCIe interrupts out of UcieTL, in UcieRegTop's source order. Off by
+    // default. An SoC that turns it on connects `UcieTL.intNode`.
+    includeInterrupts: Boolean = false,
     // Names the emitted module (see `moduleSuffix`). Instances that share an id
     // share a SystemVerilog module; give an instance its own id to harden it
     // separately in physical design.
@@ -331,29 +353,19 @@ class UcieClkRegs(
     // table, indexed by whatever rate training has settled on.
     val freqSelAutoEn = withClockAndReset(clock, reset) { RegInit(false.B) }
 
-    // `freqSel` crosses from the sideband clock. Two flops a bit: it is a held
-    // configuration value that changes once per rate negotiation, not a
-    // pulse, so the only exposure is a cycle of skew between bits while it
-    // settles -- and the table is only consulted once the controller has
-    // stopped moving it.
+    // `freqSel` crosses from the sideband clock. It changes only in SPEEDIDLE
+    // and is then held, so a word crossing is sound. The bits can skew for a
+    // cycle while it settles, and the table is read only after it stops.
     val freqSelSync = withClockAndReset(clock, reset) {
-      val stage0 = RegInit(0.U(4.W))
-      val stage1 = RegInit(0.U(4.W))
-      stage0 := io.freqSel
-      stage1 := stage0
-      stage1
+      Sync3.word(io.freqSel)
     }
     val selected = rateCfg(freqSelSync(2, 0))
 
-    // Lock crosses from the tile's own timing rather than any clock here, so
-    // it gets the same two flops. It is a level that settles once per wake-up,
-    // not a pulse, so nothing is lost to the delay.
+    // Lock crosses from the tile's own timing rather than any clock here. Each
+    // bit is an independent level that settles once per wake-up, so a per-bit
+    // synchronizer is the whole crossing.
     val pllLockSync = withClockAndReset(clock, reset) {
-      val stage0 = RegInit(0.U(2.W))
-      val stage1 = RegInit(0.U(2.W))
-      stage0 := io.pllLock
-      stage1 := stage0
-      stage1
+      Sync3.word(io.pllLock)
     }
     // Two more selects, held like the rest.
     val (sbClkDiv, sbClkBypassEn, rxClkFromTxQ) =
@@ -817,6 +829,10 @@ class UcieTLRegs(
           .defaultValidLaneSel(params.numLanes)
           .U(Phy.validLaneSelWidth(params.numLanes).W)
       )
+      // Both shuffler defaults cancel their tile's tree with Phy.treeBitOrder.
+      // That is its own inverse, so it works on both directions at once only.
+      // Checked here, as the valid-lane framing pattern cannot show a break.
+      SerdesBitOrder.check()
       val txctl = RegInit(VecInit(Seq.fill(params.numLanes + 5)({
         val w = Wire(new TxLaneDigitalCtlIO)
         // Every driver segment off out of reset, so a lane stays quiet until
@@ -928,10 +944,10 @@ class UcieTLRegs(
       val lastSeenTLReq = RegInit(0.U)
       lastSeenTLReq := io.lastSeenTLReq
 
-      // 2-FF sync: the flag is sticky and set in the digital clock domain,
-      // which is asynchronous to the UCIe clock the registers run on.
-      val sbTlRxOverflow =
-        RegNext(RegNext(io.sbTlRxOverflow, false.B), false.B)
+      // The flag is sticky and set in the digital clock domain, which is
+      // asynchronous to the PhyTest clock of the registers. It goes through the
+      // shared helper, so every crossing in the design is greppable.
+      val sbTlRxOverflow = Sync3(io.sbTlRxOverflow)
 
       txDatapathRst.ready := true.B
       txFsmRst.ready := true.B
@@ -1218,28 +1234,41 @@ class UcieController(
   private val retryW = digitalParams.logPhy.retryW
   val ucieDigital = LazyModule(new UcieDigitalTop(digitalParams))
 
-  // The controller's own controls, then the spec registers. One aligned window
-  // holds both ranges, so the offsets are from `UcieTLParams.address`.
+  // The controller's controls, then the spec registers, at offsets from
+  // `UcieTLParams.address`. With the D2D vendor block the spec registers take
+  // 32 KB but specBase is 16 KB aligned, so one AddressSet cannot hold them.
   import UcieController.{ctrlBase, specBase}
   val device = new SimpleDevice("ucie_controller", Seq("ucbbar,ucie"))
   val node = TLRegisterNode(
-    AddressSet.misaligned(params.address + ctrlBase, specBase - ctrlBase) :+
-      AddressSet(
+    AddressSet.misaligned(params.address + ctrlBase, specBase - ctrlBase) ++
+      AddressSet.misaligned(
         params.address + specBase,
-        regParams.allocation.regionSize - 1
+        regParams.allocation.regionSize
       ),
     device,
     "reg/control",
     beatBytes = beatBytes
   )
 
+  // UCIe interrupts, in UcieRegTop's source order. Off by default. They are
+  // raised on the sideband clock, so an SoC that connects them crosses them.
+  val intNode: Option[IntSourceNode] =
+    if (params.includeInterrupts)
+      Some(
+        IntSourceNode(IntSourcePortSimple(num = 1, sources = UcieIrqs.count))
+      )
+    else None
+
   override lazy val module = new UcieControllerImpl
   class UcieControllerImpl extends Impl {
     val io = IO(new Bundle {
       val chipFacingIo = new UcieDigitalTopChipIO(digitalParams.protocol)
+      // With separateDivClocks set, `clkRst` exists here as it does on
+      // UcieDigitalTop. Without it the `<>` below fails on a missing field.
       val phyFacingIo = new UcieDigitalTopPhyIO(
         digitalParams.logPhy.afe,
-        digitalParams.logPhy.sideband
+        digitalParams.logPhy.sideband,
+        digitalParams.logPhy.separateDivClocks
       )
     })
     private val top = ucieDigital.module
@@ -1256,8 +1285,21 @@ class UcieController(
       top.io.ctrl.pwrGood := pwrGood
       top.io.ctrl.retryTrainingAmt := retryTrainingAmt
 
-      val (spec, _, _) =
-        UcieRegBlock.build(top.io.regBlockIo.get, reset, regParams, specBase)
+      val regBlockIo = top.io.regBlockIo.get
+      val (spec, irqs) =
+        UcieRegBlock.build(regBlockIo, reset, regParams, specBase)
+      intNode.foreach { n =>
+        val (ints, _) = n.out(0)
+        ints.zip(irqs.toSeq).foreach { case (i, s) => i := s }
+      }
+      // node.regmap, unlike UcieSharedRegMapper.attach, does not serve partner
+      // Register Access, so the target is tied off as in UcieRegTop. The
+      // partner times out, which sec 7.1 makes the completer's job to prevent.
+      regBlockIo.sidebandRegTarget.req.ready := false.B
+      regBlockIo.sidebandRegTarget.resp.valid := false.B
+      regBlockIo.sidebandRegTarget.resp.bits := 0.U.asTypeOf(
+        new SidebandRegTargetResp
+      )
       spec ++ Seq(
         ctrlBase -> Seq(
           RegField(1, linkReset, RegFieldDesc("ucieLinkReset", ""))
@@ -1367,26 +1409,64 @@ class UcieTL(
   val phyTestClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
   val sidebandClockNode = ClockSourceNode(Seq(ClockSourceParameters()))
 
-  val ucieRegParams = UcieDigitalTopParams
-    .default()
-    .regs
+  val defaultUcieDigitalParams = UcieDigitalTopParams.default()
+  // The digital stack is built to this instance's Lane count, not the default.
+  // Otherwise a narrower build fails on a Vec length mismatch at the mainband
+  // handover. maxLinkWidth and phyBridge follow (UcieDigitalTopParams.validate)
+  val ucieAfeParams =
+    defaultUcieDigitalParams.logPhy.afe.copy(mbLanes = params.numLanes)
+  // A window the codes cannot reach is a link that never passes. That looks
+  // like a training failure, not a mis-set parameter.
+  params.trainingImpairment.foreach { window =>
+    val phaseWidth = ucieAfeParams.bridge
+      .knob(PhyBridgeParams.ClockPhaseKnob)
+      .map(_.width)
+      .getOrElse(0)
+    val vrefWidth = ucieAfeParams.bridge
+      .knob(PhyBridgeParams.RxVrefKnob)
+      .map(_.width)
+      .getOrElse(0)
+    require(
+      BigInt(window.phaseMax) < (BigInt(1) << phaseWidth),
+      s"PHY impairment phase window reaches ${window.phaseMax}, " +
+        s"which does not fit the $phaseWidth-bit clock phase code"
+    )
+    require(
+      BigInt(window.vrefMax) < (BigInt(1) << vrefWidth),
+      s"PHY impairment Vref window reaches ${window.vrefMax}, " +
+        s"which does not fit the $vrefWidth-bit Vref code"
+    )
+  }
+  val ucieRegParams = defaultUcieDigitalParams.regs
     .copy(
       baseAddress = params.ucieRegsBaseAddress,
       numModules = 1,
+      maxLinkWidth = params.numLanes,
       includeRegNode = false,
-      includeInterruptNode = false
+      includeInterruptNode = false,
+      phyBridge = ucieAfeParams.bridge
     )
-  val ucieDigitalParams = {
-    val d = UcieDigitalTopParams.default()
-    d.copy(
-      regs = ucieRegParams,
-      logPhy = d.logPhy.copy(sim = params.sim)
-    )
-  }
+  // `Phy` derives txDivClk from the main clock and rxDivClk from the received
+  // forwarded clock, so the two mainband domains are separate here and the
+  // synchronisers are required. UcieDigitalTop keeps the single-lclk setup.
+  val ucieDigitalParams = defaultUcieDigitalParams.copy(
+    adapter = defaultUcieDigitalParams.adapter
+      .copy(sideband = params.sidebandParams),
+    logPhy = defaultUcieDigitalParams.logPhy
+      .copy(
+        afe = ucieAfeParams,
+        separateDivClocks = true,
+        sideband = params.sidebandParams
+      ),
+    regs = ucieRegParams
+  )
   val regs = LazyModule(new UcieTLRegs(params, UcieTL.regBeatBytes))
   val controller = LazyModule(
     new UcieController(params, UcieTL.regBeatBytes, ucieDigitalParams)
   )
+  // The interrupts come from the controller, which holds the UCIe register
+  // block.
+  val intNode = controller.intNode
 
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
@@ -1520,147 +1600,236 @@ class UcieTL(
     val selSbTl =
       !selUcie && !selMbTl && regs.module.io.sidebandMode === BandMode.tl
 
-    // Mainband crossings to and from the PHY's packet clocks: PhyTest's from
-    // the PhyTest clock, the controller's from the sideband clock. Their PHY
-    // ends do not look at the selects, which come from the PhyTest clock: the
-    // TX queues are always drained and the RX queues always fed, so no select
-    // reaches their pointers on a packet clock. Only the selected controller's
-    // TX words reach the lanes; the others' are dropped, and the others' RX
-    // sides see words that are not theirs. (The TL path's RX queue is the
-    // exception; see there.) Software resets the datapath after changing a
-    // select, which empties every queue on the packet clocks, both ends, and
-    // starts whichever controller now has the lanes from clean queues.
+    // Async crossings are for PhyTest only, as it runs on the PhyTest clock.
+    // The UCIe mainband halves use txDivClk and rxDivClk and go to the PHY pins
+    // directly. A FIFO there would break the one-divided-clock-cycle budget.
+
+    // The two points the impairment model splices into. They are wires with or
+    // without the model, so the pin drive and fan-out read the same. Without
+    // the model they are pass-throughs and firtool folds them away.
+    val phyTxClean = Wire(new TxIO(params.numLanes))
+    val phyTxForAnalog = Wire(new TxIO(params.numLanes))
+    phyTxForAnalog := phyTxClean
+    phy.io.tx := phyTxForAnalog
+
+    val phyRxForDigital = Wire(new RxIO(params.numLanes))
+    phyRxForDigital := phy.io.rx
+
     val txTestFifo =
       Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
     txTestFifo.io.enq_clock := phy.io.clkRst.phyTestClk
     txTestFifo.io.enq_reset := phy.io.clkRst.phyTestRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txTestFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-    txTestFifo.io.deq.ready := true.B
     txTestFifo.io.enq <> test.io.tx
-
-    val txUcieFifo =
-      Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
-    txUcieFifo.io.enq_clock := phy.io.clkRst.sbClk
-    txUcieFifo.io.enq_reset := phy.io.clkRst.sbRst
-    txUcieFifo.io.deq_clock := phy.io.clkRst.txDivClk
-    txUcieFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-    txUcieFifo.io.deq.ready := true.B
 
     val rxTestFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
-    rxTestFifo.io.enq.bits := phy.io.rx
-    rxTestFifo.io.enq.valid := true.B
+    rxTestFifo.io.enq.bits := phyRxForDigital
     rxTestFifo.io.enq_clock := phy.io.clkRst.rxDivClk
     rxTestFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
     rxTestFifo.io.deq_clock := phy.io.clkRst.phyTestClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.phyTestRst
     test.io.rx <> rxTestFifo.io.deq
 
-    val rxUcieFifo =
-      Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
-    rxUcieFifo.io.enq.bits := phy.io.rx
-    rxUcieFifo.io.enq.valid := true.B
-    rxUcieFifo.io.enq_clock := phy.io.clkRst.rxDivClk
-    rxUcieFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
-    rxUcieFifo.io.deq_clock := phy.io.clkRst.sbClk
-    rxUcieFifo.io.deq_reset := phy.io.clkRst.sbRst
-    // The PHY cannot be held off: every RX word goes in as it arrives, so a
-    // full queue loses it. That happens once the packet clock outruns the
-    // sideband clock the controller drains on -- 1 GHz at 32 GT/s, against
-    // 800 MHz -- which this crossing cannot carry. Say so rather than drop
-    // words silently.
-    //
-    // Only while the controller has the lanes, though. Before then the queue
-    // takes whatever PhyTest or the TL path runs, at whatever rate, and may
-    // well be full, so the check arms at a datapath reset with the controller
-    // selected -- the order software switches in -- and stays disarmed from
-    // the first cycle it is not. Ready is also low for a few cycles after that
-    // reset, until the two ends have handshaken, and this end only starts once
-    // the partner forwards a clock. That is not a full queue either, so the
-    // check also waits for the queue to be ready.
-    withClockAndReset(
-      phy.io.clkRst.rxDivClk,
-      phy.io.clkRst.rxDatapathRstSync
-    ) {
-      val selectedSinceReset = RegInit(true.B)
-      when(!selUcie) { selectedSinceReset := false.B }
-      val rxUcieFifoPrimed = RegInit(false.B)
-      when(rxUcieFifo.io.enq.ready) { rxUcieFifoPrimed := true.B }
-      block(Verification) {
-        block(Verification.Assert) {
-          assert(
-            !(selUcie && selectedSinceReset && rxUcieFifoPrimed &&
-              !rxUcieFifo.io.enq.ready),
-            "UcieTL: the controller's RX queue overflowed; the PHY's packet " +
-              "clock is faster than the sideband clock the controller runs on"
-          )
-        }
+    // Each select starts at a PhyTest clock flop, as a glitch of the selMbTl
+    // decode could reach a divided clock. Both take one, so they stay in step.
+    def regClockFlop(sel: Bool): Bool =
+      withClockAndReset(phy.io.clkRst.phyTestClk, phy.io.clkRst.phyTestRst) {
+        RegNext(sel, false.B)
       }
-    }
+    val selUcieFlop = regClockFlop(selUcie)
+    val selMbTlFlop = regClockFlop(selMbTl)
+    // The controller select and mainband mode change only during configuration
+    // but qualify words in the divided-clock domains. A level synchroniser is
+    // the whole crossing, and it is required, as a select decides a 32 UI word.
+    val txSelUcie =
+      withClockAndReset(
+        phy.io.clkRst.txDivClk,
+        phy.io.clkRst.txDatapathRstSync
+      ) {
+        Sync3(selUcieFlop)
+      }
+    val txSelMbTl =
+      withClockAndReset(
+        phy.io.clkRst.txDivClk,
+        phy.io.clkRst.txDatapathRstSync
+      ) {
+        Sync3(selMbTlFlop)
+      }
+    val rxSelUcie =
+      withClockAndReset(
+        phy.io.clkRst.rxDivClk,
+        phy.io.clkRst.rxDatapathRstSync
+      ) {
+        Sync3(selUcieFlop)
+      }
+    val rxSelMbTl =
+      withClockAndReset(
+        phy.io.clkRst.rxDivClk,
+        phy.io.clkRst.rxDatapathRstSync
+      ) {
+        Sync3(selMbTlFlop)
+      }
+    // Drained only while it is the one driving the PHY.
+    txTestFifo.io.deq.ready := !txSelMbTl && !txSelUcie
+    rxTestFifo.io.enq.valid := !rxSelMbTl && !rxSelUcie
 
     // The UCIe controller, on the sideband clock with its register block.
     val ucieDigital = controller.module
-    // The rate training negotiated, translated by the table in the clock
-    // register block into the analog controls that realise it. Which entry
-    // means what is software's to decide, so a change in how the part is
-    // clocked during bringup does not need an RTL change.
-    clkRegs.module.io.freqSel := ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
+    // The rate that link training settled on, from the PHY bridge. The clock
+    // register block maps it to analog controls. Which entry means what is
+    // software's choice, so a bringup clocking change needs no RTL change.
+    clkRegs.module.io.freqSel := ucieDigital.io.phyFacingIo.phy.freqSel.asUInt
     clkRegs.module.io.pllLock := Cat(
       phy.io.clkRst.pll12Lock,
       phy.io.clkRst.pll8Lock
     )
-    // And back: that block's account of the clocks, in place of the PLL lock
-    // and clocks-ungated status a PHY reports. All of it crosses as held
-    // levels, two flops a bit like the lock into that block. Lock also has to
-    // be about the rate the controller is asking for now: during a rate change
-    // the answer about the old rate is still on its way for a few cycles, and
-    // taking it would let training on before the clocks have moved, so lock
-    // drops the cycle the request changes. A multi-bit level can arrive skewed
-    // for a cycle while it settles, so lock is only believed once it has held
-    // for `lockHoldCycles`.
+    // The clock register block reports lock and ungated status in place of a
+    // PHY. Lock drops the cycle the requested rate changes, as the old rate's
+    // answer is still crossing, and counts only after `lockHoldCycles` held.
     withClockAndReset(phy.io.clkRst.sbClk, phy.io.clkRst.sbRst) {
-      def sync[T <: Data](x: T): T =
-        RegNext(RegNext(x, 0.U.asTypeOf(x)), 0.U.asTypeOf(x))
       val lockHoldCycles = 4
-      val ready = sync(clkRegs.module.io.clksReady)
-      val readyFreqSel = sync(clkRegs.module.io.clksReadyFreqSel)
+      val ready = Sync3(clkRegs.module.io.clksReady)
+      // From a flop; ready, the rate match and the hold keep a torn word out.
+      val readyFreqSel = Sync3.word(clkRegs.module.io.clksReadyFreqSel)
       val lockNow = ready &&
-        readyFreqSel === ucieDigital.io.phyFacingIo.ctrl.freqSel.asUInt
+        readyFreqSel === ucieDigital.io.phyFacingIo.phy.freqSel.asUInt
       val lockHeld = RegInit(0.U(log2Ceil(lockHoldCycles + 1).W))
       when(!lockNow) {
         lockHeld := 0.U
       }.elsewhen(lockHeld =/= lockHoldCycles.U) {
         lockHeld := lockHeld + 1.U
       }
-      ucieDigital.io.phyFacingIo.status.pllLock :=
+      ucieDigital.io.phyFacingIo.phy.pllLock :=
         lockNow && lockHeld === lockHoldCycles.U
-      ucieDigital.io.phyFacingIo.status.clocksUngatedAndStable :=
-        sync(clkRegs.module.io.clksUngated)
+      ucieDigital.io.phyFacingIo.phy.clocksUngatedAndStable :=
+        Sync3(clkRegs.module.io.clksUngated)
     }
-    // The PHY has no TX self-calibration steps yet, so there is never any
-    // left to do.
-    ucieDigital.io.phyFacingIo.status.txSelfCalDone := true.B
 
+    // Opt-in channel model between the digital and the pins. Its codes cross as
+    // words, though a swept code steps. Software holds a code for the whole
+    // measurement, so only a read between windows can tear (fine for a model).
+    params.trainingImpairment.foreach { window =>
+      val bridgeParams = ucieAfeParams.bridge
+      val uciePhyCodes = ucieDigital.io.phyFacingIo.phy.codes
+
+      val txImpairment = withClockAndReset(
+        phy.io.clkRst.txDivClk,
+        phy.io.clkRst.txDatapathRstSync
+      ) {
+        val m = Module(
+          new PhyTrainingTxImpairmentModel(
+            params.numLanes,
+            bridgeParams
+          )
+        )
+        m.io.txClkPhase := Sync3.word(
+          uciePhyCodes.shared(PhyBridgeParams.ClockPhaseKnob)
+        )
+        m
+      }
+      txImpairment.io.enable := txSelUcie
+      txImpairment.io.clean := phyTxClean
+      txImpairment.io.window.phaseMin := window.phaseMin.U
+      txImpairment.io.window.phaseMax := window.phaseMax.U
+      txImpairment.io.window.vrefMin := window.vrefMin.U
+      txImpairment.io.window.vrefMax := window.vrefMax.U
+
+      val rxImpairment = withClockAndReset(
+        phy.io.clkRst.rxDivClk,
+        phy.io.clkRst.rxDatapathRstSync
+      ) {
+        val m = Module(
+          new PhyTrainingRxImpairmentModel(
+            params.numLanes,
+            bridgeParams
+          )
+        )
+        for (slot <- 0 until ucieAfeParams.slots.count) {
+          m.io.rxVref(slot) := Sync3.word(
+            uciePhyCodes.perLane(PhyBridgeParams.RxVrefKnob)(slot)
+          )
+        }
+        m
+      }
+      rxImpairment.io.enable := rxSelUcie
+      rxImpairment.io.clean := phy.io.rx
+      rxImpairment.io.window.phaseMin := window.phaseMin.U
+      rxImpairment.io.window.phaseMax := window.phaseMax.U
+      rxImpairment.io.window.vrefMin := window.vrefMin.U
+      rxImpairment.io.window.vrefMax := window.vrefMax.U
+
+      phyTxForAnalog := txImpairment.io.impaired
+      phyRxForDigital := rxImpairment.io.impaired
+    }
+    // The chip-facing receive buffer is in an SoC that is not present here, and
+    // the TileLink nodes carry their own backpressure, so nothing can overflow.
+    // It reaches Error Log uncorrectable bit 1, so the tie-off is explicit.
+    ucieDigital.io.chipFacingIo.rxOverflow := false.B
+
+    // The digital's mainband clocks are the PHY's own. They go to RDI as txLclk
+    // and rxLclk, so this is the one place that binds them to a source. Each
+    // reset is the PHY datapath reset, released against its own divided clock.
+    ucieDigital.io.phyFacingIo.clkRst.foreach { clkRst =>
+      clkRst.txDivClk := phy.io.clkRst.txDivClk
+      clkRst.txDivRst := phy.io.clkRst.txDatapathRstSync
+      clkRst.rxDivClk := phy.io.clkRst.rxDivClk
+      clkRst.rxDivRst := phy.io.clkRst.rxDatapathRstSync
+    }
+
+    // phyFacing TX is on txDivClk already, so it reaches the PHY pins without a
+    // crossing. PhyTest words still use txTestFifo. The PHY takes a word every
+    // txDivClk edge and has no ready, so the accept is unconditional here.
     val digiToPhyTx = ucieDigital.io.phyFacingIo.mainbandLink.tx
-    txUcieFifo.io.enq.valid := digiToPhyTx.valid
-    txUcieFifo.io.enq.bits.data := digiToPhyTx.bits.data
-    txUcieFifo.io.enq.bits.valid := digiToPhyTx.bits.valid
-    txUcieFifo.io.enq.bits.track := digiToPhyTx.bits.trk
-    txUcieFifo.io.enq.bits.clkp := digiToPhyTx.bits.clkP
-    txUcieFifo.io.enq.bits.clkn := digiToPhyTx.bits.clkN
-    digiToPhyTx.ready := txUcieFifo.io.enq.ready
+    val digiTxAsTxIo = Wire(new TxIO(params.numLanes))
+    digiTxAsTxIo.data := digiToPhyTx.bits.data
+    digiTxAsTxIo.valid := digiToPhyTx.bits.valid
+    digiTxAsTxIo.track := digiToPhyTx.bits.trk
+    digiTxAsTxIo.clkp := digiToPhyTx.bits.clkP
+    digiTxAsTxIo.clkn := digiToPhyTx.bits.clkN
+    digiToPhyTx.ready := txSelUcie
 
+    // phyFacing RX is taken off the PHY pins in the rxDivClk domain. PhyTest
+    // reads a crossed copy through rxTestFifo. sec 10.1.2 forbids back pressure
+    // on the receive main data path, so nothing here can stall or needs a FIFO.
     val digiToPhyRx = ucieDigital.io.phyFacingIo.mainbandLink.rx
-    digiToPhyRx.bits.data := rxUcieFifo.io.deq.bits.data
-    digiToPhyRx.bits.valid := rxUcieFifo.io.deq.bits.valid
-    digiToPhyRx.bits.trk := rxUcieFifo.io.deq.bits.track
-    // TODO: RxIO has no clkp/clkn; use the forwarded-clock patterns until sampled clkP/clkN exist.
-    // Need them for training and link bringup.
-    digiToPhyRx.bits.clkP := "h55555555".U
-    digiToPhyRx.bits.clkN := "haaaaaaaa".U
-    digiToPhyRx.valid := rxUcieFifo.io.deq.valid
-    rxUcieFifo.io.deq.ready := digiToPhyRx.ready
+    digiToPhyRx.bits.data := phyRxForDigital.data
+    digiToPhyRx.bits.valid := phyRxForDigital.valid
+    // TODO: the PHY models do not yet carry the sec 4.5.3.3.3 clock repair
+    // pattern on RCKP, RCKN or RTRK, so these slots get it here. Replace it
+    // with the PHY's words when the models carry the pattern.
+    val rxClkRepairWord = withClockAndReset(
+      phy.io.clkRst.rxDivClk,
+      phy.io.clkRst.rxDatapathRstSync
+    ) {
+      val words = PatternDefs.repeatedPatternWords(
+        PatternDefs.clkRepair,
+        PatternDefs.clkRepairWidth,
+        ucieAfeParams.mbSerializerRatio
+      )
+      val phase = RegInit(0.U(log2Ceil(math.max(2, words.length)).W))
+      phase := Mux(phase === (words.length - 1).U, 0.U, phase + 1.U)
+      VecInit(words)(phase)
+    }
+    digiToPhyRx.bits.clkP := rxClkRepairWord
+    digiToPhyRx.bits.clkN := rxClkRepairWord
+    digiToPhyRx.bits.trk := rxClkRepairWord
+    // One word per rxDivClk edge, as the PHY delivers. It has no valid of its
+    // own, and a parked clock produces no edges.
+    digiToPhyRx.valid := rxSelUcie
+    // sec 10.1.2 allows no back pressure from the Adapter to the Physical Layer
+    // on the main data path. Nothing downstream can hold a word, so a low ready
+    // is a dropped word, not a stall.
+    withClockAndReset(
+      phy.io.clkRst.rxDivClk,
+      phy.io.clkRst.rxDatapathRstSync
+    ) {
+      assert(
+        !digiToPhyRx.valid || digiToPhyRx.ready,
+        "the mainband receive path must never back pressure the PHY"
+      )
+    }
 
     // Sideband TL link: with the sideband in `tl` mode the framed TL packets a
     // `tl` mainband spreads across its lanes are shifted out of the sideband
@@ -1844,8 +2013,10 @@ class UcieTL(
         txTlFifo.io.enq.bits.data
       )
 
-      // chipFacing TX: route the same framed data into ucieDigital (ucie mode), crossing
-      // childClock -> sideband clock. Only the protocol data crosses (no track/clkp/clkn/valid lanes).
+      // chipFacing TX: route the same framed data into ucieDigital (ucie
+      // mode), crossing childClock -> txDivClk, the clock of mainbandTx.
+      // Only the protocol data crosses (no track/clkp/clkn/valid lanes).
+      val digitalClkRst = ucieDigital.io.chipFacingIo.clkRst
       val txAQ = Module(
         new AsyncQueue(
           chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandTx.bits),
@@ -1860,8 +2031,8 @@ class UcieTL(
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
       txAQ.io.enq_clock := childClock
       txAQ.io.enq_reset := childReset
-      txAQ.io.deq_clock := phy.io.clkRst.sbClk
-      txAQ.io.deq_reset := phy.io.clkRst.sbRst
+      txAQ.io.deq_clock := digitalClkRst.txDivClk
+      txAQ.io.deq_reset := digitalClkRst.txDivRst
       ucieDigital.io.chipFacingIo.mainbandTx.valid := txAQ.io.deq.valid
       ucieDigital.io.chipFacingIo.mainbandTx.bits := txAQ.io.deq.bits
       txAQ.io.deq.ready := ucieDigital.io.chipFacingIo.mainbandTx.ready
@@ -1907,19 +2078,15 @@ class UcieTL(
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
       txTlFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-      // Always drained, like the PHY's other TX queues.
-      txTlFifo.io.deq.ready := true.B
+      // Synchronised like every other use of the mode in a divided-clock
+      // domain, as this ready is sampled on txDivClk.
+      txTlFifo.io.deq.ready := txSelMbTl
 
       val rxTlFifo =
         Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
       val validFramer = Module(new ValidFramer(params.numLanes))
-      rxTlFifo.io.enq.bits := phy.io.rx
-      // Unlike the PHY's other RX queues, only fed in `tl` mode: what comes out
-      // is decoded into TL requests on the bus, so another controller's words
-      // must never reach it. The select is from the PhyTest clock, so a change
-      // that lands on an edge can upset this queue's pointers; the datapath
-      // reset software issues after the change puts them right.
-      rxTlFifo.io.enq.valid := selMbTl
+      rxTlFifo.io.enq.bits := phyRxForDigital
+      rxTlFifo.io.enq.valid := rxSelMbTl
       rxTlFifo.io.enq_clock := phy.io.clkRst.rxDivClk
       rxTlFifo.io.enq_reset := phy.io.clkRst.rxDatapathRstSync
       rxTlFifo.io.deq <> validFramer.io.phy
@@ -1930,19 +2097,29 @@ class UcieTL(
       rxABuffer.io.enq.valid := false.B
       rxDBuffer.io.enq.valid := false.B
 
-      // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path, crossing
-      // Sideband clock -> childClock. Muxed with the tl-path ValidFramer output by mode.
+      // chipFacing RX: ucieDigital's 512b (ucie mode) feeds the credit path,
+      // crossing rxDivClk -> childClock. Muxed with the tl-path ValidFramer
+      // output by mode. The select is the copy synchronised into rxDivClk.
       val rxAQ = Module(
         new AsyncQueue(
           chiselTypeOf(ucieDigital.io.chipFacingIo.mainbandRx.bits),
           params.queueParams
         )
       )
-      rxAQ.io.enq.valid := ucieDigital.io.chipFacingIo.mainbandRx.valid && selUcie
+      rxAQ.io.enq.valid :=
+        ucieDigital.io.chipFacingIo.mainbandRx.valid && rxSelUcie
       rxAQ.io.enq.bits := ucieDigital.io.chipFacingIo.mainbandRx.bits
-      ucieDigital.io.chipFacingIo.mainbandRx.ready := rxAQ.io.enq.ready && selUcie
-      rxAQ.io.enq_clock := phy.io.clkRst.sbClk
-      rxAQ.io.enq_reset := phy.io.clkRst.sbRst
+      // sec 10.1.2 allows no back pressure in the receive direction, so
+      // mainbandRx is Valid with no ready. The queue must absorb every beat, or
+      // the beat is lost. Checked on the enqueue clock, rxDivClk.
+      withClockAndReset(digitalClkRst.rxDivClk, digitalClkRst.rxDivRst) {
+        assert(
+          !rxAQ.io.enq.valid || rxAQ.io.enq.ready,
+          "chipFacing RX queue overflowed: sec 10.1.2 forbids back pressure, so this beat is lost"
+        )
+      }
+      rxAQ.io.enq_clock := digitalClkRst.rxDivClk
+      rxAQ.io.enq_reset := digitalClkRst.rxDivRst
       rxAQ.io.deq_clock := childClock
       rxAQ.io.deq_reset := childReset
       rxAQ.io.deq.ready := selUcie
@@ -2018,22 +2195,27 @@ class UcieTL(
       tlTxWord.clkp := "h55555555".U
       tlTxWord.clkn := "haaaaaaaa".U
 
-      // The lanes carry whichever of the TL path, the controller and PhyTest is
-      // selected, and nothing while it has no word ready.
-      phy.io.tx := Mux(
-        selMbTl,
-        Mux(txTlFifo.io.deq.valid, tlTxWord, 0.U.asTypeOf(phy.io.tx)),
+      // Three producers, one set of pins. The two FIFOs cross from their own
+      // clocks, and the UCIe path is on txDivClk. A producer with nothing
+      // zeroes the word, the idle level of the Lanes. Selects are synchronised.
+      phyTxClean := Mux(
+        txSelMbTl,
         Mux(
-          selUcie,
+          txTlFifo.io.deq.valid,
+          tlTxWord,
+          0.U.asTypeOf(phyTxClean)
+        ),
+        Mux(
+          txSelUcie,
           Mux(
-            txUcieFifo.io.deq.valid,
-            txUcieFifo.io.deq.bits,
-            0.U.asTypeOf(phy.io.tx)
+            digiToPhyTx.valid,
+            digiTxAsTxIo,
+            0.U.asTypeOf(phyTxClean)
           ),
           Mux(
             txTestFifo.io.deq.valid,
             txTestFifo.io.deq.bits,
-            0.U.asTypeOf(phy.io.tx)
+            0.U.asTypeOf(phyTxClean)
           )
         )
       )
@@ -2073,8 +2255,6 @@ class UcieTL(
 }
 
 trait CanHavePeripheryUcieTL { this: BaseSubsystem =>
-  private val portName = "ucie"
-
   private val pbus = locateTLBusWrapper(PBUS)
   private val sbus = locateTLBusWrapper(SBUS)
 

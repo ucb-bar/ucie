@@ -1,14 +1,10 @@
 /*
-  The top level associated with the Sideband channel for the Protocol Layer.
-
-  Contains a SidebandInterfaceNode to facilitate communication over FDI, SidebandSwitch to route
-  packets.
+  The sideband channel of the Protocol Layer, on FDI.
  */
 
 package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
-import circt.stage.ChiselStage
 import chisel3.util._
 import edu.berkeley.cs.uciedigital.utils.SkidBuffer
 
@@ -24,6 +20,7 @@ class ProtocolSidebandChannel(
       val out = Decoupled(UInt(sbMsgWidth.W))
       val status = new Bundle {
         val sbParityErr = Output(Bool())
+        val sbParityErrEvent = Output(Bool())
         val rxPriorityQueuesFull = Output(Bool())
         val invalidRouteUpper = Output(Bool())
         val invalidRouteCurr = Output(Bool())
@@ -35,11 +32,15 @@ class ProtocolSidebandChannel(
       val out = Valid(UInt(fdiNcWidth.W))
       val txCreditReturn = Input(Bool())
       val rxCreditReturn = Output(Bool())
+      val txHold = Input(Bool())
     }
   })
 
-  val layerId = LayerId.protocol // 0
-  val upperIds = Seq() // No layers above
+  // ===========================================================================
+  // Modules and status outputs
+  // ===========================================================================
+  val layerId = LayerId.protocol
+  val upperIds = Seq()
   val lowerIds = Seq(1, 2) // D2D(1), LogPHY(2)
 
   val switch = Module(
@@ -51,21 +52,31 @@ class ProtocolSidebandChannel(
   val layerInBuffer = Module(new SkidBuffer(sbMsgWidth))
   val layerOutBuffer = Module(new SkidBuffer(sbMsgWidth))
 
-  // IOs for module
-  io.fdi.rxCreditReturn := fdiIntfNode.io.rxCreditReturn
   io.layer.status.sbParityErr := fdiIntfNode.io.sbParityErr
+  io.layer.status.sbParityErrEvent := fdiIntfNode.io.sbParityErrEvent
   io.layer.status.rxPriorityQueuesFull := fdiIntfNode.io.rxPriorityQueuesFull
   io.layer.status.invalidRouteUpper := switch.io.err.invalidRouteUpper
   io.layer.status.invalidRouteCurr := switch.io.err.invalidRouteCurr
   io.layer.status.invalidRouteLower := switch.io.err.invalidRouteLower
 
-  // IOs for SidebandInterfaceNode (FDI)
+  // ===========================================================================
+  // FDI sideband node
+  // ===========================================================================
+  io.fdi.rxCreditReturn := fdiIntfNode.io.rxCreditReturn
+
+  // sec 10.2.3.1 rule 6 and Table 10-3 hold lp_cfg, lp_cfg_vld and lp_cfg_crd
+  // until pl_wake_ack.
+  fdiIntfNode.io.txHold := io.fdi.txHold
   fdiIntfNode.io.txCreditReturn := io.fdi.txCreditReturn
+  fdiIntfNode.io.flushRequesterRegAccess := false.B
+  fdiIntfNode.io.flushCompleterRegAccess := false.B
   fdiIntfNode.io.rxIn <> io.fdi.in
   fdiIntfNode.io.txOut <> io.fdi.out
   fdiIntfNode.io.txIn <> switch.io.lowerLayer.to
 
-  // IOs for SidebandSwitch
+  // ===========================================================================
+  // Switch
+  // ===========================================================================
   layerInBuffer.io.in <> io.layer.in
   switch.io.currLayer.from <> layerInBuffer.io.out
   switch.io.currLayer.to <> layerOutBuffer.io.in
@@ -75,25 +86,6 @@ class ProtocolSidebandChannel(
   switch.io.upperLayer.from.bits := 0.U
   switch.io.upperLayer.to.ready := true.B
 
-  // TODO: Maybe add buffers for tx and rx packets to/from the layer, might cause issues with
-  // timeout cycles (not sure if a concern) but breaks up long combinational path.
-  // --- Alternative solution is to add them in the layer itself
-}
-
-object MainProtocolSidebandChannel extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new ProtocolSidebandChannel(
-      sbMsgWidth = 128,
-      fdiNcWidth = 32,
-      numCredits = 32,
-      queueDepths = SidebandPriorityQueueDepths()
-    ),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--disable-all-randomization",
-      "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables"
-    )
-  )
+  // Unused here, because classAwareLowerArbitration is off.
+  switch.io.lowerLayer.toClassReady := VecInit(Seq.fill(4)(true.B))
 }

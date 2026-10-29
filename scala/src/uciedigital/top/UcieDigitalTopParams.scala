@@ -1,22 +1,20 @@
 /*
-  Description:
-    Parameter groupings for the UCIe top-level integration wrapper.
+  Parameter groups for the UCIe top level. validate() checks the layers agree.
  */
+
 package edu.berkeley.cs.uciedigital.top
 
-import edu.berkeley.cs.uciedigital.interfaces._
+import edu.berkeley.cs.uciedigital.rdi._
+import edu.berkeley.cs.uciedigital.fdi._
+import edu.berkeley.cs.uciedigital.common._
 import edu.berkeley.cs.uciedigital.logphy.AfeParams
-import edu.berkeley.cs.uciedigital.protocol.ProtocolLayerParams
 import edu.berkeley.cs.uciedigital.regs.{PhyCapabilityRegParams, UcieRegParams}
 import edu.berkeley.cs.uciedigital.sideband.{
   SidebandPriorityQueueDepths,
   SidebandParams
 }
 
-case class ProtocolTopParams(
-    fdi: FdiParams,
-    layer: ProtocolLayerParams = ProtocolLayerParams()
-)
+case class ProtocolTopParams(fdi: FdiParams)
 
 case class AdapterTopParams(
     fdi: FdiParams,
@@ -31,7 +29,9 @@ case class LogicalPhyTopParams(
     retryW: Int = 10,
     desTimeoutCycles: Int = 512,
     queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths(),
-    sim: Boolean = false
+
+    // True uses the PHY divided clocks. Only false complies with sec 10.1.2.
+    separateDivClocks: Boolean = false
 )
 
 case class UcieDigitalTopParams(
@@ -40,13 +40,19 @@ case class UcieDigitalTopParams(
     logPhy: LogicalPhyTopParams,
     regs: UcieRegParams = UcieRegParams(
       phyCapability = PhyCapabilityRegParams(
-        terminatedLink = false,
-        txEqSupport = false,
+        // Integration sets this per channel from Tables 5-10 and 5-11.
+        terminatedAtRate = Map.empty,
+
+        // sec 5.3.3 requires Tx Eq at 24 GT/s, the rate this build advertises.
+        txEqSupport = true,
         txVswingCode = 0x1,
         rxClockModeSupport = 0x0,
         rxClockPhaseSupport = 0x0
       ),
       numModules = 1,
+
+      // It holds the Protocol Layer's link triggers and its pl_error log.
+      hasVendorD2dBlock = true,
       includeInterruptNode = true
     )
 ) {
@@ -63,6 +69,16 @@ case class UcieDigitalTopParams(
       adapter.sideband == logPhy.sideband,
       "Adapter sideband params must match logical PHY sideband params"
     )
+    require(
+      regs.maxLinkWidth == logPhy.afe.mbLanes,
+      s"Register link width x${regs.maxLinkWidth} must match the logical PHY x${logPhy.afe.mbLanes}"
+    )
+    require(
+      regs.phyBridge == logPhy.afe.bridge,
+      "The register block and the logical PHY must be built from the same PhyBridgeParams, " +
+        s"got ${regs.phyBridge.knobs
+            .map(_.name)} against ${logPhy.afe.bridge.knobs.map(_.name)}"
+    )
     this
   }
 }
@@ -76,38 +92,6 @@ object UcieDigitalTopParams {
       protocol = ProtocolTopParams(fdi = explicitFdi),
       adapter = AdapterTopParams(fdi = explicitFdi, rdi = explicitRdi),
       logPhy = LogicalPhyTopParams(rdi = explicitRdi)
-    ).validate()
-  }
-
-  // Convenience helper to build a fully aligned top-level parameter set from shared interface values.
-  def withSharedInterfaces(
-      fdi: FdiParams,
-      rdi: RdiParams,
-      protocolLayer: ProtocolLayerParams = ProtocolLayerParams(),
-      afe: AfeParams = AfeParams(),
-      sideband: SidebandParams = new SidebandParams(),
-      retryW: Int = 10,
-      desTimeoutCycles: Int = 512,
-      queueDepths: SidebandPriorityQueueDepths = SidebandPriorityQueueDepths()
-  ): UcieDigitalTopParams = {
-    UcieDigitalTopParams(
-      protocol = ProtocolTopParams(
-        fdi = fdi,
-        layer = protocolLayer
-      ),
-      adapter = AdapterTopParams(
-        fdi = fdi,
-        rdi = rdi,
-        sideband = sideband
-      ),
-      logPhy = LogicalPhyTopParams(
-        afe = afe,
-        sideband = sideband,
-        rdi = rdi,
-        retryW = retryW,
-        desTimeoutCycles = desTimeoutCycles,
-        queueDepths = queueDepths
-      )
     ).validate()
   }
 }
