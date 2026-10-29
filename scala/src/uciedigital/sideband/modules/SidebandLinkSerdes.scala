@@ -1,7 +1,5 @@
 /*
-  Description:
-    Contains the logic for the serializer, and deserializer for
-    the sideband messaging over the physical UCIe link.
+  Serializer and deserializer for the sideband link (sec 4.1.5).
  */
 
 package edu.berkeley.cs.uciedigital.sideband
@@ -10,13 +8,10 @@ import chisel3._
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.ltl._
-import circt.stage.ChiselStage
 import chisel3.util._
+import edu.berkeley.cs.uciedigital.utils.Sync3
 import freechips.rocketchip.util.{AsyncQueue, AsyncQueueParams}
 
-// ============================================================================
-// Sideband Link Serializer
-// ============================================================================
 class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   val io = IO(new Bundle {
     val ctrl = new Bundle {
@@ -24,15 +19,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
     }
     val in = Flipped(Decoupled(UInt(msgW.W)))
 
-    val out = new Bundle {
-      // Half rate bits for the sideband bump drivers; `d0` goes out while
-      // `clk` is high, `d1` while it is low.
-      val clk = Output(Clock())
-      val d0 = Output(UInt(sbLinkW.W))
-      val d1 = Output(UInt(sbLinkW.W))
-      val fwClockD0 = Output(Bool())
-      val fwClockD1 = Output(Bool())
-    }
+    val out = new SidebandTxPins(sbLinkW)
   })
 
   object SerializerState extends ChiselEnum {
@@ -41,12 +28,16 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
 
   require(sbLinkW == 1, "Sideband link width must be 1 per spec")
 
+  // ===========================================================================
+  // Framing and outputs
+  // ===========================================================================
   val currentState = RegInit(SerializerState.sIdle)
-  val numBitsToSend = 64 // As per spec, tansmit in 64 bit chunks
-  val numBitsToWait = 32 // As per spec, need to wait 32 bits
+  val numBitsToSend = 64 // sec 4.1.5 sends 64-bit chunks
+  val numBitsToWait = 32 // sec 4.1.5 waits 32 bits between chunks
 
   val packet = RegInit(0.U(msgW.W))
   val pktOpcode = RegInit(0.U(5.W))
+  val pktMode = RegInit(SBRxTxMode.PACKET)
   val outClkEn = Wire(Bool())
   val outBitsCntEn = Wire(Bool())
   val waitBitsCntEn = Wire(Bool())
@@ -63,7 +54,6 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
 
   val (waitBitsCount, waitBitsDone) = Counter(waitBitsCntEn, numBitsToWait)
 
-  // Packet opcodes without data
   val isWoData =
     SBMsgOpcode.OpsWithoutData.map(_.asUInt === pktOpcode).reduce(_ || _)
   val inputIsWoData =
@@ -74,16 +64,13 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   val acceptPacketWithData =
     io.in.fire && io.ctrl.txMode === SBRxTxMode.PACKET && !inputIsWoData
 
-  // txMode: RAW means send raw bits don't look at opcode (will be 64 bits)
-  when(isWoData || (io.ctrl.txMode === SBRxTxMode.RAW)) {
-    numBeats := 1.U // messages w/o data (1 64 bit chunk)
+  when(isWoData || (pktMode === SBRxTxMode.RAW)) {
+    numBeats := 1.U
   }.otherwise {
-    numBeats := 2.U // messages w/ data  (2 64-bit chunk)
+    numBeats := 2.U
   }
 
-  // The `SbDriver` on each sideband bump does the 2:1, so this hands over the
-  // two half rate bits rather than a serialized stream. Data is held across
-  // the whole period and the forwarded clock is a gated copy of this clock.
+  // One bit per cycle on d0 and d1. The forwarded clock is this clock, gated.
   val dataBit = Mux(outClkEn, packet(sbLinkW - 1, 0), 0.U)
 
   io.out.clk := clock
@@ -92,13 +79,14 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   io.out.fwClockD0 := outClkEn
   io.out.fwClockD1 := false.B
 
-  // defaults
+  // ===========================================================================
+  // State machine
+  // ===========================================================================
   io.in.ready := false.B
   outClkEn := false.B
   outBitsCntEn := false.B
   waitBitsCntEn := false.B
 
-  // state action
   switch(currentState) {
     is(SerializerState.sIdle) {
       assert(outBitsCount === 0.U, "Output bit counter should start at 0")
@@ -111,6 +99,7 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
         beatCount := 0.U
         packet := io.in.bits
         pktOpcode := io.in.bits(4, 0)
+        pktMode := io.ctrl.txMode
       }
     }
     is(SerializerState.sBitsSend) {
@@ -130,18 +119,17 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
       outBitsCntEn := false.B
       waitBitsCntEn := true.B
 
-      // finished sending current packet, but there is a valid packet
-      // ready -- doing so removes a cycle delay between sending packets
+      // Accepting the next packet here saves a cycle between packets.
       when(doneSending && newPacketValid) {
         beatCount := 0.U
         io.in.ready := true.B
         packet := io.in.bits
         pktOpcode := io.in.bits(4, 0)
+        pktMode := io.ctrl.txMode
       }
     }
   }
 
-  // state transition
   switch(currentState) {
     is(SerializerState.sIdle) {
       when(io.in.valid && io.in.ready) {
@@ -156,17 +144,17 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
     is(SerializerState.sBitsWait) {
       when(waitBitsDone) {
         when(doneSending && !newPacketValid) {
-          currentState := SerializerState.sIdle // wait for new message
+          currentState := SerializerState.sIdle
         }.otherwise {
-          currentState := SerializerState.sBitsSend // more beats to send
+          currentState := SerializerState.sBitsSend
         }
       }
     }
   }
 
-  // ==========================================================================
-  // Assertions
-  // ==========================================================================
+  // ===========================================================================
+  // Verification
+  // ===========================================================================
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
@@ -226,24 +214,26 @@ class SidebandLinkSerializer(val sbLinkW: Int, val msgW: Int) extends Module {
   }
 }
 
-// ============================================================================
-// Sideband Link Deserializer
-// ============================================================================
 class SidebandLinkDeserializer(
     val sbLinkW: Int,
     val msgW: Int,
-    val desTimeoutCycles: Int
+    val desTimeoutCycles: Int,
+
+    // Idle cycles that re-frame the capture, far below sec 4.5.3.2's 1 ms.
+    val sbGapCycles: Int = 96
 ) extends Module {
   val io = IO(new Bundle {
     val ctrl = new Bundle {
       val rxMode = Input(SBRxTxMode())
       val desTimedout = Output(Bool())
     }
-    val in = new Bundle {
-      val bits = Input(UInt(sbLinkW.W))
-      val fwClock = Input(Bool())
-    }
-    val out = Decoupled(new SbLinkRxWord(msgW))
+    val in = new SidebandRxPins(sbLinkW)
+    val flushRegAccess = Input(Bool())
+    val clearParityContainment = Input(Bool())
+    val out = Decoupled(UInt(msgW.W))
+    val outInvalid = Output(Bool())
+    val outPacketMode = Output(Bool())
+    val headerCpErrEvent = Output(Bool())
   })
 
   require(sbLinkW == 1, "Sideband link width must be 1 per spec")
@@ -251,15 +241,77 @@ class SidebandLinkDeserializer(
     desTimeoutCycles > (msgW + 64),
     "Need to atleast let largest message process"
   )
+  require(
+    sbGapCycles > 32,
+    "sbGapCycles must exceed the 32 UI the serializer gates between chunks, " +
+      "or a 128-bit packet re-frames at its own mid-packet gap"
+  )
 
+  // ===========================================================================
+  // Clock crossing state
+  // ===========================================================================
   val asyncQueueDepth = 2
 
-  val negFwClock = (!io.in.fwClock).asClock
+  val negFwClock = (!io.in.fwClock.asBool).asClock
+  val regAccessEpoch = RegInit(false.B)
+  val flushRegAccessPrev = RegNext(io.flushRegAccess, false.B)
+  val flushRegAccessPulse = io.flushRegAccess && !flushRegAccessPrev
+  val flushPending = RegInit(false.B)
+  val flushObserved = WireDefault(false.B)
 
-  // The assembled message word crosses to the local clock domain through an async FIFO.
+  val flushObservedSync = Sync3(flushObserved)
+  val headerCpErrToggle = WireDefault(false.B)
+  val headerCpErrAck = WireDefault(false.B)
+  val rxAssemblyReset =
+    (reset.asBool || io.clearParityContainment).asAsyncReset
+
+  // ===========================================================================
+  // Idle detection and re-framing
+  // ===========================================================================
+  // A gap in the gated forwarded clock (sec 4.1.5) marks where a word starts.
+  val rxActivity = Wire(Bool())
+
+  // Sample a capture counter bit, because the clock itself aliases (sec 5.13).
+  val activitySync = Sync3(rxActivity)
+  val activityPrev = RegNext(activitySync, false.B)
+  val gapCounter = RegInit(0.U(log2Ceil(sbGapCycles + 1).W))
+  when(activitySync =/= activityPrev) {
+    gapCounter := 0.U
+  }.elsewhen(gapCounter =/= sbGapCycles.U) {
+    gapCounter := gapCounter + 1.U
+  }
+
+  // A one-cycle pulse from a flop, so no glitch reaches the async reset.
+  val sbGapPulse = RegNext(
+    (gapCounter === (sbGapCycles - 1).U) &&
+
+      // RAW only, because a mistimed arm in PACKET mode fails the CP check.
+      (io.ctrl.rxMode === SBRxTxMode.RAW),
+    false.B
+  )
+
+  // Kept apart from rxAssemblyReset, so a gap never clears rxContained.
+  val rxFramingArm =
+    (reset.asBool || io.clearParityContainment || sbGapPulse).asAsyncReset
+
+  // ===========================================================================
+  // Register access flush
+  // ===========================================================================
+  when(flushRegAccessPulse) {
+    regAccessEpoch := !regAccessEpoch
+  }
+  when(io.flushRegAccess) {
+    flushPending := true.B
+  }.elsewhen(flushObservedSync) {
+    flushPending := false.B
+  }
+
+  // ===========================================================================
+  // Capture domain
+  // ===========================================================================
   val rxQueue = Module(
     new AsyncQueue(
-      new SbLinkRxWord(msgW),
+      UInt((msgW + 3).W),
       AsyncQueueParams(depth = asyncQueueDepth)
     )
   )
@@ -268,45 +320,157 @@ class SidebandLinkDeserializer(
   rxQueue.io.deq_clock := clock
   rxQueue.io.deq_reset := reset.asBool
 
-  // Assemble the serial bits and enqueue the complete word on the final bit
-  // in the forwarded clock domain.
-  val idleStatus = withClockAndReset(negFwClock, reset.asAsyncReset) {
-    val counter = RegInit(0.U(log2Ceil(msgW).W))
-    val maxBits = RegInit((msgW - 1).U(log2Ceil(msgW).W))
-    val dataReg = RegInit(0.U(msgW.W))
-    val capturedIsRaw = RegInit(true.B)
+  val (idleStatus, rxActivityOut) =
+    withClockAndReset(negFwClock, reset.asAsyncReset) {
+      val counter = withReset(rxAssemblyReset) {
+        RegInit(0.U(log2Ceil(msgW).W))
+      }
+      val maxBits = withReset(rxAssemblyReset) {
+        RegInit((msgW - 1).U(log2Ceil(msgW).W))
+      }
+      val dataReg = withReset(rxAssemblyReset) {
+        RegInit(0.U(msgW.W))
+      }
+      val packetEpoch = withReset(rxAssemblyReset) { RegInit(false.B) }
+      val packetInvalid = withReset(rxAssemblyReset) { RegInit(false.B) }
+      val packetMode = withReset(rxAssemblyReset) { RegInit(false.B) }
+      val rxContained = withReset(rxAssemblyReset) { RegInit(false.B) }
+      val headerCpErrToggleReg = RegInit(false.B)
+      val headerCpErrAckSync = Sync3(headerCpErrAck)
+      val epochSync = Sync3(regAccessEpoch)
 
-    val isWoData =
-      SBMsgOpcode.OpsWithoutData.map(_.asUInt === dataReg(4, 0)).reduce(_ || _)
-    val recvDone = counter === maxBits
+      // flushPending holds until this echo returns.
+      val flushSync = Sync3(flushPending)
+      flushObserved := flushSync
 
-    // Opcode (bits[4:0]) determines message length once the first 5 bits arrive.
-    // RAW means read raw bits (will be 64 bits).
-    when(counter === 5.U) {
-      val rxIsRaw = io.ctrl.rxMode === SBRxTxMode.RAW
-      maxBits := Mux(isWoData || rxIsRaw, 63.U, 127.U)
-      capturedIsRaw := rxIsRaw
+      val isWoData = SBMsgOpcode.OpsWithoutData
+        .map(_.asUInt === dataReg(4, 0))
+        .reduce(_ || _)
+
+      // Set asynchronously, because this domain has no clock in the gap.
+      val framingArmed = withReset(rxFramingArm) { RegInit(true.B) }
+      framingArmed := false.B
+      val effCounter = Mux(framingArmed, 0.U, counter)
+
+      val recvDone = effCounter === maxBits
+      val firstBit = effCounter === 0.U
+      headerCpErrToggle := headerCpErrToggleReg
+
+      when(firstBit) {
+        packetEpoch := epochSync
+        packetInvalid := flushSync
+        packetMode := io.ctrl.rxMode === SBRxTxMode.PACKET
+      }.elsewhen(flushSync) {
+        packetInvalid := true.B
+      }
+
+      // The opcode sets the length once its 5 bits are in.
+      when(effCounter === 5.U && !rxContained) {
+        maxBits := Mux(
+          isWoData || !packetMode,
+          63.U,
+          127.U
+        )
+      }
+
+      val completeWord = dataReg.bitSet(effCounter, io.in.bits.asBool)
+      val completeEpoch = Mux(firstBit, epochSync, packetEpoch)
+      val completeMode = Mux(
+        firstBit,
+        io.ctrl.rxMode === SBRxTxMode.PACKET,
+        packetMode
+      )
+      val completeInvalid = Mux(
+        firstBit,
+        flushSync,
+        packetInvalid || flushSync
+      )
+      val completePacket = Mux(
+        completeMode,
+        completeWord,
+        completeWord & ((BigInt(1) << 64) - 1).U(msgW.W)
+      )
+      val headerDone = effCounter === 63.U
+      val headerCpBad = completeWord(62) ^ completeWord(61, 0).xorR
+      val newHeaderError = headerDone && completeMode && headerCpBad
+
+      // Fatal (sec 7.1.3.2), so stay contained until LinkError recovery.
+      when(newHeaderError) {
+        assert(
+          headerCpErrToggleReg === headerCpErrAckSync,
+          "Previous header CP event was not observed"
+        )
+        headerCpErrToggleReg := !headerCpErrToggleReg
+      }
+
+      when(rxContained) {
+        counter := 0.U
+        maxBits := (msgW - 1).U
+        dataReg := 0.U
+      }.elsewhen(newHeaderError) {
+        rxContained := true.B
+        counter := 0.U
+        maxBits := (msgW - 1).U
+        dataReg := 0.U
+      }.otherwise {
+        dataReg := completeWord
+        counter := Mux(recvDone, 0.U, effCounter + 1.U)
+      }
+
+      rxQueue.io.enq.valid := recvDone && !newHeaderError && !rxContained
+      rxQueue.io.enq.bits := Cat(
+        completeInvalid,
+        completeEpoch,
+        completeMode,
+        completePacket
+      )
+
+      // Bit 1 changes every second edge, for sampling margin.
+      val activityCounter = RegInit(0.U(2.W))
+      activityCounter := activityCounter + 1.U
+
+      // Counts a word ending on this edge, because the clock stops after it.
+      val wordBoundary = recvDone || newHeaderError || rxContained
+
+      // A flop before the CDC, because the compare can glitch.
+      val idleFlag = withReset(rxFramingArm) { RegInit(true.B) }
+      idleFlag := wordBoundary
+
+      (idleFlag, activityCounter(1))
     }
+  rxActivity := rxActivityOut
 
-    val completeWord = dataReg.bitSet(counter, io.in.bits.asBool)
-    dataReg := completeWord
-    counter := Mux(recvDone, 0.U, counter + 1.U)
-
-    rxQueue.io.enq.valid := recvDone
-    rxQueue.io.enq.bits.data := completeWord
-    rxQueue.io.enq.bits.isRaw := capturedIsRaw
-
-    // Register before the CDC to the local domain: the comparator output can
-    // glitch while the counter transitions, and the async local clock could
-    // sample the glitch.
-    RegNext(counter === 0.U, true.B)
-  }
-
+  // ===========================================================================
+  // Output
+  // ===========================================================================
   io.out.valid := rxQueue.io.deq.valid
-  io.out.bits := rxQueue.io.deq.bits
+  io.out.bits := rxQueue.io.deq.bits(msgW - 1, 0)
   rxQueue.io.deq.ready := io.out.ready
 
-  val idleStatusSync = RegNext(RegNext(idleStatus, true.B), true.B) // 2-FF sync
+  val headerCpErrSync = Sync3(headerCpErrToggle)
+  val headerCpErrSyncPrev = RegNext(headerCpErrSync, false.B)
+  headerCpErrAck := headerCpErrSync
+  io.headerCpErrEvent := headerCpErrSync ^ headerCpErrSyncPrev
+
+  val outputInvalidAtIngress = rxQueue.io.deq.bits(msgW + 2)
+  val outputEpoch = rxQueue.io.deq.bits(msgW + 1)
+  val outputWasPacketMode = rxQueue.io.deq.bits(msgW)
+  io.outPacketMode := outputWasPacketMode
+  val outputOpcode = io.out.bits(4, 0)
+  val outputIsRegRequest = SBM.isRegAccessRequest(outputOpcode)
+  val outputIsRegCompletion = SBM.isRegAccessComplete(outputOpcode)
+  val outputIsRegAccess = outputIsRegRequest || outputIsRegCompletion
+  val outputIsWoData =
+    SBMsgOpcode.OpsWithoutData.map(_.asUInt === outputOpcode).reduce(_ || _)
+  io.outInvalid := io.out.valid && outputWasPacketMode && outputIsRegAccess &&
+    (outputInvalidAtIngress || outputEpoch =/= regAccessEpoch ||
+      flushPending || io.flushRegAccess)
+
+  // ===========================================================================
+  // Timeout
+  // ===========================================================================
+  // Starts idle, so no timeout runs before the first forwarded clock edge.
+  val idleStatusSync = Sync3(idleStatus, init = true.B)
   val timeoutCounter = RegInit(0.U(log2Ceil(desTimeoutCycles + 1).W))
 
   when(idleStatusSync) {
@@ -317,13 +481,9 @@ class SidebandLinkDeserializer(
 
   io.ctrl.desTimedout := timeoutCounter === desTimeoutCycles.U
 
-  val outputOpcode = io.out.bits.data(4, 0)
-  val outputIsWoData =
-    SBMsgOpcode.OpsWithoutData.map(_.asUInt === outputOpcode).reduce(_ || _)
-
-  // ==========================================================================
-  // Assertions
-  // ==========================================================================
+  // ===========================================================================
+  // Verification
+  // ===========================================================================
   block(Verification) {
     block(Verification.Assert) {
       val outStalled = RegNext(io.out.valid && !io.out.ready, false.B)
@@ -338,9 +498,17 @@ class SidebandLinkDeserializer(
       )
 
       AssertProperty(
-        Sequence.BoolSequence(rxQueue.io.enq.valid) |->
+        Sequence.BoolSequence(
+          rxQueue.io.enq.valid && io.ctrl.rxMode === SBRxTxMode.PACKET
+        ) |->
           Sequence.BoolSequence(rxQueue.io.enq.ready),
         label = Some("SidebandDeserializerDoesNotDropWords")
+      )
+
+      AssertProperty(
+        Sequence.BoolSequence(io.outInvalid) |->
+          Sequence.BoolSequence(io.out.valid && outputIsRegAccess),
+        label = Some("SidebandDeserializerOnlyInvalidatesRegisterPackets")
       )
     }
     block(Verification.Cover) {
@@ -352,15 +520,15 @@ class SidebandLinkDeserializer(
       }
 
       cover(
-        io.out.fire && io.out.bits.isRaw,
+        io.out.fire && !io.outPacketMode,
         "SidebandLinkDeserializerRaw64Output"
       )
       cover(
-        io.out.fire && !io.out.bits.isRaw && outputIsWoData,
+        io.out.fire && io.outPacketMode && outputIsWoData,
         "SidebandLinkDeserializerPacket64Output"
       )
       cover(
-        io.out.fire && !io.out.bits.isRaw && !outputIsWoData,
+        io.out.fire && io.outPacketMode && !outputIsWoData,
         "SidebandLinkDeserializerPacket128Output"
       )
       cover(
@@ -372,6 +540,7 @@ class SidebandLinkDeserializer(
         "SidebandLinkDeserializerStalledOutputConsumed"
       )
       cover(io.ctrl.desTimedout, "SidebandLinkDeserializerTimeout")
+      cover(io.headerCpErrEvent, "SidebandLinkDeserializerHeaderCpError")
       CoverProperty(
         Sequence.BoolSequence(reset.asBool && !idleStatusSync),
         disable = None,
@@ -379,26 +548,4 @@ class SidebandLinkDeserializer(
       )
     }
   }
-}
-
-object MainSBSerdes extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandLinkSerializer(1, 128),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
-
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandLinkDeserializer(1, 128, 512),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
 }

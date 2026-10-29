@@ -1,7 +1,10 @@
+/*
+  A skid buffer. On a stall it holds the beat in dataReg and drops in.ready.
+ */
+
 package edu.berkeley.cs.uciedigital.utils
 
 import chisel3._
-import circt.stage.ChiselStage
 import chisel3.util._
 
 class SkidBuffer(dataWidth: Int) extends Module {
@@ -13,12 +16,12 @@ class SkidBuffer(dataWidth: Int) extends Module {
   val dataReg = RegInit(0.U(dataWidth.W))
   val bypassReg = RegInit(true.B)
 
-  when(bypassReg) { // bypass state
+  when(bypassReg) {
     when(!io.out.ready && io.in.valid) {
       dataReg := io.in.bits
       bypassReg := false.B
     }
-  }.otherwise { // skid state, bypassReg == false
+  }.otherwise {
     when(io.out.ready) {
       bypassReg := true.B
     }
@@ -30,18 +33,5 @@ class SkidBuffer(dataWidth: Int) extends Module {
     bypassReg,
     io.in.valid,
     true.B
-  ) // valid data in the dataReg
-}
-
-object MainSkidBuffer extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SkidBuffer(128),
-    args = Array("-td", "./generatedVerilog/utils/"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--disable-all-randomization",
-      "--strip-debug-info",
-      "--lowering-options=disallowLocalVariables"
-    )
   )
 }

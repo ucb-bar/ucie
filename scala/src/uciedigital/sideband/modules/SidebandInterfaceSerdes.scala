@@ -1,18 +1,6 @@
 /*
-  Description:
-    The sideband interface serdes serializes and deserializes messages over FDI/RDI interface.
-    Parameterizable to serialize/deserialize at NC_WIDTH: 8, 16, 32 as per spec.
-
-    This file contains the RTL for:
-      1. Serializer
-      2. Deserializer
-
-    Note:
- * The serializer and deserializer doesn't consider the opcode during serialization, because
-    each credit associated with a message considers both a 64-bit header and potential 64-bit
-    payload.
-      - The added latency for serializing 0s is 8, 4, 2 cycles for
-        NC_WIDTH: 8, 16, 32, respectively.
+  Serializer and deserializer for sideband packets over FDI and RDI. The data
+  phases follow the header phases only when the opcode has data (sec 7.1.4).
  */
 
 package edu.berkeley.cs.uciedigital.sideband
@@ -21,13 +9,14 @@ import chisel3._
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.ltl._
-import circt.stage.ChiselStage
 import chisel3.util._
 import scala.math.max
 
-// ============================================================================
-// Sideband Interface Serializer
-// ============================================================================
+object SidebandInterfaceFraming {
+  def headerOnly(opcode: UInt): Bool =
+    SBMsgOpcode.OpsWithoutData.map(_.asUInt === opcode).reduce(_ || _)
+}
+
 class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
     extends Module {
   val io = IO(new Bundle {
@@ -35,16 +24,23 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
     val out = Valid(UInt(ncWidth.W))
   })
 
-  // sbMsgWidth is the width of a sideband message, ncWidth is the interface sideband bus width
-  assert(sbMsgWidth % ncWidth == 0 && ncWidth <= sbMsgWidth)
+  require(sbMsgWidth == 128 && Seq(8, 16, 32).contains(ncWidth))
+
   val numBeats = (sbMsgWidth / ncWidth)
   val maxBeats = numBeats - 1
+  val headerBeats = 64 / ncWidth
   val counterWidth = max(1, log2Ceil(numBeats))
 
   val beatCounter = RegInit(0.U(counterWidth.W))
   val dataReg = RegInit(0.U(sbMsgWidth.W))
   val inProgress = RegInit(false.B)
-  val isLastBeat = WireDefault(beatCounter === maxBeats.U)
+  val lastBeat = RegInit(maxBeats.U(counterWidth.W))
+  val isLastBeat = WireDefault(beatCounter === lastBeat)
+  val loadLastBeat = Mux(
+    SidebandInterfaceFraming.headerOnly(io.in.bits(4, 0)),
+    (headerBeats - 1).U,
+    maxBeats.U
+  )
 
   io.out.bits := dataReg(ncWidth - 1, 0)
   io.out.valid := inProgress
@@ -53,11 +49,13 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
 
   when(inProgress) {
     when(!isLastBeat) {
-      dataReg := dataReg >> ncWidth // Using ncWidth.U may generate a barrel shifter instead of rewiring
+      // Shift by the Int ncWidth. A UInt amount may build a barrel shifter.
+      dataReg := dataReg >> ncWidth
       beatCounter := beatCounter + 1.U
     }.otherwise {
       when(io.in.valid) { // Immediately loads back-to-back valid packet
         dataReg := io.in.bits
+        lastBeat := loadLastBeat
         beatCounter := 0.U
       }.otherwise {
         inProgress := false.B
@@ -68,25 +66,19 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
 
   when(!inProgress && io.in.valid) {
     dataReg := io.in.bits
+    lastBeat := loadLastBeat
     inProgress := true.B
     beatCounter := 0.U
   }
 
-  // =======================================================================
-  // Assertions
-  // =======================================================================
   block(Verification) {
     block(Verification.Assert) {
-      // Stated as "if the input was accepted within the last `numBeats`
-      // cycles, a beat has to be going out now" rather than the more direct
-      // `in.fire |=> out.valid.repeat(numBeats)`. The two say the same thing,
-      // but the direct form needs a multi-cycle sequence as the consequent of
-      // the implication, and Verilator supports only a boolean one there --
-      // whether the sequence is written as consecutive repetition (`[*n]`) or
-      // spelled out as a `##1` chain. Every Verilator simulation in the repo
-      // fails to compile over it, so the reindexed form is what we assert.
+      // Verilator allows only a boolean consequent. An accept in the last
+      // `headerBeats` cycles, the shortest packet, means a beat is out now.
       val acceptedWithinLastBeats = Seq
-        .iterate[Bool](io.in.fire, numBeats + 1)(prev => RegNext(prev, false.B))
+        .iterate[Bool](io.in.fire, headerBeats + 1)(prev =>
+          RegNext(prev, false.B)
+        )
         .tail
         .reduce(_ || _)
       AssertProperty(
@@ -106,38 +98,79 @@ class SidebandInterfaceSerializer(sbMsgWidth: Int, ncWidth: Int)
   }
 }
 
-// ============================================================================
-// Sideband Interface Deserializer
-// ============================================================================
 class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int)
     extends Module {
   val io = IO(new Bundle {
     val in = Flipped(Valid(UInt(ncWidth.W)))
+    val flushRegAccessCompletion = Input(Bool())
+    val flushRegAccessRequest = Input(Bool())
     val out = Valid(
       UInt(sbMsgWidth.W)
-    ) // Receiving end should sink when valid is high for a cycle
+    )
+    val outInvalid = Output(Bool())
+    val invalidatedRequest = Output(Bool())
   })
 
-  // sbMsgWidth is the width of a sideband message, ncWidth is the interface sideband bus width
-  assert(sbMsgWidth % ncWidth == 0 && ncWidth <= sbMsgWidth)
+  require(sbMsgWidth == 128 && Seq(8, 16, 32).contains(ncWidth))
+
   val numBeats = (sbMsgWidth / ncWidth)
   val maxBeats = numBeats - 1
+  val headerBeats = 64 / ncWidth
   val counterWidth = max(1, log2Ceil(numBeats))
 
   val beatCounter = RegInit(0.U(counterWidth.W))
   val dataReg = RegInit(VecInit.fill(numBeats)(0.U(ncWidth.W)))
   val inProgress = RegInit(false.B)
+  val invalidatePacket = RegInit(false.B)
 
+  // Phase 0 carries the opcode, so the packet length is known from its first
+  // beat. That beat is never the last (two header phases at least).
+  val lastBeat = RegInit(maxBeats.U(counterWidth.W))
+
+  // Note: the receiver must sink the packet in the one cycle valid is high.
   io.out.bits := dataReg.asUInt
   io.out.valid := inProgress && (beatCounter === 0.U)
+  val packetOpcode = dataReg.asUInt(4, 0)
+  val packetIsRegRequest = SBM.isRegAccessRequest(packetOpcode)
+  val packetIsRegCompletion = SBM.isRegAccessComplete(packetOpcode)
+  val packetIsRegAccess = packetIsRegRequest || packetIsRegCompletion
+  val flushThisPacket = (packetIsRegRequest && io.flushRegAccessRequest) ||
+    (packetIsRegCompletion && io.flushRegAccessCompletion)
+  io.outInvalid := io.out.valid && packetIsRegAccess &&
+    (invalidatePacket || flushThisPacket)
 
-  // As per spec can be assured that consecutive phases of a packet will come in consecutive
-  // clock cycles
+  val partialPacket = inProgress && beatCounter =/= 0.U
+  val abortingPacket = partialPacket && !io.in.valid
+  io.invalidatedRequest :=
+    (io.outInvalid && packetIsRegRequest) ||
+      (abortingPacket && packetIsRegRequest &&
+        (invalidatePacket || io.flushRegAccessRequest))
+
+  val firstBeat = io.in.valid && beatCounter === 0.U
+  val firstBeatOpcode = io.in.bits.pad(5)(4, 0)
+  val invalidateFirstBeat = firstBeat &&
+    ((SBM.isRegAccessRequest(firstBeatOpcode) && io.flushRegAccessRequest) ||
+      (SBM.isRegAccessComplete(firstBeatOpcode) &&
+        io.flushRegAccessCompletion))
+  val invalidatePartialPacket = partialPacket && io.in.valid && flushThisPacket
+
+  when(io.out.valid || abortingPacket) {
+    invalidatePacket := false.B
+  }
+  when(invalidateFirstBeat || invalidatePartialPacket) {
+    invalidatePacket := true.B
+  }
+
+  val firstHeaderOnly =
+    SidebandInterfaceFraming.headerOnly(firstBeatOpcode)
+
+  // sec 7.1.4 sends the phases of a packet on consecutive cycles, so a gap ends
+  // the packet.
   when(io.in.valid) {
     dataReg(beatCounter) := io.in.bits
     inProgress := true.B
 
-    when(beatCounter =/= maxBeats.U) {
+    when(beatCounter =/= lastBeat) {
       beatCounter := beatCounter + 1.U
     }.otherwise {
       beatCounter := 0.U
@@ -147,9 +180,13 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int)
     beatCounter := 0.U
   }
 
-  // =======================================================================
-  // Assertions
-  // =======================================================================
+  when(firstBeat) {
+    lastBeat := Mux(firstHeaderOnly, (headerBeats - 1).U, maxBeats.U)
+    when(firstHeaderOnly) {
+      for (i <- headerBeats until numBeats) dataReg(i) := 0.U
+    }
+  }
+
   if (numBeats > 1) {
     block(Verification) {
       block(Verification.Assert) {
@@ -158,6 +195,16 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int)
             !io.out.valid
           ),
           label = Some("DeserializerOutputIsSingleCyclePulse")
+        )
+        AssertProperty(
+          Sequence.BoolSequence(io.outInvalid) |->
+            Sequence.BoolSequence(io.out.valid && packetIsRegAccess),
+          label = Some("DeserializerOnlyInvalidatesRegisterPackets")
+        )
+        AssertProperty(
+          Sequence.BoolSequence(io.invalidatedRequest) |->
+            Sequence.BoolSequence(packetIsRegRequest),
+          label = Some("DeserializerOnlyReturnsInvalidatedRequestCredit")
         )
       }
       block(Verification.Cover) {
@@ -178,28 +225,4 @@ class SidebandInterfaceDeserializer(sbMsgWidth: Int, ncWidth: Int)
       }
     }
   }
-}
-
-object MainSBIntfSer extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandInterfaceSerializer(128, 32),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
-}
-
-object MainSBIntfDes extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandInterfaceDeserializer(128, 32),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
 }

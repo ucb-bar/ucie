@@ -1,39 +1,31 @@
+/*
+  Routes sideband packets between a layer and the layers above and below it,
+  by dstid (Table 7-2).
+ */
+
 package edu.berkeley.cs.uciedigital.sideband
 
 import chisel3._
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.ltl._
-import circt.stage.ChiselStage
 import chisel3.util._
-
-/*
-  Description:
-    Contains logic for a sideband switch. It manages routing of sideband packages based on packet
-    srcid and dstid.
-
-    layer: can be set with SBSourceDestination which is in SidebandMessageEncodings.scala
-
-    Instantiation Examples:
-    // Protocol Layer
-    // Has no upper IDs. Lower IDs are Adapter (1), LogPHY (2)
-    SidebandSwitch(layerId = 0, upperIds = Seq(), lowerIds = Seq(1, 2), sbMsgWidth = 128)
-
-    // Adapter Layer
-    // Upper is Protocol (0). Lower is LogPHY (2)
-    SidebandSwitch(layerId = 1, upperIds = Seq(0), lowerIds = Seq(2), sbMsgWidth = 128)
-
-    // LogPHY Layer
-    // Upper is Protocol (0) and Adapter (1). No lower IDs
-    SidebandSwitch(layerId = 2, upperIds = Seq(0, 1), lowerIds = Seq(), sbMsgWidth = 128)
- */
 
 class SidebandSwitch(
     layerId: Int,
     upperIds: Seq[Int],
     lowerIds: Seq[Int],
-    sbMsgWidth: Int
+    sbMsgWidth: Int,
+    routeRemoteRegRequestsToUpper: Boolean = false,
+    routeRegAccessToCurrent: Boolean = false,
+    routeUpperRegRequestsToCurrent: Boolean = false,
+    classAwareLowerArbitration: Boolean = false
 ) extends Module {
+  require(
+    !(routeRemoteRegRequestsToUpper && routeRegAccessToCurrent),
+    "Only one lower-ingress register routing override may be enabled"
+  )
+
   val io = IO(new Bundle {
     val upperLayer = new Bundle {
       val from = Flipped(Decoupled(UInt(sbMsgWidth.W)))
@@ -46,64 +38,104 @@ class SidebandSwitch(
     val lowerLayer = new Bundle {
       val from = Flipped(Decoupled(UInt(sbMsgWidth.W)))
       val to = Decoupled(UInt(sbMsgWidth.W))
+      val toClassReady = Input(Vec(4, Bool()))
     }
 
     val err = new Bundle {
       val invalidRouteUpper = Output(Bool())
       val invalidRouteCurr = Output(Bool())
       val invalidRouteLower = Output(Bool())
-      // TODO: Might want to add show the header of the packet causing the error
     }
   })
 
-  // Helper functions
+  // ===========================================================================
+  // Helpers and arbiters
+  // ===========================================================================
   def getDstLayer(msg: UInt): UInt = msg(57, 56)
   def isRemote(msg: UInt): Bool = msg(58) === 1.U
   def matchesAnyId(dstId: UInt, idList: Seq[Int]): Bool = {
     idList.map(id => dstId === id.U(2.W)).foldLeft(false.B)(_ || _)
   }
 
+  def packetRank(packet: UInt): UInt = {
+    val opcode = packet(4, 0)
+    Mux(
+      SBM.isReqRespMessage(opcode),
+      0.U,
+      Mux(
+        SBM.isRegAccessComplete(opcode),
+        1.U,
+        Mux(SBM.isRegAccessRequest(opcode), 2.U, 3.U)
+      )
+    )
+  }
+
   val arbiterToCurrLayer = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
   val arbiterToUpperLayer = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
   val arbiterToLowerLayer = Module(new RRArbiter(UInt(sbMsgWidth.W), 2))
+  val currentLowerWins = WireDefault(false.B)
+  val upperLowerWins = WireDefault(false.B)
 
   io.currLayer.to <> arbiterToCurrLayer.io.out
   io.upperLayer.to <> arbiterToUpperLayer.io.out
   io.lowerLayer.to <> arbiterToLowerLayer.io.out
 
-  // =======================================================================
-  // Demux from UPPER Layer
-  // =======================================================================
-  val upperToCurr = !isRemote(io.upperLayer.from.bits) &&
-    (getDstLayer(io.upperLayer.from.bits) === layerId.U)
-  val upperToLower = isRemote(io.upperLayer.from.bits) ||
+  // ===========================================================================
+  // Demux from the upper layer
+  // ===========================================================================
+  val upperDstLower =
     matchesAnyId(getDstLayer(io.upperLayer.from.bits), lowerIds)
-  val upperMalformed =
-    !(upperToCurr || upperToLower) // Malformed destination from upper layer
+
+  // The Adapter answers every Protocol Layer register access itself, so one
+  // addressed to the Physical Layer (Table 7-2) stops here.
+  val forceUpperToCurr = routeUpperRegRequestsToCurrent.B &&
+    !isRemote(io.upperLayer.from.bits) && upperDstLower &&
+    SBM.isRegAccessRequest(io.upperLayer.from.bits(4, 0))
+  val upperToCurr = forceUpperToCurr || (!isRemote(io.upperLayer.from.bits) &&
+    (getDstLayer(io.upperLayer.from.bits) === layerId.U))
+  val upperToLower = !forceUpperToCurr &&
+    (isRemote(io.upperLayer.from.bits) || upperDstLower)
+  val upperMalformed = !(upperToCurr || upperToLower)
 
   arbiterToCurrLayer.io.in(0).valid := io.upperLayer.from.valid && upperToCurr
   arbiterToCurrLayer.io.in(0).bits := io.upperLayer.from.bits
 
-  arbiterToLowerLayer.io.in(0).valid := io.upperLayer.from.valid && upperToLower
+  arbiterToLowerLayer.io.in(0).valid := io.upperLayer.from.valid &&
+    upperToLower && !currentLowerWins
   arbiterToLowerLayer.io.in(0).bits := io.upperLayer.from.bits
 
-  // If not upperToCurr nor upperToLower, drop packet
+  // A packet routed to neither is accepted and dropped.
   io.upperLayer.from.ready := Mux(
     upperToCurr,
     arbiterToCurrLayer.io.in(0).ready,
-    Mux(upperToLower, arbiterToLowerLayer.io.in(0).ready, true.B)
+    Mux(
+      upperToLower,
+      !currentLowerWins && arbiterToLowerLayer.io.in(0).ready,
+      true.B
+    )
   )
 
-  io.err.invalidRouteUpper := io.upperLayer.from.valid && upperMalformed // Trigger error
+  // TODO: Show the header of the packet that caused an invalid route error.
+  io.err.invalidRouteUpper := io.upperLayer.from.valid && upperMalformed
 
-  // =======================================================================
-  // Demux from LOWER Layer
-  // =======================================================================
-  val lowerToCurr = getDstLayer(io.lowerLayer.from.bits) === layerId.U
-  val lowerToUpper =
-    matchesAnyId(getDstLayer(io.lowerLayer.from.bits), upperIds)
-  val lowerMalformed =
-    !(lowerToCurr || lowerToUpper) // Malformed destination from lower layer
+  // ===========================================================================
+  // Demux from the lower layer
+  // ===========================================================================
+  val lowerOpcode = io.lowerLayer.from.bits(4, 0)
+  val lowerRemoteRegRequest = isRemote(io.lowerLayer.from.bits) &&
+    SBM.isRemoteRegAccessRequest(lowerOpcode)
+  val forceLowerToUpper = routeRemoteRegRequestsToUpper.B &&
+    lowerRemoteRegRequest
+  val forceLowerToCurr = routeRegAccessToCurrent.B &&
+    (lowerRemoteRegRequest || SBM.isRegAccessComplete(lowerOpcode))
+  val lowerToCurr = forceLowerToCurr ||
+    (!forceLowerToUpper && getDstLayer(io.lowerLayer.from.bits) === layerId.U)
+  val lowerToUpper = forceLowerToUpper ||
+    (!forceLowerToCurr && matchesAnyId(
+      getDstLayer(io.lowerLayer.from.bits),
+      upperIds
+    ))
+  val lowerMalformed = !(lowerToCurr || lowerToUpper)
 
   arbiterToCurrLayer.io.in(1).valid := io.lowerLayer.from.valid && lowerToCurr
   arbiterToCurrLayer.io.in(1).bits := io.lowerLayer.from.bits
@@ -117,48 +149,74 @@ class SidebandSwitch(
     Mux(lowerToUpper, arbiterToUpperLayer.io.in(0).ready, true.B)
   )
 
-  io.err.invalidRouteLower := io.lowerLayer.from.valid && lowerMalformed // Trigger error
+  io.err.invalidRouteLower := io.lowerLayer.from.valid && lowerMalformed
 
-  // =======================================================================
-  // Demux from CURRENT Layer
-  // =======================================================================
+  // ===========================================================================
+  // Demux from the current layer
+  // ===========================================================================
   val currToUpper = !isRemote(io.currLayer.from.bits) &&
     matchesAnyId(getDstLayer(io.currLayer.from.bits), upperIds)
   val currToLower = isRemote(io.currLayer.from.bits) ||
     matchesAnyId(getDstLayer(io.currLayer.from.bits), lowerIds)
-  val currMalformed =
-    !(currToUpper || currToLower) // Malformed destination from curr layer
+  val currMalformed = !(currToUpper || currToLower)
+  val upperRank = packetRank(io.upperLayer.from.bits)
+  val currentRank = packetRank(io.currLayer.from.bits)
+  val lowerClassContention = classAwareLowerArbitration.B &&
+    io.upperLayer.from.valid && upperToLower &&
+    io.currLayer.from.valid && currToLower
+  val upperClassReady = io.lowerLayer.toClassReady(upperRank)
+  val currentClassReady = io.lowerLayer.toClassReady(currentRank)
+  currentLowerWins := lowerClassContention && currentClassReady &&
+    (!upperClassReady || currentRank < upperRank)
+  upperLowerWins := lowerClassContention && upperClassReady &&
+    (!currentClassReady || upperRank < currentRank)
 
   arbiterToUpperLayer.io.in(1).valid := io.currLayer.from.valid && currToUpper
   arbiterToUpperLayer.io.in(1).bits := io.currLayer.from.bits
 
-  arbiterToLowerLayer.io.in(1).valid := io.currLayer.from.valid && currToLower
+  arbiterToLowerLayer.io.in(1).valid := io.currLayer.from.valid &&
+    currToLower && !upperLowerWins
   arbiterToLowerLayer.io.in(1).bits := io.currLayer.from.bits
 
   io.currLayer.from.ready := Mux(
     currToUpper,
     arbiterToUpperLayer.io.in(1).ready,
-    Mux(currToLower, arbiterToLowerLayer.io.in(1).ready, true.B)
+    Mux(
+      currToLower,
+      !upperLowerWins && arbiterToLowerLayer.io.in(1).ready,
+      true.B
+    )
   )
 
-  io.err.invalidRouteCurr := io.currLayer.from.valid && currMalformed // Trigger error
+  io.err.invalidRouteCurr := io.currLayer.from.valid && currMalformed
 
-  // =======================================================================
-  // Assertions
-  // =======================================================================
+  // ===========================================================================
+  // Verification
+  // ===========================================================================
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
         Sequence.BoolSequence(io.currLayer.to.fire) |->
           Sequence.BoolSequence(
-            getDstLayer(io.currLayer.to.bits) === layerId.U
+            getDstLayer(io.currLayer.to.bits) === layerId.U ||
+              (routeRegAccessToCurrent.B &&
+                ((isRemote(io.currLayer.to.bits) &&
+                  SBM.isRemoteRegAccessRequest(io.currLayer.to.bits(4, 0))) ||
+                  SBM.isRegAccessComplete(io.currLayer.to.bits(4, 0)))) ||
+              (routeUpperRegRequestsToCurrent.B &&
+                !isRemote(io.currLayer.to.bits) &&
+                SBM.isRegAccessRequest(io.currLayer.to.bits(4, 0)) &&
+                matchesAnyId(getDstLayer(io.currLayer.to.bits), lowerIds))
           ),
         label = Some("SwitchCurrEgressAddressedToCurrLayer")
       )
       AssertProperty(
         Sequence.BoolSequence(io.upperLayer.to.fire) |->
           Sequence.BoolSequence(
-            matchesAnyId(getDstLayer(io.upperLayer.to.bits), upperIds)
+            matchesAnyId(getDstLayer(io.upperLayer.to.bits), upperIds) ||
+              (routeRemoteRegRequestsToUpper.B &&
+                isRemote(io.upperLayer.to.bits) &&
+                SBM.isRemoteRegAccessRequest(io.upperLayer.to.bits(4, 0)))
           ),
         label = Some("SwitchUpperEgressAddressedToUpperIds")
       )
@@ -180,12 +238,24 @@ class SidebandSwitch(
         )
       }
       cover(io.lowerLayer.from.fire && lowerToCurr, "SwitchLowerToCurrRoute")
+      if (routeRegAccessToCurrent) {
+        cover(
+          io.lowerLayer.from.fire && forceLowerToCurr,
+          "SwitchLowerRegAccessToCurrRoute"
+        )
+      }
       if (upperIds.nonEmpty) {
         cover(
           io.lowerLayer.from.fire && lowerToUpper,
           "SwitchLowerToUpperRoute"
         )
         cover(io.currLayer.from.fire && currToUpper, "SwitchCurrToUpperRoute")
+      }
+      if (routeRemoteRegRequestsToUpper) {
+        cover(
+          io.lowerLayer.from.fire && forceLowerToUpper,
+          "SwitchLowerRemoteRegRequestToUpperRoute"
+        )
       }
       cover(io.currLayer.from.fire && currToLower, "SwitchCurrToLowerRoute")
 
@@ -249,21 +319,4 @@ class SidebandSwitch(
       )
     }
   }
-}
-
-object MainSBSwitch extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandSwitch(
-      layerId = 2,
-      upperIds = Seq(0, 1),
-      lowerIds = Seq(),
-      sbMsgWidth = 128
-    ),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
 }

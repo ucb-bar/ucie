@@ -1,23 +1,7 @@
 /*
-  Description:
-    SidebandPriorityQueue is a helper module used in the SidebandInterfaceNode.
-    It separates sideband messages into the following queues:
-      1. MessageRequestOrResponse
-      2. RegAccessCompletion
-      3. RegAccessRequests
-      3. Other
-
-    More queues can be added, if required.
-
-    1. MessageRequestOrResponse queues messages with and without data this because training
-    messages are of this form. They must not be blocked behind other messages and need to
-    prioritized for forward progress.
-
-    2. RegAccessCompletion these messages must be unconditionally sinked according to the spec
-
-    3. ReqAccessRequest has a separate credit system and provision 4 credits for them
-
-    4. Other catch all queue.
+  The sideband priority queues. Each class has its own queue, so completions
+  and request or response messages never wait behind register access requests
+  (sec 7.1.3.1).
  */
 
 package edu.berkeley.cs.uciedigital.sideband
@@ -26,7 +10,6 @@ import chisel3._
 import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.ltl._
-import circt.stage.ChiselStage
 import chisel3.util._
 
 class SidebandPriorityQueue(
@@ -36,11 +19,11 @@ class SidebandPriorityQueue(
   val io = IO(new Bundle {
     val enq = Flipped(Decoupled(UInt(sbMsgWidth.W)))
     val deq = Decoupled(UInt(sbMsgWidth.W))
+    val flushRegAccessCompletion = Input(Bool())
+    val flushRegAccessRequest = Input(Bool())
   })
 
-  // Put depths in a sequence, ordered from highest priority to lowest
-  // To change priority, can just change depth ordering here. Make to
-  // also change order in the EnqueueArbiter module below.
+  // Note: keep this priority order the same as in the EnqueueArbiter below.
   val priorityDepths = Seq(
     depths.messageRequestOrResponse,
     depths.regAccessCompletion,
@@ -48,11 +31,23 @@ class SidebandPriorityQueue(
     depths.other
   )
 
-  // queue(0) has highest priority, queue(n) has lowest priority
-  val queues =
-    priorityDepths.map(depth => Module(new Queue(UInt(sbMsgWidth.W), depth)))
+  val queues = priorityDepths.zipWithIndex.map { case (depth, index) =>
+    Module(
+      new Queue(
+        UInt(sbMsgWidth.W),
+        depth,
+        hasFlush = index == 1 || index == 2
+      )
+    )
+  }
 
-  // Enqueue
+  queues.zipWithIndex.foreach { case (q, index) =>
+    q.io.flush.foreach(
+      _ := (if (index == 1) io.flushRegAccessCompletion
+            else io.flushRegAccessRequest)
+    )
+  }
+
   val enqArbiter = Module(new EnqueueArbiter(sbMsgWidth, queues.length))
   enqArbiter.io.in <> io.enq
 
@@ -60,7 +55,6 @@ class SidebandPriorityQueue(
     queues(i).io.enq <> enqArbiter.io.out(i)
   }
 
-  // Dequeue
   val deqArbiter = Module(new Arbiter(UInt(sbMsgWidth.W), queues.length))
 
   for (i <- queues.indices) {
@@ -92,11 +86,6 @@ class SidebandPriorityQueue(
   }
 }
 
-// ============================================================================
-
-// Helper module to select correct queue
-// NOTE: If changing priority order, make sure the enqueue arbiter
-// matches the ordering of the queues
 class EnqueueArbiter(sbMsgWidth: Int, numQueues: Int) extends Module {
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(UInt(sbMsgWidth.W)))
@@ -121,9 +110,6 @@ class EnqueueArbiter(sbMsgWidth: Int, numQueues: Int) extends Module {
     (isAccRequest && io.out(2).ready) ||
     (isOther && io.out(3).ready)
 
-  // =======================================================================
-  // Assertions
-  // =======================================================================
   block(Verification) {
     block(Verification.Assert) {
       AssertProperty(
@@ -141,16 +127,4 @@ class EnqueueArbiter(sbMsgWidth: Int, numQueues: Int) extends Module {
       cover(io.in.fire && isOther, "PriorityQueueClassifyOther")
     }
   }
-}
-
-object MainSBPriorityQueue extends App {
-  ChiselStage.emitSystemVerilogFile(
-    new SidebandPriorityQueue(128, SidebandPriorityQueueDepths()),
-    args = Array("-td", "./generatedVerilog/sideband"),
-    firtoolOpts = Array(
-      "-O=debug",
-      "--lowering-options=disallowLocalVariables",
-      "--lowering-options=locationInfoStyle=wrapInAtSquareBracket"
-    )
-  )
 }

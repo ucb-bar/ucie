@@ -1,23 +1,14 @@
 /*
-  Description: Contains the MBInit state machine top, requester, and responder module.
-  The top module instantiates both the requester and responder.
-
-  NOTE: There are remaining TODOs in this file.
-  1. Functionality - how to implement sCAL and how to set clock phase to center of UI
-  2. Need to write SVAs (Not required for functionality)
+  The MBINIT state machine of the Logical PHY (sec 4.5.3.3).
  */
 
 package edu.berkeley.cs.uciedigital.logphy
 
 import edu.berkeley.cs.uciedigital.sideband._
+import edu.berkeley.cs.uciedigital.common.SpeedMode
 import chisel3._
-import chisel3.layer.block
-import chisel3.layers.Verification
 import chisel3.util._
 
-// ============================================================================
-// Bundles & Objects
-// ============================================================================
 class MbInitParamsIO extends Bundle {
   val localPhySettings = Flipped(Valid(new PHYParamExchangeIO()))
   val remotePhySettings = Valid(new PHYParamExchangeIO())
@@ -32,16 +23,15 @@ object MBInitSubstate extends ChiselEnum {
   val s0, s1, s2, s3, s4 = Value
 }
 
-// ============================================================================
-// Modules
-// ============================================================================
 class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   val io = IO(new Bundle {
-    // IN
+    val pauseAfterParam = Input(Bool())
+    val pausedAtParam = Output(Bool())
+    val pauseSidebandResume = Output(Bool())
     val mbInitCalDone = Input(Bool())
     val localPhySettings = Flipped(Valid(new PHYParamExchangeIO()))
+    val initWidthCode = Input(UInt(3.W))
 
-    // OUT
     val currentState = Output(MBInitState())
     val mbLaneCtrlIo = new MainbandLaneCtrlIO(afeParams)
     val mbInitCalStart = Output(Bool())
@@ -50,31 +40,30 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
     val txWidthChanged = Output(Bool())
     val remoteFunctionalLanes = Output(UInt(3.W))
     val rxWidthChanged = Output(Bool())
+    val widthApply = Output(new MainbandWidthApply)
     val interoperableParamsNotFound =
-      Output(Bool()) // Error signal in fsmCtrl will also go HIGH
+      Output(Bool())
     val negotiatedPhySettings = Valid(new PHYParamExchangeIO())
+    val remoteAdvertisedClockPhase = Output(UInt(1.W))
     val usingPatternWriter = Output(Bool())
     val usingPatternReader = Output(Bool())
 
-    // Bundles with IN & OUT IOs
     val fsmCtrl = new SubFsmControlIO()
     val patternWriterIo = Flipped(new PatternWriterIO)
-    val patternReaderIo = Flipped(new PatternReaderIO(afeParams.mbLanes))
+    val patternReaderIo = Flipped(new PatternReaderClientIO(afeParams.mbLanes))
     val requesterSbLaneIo = new SidebandLaneIO(sbParams)
     val responderSbLaneIo = new SidebandLaneIO(sbParams)
     val txPtTestReqInterfaceIo = new TxInitPtTestRequesterInterfaceIO(afeParams)
     val txPtTestRespInterfaceIo = new TxInitPtTestResponderInterfaceIO()
   })
 
+  // TODO: SVA that both halves change state together, with settings valid.
   val requester = Module(new MBInitRequester(afeParams, sbParams))
   val responder = Module(new MBInitResponder(afeParams, sbParams))
 
-  // TODO: SVA -- when transition state goes high then currentstates of
-  // requester and responder need to be the same
-
-  // TODO: SVA -- assuming io.phyParams.localPhySettings.valid is always high
-
-  // Remote's params given from {MBINIT_PARAM_CONFIGURATION_REQ}
+  // ===========================================================================
+  // Parameter exchange
+  // ===========================================================================
   val remoteModuleId = RegInit(0.U(2.W))
   val remoteVoltageSwing = RegInit(0.U(5.W))
   val remoteMaxDataRate = RegInit(0.U(4.W))
@@ -97,7 +86,6 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
     remoteSettingsValid := true.B
   }
 
-  // These registers populate local die's {MBINIT_PARAM_CONFIGURATION_RESP}
   val localNegotiatedTxAdjRuntime = RegInit(0.U(1.W))
   val localNegotiatedSbFeatExt = RegInit(0.U(1.W))
   val localNegotiatedClockPhase = RegInit(0.U(1.W))
@@ -105,18 +93,30 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   val localNegotiatedMaxDataRate = RegInit(0.U(4.W))
   val localNegotiatedParamsValid = RegInit(false.B)
 
+  // The codes are in rate order, so sec 4.5.3.3.1's common rate is the min.
+  val negotiatedMaxRate = Mux(
+    remoteMaxDataRate < io.localPhySettings.bits.maxDataRate,
+    remoteMaxDataRate,
+    io.localPhySettings.bits.maxDataRate
+  )
+
+  // Clock Phase applies only at 24 and 32 GT/s (sec 4.5.3.3.1).
+  val quarterRateAllowed =
+    (negotiatedMaxRate === SpeedMode.speed24.asUInt) ||
+      (negotiatedMaxRate === SpeedMode.speed32.asUInt)
+
   when(remoteSettingsValid) {
     localNegotiatedTxAdjRuntime := remoteTxAdjRuntime & io.localPhySettings.bits.txAdjRuntime
     localNegotiatedSbFeatExt := remoteSbFeatExt & io.localPhySettings.bits.sbFeatExt
-    localNegotiatedClockPhase := remoteClockPhase & io.localPhySettings.bits.clockPhase
-    localNegotiatedClockMode := io.localPhySettings.bits.clockMode
-    localNegotiatedMaxDataRate := remoteMaxDataRate & io.localPhySettings.bits.maxDataRate
+
+    // The resp reflects the partner's requests, and Clock Phase needs the rate.
+    localNegotiatedClockPhase := remoteClockPhase & quarterRateAllowed.asUInt
+    localNegotiatedClockMode := remoteClockMode
+    localNegotiatedMaxDataRate := negotiatedMaxRate
     localNegotiatedParamsValid := true.B
   }
 
-  // These registers are populated by the remote die's {MBINIT_PARAM_CONFIGURATION_RESP}
-  // Good to register these values in a case of a scenario when remote
-  // sends a response to local's request before sending the remote's request
+  // The partner's resp can come before its req, so hold it in registers.
   val remoteNegotiatedTxAdjRuntime = RegInit(0.U(1.W))
   val remoteNegotiatedSbFeatExt = RegInit(0.U(1.W))
   val remoteNegotiatedClockPhase = RegInit(0.U(1.W))
@@ -136,11 +136,12 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   val interoperableParamsFound = Wire(Bool())
   val interoperableParamsErrorFlag = Wire(Bool())
 
-  // Based on the spec, clock mode bit in the response must be the same as the one in the request
+  // The partner's resp reflects our req, so compare Clock Phase and Mode to it.
   interoperableParamsComparison := (localNegotiatedTxAdjRuntime === remoteNegotiatedTxAdjRuntime) &&
     (localNegotiatedSbFeatExt === remoteNegotiatedSbFeatExt) &&
-    (localNegotiatedClockPhase === remoteNegotiatedClockPhase) &&
-    (remoteNegotiatedClockMode === remoteClockMode) &&
+    (remoteNegotiatedClockPhase ===
+      (io.localPhySettings.bits.clockPhase & quarterRateAllowed.asUInt)) &&
+    (remoteNegotiatedClockMode === io.localPhySettings.bits.clockMode) &&
     (localNegotiatedMaxDataRate === remoteNegotiatedMaxDataRate)
 
   interoperableParamsFound := interoperableParamsComparison &&
@@ -152,24 +153,36 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   interpretBy8Lane := (io.localPhySettings.bits.ucieSx8 & io.localPhySettings.valid) |
     (remoteUcieSx8 & remoteSettingsValid)
 
-  // Requester IN
+  // ===========================================================================
+  // Requester and responder
+  // ===========================================================================
   requester.io.start := io.fsmCtrl.start
   requester.io.mbInitCalDone := io.mbInitCalDone
   requester.io.responderRdy := responder.io.responderRdy
+  requester.io.pauseAfterParam := io.pauseAfterParam
+  responder.io.pauseAfterParam := io.pauseAfterParam
+  io.pausedAtParam :=
+    requester.io.pausedAtParam || responder.io.pausedAtParam
+  io.pauseSidebandResume :=
+    requester.io.pauseSidebandResume || responder.io.pauseSidebandResume
   requester.io.interpretBy8Lane := interpretBy8Lane
+  requester.io.initWidthCode := io.initWidthCode
   requester.io.rxWidthChanged := responder.io.rxWidthChanged
   requester.io.phyParams.localPhySettings := io.localPhySettings
   requester.io.phyParams.interoperableParamsFound := interoperableParamsFound
 
-  // Responder IN
   responder.io.start := io.fsmCtrl.start
   responder.io.requesterRdy := requester.io.requesterRdy
   responder.io.interpretBy8Lane := interpretBy8Lane
   responder.io.txWidthChanged := requester.io.txWidthChanged
+  responder.io.localTxFunctionalLanes := requester.io.localFunctionalLanes
+  responder.io.localTxCodeValid := requester.io.localTxCodeValid
   responder.io.phyParams.localPhySettings.valid := localNegotiatedParamsValid
-  responder.io.phyParams.localPhySettings.bits.voltageSwing := 0.U // Not used by responder
-  responder.io.phyParams.localPhySettings.bits.ucieSx8 := 0.U // Not used by responder
-  responder.io.phyParams.localPhySettings.bits.moduleId := 0.U // Not used by responder
+
+  // The resp reserves these three fields (sec 4.5.3.3.1).
+  responder.io.phyParams.localPhySettings.bits.voltageSwing := 0.U
+  responder.io.phyParams.localPhySettings.bits.ucieSx8 := 0.U
+  responder.io.phyParams.localPhySettings.bits.moduleId := 0.U
   responder.io.phyParams.localPhySettings.bits.txAdjRuntime := localNegotiatedTxAdjRuntime
   responder.io.phyParams.localPhySettings.bits.sbFeatExt := localNegotiatedSbFeatExt
   responder.io.phyParams.localPhySettings.bits.clockPhase := localNegotiatedClockPhase
@@ -177,10 +190,15 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   responder.io.phyParams.localPhySettings.bits.maxDataRate := localNegotiatedMaxDataRate
   responder.io.phyParams.interoperableParamsFound := interoperableParamsFound
 
-  // Top level IOs
+  // ===========================================================================
+  // Outputs
+  // ===========================================================================
   io.fsmCtrl.done := requester.io.done && responder.io.done
   io.fsmCtrl.substateTransitioning := requester.io.transitioningState
   io.fsmCtrl.error := requester.io.error | responder.io.error | interoperableParamsErrorFlag
+
+  // Only the SBFE resp can Stall (Table 7-11), and SFES is advertised as 0.
+  io.fsmCtrl.stallReceived := false.B
   io.currentState := requester.io.currentState
   io.mbLaneCtrlIo := requester.io.mbLaneCtrlIo
   io.mbInitCalStart := requester.io.mbInitCalStart
@@ -189,6 +207,7 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.txWidthChanged := requester.io.txWidthChanged
   io.remoteFunctionalLanes := responder.io.remoteFunctionalLanes
   io.rxWidthChanged := responder.io.rxWidthChanged
+  io.widthApply := responder.io.widthApply
   io.requesterSbLaneIo <> requester.io.sbLaneIo
   io.responderSbLaneIo <> responder.io.sbLaneIo
   io.patternWriterIo <> requester.io.patternWriterIo
@@ -199,30 +218,32 @@ class MBInitSM(afeParams: AfeParams, sbParams: SidebandParams) extends Module {
   io.usingPatternWriter := requester.io.usingPatternWriter
   io.usingPatternReader := responder.io.usingPatternReader
 
-  // Agreed upon and requested PHY settings that are used between the modules
-  // Note: clockMode is setting local TX uses for the remote RX
+  // clockMode is the mode that the local Tx uses, as the partner requested.
   io.negotiatedPhySettings.valid := interoperableParamsFound
   io.negotiatedPhySettings.bits.voltageSwing := remoteVoltageSwing
   io.negotiatedPhySettings.bits.maxDataRate := localNegotiatedMaxDataRate
-  io.negotiatedPhySettings.bits.clockMode := remoteNegotiatedClockMode
+  io.negotiatedPhySettings.bits.clockMode := localNegotiatedClockMode
   io.negotiatedPhySettings.bits.clockPhase := localNegotiatedClockPhase
   io.negotiatedPhySettings.bits.ucieSx8 := interpretBy8Lane
   io.negotiatedPhySettings.bits.sbFeatExt := remoteSbFeatExt
   io.negotiatedPhySettings.bits.txAdjRuntime := localNegotiatedTxAdjRuntime
   io.negotiatedPhySettings.bits.moduleId := remoteModuleId
+  io.remoteAdvertisedClockPhase := remoteClockPhase
 }
 
 class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
     extends Module {
   val io = IO(new Bundle {
-    // IN
     val start = Input(Bool())
     val mbInitCalDone = Input(Bool())
     val responderRdy = Input(Bool())
+    val initWidthCode = Input(UInt(3.W))
     val interpretBy8Lane = Input(Bool())
     val rxWidthChanged = Input(Bool())
+    val pauseAfterParam = Input(Bool())
 
-    // OUT
+    val pausedAtParam = Output(Bool())
+    val pauseSidebandResume = Output(Bool())
     val done = Output(Bool())
     val transitioningState = Output(Bool())
     val currentState = Output(MBInitState())
@@ -231,38 +252,38 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
     val requesterRdy = Output(Bool())
     val applyLaneReversal = Output(Bool())
     val localFunctionalLanes = Output(UInt(3.W))
+    val localTxCodeValid = Output(Bool())
     val txWidthChanged = Output(Bool())
     val error = Output(Bool())
     val usingPatternWriter = Output(Bool())
 
-    // Bundles with IN & OUT IOs
     val sbLaneIo = new SidebandLaneIO(sbParams)
     val phyParams = new MbInitParamsIO()
     val patternWriterIo = Flipped(new PatternWriterIO)
     val txPtTestReqInterfaceIo = new TxInitPtTestRequesterInterfaceIO(afeParams)
   })
 
-  // Helper modules
   val sbMsgExchanger = Module(new SidebandMessageExchanger(sbParams))
 
-  // FSM state register
+  // ===========================================================================
+  // State registers
+  // ===========================================================================
   val currentState = RegInit(MBInitState.sPARAM)
   val nextState = WireInit(currentState)
   currentState := nextState
   io.currentState := currentState
 
-  // Substate register
   val substateReg = RegInit(MBInitSubstate.s0)
   val nextSubstate = WireInit(substateReg)
   substateReg := nextSubstate
 
-  // Requester ready logic -- used by responder
   val requesterRdyStatusReg = RegInit(false.B)
   val requesterRdy = WireInit(false.B)
+
+  // The clear wins, because a rdy in the transition cycle is the old state's.
   when((currentState =/= nextState) || (substateReg =/= nextSubstate)) {
     requesterRdyStatusReg := false.B
-  }
-  when(requesterRdy) {
+  }.elsewhen(requesterRdy) {
     requesterRdyStatusReg := true.B
   }
   io.requesterRdy := requesterRdyStatusReg || requesterRdy
@@ -282,50 +303,46 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   io.transitioningState := currentState =/= nextState
   io.done := false.B
 
-  // sbMsgExchanger Module Defaults
-  sbMsgExchanger.io.req.bits := 0.U
-  sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
-    0.U(5.W),
-    0.U(8.W),
-    0.U(8.W)
-  )
-  sbMsgExchanger.io.rxRefBitPattern.valid := false.B
+  // ===========================================================================
+  // Defaults
+  // ===========================================================================
+  SidebandMessageExchanger.tieOff(sbMsgExchanger)
   sbMsgExchanger.io.clear := (currentState =/= nextState) || (substateReg =/= nextSubstate)
   sbMsgExchanger.io.sbLaneIo <> io.sbLaneIo
 
-  // mbLaneCtrlIo Defaults
   io.mbLaneCtrlIo.txDataEn.foreach(_ := false.B)
   io.mbLaneCtrlIo.txClkEn := false.B
   io.mbLaneCtrlIo.txValidEn := false.B
   io.mbLaneCtrlIo.txTrackEn := false.B
+  io.mbLaneCtrlIo.txClkHeldLow := false.B
+  io.mbLaneCtrlIo.txTrackPattern := false.B
+  io.mbLaneCtrlIo.txTrackLevel := false.B
   io.mbLaneCtrlIo.rxDataEn.foreach(_ := false.B)
   io.mbLaneCtrlIo.rxClkEn := false.B
   io.mbLaneCtrlIo.rxValidEn := false.B
   io.mbLaneCtrlIo.rxTrackEn := false.B
 
-  // patternWriterIo defaults
   io.patternWriterIo.req.valid := false.B
   io.patternWriterIo.req.bits.patternType := PatternSelect.VALTRAIN
+  io.usingPatternWriter := false.B
 
-  // txPtTestReqInterfaceIo Defaults (defaults are used in MBINIT.REPAIRMB state)
   io.txPtTestReqInterfaceIo.start := false.B
   io.txPtTestReqInterfaceIo.patternType := PatternSelect.PERLANEID
 
-  // NOTE: Currently TxD2CPointTest, PatternWriter don't use many of these parameters,
-  // since pattern counts are fixed for normal link training operation.
-  // Setting them according to spec for the data bits when sending message to Remote die.
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.clockPhase := 0.U // center clock pi
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.dataPattern := 1.U // per lane id
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.validPattern := 0.U // valtrain
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.patternMode := 0.U // continuous
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.iterationCount := 1.U // num of bursts
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.idleCount := 0.U // UI to wait
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.burstCount := 2048.U // UI to send per burst
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.maxErrorThreshold := 0.U // consecutive detect.
-  io.txPtTestReqInterfaceIo.linkTrainingParameters.comparisonMode := 0.U // per lane
+  // Table 7-11 codes for Center, Per Lane ID, VALTRAIN, continuous, per Lane.
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.clockPhase := 0.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.dataPattern := 1.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.validPattern := 0.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.patternMode := 0.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.iterationCount := 1.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.idleCount := 0.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.burstCount := 2048.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.maxErrorThreshold := 0.U
+  io.txPtTestReqInterfaceIo.linkTrainingParameters.comparisonMode := 0.U
 
-  // MBInit.PARAM Configuration message bits
+  // ===========================================================================
+  // Message fields
+  // ===========================================================================
   val mbInitParamReqDataBits = Wire(UInt(64.W))
   mbInitParamReqDataBits := Cat(
     0.U(48.W), // Reserved
@@ -339,8 +356,6 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
     io.phyParams.localPhySettings.bits.maxDataRate
   )
 
-  // PhyParams from Remote die defaults (This is coming from Remote die's response)
-  // Parameter interopertability done in top level
   io.phyParams.remotePhySettings.valid := false.B
   io.phyParams.remotePhySettings.bits.txAdjRuntime := sbMsgExchanger.io.resp
     .bits(79)
@@ -359,7 +374,7 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   io.phyParams.remotePhySettings.bits.maxDataRate := sbMsgExchanger.io.resp
     .bits(67, 64)
 
-  // Success indicators for pattern detection
+  // Bits 40 to 42 are MsgInfo[2:0], and all three must pass (sec 4.5.3.3.3).
   val repairClkSuccess = Wire(Bool())
   repairClkSuccess := sbMsgExchanger.io.resp.bits(40) &&
     sbMsgExchanger.io.resp.bits(41) &&
@@ -368,153 +383,110 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
   repairValSuccess := sbMsgExchanger.io.resp.bits(40)
   val reversalMbSuccess = Wire(Bool())
 
-  // NOTE: PopCount uses an adder tree. So, might be a long path. Can add
-  // an extra cycle by registering the count, and then do the comparison
+  val perLaneResults = SBMsgField.data(sbMsgExchanger.io.resp.bits)
+
+  // sec 4.5.3.3.5 step 6 reverses at exactly 50%, so pass needs above N/2.
+  val reversalLanes = afeParams.mbLanes
+
+  // Note: PopCount is an adder tree, so this can be a long path.
   when(io.interpretBy8Lane) {
-    reversalMbSuccess := PopCount(sbMsgExchanger.io.resp.bits(70, 63)) > 4.U
+    // A x16 module run as UCIe-S x8 votes on Lanes 7:0 only (sec 4.5.3.3.5).
+    reversalMbSuccess := PopCount(perLaneResults(7, 0)) > 4.U
   }.otherwise {
-    reversalMbSuccess := PopCount(sbMsgExchanger.io.resp.bits(78, 63)) > 8.U
+    reversalMbSuccess :=
+      PopCount(perLaneResults(reversalLanes - 1, 0)) > (reversalLanes / 2).U
   }
 
-  // MBINIT.Cal registers/wires
+  // ===========================================================================
+  // Calibration, reversal and width
+  // ===========================================================================
+  // Software completes the sec 4.5.3.3.2 calibration, and the done req waits.
   val mbInitCalDoneReg = RegInit(false.B)
-  when(io.mbInitCalDone) {
-    mbInitCalDoneReg := true.B
-  }
+  when(io.mbInitCalDone) { mbInitCalDoneReg := true.B }
 
-  // MBINIT.ReversalMB registers/wires
   val applyReversalMbTxReg = RegInit(false.B)
   io.applyLaneReversal := applyReversalMbTxReg
 
-  // MBINIT.RepairMB registers/wires
+  // TODO: This register and MainbandWidth both hold the Tx code. Make them one.
   val localTxFunctionalLanesReg = RegInit(
-    "b011".U(3.W)
-  ) // Default code all lanes are functional
+    "b011".U(3.W) // all Lanes functional (Table 4-9)
+  )
   val faultInLowerLanes = RegInit(false.B)
   val faultInUpperLanes = RegInit(false.B)
   val localFuncLanesWire = Wire(UInt(3.W))
   val widthChange = Wire(Bool())
-  val isLanes0To15 = Wire(Bool())
-  val isLanes0To7 = Wire(Bool())
-  val isLowerLanes = Wire(Bool()) // Logical lanes 0-7 (or 0-3, if by 8 lanes)
-  val isUpperLanes = Wire(Bool()) // Logical lanes 8-15 (or 4-7, if by 8 lanes)
-  val onlyLowerLanesFailed = Wire(Bool())
-  val onlyUpperLanesFailed = Wire(Bool())
-  val allLanesFailed = Wire(Bool())
-  val widthDegradeFromAllToLowerBy8 = Wire(Bool())
-  val widthDegradeFromAllToUpperBy8 = Wire(Bool())
-  val widthDegradeFromAllToLower = Wire(Bool())
-  val widthDegradeFromAllToUpper = Wire(Bool())
-  val laneRepairDegradeCondSel = Wire(UInt(5.W))
 
-  // Using `start` in the condition acts as a gate. Can have valid and data bits fan out to
-  // modules that can initiate a point test but only modules that started the point test will
-  // register the values. Eliminates any arbitration logic in the top level.
+  // Every caller sees the results, so start gates which one captures them.
   when(
     io.txPtTestReqInterfaceIo.start && io.txPtTestReqInterfaceIo.ptTestResults.valid
   ) {
-    // ptTestResults bits are per-lane PASS flags, so a lane is faulty when its bit is low
-    when(io.interpretBy8Lane) {
-      faultInLowerLanes := !Cat(
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(0),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(1),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(2),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(3)
-      ).andR
-      faultInUpperLanes := !Cat(
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(4),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(5),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(6),
-        io.txPtTestReqInterfaceIo.ptTestResults.bits(7)
-      ).andR
-    }.otherwise {
-      // Get top (afeParams.mbLanes / 2) lanes
-      faultInLowerLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
-        .take(afeParams.mbLanes / 2)
-        .map(_.asBool)
-        .reduce(_ && _)
-      // Get bottom (afeParams.mbLanes / 2) lanes
-      faultInUpperLanes := !io.txPtTestReqInterfaceIo.ptTestResults.bits
-        .drop(afeParams.mbLanes / 2)
-        .map(_.asBool)
-        .reduce(_ && _)
-    }
+    val (lowerFault, upperFault) = PatternLaneMap.faultHalves(
+      localTxFunctionalLanesReg,
+      io.txPtTestReqInterfaceIo.ptTestResults.bits.map(_.asBool),
+      afeParams.mbLanes,
+      io.interpretBy8Lane
+    )
+    faultInLowerLanes := lowerFault
+    faultInUpperLanes := upperFault
   }
 
-  isLanes0To15 := localTxFunctionalLanesReg === "b011".U
-  isLanes0To7 := isLanes0To15 && io.interpretBy8Lane
-  isLowerLanes := (localTxFunctionalLanesReg === "b001".U) ||
-    (localTxFunctionalLanesReg === "b100".U)
-  isUpperLanes := (localTxFunctionalLanesReg === "b010".U) ||
-    (localTxFunctionalLanesReg === "b101".U)
-  onlyLowerLanesFailed := !faultInUpperLanes && faultInLowerLanes
-  onlyUpperLanesFailed := faultInUpperLanes && !faultInLowerLanes
-
-  // Plausible conditions for width degrade (laneRepairCondSel)
-  allLanesFailed := (isLowerLanes && faultInLowerLanes) ||
-    (isUpperLanes && faultInUpperLanes) ||
-    (isLanes0To15 && faultInUpperLanes && faultInLowerLanes)
-
-  // Upper lanes failed to width degrade to lower lanes (when interpreting by 8 lanes)
-  widthDegradeFromAllToLowerBy8 := isLanes0To7 && onlyUpperLanesFailed
-
-  // Lower lanes failed so width degrade to upper lanes (when interpreting by 8 lanes)
-  widthDegradeFromAllToUpperBy8 := isLanes0To7 && onlyLowerLanesFailed
-
-  // Upper lanes failed to width degrade to lower lanes. Not when interpreting
-  // by 8 lanes: `isLanes0To15` is still true then, and the By8 conditions above
-  // cover it.
-  widthDegradeFromAllToLower := isLanes0To15 && !io.interpretBy8Lane &&
-    onlyUpperLanesFailed
-
-  // Lower lanes failed so width degrade to upper lanes, likewise not by 8 lanes
-  widthDegradeFromAllToUpper := isLanes0To15 && !io.interpretBy8Lane &&
-    onlyLowerLanesFailed
-
-  laneRepairDegradeCondSel := Cat(
-    allLanesFailed,
-    widthDegradeFromAllToLower,
-    widthDegradeFromAllToUpper,
-    widthDegradeFromAllToLowerBy8,
-    widthDegradeFromAllToUpperBy8
+  val degradeTargetWire = PatternLaneMap.degradeTarget(
+    localTxFunctionalLanesReg,
+    faultInLowerLanes,
+    faultInUpperLanes,
+    io.interpretBy8Lane
   )
-  // The Mux1H that applies these ORs its inputs, so two at once would program
-  // a lane map that is neither.
-  block(Verification) {
-    block(Verification.Assert) {
-      assert(
-        PopCount(laneRepairDegradeCondSel) <= 1.U,
-        "MBInitSM: more than one width degrade condition at once"
-      )
-    }
-  }
 
   localFuncLanesWire := localTxFunctionalLanesReg
   widthChange := localTxFunctionalLanesReg =/= localFuncLanesWire
 
-  // TODO: SVA -- if widthChange goes high then it state is sREPAIRMB and s2 (applying degrade)
-  io.txWidthChanged := widthChange // goes HIGH in sREPAIRMB if localFuncLanesWire changes
+  // TODO: SVA that widthChange is high only in sREPAIRMB s2.
+  io.txWidthChanged := widthChange
   io.localFunctionalLanes := localTxFunctionalLanesReg
-  io.usingPatternWriter := false.B
+  io.localTxCodeValid := currentState === MBInitState.sREPAIRMB &&
+    substateReg === MBInitSubstate.s2
 
+  // ===========================================================================
+  // Pause
+  // ===========================================================================
+  // sec 9.5.3.25 code 001b pauses after PARAM step 2, so hold at its exit.
+  val paramExitReady = Wire(Bool())
+  val paramPauseHeld = RegInit(false.B)
+  paramExitReady := (io.requesterRdy && io.responderRdy) || paramPauseHeld
+
+  // Latch the pause, because a hold on the rdy pair alone can strand one half.
+  when(currentState =/= nextState) {
+    paramPauseHeld := false.B
+  }.elsewhen(paramExitReady && io.pauseAfterParam) {
+    paramPauseHeld := true.B
+  }
+
+  // The latch gives the LTSM a level to gate the resume and the timeout on.
+  io.pausedAtParam := paramPauseHeld
+
+  // {MBINIT.CAL Done req} is the sec 9.5.3.25 resume message for MBINIT.
+  io.pauseSidebandResume := paramPauseHeld && io.sbLaneIo.rx.valid &&
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.MBINIT_CAL_DONE_REQ)
+
+  // ===========================================================================
+  // State machine
+  // ===========================================================================
   switch(currentState) {
     is(MBInitState.sPARAM) {
-      // mb transmitters remain tristated, and mb receivers are permitted to be disabled (default)
+      // PARAM and CAL tri-state the mainband (sec 4.5.3.3.1, sec 4.5.3.3.2).
       when(io.start) {
-        // Reset status registers
         errorDetectedReg := false.B
         applyReversalMbTxReg := false.B
-        localTxFunctionalLanesReg := "b011".U
+
+        // Start at the sec 9.5.1.5 target, or step 3 overwrites MainbandWidth.
+        localTxFunctionalLanesReg := io.initWidthCode
         faultInLowerLanes := false.B
         faultInUpperLanes := false.B
         mbInitCalDoneReg := false.B
 
         sbMsgExchanger.io.req.valid := io.phyParams.localPhySettings.valid
-        sbMsgExchanger.io.req.bits := SBMsgCreate(
+        sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
           SBM.MBINIT_PARAM_CONFIGURATION_REQ,
-          "PHY",
-          "PHY",
-          true,
           data = mbInitParamReqDataBits
         )
         sbMsgExchanger.io.rxRefBitPattern.valid := true.B
@@ -522,38 +494,32 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
 
         io.phyParams.remotePhySettings.valid := sbMsgExchanger.io.resp.valid
 
-        // io.phyParams.interoperableParamsFound is HIGH when resp params are what is expected
         requesterRdy := sbMsgExchanger.io.exchDone && io.phyParams.interoperableParamsFound
 
-        when(io.requesterRdy && io.responderRdy) {
+        when(paramExitReady && !io.pauseAfterParam) {
           nextState := MBInitState.sCAL
         }
       }
     }
     is(MBInitState.sCAL) {
-      // mb transmitters remain tristated, and mb receivers are permitted to be disabled (default)
-
       sbMsgExchanger.io.req.valid := mbInitCalDoneReg
-      sbMsgExchanger.io.req.bits := SBMsgCreate(
-        SBM.MBINIT_CAL_DONE_REQ,
-        "PHY",
-        "PHY",
-        true
-      )
+      sbMsgExchanger.io.req.bits := PhyLinkMsg.create(SBM.MBINIT_CAL_DONE_REQ)
       sbMsgExchanger.io.rxRefBitPattern.valid := sbMsgExchanger.io.msgSent
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_CAL_DONE_RESP
 
       requesterRdy := sbMsgExchanger.io.exchDone
 
       when(io.requesterRdy && io.responderRdy) {
-        // TODO: Remove sREPAIRCLK bypass
-        nextState := MBInitState.sREPAIRVAL
+        nextState := MBInitState.sREPAIRCLK
       }
     }
     is(MBInitState.sREPAIRCLK) {
       io.mbLaneCtrlIo.txClkEn := true.B
       io.mbLaneCtrlIo.txValidEn := true.B
+
+      // sec 4.5.3.3.3 step 1 also sends the clock repair pattern on TTRK_L.
       io.mbLaneCtrlIo.txTrackEn := true.B
+      io.mbLaneCtrlIo.txTrackPattern := true.B
       io.mbLaneCtrlIo.rxClkEn := true.B
       io.mbLaneCtrlIo.rxValidEn := true.B
       io.mbLaneCtrlIo.rxTrackEn := true.B
@@ -563,17 +529,12 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       switch(substateReg) {
         is(MBInitSubstate.s0) { // INIT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRCLK_INIT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRCLK_INIT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRCLK_INIT_RESP
 
-          // send 128 iterations of clock repair pattern (16 cycles clock followed by 8 cycles low)
-          // on TCLKN_L, TCLKP_L, TTRK_L (not scrambled)
           io.patternWriterIo.req.valid := sbMsgExchanger.io.exchDone && io.patternWriterIo.req.ready
           io.patternWriterIo.req.bits.patternType := PatternSelect.CLKREPAIR
 
@@ -583,11 +544,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s1) { // RESULT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRCLK_RESULT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRCLK_RESULT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRCLK_RESULT_RESP
@@ -602,11 +560,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s2) { // DONE
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRCLK_DONE_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRCLK_DONE_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRCLK_DONE_RESP
@@ -620,14 +575,17 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
     is(MBInitState.sREPAIRVAL) {
-      // TODO:
-      //  -- center the clock phase at the center of data UI; info from the calibration
-      //     Need to see how sCAL will be implemented
-
+      // These states give no clock phase value, so PhyBridge holds a default.
       io.mbLaneCtrlIo.txDataEn.foreach(x =>
-        x := true.B
-      ) // data lanes held low in sREPAIRVAL
-      io.mbLaneCtrlIo.txClkEn := true.B // clock lanes held low in sREPAIRVAL
+        x := true.B // sec 4.5.3.3.4 holds the Data Lanes low
+      )
+      io.mbLaneCtrlIo.txClkEn := true.B
+
+      // sec 4.5.3.3.4 holds the Clock Transmitters low outside the pattern.
+      io.mbLaneCtrlIo.txClkHeldLow := true.B
+
+      // sec 4.5.3.3.4 says nothing of Track, so drive it low like REVERSALMB.
+      io.mbLaneCtrlIo.txTrackEn := true.B
       io.mbLaneCtrlIo.rxClkEn := true.B
       io.mbLaneCtrlIo.rxValidEn := true.B
 
@@ -636,16 +594,13 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       switch(substateReg) {
         is(MBInitSubstate.s0) { // INIT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRVAL_INIT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRVAL_INIT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRVAL_INIT_RESP
 
-          // valid transmitter is enabled when sending, tri-stated otherwise
+          // sec 4.5.3.3.4 tri-states the Valid Transmitter outside VALTRAIN.
           io.mbLaneCtrlIo.txValidEn := true.B
 
           io.patternWriterIo.req.valid := sbMsgExchanger.io.exchDone && io.patternWriterIo.req.ready
@@ -657,11 +612,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s1) { // RESULT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRVAL_RESULT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRVAL_RESULT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRVAL_RESULT_RESP
@@ -676,11 +628,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s2) { // DONE
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRVAL_DONE_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRVAL_DONE_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRVAL_DONE_RESP
@@ -694,28 +643,22 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
     is(MBInitState.sREVERSALMB) {
-      // TODO:
-      //  -- center the clock phase at the center of data UI; info from the calibration
-      //     Need to see how sCAL will be implemented
       io.mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
+      io.mbLaneCtrlIo.txClkHeldLow := true.B
       io.mbLaneCtrlIo.txClkEn := true.B
-      io.mbLaneCtrlIo.txValidEn := true.B
       io.mbLaneCtrlIo.txTrackEn := true.B
+      io.mbLaneCtrlIo.txValidEn := true.B
       io.mbLaneCtrlIo.rxDataEn.foreach(_ := true.B)
       io.mbLaneCtrlIo.rxClkEn := true.B
       io.mbLaneCtrlIo.rxValidEn := true.B
-      // Track receiver is allowed to be disable
 
       io.usingPatternWriter := true.B
 
       switch(substateReg) {
         is(MBInitSubstate.s0) { // INIT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_INIT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_INIT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_INIT_RESP
@@ -726,11 +669,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s1) { // CLEAR ERROR
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_CLEAR_ERROR_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_CLEAR_ERROR_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_CLEAR_ERROR_RESP
@@ -744,16 +684,13 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s2) { // RESULT
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_RESULT_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_RESULT_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_RESULT_RESP
 
-          // Error is triggered when it applies a lane reversal and it test still fails
+          // sec 4.5.3.3.5 step 10 fails the state if reversal does not help.
           errorDetectedWire := sbMsgExchanger.io.resp.valid &&
             !reversalMbSuccess &&
             applyReversalMbTxReg
@@ -772,11 +709,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s3) { // DONE
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_DONE_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_DONE_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_DONE_RESP
@@ -790,26 +724,20 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
       }
     }
     is(MBInitState.sREPAIRMB) {
-      // TODO:
-      //  -- center the clock phase at the center of data UI; info from the calibration
-      //     Need to see how sCAL will be implemented
       io.mbLaneCtrlIo.txDataEn.foreach(_ := true.B)
+      io.mbLaneCtrlIo.txClkHeldLow := true.B
       io.mbLaneCtrlIo.txClkEn := true.B
-      io.mbLaneCtrlIo.txValidEn := true.B
       io.mbLaneCtrlIo.txTrackEn := true.B
+      io.mbLaneCtrlIo.txValidEn := true.B
       io.mbLaneCtrlIo.rxDataEn.foreach(_ := true.B)
       io.mbLaneCtrlIo.rxClkEn := true.B
       io.mbLaneCtrlIo.rxValidEn := true.B
-      // Track receiver is allowed to be disable
 
       switch(substateReg) {
         is(MBInitSubstate.s0) { // START
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRMB_START_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRMB_START_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_START_RESP
@@ -819,79 +747,41 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
           }
         }
         is(MBInitSubstate.s1) { // TX INIT D2C POINT TEST
-          io.txPtTestReqInterfaceIo.start := true.B // Trigger the pt test
-
-          // Using defaults signals for tx d2c point test (see above)
-          // io.txPtTestReqInterfaceIo.linkTrainingParameters.<signal>
-
-          // faultInUpperLanes, and faultInLowerLanes registers will capture the results from the
-          // point test when the following condition is satifised:
-          // io.txPtTestReqInterfaceIo.start && io.txPtTestReqInterfaceIo.ptTestResults.valid
+          io.txPtTestReqInterfaceIo.start := true.B
 
           when(io.txPtTestReqInterfaceIo.done) {
             nextSubstate := MBInitSubstate.s2
           }
         }
         is(MBInitSubstate.s2) { // APPLY DEGRADE
-          // Calculate the width degrade
-          // If no degrade needed, keeps default value (driven by localTxFunctionalLanesReg)
+          localFuncLanesWire := degradeTargetWire
 
-          when(laneRepairDegradeCondSel.orR) {
-            localFuncLanesWire := Mux1H(
-              Seq(
-                laneRepairDegradeCondSel(
-                  0
-                ) -> "b101".U, // Logical lanes 4-7 are functional
-                laneRepairDegradeCondSel(
-                  1
-                ) -> "b100".U, // Logical lanes 0-3 are functional
-                laneRepairDegradeCondSel(
-                  2
-                ) -> "b010".U, // Logical lanes 8-15 are functional
-                laneRepairDegradeCondSel(
-                  3
-                ) -> "b001".U, // Logical lanes 0-7 are functional
-                laneRepairDegradeCondSel(
-                  4
-                ) -> "b000".U // No functional lanes (No degrade possible)
-              )
-            )
-          }
-
-          // io.localFunctionalLanes should always have an updated value no matter what
+          // localFunctionalLanes must always show the current code.
           when(widthChange) {
             io.localFunctionalLanes := localFuncLanesWire
           }
 
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
             SBM.MBINIT_REPAIRMB_APPLY_DEGRADE_REQ,
-            "PHY",
-            "PHY",
-            true,
             msgInfo = Cat(0.U(13.W), localFuncLanesWire)
           )
 
-          // No need to wait for a response when all lanes have failed. Going into TrainError
-          when(!allLanesFailed) {
+          // A 000b req still goes out, and no resp is awaited (sec 4.5.3.3.6).
+          val degradeNotPossible = degradeTargetWire === "b000".U
+          when(!degradeNotPossible) {
             sbMsgExchanger.io.rxRefBitPattern.valid := true.B
             sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_APPLY_DEGRADE_RESP
           }
 
-          // Need message to send when all lanes failed before triggering an error
-          when(sbMsgExchanger.io.msgSent && allLanesFailed) {
+          when(sbMsgExchanger.io.msgSent && degradeNotPossible) {
             errorDetectedWire := true.B
           }
           requesterRdy := sbMsgExchanger.io.exchDone & !errorDetected
 
-          // Need to wait for responder to change width and send the response to Remote die
-          // before moving on. (i.e. If Local die receives a response that means, Remote
-          // die has adjusted their TX and RX widths. However, if Local die Responder isn't ready
-          // that means Local die hasn't receieved a request, so Local die is unable to adjust
-          // RX widths)
+          // Commit once the partner has changed width and sent its own req.
           when(io.requesterRdy && io.responderRdy) {
             localTxFunctionalLanesReg := localFuncLanesWire
-            requesterRdyStatusReg := false.B
             when(widthChange || io.rxWidthChanged) {
               nextSubstate := MBInitSubstate.s1
             }
@@ -902,11 +792,8 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s3) { // END
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRMB_END_REQ,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRMB_END_REQ
           )
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_END_RESP
@@ -926,57 +813,65 @@ class MBInitRequester(afeParams: AfeParams, sbParams: SidebandParams)
 class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
     extends Module {
   val io = IO(new Bundle {
-    // IN
+    val pauseAfterParam = Input(Bool())
+    val pausedAtParam = Output(Bool())
+    val pauseSidebandResume = Output(Bool())
     val start = Input(Bool())
     val requesterRdy = Input(Bool())
     val interpretBy8Lane = Input(Bool())
     val txWidthChanged = Input(Bool())
+    val localTxFunctionalLanes = Input(UInt(3.W))
+    val localTxCodeValid = Input(Bool())
 
-    // OUT
     val done = Output(Bool())
     val error = Output(Bool())
     val currentState = Output(MBInitState())
     val responderRdy = Output(Bool())
     val rxWidthChanged = Output(Bool())
+    val widthApply = Output(new MainbandWidthApply)
     val remoteFunctionalLanes = Output(UInt(3.W))
     val usingPatternReader = Output(Bool())
 
-    // Bundles with IN & OUT IOs
     val sbLaneIo = new SidebandLaneIO(sbParams)
-    val patternReaderIo = Flipped(new PatternReaderIO(afeParams.mbLanes))
+    val patternReaderIo = Flipped(new PatternReaderClientIO(afeParams.mbLanes))
     val txPtTestRespInterfaceIo = new TxInitPtTestResponderInterfaceIO()
     val phyParams = new MbInitParamsIO
   })
 
-  // Helper modules
   val sbMsgExchanger = Module(new SidebandMessageExchanger(sbParams))
 
-  // Internal state registers
-  val gotLFSRClearReq = RegInit(false.B) // HIGH if clear error message received
+  // ===========================================================================
+  // State registers
+  // ===========================================================================
+  // Set when REVERSALMB s0 or s3 takes the clear error req for s1.
+  val gotLFSRClearReq = RegInit(false.B)
 
-  // FSM state register
+  // The init resp waits only for the arming, because rxDivClk starts later.
+  val readerArmed = RegInit(false.B)
+  val reversalSecondPass = RegInit(false.B)
+
   val currentState = RegInit(MBInitState.sPARAM)
   val nextState = WireInit(currentState)
   currentState := nextState
   io.currentState := currentState
 
-  // Substate register
   val substateReg = RegInit(MBInitSubstate.s0)
   val nextSubstate = WireInit(substateReg)
   substateReg := nextSubstate
 
-  // Responder ready logic -- used by requester
+  when(currentState =/= nextState || substateReg =/= nextSubstate) {
+    readerArmed := false.B
+  }
+
   val responderRdyStatusReg = RegInit(false.B)
   val responderRdy = WireInit(false.B)
-  when(currentState =/= nextState) {
+  when((currentState =/= nextState) || (substateReg =/= nextSubstate)) {
     responderRdyStatusReg := false.B
-  }
-  when(responderRdy) {
+  }.elsewhen(responderRdy) {
     responderRdyStatusReg := true.B
   }
   io.responderRdy := responderRdyStatusReg || responderRdy
 
-  // IO defaults
   val errorDetectedReg = RegInit(false.B)
   val errorDetectedWire = WireInit(false.B)
   val errorDetected = Wire(Bool())
@@ -989,21 +884,16 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
   io.error := errorDetectedReg
   io.done := false.B
 
-  // sbMsgExchanger Module Defaults
-  sbMsgExchanger.io.req.bits := 0.U
-  sbMsgExchanger.io.req.valid := false.B
-  sbMsgExchanger.io.rxRefBitPattern.bits := VecInit(
-    0.U(5.W),
-    0.U(8.W),
-    0.U(8.W)
-  )
-  sbMsgExchanger.io.rxRefBitPattern.valid := false.B
+  // ===========================================================================
+  // Defaults
+  // ===========================================================================
+  SidebandMessageExchanger.tieOff(sbMsgExchanger)
   sbMsgExchanger.io.clear := (currentState =/= nextState) || (substateReg =/= nextSubstate)
   sbMsgExchanger.io.sbLaneIo.tx <> io.sbLaneIo.tx
   sbMsgExchanger.io.sbLaneIo.rx.valid := io.sbLaneIo.rx.valid
   sbMsgExchanger.io.sbLaneIo.rx.bits.data := io.sbLaneIo.rx.bits.data
 
-  // need to wait for two diff. messages sREVERSALMB
+  // s3 waits for one of two messages, so it drives rx.ready itself.
   when(
     (currentState === MBInitState.sREVERSALMB) && (substateReg === MBInitSubstate.s3)
   ) {
@@ -1012,22 +902,23 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
     io.sbLaneIo.rx.ready := sbMsgExchanger.io.sbLaneIo.rx.ready
   }
 
-  // patternReaderIo defaults
   io.patternReaderIo.req.valid := false.B
   io.patternReaderIo.req.bits.patternType := PatternSelect.PERLANEID
   io.patternReaderIo.req.bits.comparisonMode := ComparisonMode.PERLANE
   io.patternReaderIo.req.bits.errorThreshold := 0.U
-  io.patternReaderIo.req.bits.doConsecutiveCount := true.B // mbinit always consecutive counts
+
+  // MBINIT passes a Lane on 16 consecutive iterations (sec 4.5.3.3.3).
+  io.patternReaderIo.req.bits.doConsecutiveCount := true.B
   io.patternReaderIo.done := false.B
   io.patternReaderIo.resp.ready := false.B
-  io.patternReaderIo.remoteFuncLanes := "b011".U
+  io.usingPatternReader := false.B
 
-  // txPtTestRespInterfaceIo Defaults (defaults are used in MBINIT.RepairMB state)
   io.txPtTestRespInterfaceIo.start := false.B
   io.txPtTestRespInterfaceIo.patternType := PatternSelect.PERLANEID
 
-  // PhyParams from Remote die defaults (This is coming from the Remote die's request)
-  // Parameter interopertability done in top level; top level registers the values
+  // ===========================================================================
+  // Message fields
+  // ===========================================================================
   io.phyParams.remotePhySettings.valid := false.B
   io.phyParams.remotePhySettings.bits.txAdjRuntime := sbMsgExchanger.io.resp
     .bits(79)
@@ -1048,54 +939,33 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
   io.phyParams.remotePhySettings.bits.maxDataRate := sbMsgExchanger.io.resp
     .bits(67, 64)
 
-  // MBINIT.RepairClk wires
+  // Table 7-9 MsgInfo[3] is RRDCK_L, which Standard Package lacks, so pass.
   val mbRepairClkResult = Wire(UInt(16.W))
   mbRepairClkResult := Cat(
     0.U(12.W),
-    0.U,
+    1.U(1.W),
     io.patternReaderIo.resp.bits.perLaneStatusBits(2),
     io.patternReaderIo.resp.bits.perLaneStatusBits(1),
     io.patternReaderIo.resp.bits.perLaneStatusBits(0)
   )
 
-  // MBINIT.RepairVal wires
+  // Table 7-9 MsgInfo bit 1 is RRDVLD_L, which reports pass as RRDCK_L does.
   val mbRepairValResult = Wire(UInt(16.W))
   mbRepairValResult := Cat(
     0.U(14.W),
-    0.U,
+    1.U(1.W),
     io.patternReaderIo.resp.bits.perLaneStatusBits(0)
   )
 
-  // MBINIT.ReversalMb wires
   val mbReversalMbResult = Wire(UInt(64.W))
   mbReversalMbResult := Cat(
     0.U((64 - afeParams.mbLanes).W),
     io.patternReaderIo.resp.bits.perLaneStatusBits.asUInt
   )
 
-  // MBINIT.RepairMB registers/wires
-  val currRemoteTxFunctionalLanes = RegInit(
-    "b011".U(3.W)
-  ) // Default code all lanes are functional
-  val newRemoteTxFunctionalLanes = RegInit("b011".U(3.W))
-  val incRemoteFuncLanesWire = Wire(UInt(3.W))
-  val widthChange = WireInit(false.B)
-
-  incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42, 40)
-
-  widthChange := currRemoteTxFunctionalLanes =/= newRemoteTxFunctionalLanes
-  when(widthChange) {
-    io.remoteFunctionalLanes := newRemoteTxFunctionalLanes
-  }.otherwise {
-    io.remoteFunctionalLanes := currRemoteTxFunctionalLanes
-  }
-  io.rxWidthChanged := widthChange
-
-  // MBInit.PARAM Configuration message bits
   val mbInitParamRespDataBits = Wire(UInt(64.W))
-  // localPhySettings in this case are the negotiated params after comparison between local
-  // settings and remote's settings in {MBINIT_PARAM_CONFIGURATION_REQ}
-  // Data comes from the negotiated prefixed registers from the top level (MBInit module)
+
+  // Here localPhySettings holds the resp values that MBInitSM resolves.
   mbInitParamRespDataBits := Cat(
     0.U(48.W), // Reserved
     io.phyParams.localPhySettings.bits.txAdjRuntime,
@@ -1107,13 +977,61 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
     io.phyParams.localPhySettings.bits.maxDataRate
   )
 
-  io.usingPatternReader := false.B
+  // ===========================================================================
+  // Width degrade
+  // ===========================================================================
+  // currRemoteTxFunctionalLanes is the Receiver code that is in use.
+  val currRemoteTxFunctionalLanes = RegInit(
+    "b011".U(3.W) // all Lanes functional (Table 4-9)
+  )
+  val newRemoteTxFunctionalLanes = RegInit("b011".U(3.W))
+  val prevRemoteTxFunctionalLanes = RegInit("b011".U(3.W))
+  val incRemoteFuncLanesWire = Wire(UInt(3.W))
+  val widthChange = WireInit(false.B)
 
+  incRemoteFuncLanesWire := sbMsgExchanger.io.resp.bits(42, 40)
+
+  // The only width change of MBINIT (sec 4.5.3.3.6 step 3).
+  val widthApplyValid = WireInit(false.B)
+  io.widthApply.valid := widthApplyValid
+  io.widthApply.txCode := io.localTxFunctionalLanes
+  val rxCode = PatternLaneMap.receiverLaneMap(
+    newRemoteTxFunctionalLanes,
+    io.localTxFunctionalLanes
+  )
+  io.widthApply.rxCode := rxCode
+
+  // Both partners repeat step 2 if either width changes (sec 4.5.3.3.6 step 3).
+  widthChange := currRemoteTxFunctionalLanes =/= rxCode ||
+    prevRemoteTxFunctionalLanes =/= newRemoteTxFunctionalLanes
+  io.remoteFunctionalLanes := rxCode
+  io.rxWidthChanged := widthChange
+
+  // ===========================================================================
+  // Pause
+  // ===========================================================================
+  // The same pause latch and resume decode as in the requester.
+  val paramExitReady = Wire(Bool())
+  val paramPauseHeld = RegInit(false.B)
+  paramExitReady := (io.requesterRdy && io.responderRdy) || paramPauseHeld
+  when(currentState =/= nextState) {
+    paramPauseHeld := false.B
+  }.elsewhen(paramExitReady && io.pauseAfterParam) {
+    paramPauseHeld := true.B
+  }
+  io.pausedAtParam := paramPauseHeld
+  io.pauseSidebandResume := paramPauseHeld && io.sbLaneIo.rx.valid &&
+    SBMsgCompare(io.sbLaneIo.rx.bits.data, SBM.MBINIT_CAL_DONE_REQ)
+
+  // ===========================================================================
+  // State machine
+  // ===========================================================================
   switch(currentState) {
     is(MBInitState.sPARAM) {
       when(io.start) {
         currRemoteTxFunctionalLanes := "b011".U
         newRemoteTxFunctionalLanes := "b011".U
+        prevRemoteTxFunctionalLanes := "b011".U
         errorDetectedReg := false.B
         gotLFSRClearReq := false.B
 
@@ -1122,22 +1040,15 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
 
         io.phyParams.remotePhySettings.valid := sbMsgExchanger.io.resp.valid
 
-        // Valid goes HIGH when interoperable params are found in the top level after receiving req
         sbMsgExchanger.io.req.valid := io.phyParams.localPhySettings.valid
-        sbMsgExchanger.io.req.bits := SBMsgCreate(
+        sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
           SBM.MBINIT_PARAM_CONFIGURATION_RESP,
-          "PHY",
-          "PHY",
-          true,
           data = mbInitParamRespDataBits
         )
 
-        // Top level will trigger an error if interoperable parameters are not found
-        // Message won't send unless interoperable parameters are found.
-
         responderRdy := sbMsgExchanger.io.exchDone && io.phyParams.interoperableParamsFound
 
-        when(io.requesterRdy && io.responderRdy) {
+        when(paramExitReady && !io.pauseAfterParam) {
           nextState := MBInitState.sCAL
         }
       }
@@ -1147,17 +1058,11 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
       sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_CAL_DONE_REQ
 
       sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-      sbMsgExchanger.io.req.bits := SBMsgCreate(
-        SBM.MBINIT_CAL_DONE_RESP,
-        "PHY",
-        "PHY",
-        true
-      )
+      sbMsgExchanger.io.req.bits := PhyLinkMsg.create(SBM.MBINIT_CAL_DONE_RESP)
 
       responderRdy := sbMsgExchanger.io.exchDone
       when(io.requesterRdy && io.responderRdy) {
-        // TODO: Remove sREPAIRCLK bypass
-        nextState := MBInitState.sREPAIRVAL
+        nextState := MBInitState.sREPAIRCLK
       }
     }
     is(MBInitState.sREPAIRCLK) {
@@ -1167,18 +1072,19 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRCLK_INIT_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRCLK_INIT_RESP,
-            "PHY",
-            "PHY",
-            true
+          io.patternReaderIo.req.bits.patternType := PatternSelect.CLKREPAIR
+          io.patternReaderIo.req.valid :=
+            sbMsgExchanger.io.msgReceived && !readerArmed
+          when(io.patternReaderIo.req.fire) {
+            readerArmed := true.B
+          }
+
+          sbMsgExchanger.io.req.valid := readerArmed
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRCLK_INIT_RESP
           )
 
-          io.patternReaderIo.req.bits.patternType := PatternSelect.CLKREPAIR
-
-          when(sbMsgExchanger.io.exchDone && io.patternReaderIo.req.ready) {
-            io.patternReaderIo.req.valid := true.B
+          when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBInitSubstate.s1
           }
         }
@@ -1189,11 +1095,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           io.patternReaderIo.done := sbMsgExchanger.io.msgReceived
 
           sbMsgExchanger.io.req.valid := io.patternReaderIo.resp.valid
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
             SBM.MBINIT_REPAIRCLK_RESULT_RESP,
-            "PHY",
-            "PHY",
-            true,
             msgInfo = mbRepairClkResult
           )
 
@@ -1207,11 +1110,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRCLK_DONE_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRCLK_DONE_RESP,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRCLK_DONE_RESP
           )
 
           responderRdy := sbMsgExchanger.io.exchDone
@@ -1229,18 +1129,19 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRVAL_INIT_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRVAL_INIT_RESP,
-            "PHY",
-            "PHY",
-            true
+          io.patternReaderIo.req.bits.patternType := PatternSelect.VALTRAIN
+          io.patternReaderIo.req.valid :=
+            sbMsgExchanger.io.msgReceived && !readerArmed
+          when(io.patternReaderIo.req.fire) {
+            readerArmed := true.B
+          }
+
+          sbMsgExchanger.io.req.valid := readerArmed
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRVAL_INIT_RESP
           )
 
-          io.patternReaderIo.req.bits.patternType := PatternSelect.VALTRAIN
-
-          when(sbMsgExchanger.io.exchDone && io.patternReaderIo.req.ready) {
-            io.patternReaderIo.req.valid := true.B
+          when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBInitSubstate.s1
           }
         }
@@ -1251,11 +1152,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           io.patternReaderIo.done := sbMsgExchanger.io.msgReceived
 
           sbMsgExchanger.io.req.valid := io.patternReaderIo.resp.valid
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
             SBM.MBINIT_REPAIRVAL_RESULT_RESP,
-            "PHY",
-            "PHY",
-            true,
             msgInfo = mbRepairValResult
           )
           when(sbMsgExchanger.io.exchDone) {
@@ -1268,11 +1166,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRVAL_DONE_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRVAL_DONE_RESP,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRVAL_DONE_RESP
           )
 
           responderRdy := sbMsgExchanger.io.exchDone
@@ -1290,15 +1185,31 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_INIT_REQ
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_INIT_RESP,
-            "PHY",
-            "PHY",
-            true
+          io.patternReaderIo.req.bits.patternType := PatternSelect.PERLANEID
+          io.patternReaderIo.req.valid :=
+            sbMsgExchanger.io.msgReceived && !readerArmed
+          when(io.patternReaderIo.req.fire) {
+            readerArmed := true.B
+          }
+
+          sbMsgExchanger.io.req.valid := readerArmed
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_INIT_RESP
           )
 
+          // Take an early clear error req here, or the queue drops it.
+          when(
+            io.sbLaneIo.rx.valid && SBMsgCompare(
+              io.sbLaneIo.rx.bits.data,
+              SBM.MBINIT_REVERSALMB_CLEAR_ERROR_REQ
+            )
+          ) {
+            io.sbLaneIo.rx.ready := true.B
+            gotLFSRClearReq := true.B
+          }
+
           when(sbMsgExchanger.io.exchDone) {
+            reversalSecondPass := false.B
             nextSubstate := MBInitSubstate.s1
           }
         }
@@ -1308,21 +1219,24 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_CLEAR_ERROR_REQ
           }
 
-          assert(
-            io.patternReaderIo.req.ready === true.B,
-            "PatternReader should be ready here"
+          val clearReqSeen = sbMsgExchanger.io.msgReceived || gotLFSRClearReq
+
+          // Re-arm first, because pass 2 starts the partner on this resp.
+          io.patternReaderIo.req.bits.patternType := PatternSelect.PERLANEID
+          io.patternReaderIo.req.valid :=
+            reversalSecondPass && clearReqSeen && !readerArmed
+          when(io.patternReaderIo.req.fire) {
+            readerArmed := true.B
+          }
+
+          sbMsgExchanger.io.req.valid :=
+            clearReqSeen && (!reversalSecondPass || readerArmed)
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_CLEAR_ERROR_RESP
           )
 
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_CLEAR_ERROR_RESP,
-            "PHY",
-            "PHY",
-            true
-          )
-
-          when(sbMsgExchanger.io.exchDone && io.patternReaderIo.req.ready) {
-            io.patternReaderIo.req.valid := true.B
+          // If s0 or s3 took the req, msgReceived stays low, so end on msgSent.
+          when(sbMsgExchanger.io.msgSent) {
             gotLFSRClearReq := false.B
             nextSubstate := MBInitSubstate.s2
           }
@@ -1331,15 +1245,11 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.valid := true.B
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REVERSALMB_RESULT_REQ
 
-          // stop the pattern reader
           io.patternReaderIo.done := sbMsgExchanger.io.msgReceived
 
           sbMsgExchanger.io.req.valid := io.patternReaderIo.resp.valid
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
             SBM.MBINIT_REVERSALMB_RESULT_RESP,
-            "PHY",
-            "PHY",
-            true,
             data = mbReversalMbResult
           )
 
@@ -1348,7 +1258,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             nextSubstate := MBInitSubstate.s3
           }
         }
-        is(MBInitSubstate.s3) { // Intermediate state
+        is(MBInitSubstate.s3) { // WAIT FOR CLEAR ERROR OR DONE
           when(io.sbLaneIo.rx.valid) {
             when(
               SBMsgCompare(
@@ -1358,6 +1268,7 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             ) {
               io.sbLaneIo.rx.ready := true.B
               gotLFSRClearReq := true.B
+              reversalSecondPass := true.B
               nextSubstate := MBInitSubstate.s1
             }.elsewhen(
               SBMsgCompare(
@@ -1372,14 +1283,13 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
         }
         is(MBInitSubstate.s4) { // DONE
           sbMsgExchanger.io.req.valid := true.B
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REVERSALMB_DONE_RESP,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REVERSALMB_DONE_RESP
           )
+
+          // Leave on the rdy pair, or the requester loses the rdy it needs.
           responderRdy := sbMsgExchanger.io.msgSent
-          when(sbMsgExchanger.io.msgSent) {
+          when(io.requesterRdy && io.responderRdy) {
             nextState := MBInitState.sREPAIRMB
             nextSubstate := MBInitSubstate.s0
           }
@@ -1393,21 +1303,16 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_START_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRMB_START_RESP,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRMB_START_RESP
           )
 
           when(sbMsgExchanger.io.exchDone) {
             nextSubstate := MBInitSubstate.s1
           }
         }
-        is(MBInitSubstate.s1) { // Start RX side of pt test
-          io.txPtTestRespInterfaceIo.start := true.B // Trigger the responder for the tx pt test
-
-          // Waits for PERLANEID by default (see above)
+        is(MBInitSubstate.s1) { // TX INIT D2C POINT TEST
+          io.txPtTestRespInterfaceIo.start := true.B
 
           when(io.txPtTestRespInterfaceIo.done === true.B) {
             nextSubstate := MBInitSubstate.s2
@@ -1422,25 +1327,21 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
             newRemoteTxFunctionalLanes := incRemoteFuncLanesWire
           }
 
-          // Width change will be happen within a cycle. The top level register will update
-          // and the lanes are tristated/disabled appropriately in the top level LTSM.
-          // Substates drive tristate/disable signals according to spec. However,
-          // repair/masking will happen in the top level LTSM module -- centralizes the logic.
-          // So, sending the {apply degrade resp} without an ack from LTSM
-          // that the width changes has happend is safe.
-          sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived && !errorDetected
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRMB_APPLY_DEGRADE_RESP,
-            "PHY",
-            "PHY",
-            true
+          // Set both widths before this resp (sec 4.5.3.3.6 step 3).
+          // The Tx width is known only after the local step 2.
+          val applyWidth = sbMsgExchanger.io.msgReceived &&
+            io.localTxCodeValid && !errorDetected
+          widthApplyValid := applyWidth
+          sbMsgExchanger.io.req.valid := applyWidth
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRMB_APPLY_DEGRADE_RESP
           )
 
           responderRdy := sbMsgExchanger.io.exchDone
 
           when(io.requesterRdy && io.responderRdy) {
-            currRemoteTxFunctionalLanes := newRemoteTxFunctionalLanes
-            responderRdyStatusReg := false.B
+            currRemoteTxFunctionalLanes := rxCode
+            prevRemoteTxFunctionalLanes := newRemoteTxFunctionalLanes
             when(widthChange || io.txWidthChanged) {
               nextSubstate := MBInitSubstate.s1
             }
@@ -1454,11 +1355,8 @@ class MBInitResponder(afeParams: AfeParams, sbParams: SidebandParams)
           sbMsgExchanger.io.rxRefBitPattern.bits := SBM.MBINIT_REPAIRMB_END_REQ
 
           sbMsgExchanger.io.req.valid := sbMsgExchanger.io.msgReceived
-          sbMsgExchanger.io.req.bits := SBMsgCreate(
-            SBM.MBINIT_REPAIRMB_END_RESP,
-            "PHY",
-            "PHY",
-            true
+          sbMsgExchanger.io.req.bits := PhyLinkMsg.create(
+            SBM.MBINIT_REPAIRMB_END_RESP
           )
           responderRdy := sbMsgExchanger.io.exchDone
           when(io.requesterRdy && io.responderRdy) {
