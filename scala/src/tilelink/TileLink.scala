@@ -380,9 +380,9 @@ class UcieClkRegs(
           RegInit(false.B)
         )
       }
-    // Which PLL the PHY test and TX sideband dividers each divide, held like
-    // the rest. Both come up on PLL8, which makes no difference until a clock
-    // leaves its bypass pin.
+    // What the PHY test and TX sideband dividers each divide -- PLL8, PLL12 or
+    // the analog bypass pin -- held like the rest. Both come up on PLL8, which
+    // makes no difference until a clock leaves its bypass pin.
     val (phyTestClkSrcSel, sbClkSrcSel) =
       withClockAndReset(clock, reset) {
         (
@@ -591,10 +591,14 @@ class UcieClkRegs(
 
     // A PHY test or TX sideband clock reopened onto its divider has to wait
     // for the PLL it divides too, which may only have been turned on by this
-    // apply.
+    // apply. The analog bypass pin has no lock to report and counts as ready,
+    // as it does in front of the UCIe main clock, and so does the spare code.
+    def srcLocked(src: UInt): Bool = MuxLookup(src, true.B)(
+      Seq(0.U -> pllLockSync(0), 1.U -> pllLockSync(1))
+    )
     val phyTestLocked = !cfgGatePhyTest || livePhyTestBypass ||
-      pllLockSync(livePhyTestSrc)
-    val sbLocked = !cfgGateSb || liveSbBypass || pllLockSync(liveSbSrc)
+      srcLocked(livePhyTestSrc)
+    val sbLocked = !cfgGateSb || liveSbBypass || srcLocked(liveSbSrc)
     val applyPhase = withClockAndReset(clock, reset) {
       RegInit(ClkApplyPhase.idle)
     }
@@ -727,7 +731,7 @@ class UcieClkRegs(
     // and TX sideband dividers, so a PLL stays on while either clock is on a
     // divider that takes it, whatever its enable says: turning it off would
     // stop the UCIe controller's clock, or the PHY test one, with no gate shut
-    // in front of it.
+    // in front of it. A divider on the analog bypass pin holds neither on.
     def dividing(bypass: Bool, src: UInt, pll: Int): Bool =
       !bypass && src === pll.U
     val fsmPll8En = live.pll8En ||

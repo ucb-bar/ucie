@@ -70,9 +70,9 @@ object ClockingTile {
   val txClkDivWidth = 2
   val txClkPhaseWidth = 4
   val phyTestClkDivWidth = 3
-  val phyTestClkSrcSelWidth = 1
+  val phyTestClkSrcSelWidth = 2
   val sbClkDivWidth = 3
-  val sbClkSrcSelWidth = 1
+  val sbClkSrcSelWidth = 2
 }
 
 class ClockingTileIO extends Bundle {
@@ -118,15 +118,19 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** PHY test clock division of whichever PLL `PhyTestClkSrcSel` picks: 0 /1, 1
-    * /2, 2 /4, 3 /8, 4 /15. 1 GHz is /8 off PLL8, 800 MHz /15 off PLL12. The
-    * divider stops on its own whenever the bypass pin is selected. It divides a
-    * PLL rather than the UCIe main clock, so nothing done to the main clock
-    * reaches the PHY test clock.
+  /** PHY test clock division of whichever source `PhyTestClkSrcSel` picks: 0
+    * /1, 1 /2, 2 /4, 3 /8, 4 /15. 1 GHz is /8 off PLL8, 800 MHz /15 off PLL12.
+    * The divider stops on its own whenever the bypass pin is selected. It
+    * divides a PLL or the analog bypass pin rather than the UCIe main clock, so
+    * nothing done to the main clock reaches the PHY test clock. /15 goes
+    * through a duty cycle corrector, so it is 50% like the even ratios.
     */
   val PhyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
 
-  /** What the PHY test divider divides: 0 PLL8, 1 PLL12. */
+  /** What the PHY test divider divides: 0 PLL8, 1 PLL12, 2 the analog bypass
+    * pin, for running the divider with no PLL; 3 is spare and selects the
+    * analog bypass pin too.
+    */
   val PhyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
 
   /** Takes the PHY test clock from the bypass pin rather than the divider. */
@@ -139,14 +143,15 @@ class ClockingTileIO extends Bundle {
     */
   val PhyTestClkEn = Input(Bool())
 
-  /** TX sideband clock division of whichever PLL `SbClkSrcSel` picks: 0 /1, 1
-    * /5, 2 /10, 3 /15, 4 /20. 800 MHz is /10 off PLL8, /15 off PLL12. A divider
-    * of its own, since the TX sideband clock runs at a rate the PHY test clock
-    * does not.
+  /** TX sideband clock division of whichever source `SbClkSrcSel` picks: 0 /1,
+    * 1 /5, 2 /10, 3 /15, 4 /20. 800 MHz is /10 off PLL8, /15 off PLL12. A
+    * divider of its own, since the TX sideband clock runs at a rate the PHY
+    * test clock does not. /5 and /15 go through a duty cycle corrector, so they
+    * are 50% like the even ratios.
     */
   val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
 
-  /** What the TX sideband divider divides: 0 PLL8, 1 PLL12. */
+  /** What the TX sideband divider divides, coded as `PhyTestClkSrcSel`. */
   val SbClkSrcSel = Input(UInt(ClockingTile.sbClkSrcSelWidth.W))
 
   /** Takes the TX sideband clock from its own bypass pin. */

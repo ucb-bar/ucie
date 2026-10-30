@@ -211,7 +211,8 @@ class PhyClkRstIO extends Bundle {
   val txClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
   val txClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
   val phyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
-  // Which PLL the PHY test divider divides, and the same for the TX sideband's.
+  // What the PHY test divider divides -- a PLL or the analog bypass pin -- and
+  // the same for the TX sideband's.
   val phyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
   val phyTestClkBypassEn = Input(Bool())
   val sbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))

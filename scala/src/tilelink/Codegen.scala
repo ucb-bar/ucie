@@ -1237,7 +1237,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   }
 
   /** Enables the PLLs and the X2 multiplier, and points the PHY test clock at
-    * PLL8 (`phytest_src` 0) or PLL12 (1), divided.
+    * PLL8 (`phytest_src` 0), PLL12 (1) or the analog bypass pin (2), divided.
     *
     * The source and ratio are set in the same apply as the switch, which shuts
     * the PHY test clock's gate across all of it and keeps it shut until that

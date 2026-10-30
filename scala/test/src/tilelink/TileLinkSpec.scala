@@ -1077,6 +1077,36 @@ task automatic sb_period(output real p);
   @(posedge `CLOCKING_TILE.SbClk) p = $realtime - a;
 endtask
 
+// High and low time of one whole period of each clock.
+task automatic phytest_duty(output real hi, output real lo);
+  real r, f;
+  @(posedge `CLOCKING_TILE.PhyTestClk) r = $realtime;
+  @(negedge `CLOCKING_TILE.PhyTestClk) f = $realtime;
+  hi = f - r;
+  @(posedge `CLOCKING_TILE.PhyTestClk) lo = $realtime - f;
+endtask
+
+task automatic sb_duty(output real hi, output real lo);
+  real r, f;
+  @(posedge `CLOCKING_TILE.SbClk) r = $realtime;
+  @(negedge `CLOCKING_TILE.SbClk) f = $realtime;
+  hi = f - r;
+  @(posedge `CLOCKING_TILE.SbClk) lo = $realtime - f;
+endtask
+
+// Fails unless a clock is high and low for half of `period` each.
+task automatic check_duty(
+  input string what, input real hi, input real lo, input real period,
+  inout integer fails
+);
+  $display("%s: high %0.1f ps, low %0.1f ps", what, hi, lo);
+  if (hi < period / 2 - 1.0 || hi > period / 2 + 1.0 ||
+      lo < period / 2 - 1.0 || lo > period / 2 + 1.0) begin
+    $display("FAIL: %s should be %0.1f ps high and low", what, period / 2);
+    fails = fails + 1;
+  end
+endtask
+
 task automatic check_period(
   input string what, input real got, input real want, inout integer fails
 );
@@ -2518,6 +2548,98 @@ endtask
   )
 }
 
+/** The PHY test and TX sideband dividers at every odd ratio, and off the analog
+  * bypass pin.
+  *
+  * An odd ratio goes through a duty cycle corrector, so each of them -- /15 of
+  * the PHY test divider, /5 and /15 of the TX sideband one -- has to come out
+  * high and low for exactly half its period, the same as the even ratios, which
+  * do not go through it. The analog bypass pin runs at 5 GHz here, neither
+  * PLL's rate, so a ratio off it can only come out at its own period if the
+  * select really took the pin. With both clocks on the pin, neither PLL is held
+  * on for them, and an apply finishes with no PLL locked.
+  */
+class DividerDutyTestDriver extends SVTestDriver {
+
+  /** 5 GHz, so a period off the pin is no PLL's. */
+  override def bypassHalfPeriodPs: Double = 100.0
+
+  setStimulus(
+    "DividerDutyTestDriver",
+    """
+begin : divider_duty
+  real hi, lo;
+  integer fails;
+  fails = 0;
+
+  `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+
+  // Odd ratios off the PLLs.
+  use_internal_clk(0, 4);
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, PLL8 / 15", hi, lo, 1875.0, fails);
+  `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h1);
+  `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
+  apply_clk_cfg();
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  sb_duty(hi, lo);
+  check_duty("TX sideband clock, PLL8 / 5", hi, lo, 625.0, fails);
+  `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
+  apply_clk_cfg();
+  sb_duty(hi, lo);
+  check_duty("TX sideband clock, PLL12 / 15", hi, lo, 1250.0, fails);
+
+  // Off the analog bypass pin, at 5 GHz: even ratios, which the corrector must
+  // leave alone, and odd ones.
+  `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h2);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
+  apply_clk_cfg();
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  sb_duty(hi, lo);
+  check_duty("TX sideband clock, analog bypass / 10", hi, lo, 2000.0, fails);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h1);
+  apply_clk_cfg();
+  sb_duty(hi, lo);
+  check_duty("TX sideband clock, analog bypass / 5", hi, lo, 1000.0, fails);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_SRC_SEL, 64'h2);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  apply_clk_cfg();
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, analog bypass / 8", hi, lo, 1600.0, fails);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
+  apply_clk_cfg();
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, analog bypass / 15", hi, lo, 3000.0, fails);
+
+  // No PLL is held on for a divider on the pin, and an apply on the pin
+  // finishes with neither PLL running.
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
+  `WRITE_UCIE(regDrv, `X2_EN, 64'h0);
+  apply_clk_cfg();
+  if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
+    $display("FAIL: a PLL was held on for a divider on the analog bypass pin");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h4);
+  apply_clk_cfg();
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply on the pin waited for a PLL");
+  sb_duty(hi, lo);
+  check_duty("TX sideband clock, analog bypass / 20, no PLL", hi, lo, 4000.0, fails);
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, analog bypass / 15, no PLL", hi, lo, 3000.0, fails);
+
+  if (fails != 0) $fatal(1, "%0d divider duty checks failed", fails);
+end
+          """.trim,
+    moduleItems = TestDriverItems.clocking
+  )
+}
+
 /** Each RX lane's sampling-delay trim, `rxctl_<lane>_dctrl`, from its own
   * register to its own lane.
   *
@@ -3120,6 +3242,17 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new ClkManualTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_drive_every_clock_control_from_its_own_register_in_manual_mode_using_Xcelium"
+      )
+    }
+
+    it(
+      "should run the PHY test and sideband dividers at 50% duty, off a PLL or the analog bypass pin, using Xcelium"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new DividerDutyTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_run_the_PHY_test_and_sideband_dividers_at_50_duty_using_Xcelium"
       )
     }
 
