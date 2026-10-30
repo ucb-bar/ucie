@@ -2292,6 +2292,342 @@ end
   )
 }
 
+/** Manual mode on the clock register block: every output its own register.
+  *
+  * Each output of the block is read off its port, all of them together, and
+  * every step says which one alone should have moved. Switching into manual
+  * mode and back out must move nothing; in between, each control has to take
+  * effect when it is written, with no apply, and with none of the FSM's rules
+  * on top -- a PLL a divider takes can be turned off, the UCIe reset no longer
+  * reaches the dividers, and the controller's clock handshake is software's.
+  */
+class ClkManualTestDriver extends SVTestDriver {
+  setStimulus(
+    "ClkManualTestDriver",
+    """
+begin : clk_manual
+  clk_outs_t prev, want;
+  integer moved;
+  integer fails;
+  fails = 0;
+
+  // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off, which
+  // the FSM overrides while the divider takes it.
+  `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  use_internal_clk(0, 3);
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
+  apply_clk_cfg();
+  `WRITE_UCIE(regDrv, `CLK_EN, 64'h1);
+  #10000;
+  if (`UCIE_CLK_REGS.io_pll8En !== 1'b1) begin
+    $display("FAIL: FSM mode turned PLL8 off under its divider");
+    fails = fails + 1;
+  end
+
+  // Into manual mode, watching every output through the switch.
+  prev = clk_outs();
+  moved = 0;
+  fork
+    set_clk_manual(1);
+    repeat (400) begin
+      #250;
+      if (clk_outs() !== prev) moved = moved + 1;
+    end
+  join
+  if (moved != 0) begin
+    $display("FAIL: entering manual mode moved an output");
+    fails = fails + 1;
+  end
+  check_outs(prev, "entering manual mode", fails);
+  // The registers read back what was driven, the keep-alive folded in.
+  `EXPECT_UCIE(regDrv, `PLL8_EN, 64'h1);
+  `EXPECT_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h0);
+
+  // Every control on its own.
+  want = clk_outs(); want.clkEn = 1'b0; step(`CLK_EN, 0, want, "clkEn", fails);
+  want = clk_outs(); want.mainClkSel = 2'd1; step(`MAIN_CLK_SEL, 1, want, "mainClkSel", fails);
+  want = clk_outs(); want.txClkDiv = 2'd2; step(`TX_CLK_DIV, 2, want, "txClkDiv", fails);
+  want = clk_outs(); want.txClkPhase = 4'd3; step(`TX_CLK_PHASE, 3, want, "txClkPhase", fails);
+  want = clk_outs(); want.x2En = 1'b0; step(`X2_EN, 0, want, "x2En", fails);
+  want = clk_outs(); want.pll12En = 1'b0; step(`PLL12_EN, 0, want, "pll12En", fails);
+  want = clk_outs(); want.phyTestClkEn = 1'b0;
+  step(`PHY_TEST_CLK_EN, 0, want, "phyTestClkEn", fails);
+  // PLL8 off, with the PHY test divider still taking it.
+  want = clk_outs(); want.pll8En = 1'b0; step(`PLL8_EN, 0, want, "pll8En", fails);
+  want = clk_outs(); want.phyTestClkDiv = 3'd1;
+  step(`PHY_TEST_CLK_DIV, 1, want, "phyTestClkDiv", fails);
+  want = clk_outs(); want.phyTestClkSrcSel = 1'b1;
+  step(`PHY_TEST_CLK_SRC_SEL, 1, want, "phyTestClkSrcSel", fails);
+  want = clk_outs(); want.phyTestClkBypassEn = 1'b1;
+  step(`PHY_TEST_CLK_BYPASS_EN, 1, want, "phyTestClkBypassEn", fails);
+  want = clk_outs(); want.sbClkEn = 1'b0; step(`SB_CLK_EN, 0, want, "sbClkEn", fails);
+  want = clk_outs(); want.sbClkDiv = 3'd3; step(`SB_CLK_DIV, 3, want, "sbClkDiv", fails);
+  want = clk_outs(); want.sbClkSrcSel = 1'b1; step(`SB_CLK_SRC_SEL, 1, want, "sbClkSrcSel", fails);
+  want = clk_outs(); want.sbClkBypassEn = 1'b0;
+  step(`SB_CLK_BYPASS_EN, 0, want, "sbClkBypassEn", fails);
+  want = clk_outs(); want.rxClkEn = 1'b1; step(`RX_CLK_EN, 1, want, "rxClkEn", fails);
+  want = clk_outs(); want.rxClkFromTxQ = 1'b1;
+  step(`RX_CLK_FROM_TX_Q, 1, want, "rxClkFromTxQ", fails);
+  want = clk_outs(); want.clkPhaseSel = 64'h0; step(`CLK_PHASE_SEL, 0, want, "clkPhaseSel", fails);
+  // The UCIe reset alone, without the dividers; then each divider reset alone.
+  want = clk_outs(); want.ucieRst = 1'b1; step(`UCIE_RST, 1, want, "ucieRst", fails);
+  want = clk_outs(); want.txDividerRstb = 1'b0;
+  step(`TX_DIVIDER_RST, 1, want, "txDividerRst", fails);
+  want = clk_outs(); want.rxDividerRstb = 1'b0;
+  step(`RX_DIVIDER_RST, 1, want, "rxDividerRst", fails);
+  want = clk_outs(); want.txDividerRstb = 1'b1;
+  step(`TX_DIVIDER_RST, 0, want, "txDividerRst release", fails);
+  want = clk_outs(); want.rxDividerRstb = 1'b1;
+  step(`RX_DIVIDER_RST, 0, want, "rxDividerRst release", fails);
+  want = clk_outs(); want.ucieRst = 1'b0; step(`UCIE_RST, 0, want, "ucieRst release", fails);
+  // The controller's clock handshake.
+  want = clk_outs(); want.clksReady = ~want.clksReady;
+  step(`MANUAL_CLKS_READY, want.clksReady, want, "manualClksReady", fails);
+  want = clk_outs(); want.clksReadyFreqSel = 4'd5;
+  step(`MANUAL_CLKS_READY_FREQ_SEL, 5, want, "manualClksReadyFreqSel", fails);
+  want = clk_outs(); want.clksUngated = ~want.clksUngated;
+  step(`MANUAL_CLKS_UNGATED, want.clksUngated, want, "manualClksUngated", fails);
+  // Neither an apply nor the rate table does anything.
+  want = clk_outs(); step(`CLK_CFG_APPLY, 1, want, "clkCfgApply", fails);
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  want = clk_outs(); step(`FREQ_SEL_AUTO_EN, 1, want, "freqSelAutoEn", fails);
+  `WRITE_UCIE(regDrv, `FREQ_SEL_AUTO_EN, 64'h0);
+
+  // Somewhere the FSM can take over from: both clocks back on their bypass
+  // pins, and the UCIe main clock on its bypass pin, gated.
+  `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `MAIN_CLK_SEL, 64'h3);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `SB_CLK_EN, 64'h1);
+  #10000;
+
+  // Out of manual mode. Nothing moves but the clock handshake, which is the
+  // FSM's again.
+  prev = clk_outs();
+  moved = 0;
+  fork
+    set_clk_manual(0);
+    repeat (400) begin
+      #250;
+      want = clk_outs();
+      want.clksReady = prev.clksReady;
+      want.clksReadyFreqSel = prev.clksReadyFreqSel;
+      want.clksUngated = prev.clksUngated;
+      if (want !== prev) moved = moved + 1;
+    end
+  join
+  if (moved != 0) begin
+    $display("FAIL: leaving manual mode moved an output");
+    fails = fails + 1;
+  end
+
+  // And the FSM runs again: an apply moves the TX division under the gate.
+  main_gate_shuts = 0;
+  set_main_clk(3, 0);
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`UCIE_CLK_REGS.io_txClkDiv !== 2'd0 || `UCIE_CLK_REGS.io_clkEn !== 1'b1 ||
+      main_gate_shuts != 1) begin
+    $display("FAIL: the FSM did not apply after manual mode (div %0d, clkEn %0d, %0d gate shuts)",
+             `UCIE_CLK_REGS.io_txClkDiv, `UCIE_CLK_REGS.io_clkEn, main_gate_shuts);
+    fails = fails + 1;
+  end
+
+  if (fails != 0) $fatal(1, "%0d manual mode checks failed", fails);
+end
+          """.trim,
+    moduleItems = TestDriverItems.clocking + "\n" + """
+// Every output of the clock register block, read off its port.
+typedef struct packed {
+  logic [1:0] mainClkSel;
+  logic pll8En;
+  logic pll12En;
+  logic x2En;
+  logic [1:0] txClkDiv;
+  logic [3:0] txClkPhase;
+  logic [2:0] phyTestClkDiv;
+  logic phyTestClkSrcSel;
+  logic phyTestClkBypassEn;
+  logic [2:0] sbClkDiv;
+  logic sbClkSrcSel;
+  logic sbClkBypassEn;
+  logic rxClkFromTxQ;
+  logic [63:0] clkPhaseSel;
+  logic clkEn;
+  logic rxClkEn;
+  logic phyTestClkEn;
+  logic sbClkEn;
+  logic txDividerRstb;
+  logic rxDividerRstb;
+  logic ucieRst;
+  logic clksReady;
+  logic [3:0] clksReadyFreqSel;
+  logic clksUngated;
+} clk_outs_t;
+
+function automatic clk_outs_t clk_outs();
+  clk_outs_t o;
+  o.mainClkSel = `UCIE_CLK_REGS.io_mainClkSel;
+  o.pll8En = `UCIE_CLK_REGS.io_pll8En;
+  o.pll12En = `UCIE_CLK_REGS.io_pll12En;
+  o.x2En = `UCIE_CLK_REGS.io_x2En;
+  o.txClkDiv = `UCIE_CLK_REGS.io_txClkDiv;
+  o.txClkPhase = `UCIE_CLK_REGS.io_txClkPhase;
+  o.phyTestClkDiv = `UCIE_CLK_REGS.io_phyTestClkDiv;
+  o.phyTestClkSrcSel = `UCIE_CLK_REGS.io_phyTestClkSrcSel;
+  o.phyTestClkBypassEn = `UCIE_CLK_REGS.io_phyTestClkBypassEn;
+  o.sbClkDiv = `UCIE_CLK_REGS.io_sbClkDiv;
+  o.sbClkSrcSel = `UCIE_CLK_REGS.io_sbClkSrcSel;
+  o.sbClkBypassEn = `UCIE_CLK_REGS.io_sbClkBypassEn;
+  o.rxClkFromTxQ = `UCIE_CLK_REGS.io_rxClkFromTxQ;
+  o.clkPhaseSel = `UCIE_CLK_REGS.io_clkPhaseSel;
+  o.clkEn = `UCIE_CLK_REGS.io_clkEn;
+  o.rxClkEn = `UCIE_CLK_REGS.io_rxClkEn;
+  o.phyTestClkEn = `UCIE_CLK_REGS.io_phyTestClkEn;
+  o.sbClkEn = `UCIE_CLK_REGS.io_sbClkEn;
+  o.txDividerRstb = `UCIE_CLK_REGS.io_txDividerRstb;
+  o.rxDividerRstb = `UCIE_CLK_REGS.io_rxDividerRstb;
+  o.ucieRst = `UCIE_CLK_REGS.io_ucieRst;
+  o.clksReady = `UCIE_CLK_REGS.io_clksReady;
+  o.clksReadyFreqSel = `UCIE_CLK_REGS.io_clksReadyFreqSel;
+  o.clksUngated = `UCIE_CLK_REGS.io_clksUngated;
+  return o;
+endfunction
+
+// Fails unless the outputs are now exactly `want`.
+task automatic check_outs(input clk_outs_t want, input string what, inout integer fails);
+  clk_outs_t got;
+  got = clk_outs();
+  if (got !== want) begin
+    $display("FAIL: %s: outputs %h, expected %h (differing bits %h)",
+             what, got, want, got ^ want);
+    fails = fails + 1;
+  end
+endtask
+
+// Writes one register and checks the outputs are then exactly `want`, with
+// no apply in between.
+task automatic step(
+  input [63:0] addr, input [63:0] val, input clk_outs_t want, input string what,
+  inout integer fails
+);
+  `WRITE_UCIE(regDrv, addr, val);
+  #10000;
+  check_outs(want, what, fails);
+endtask
+"""
+  )
+}
+
+/** Each RX lane's sampling-delay trim, `rxctl_<lane>_dctrl`, from its own
+  * register to its own lane.
+  *
+  * The behavioural RX lane ignores `Dctrl` -- only the analog models resolve it
+  * -- so this checks the wiring: each lane's thermometer code reaches that
+  * lane's pins and no other's, reads back, and comes up zero. Every lane gets a
+  * different count of taps so a code landing on the wrong lane shows. The two
+  * clock lanes have no delay line and are left out.
+  */
+class RxDelayTestDriver extends SVTestDriver {
+  setStimulus(
+    "RxDelayTestDriver",
+    """
+begin : rx_delay
+  reg [63:0] v;
+  integer fails;
+  fails = 0;
+
+  `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  for (int l = 0; l < `RX_LANES; l++)
+    if (has_delay_line(l) && rx_dctrl(l) !== 32'h0) begin
+      $display("FAIL: lane %0d's trim is %h out of reset", l, rx_dctrl(l));
+      fails = fails + 1;
+    end
+
+  for (int l = 0; l < `RX_LANES; l++) set_rx_delay(l, lane_taps(l));
+  #10000;
+  for (int l = 0; l < `RX_LANES; l++) begin
+    `READ_UCIE(regDrv, `RXCTL + l * `RXCTL_WIDTH + `RXCTL_DCTRL_OFS, v);
+    if (v !== (64'h1 << lane_taps(l)) - 64'h1) begin
+      $display("FAIL: lane %0d's trim reads back %h", l, v);
+      fails = fails + 1;
+    end
+    if (has_delay_line(l) && rx_dctrl(l) !== (64'h1 << lane_taps(l)) - 64'h1) begin
+      $display("FAIL: lane %0d's pins are %h, not %0d taps", l, rx_dctrl(l), lane_taps(l));
+      fails = fails + 1;
+    end
+  end
+
+  // Both ends of the line on one lane.
+  set_rx_delay(3, 32);
+  #10000;
+  if (rx_dctrl(3) !== 32'hffffffff) begin
+    $display("FAIL: all 32 taps gave %h", rx_dctrl(3));
+    fails = fails + 1;
+  end
+  set_rx_delay(3, 0);
+  #10000;
+  if (rx_dctrl(3) !== 32'h0) begin
+    $display("FAIL: no taps gave %h", rx_dctrl(3));
+    fails = fails + 1;
+  end
+
+  if (fails != 0) $fatal(1, "%0d RX delay checks failed", fails);
+end
+          """.trim,
+    moduleItems = RxDelayTestDriver.items
+  )
+}
+
+object RxDelayTestDriver {
+  private val numLanes = UcieTLParams().numLanes
+
+  /** Every `rxctl` entry with a delay line, and the lane macro it drives: the
+    * PHY's data, valid and track lanes, then PhyTest's loopback receiver.
+    */
+  val lanes: Seq[(Int, String)] =
+    (0 until numLanes).map(i => i -> s"SimTop.harness.ucieTL.phy.rxdata$i") ++
+      Seq(
+        edu.berkeley.cs.uciedigital.phy.Phy.validLane(numLanes) ->
+          "SimTop.harness.ucieTL.phy.rxvalid",
+        edu.berkeley.cs.uciedigital.phy.Phy.trackLane(numLanes) ->
+          "SimTop.harness.ucieTL.phy.rxtrack",
+        (numLanes + 4) -> "SimTop.harness.ucieTL.test.rxloopback"
+      )
+
+  def items: String = {
+    val cases = lanes
+      .map { case (i, path) =>
+        val pins = (31 to 0 by -1).map(b => s"$path.Dctrl_$b").mkString(", ")
+        s"    $i: rx_dctrl = {$pins};"
+      }
+      .mkString("\n")
+    val withLine = lanes.map(_._1).mkString(", ")
+    s"""
+`define RX_LANES ${numLanes + 5}
+
+// The thermometer code on one lane's `Dctrl_*` pins.
+function automatic [31:0] rx_dctrl(input integer lane);
+  case (lane)
+$cases
+    default: rx_dctrl = 32'hx;
+  endcase
+endfunction
+
+function automatic bit has_delay_line(input integer lane);
+  case (lane)
+    $withLine: has_delay_line = 1;
+    default: has_delay_line = 0;
+  endcase
+endfunction
+
+// A different trim for every lane.
+function automatic integer lane_taps(input integer lane);
+  lane_taps = lane % 31 + 1;
+endfunction
+"""
+  }
+}
+
 /** Register accesses through a harness's tester, with the harness clock and the
   * PHY clocks the register blocks run on all running.
   *
@@ -2773,6 +3109,28 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TxPhaseTestDriver),
         Utils.writeXrunSimScript,
         Utils.buildRoot / "UcieTL_should_step_the_TX_quadrature_clock_half_a_main_clock_period_at_a_time_using_Xcelium"
+      )
+    }
+
+    it(
+      "should drive every clock control from its own register in manual mode using Xcelium"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new ClkManualTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_drive_every_clock_control_from_its_own_register_in_manual_mode_using_Xcelium"
+      )
+    }
+
+    it(
+      "should trim each RX lane's sampling delay from its own register using Xcelium"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new RxDelayTestDriver),
+        Utils.writeXrunSimScript,
+        Utils.buildRoot / "UcieTL_should_trim_each_RX_lanes_sampling_delay_from_its_own_register_using_Xcelium"
       )
     }
 

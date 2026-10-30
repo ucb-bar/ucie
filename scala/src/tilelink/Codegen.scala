@@ -1095,6 +1095,27 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
+  /** Puts the clocking in manual mode, or hands it back to the FSM.
+    *
+    * In manual mode every clock control is its own register and takes effect
+    * when written -- no apply, no rate table, no PLL kept on for a divider, no
+    * UCIe reset on the dividers -- and the UCIe controller's clock handshake
+    * comes from `manualClksReady`, `manualClksReadyFreqSel` and
+    * `manualClksUngated`. Sequencing a change is then up to software: gate the
+    * clock, switch, wait out a PLL's lock, ungate. Neither switch moves a
+    * clock: going in, the registers take what is already driven, and coming
+    * out, the FSM picks up from what software left.
+    */
+  def formatSetClkManualFn(): String = {
+    val body = new StringBuilder
+    body.append(formatWriteNamedReg("clkManualEn", "en"))
+    f.formatFn(
+      "set_clk_manual",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
+    )
+  }
+
   /** Hands a written configuration to the tile.
     *
     * Nothing written above reaches the clocking tile on its own: the registers
@@ -1281,6 +1302,34 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       "set_global_delay",
       body.toString,
       args = Seq(Arg("taps", Datatype.Long))
+    )
+  }
+
+  /** Sets one RX lane's sampling point: `taps` of the delay line on its
+    * sampling clock enabled.
+    *
+    * The receive-side counterpart of `set_tx_delay`. The delay sits on the
+    * clock this lane samples with, so it moves where in the UI this lane
+    * samples without touching any other lane, against a forwarded clock and a
+    * transmitter that have not moved. `Dctrl` is thermometer coded. The clock
+    * lanes have no delay line and ignore it.
+    */
+  def formatSetRxDelayFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      f.formatFnCall(
+        "write_rxctl",
+        args = Seq(
+          "lane",
+          f.formatConstantRef("rxctlDctrlOfs"),
+          s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})"
+        )
+      )
+    )
+    f.formatFn(
+      "set_rx_delay",
+      body.toString,
+      args = Seq(Arg("lane", Datatype.Long), Arg("taps", Datatype.Long))
     )
   }
 
@@ -2142,6 +2191,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetClkEnFn())
     sb.append(formatSetRateCfgFn())
     sb.append(formatSetFreqSelAutoFn())
+    sb.append(formatSetClkManualFn())
     sb.append(formatApplyClkCfgFn())
     sb.append(formatSetUngateSrcFn())
     sb.append(formatReleaseClkGateFn())
@@ -2154,6 +2204,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetGlobalDelayFn())
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
+    sb.append(formatSetRxDelayFn())
     sb.append(formatSetupUcieFn())
     sb.append(formatSetupUcieDigitalFn())
     sb.append(formatSeedLfsrsFn())
@@ -2231,6 +2282,7 @@ object GenUcieHeader {
     sb.append(cg.formatSetClkEnFn())
     sb.append(cg.formatSetRateCfgFn())
     sb.append(cg.formatSetFreqSelAutoFn())
+    sb.append(cg.formatSetClkManualFn())
     sb.append(cg.formatApplyClkCfgFn())
     sb.append(cg.formatSetUngateSrcFn())
     sb.append(cg.formatReleaseClkGateFn())
@@ -2244,6 +2296,7 @@ object GenUcieHeader {
     sb.append(cg.formatSetTxDelayFn())
     sb.append("\n")
     sb.append(cg.formatSetRxVrefFn())
+    sb.append(cg.formatSetRxDelayFn())
     sb.append("\n")
     sb.append(cg.formatSetupUcieFn())
     sb.append("\n")

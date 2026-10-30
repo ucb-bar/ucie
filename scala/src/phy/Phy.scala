@@ -304,13 +304,13 @@ class TxLaneDigitalCtlIO extends Bundle {
   val tile = new TxLaneCtlIO
   val shuffler = Vec(32, UInt(5.W))
   val sample_negedge = Bool()
-  val delay = UInt(7.W)
 }
 
 class RxLaneDigitalCtlIO extends Bundle {
   // Delay taps on this lane's sampling clock, thermometer coded. The RX
   // counterpart of the TX tile's `Dctrl`: it moves where in the UI this lane
-  // samples, independently of every other lane.
+  // samples, independently of every other lane. The clock lanes have no delay
+  // line, so theirs goes nowhere.
   val Dctrl = UInt(RxDataLane.DelayTaps.W)
   val zen = Bool()
   val zctl = UInt(5.W)
@@ -321,7 +321,6 @@ class RxLaneDigitalCtlIO extends Bundle {
   val afeOverlapCycles = UInt(16.W)
   val shuffler = Vec(32, UInt(5.W))
   val sample_negedge = Bool()
-  val delay = UInt(7.W)
 }
 
 class PhyRegsIO(numLanes: Int = 16) extends Bundle {
