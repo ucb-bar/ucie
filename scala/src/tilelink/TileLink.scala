@@ -75,7 +75,12 @@ case class UcieTLParams(
     // `ClkDistLayout`). A physical network is laid out for one instance, so an
     // instance that uses one should have a `moduleId` of its own.
     clkDistLayout: edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout =
-      edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral
+      edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral,
+    // Whether the link has a PHY. Without one (`UcieTLNoPhy`) the TL frames
+    // leave the chip directly as a `UciePacketIO`, for simulators that model
+    // the link themselves (e.g. a FireSim bridge); the PHY-only fields above
+    // are then unused.
+    phy: Boolean = true
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
@@ -98,7 +103,9 @@ case class UcieTLParams(
   def creditBits: Int = log2Up(tlBufferDepth + 1)
   def instantiate(params: OffchipSubsystemParams, id: Int)(implicit
       p: Parameters
-  ): ChipletLinkWrapper = LazyModule(new UcieChipletLink(this, params, id))
+  ): ChipletLinkWrapper =
+    if (phy) LazyModule(new UcieChipletLink(this, params, id))
+    else LazyModule(new UcieNoPhyChipletLink(this, params, id))
   assert(isPow2(creditCounterSize), s"Credit counter size must be a power of 2")
   assert(
     tlBufferDepth < creditCounterSize / 2,
@@ -1265,6 +1272,41 @@ object UcieTL {
     * the async queues into the PhyTest and sideband clocks small.
     */
   val regBeatBytes = 8
+
+  /** The manager port to the partner die: one manager per region. */
+  def managerPortParams(
+      managerRegion: Seq[AddressSet],
+      device: SimpleDevice,
+      beatBytes: Int,
+      blockBytes: Int
+  ): TLSlavePortParameters =
+    TLSlavePortParameters.v1(
+      managers = managerRegion.map { as =>
+        TLSlaveParameters.v1(
+          address = AddressSet.misaligned(as.base, as.mask + 1),
+          resources = device.reg,
+          regionType =
+            RegionType.UNCACHED, // Should be changed to CACHED eventually
+          executable = true,
+          supportsGet = TransferSizes(1, blockBytes),
+          supportsPutFull = TransferSizes(1, blockBytes),
+          supportsPutPartial = TransferSizes(1, blockBytes),
+          fifoId = Some(0)
+        )
+      },
+      beatBytes = beatBytes
+    )
+
+  /** The client port that issues the partner die's requests on this one. */
+  def clientPortParams(params: UcieTLParams): TLMasterPortParameters =
+    TLMasterPortParameters.v1(
+      Seq(
+        TLMasterParameters.v1(
+          name = "ucie-client",
+          sourceId = IdRange(0, 1 << params.clientIdBits)
+        )
+      )
+    )
 }
 
 class UcieTL(
@@ -1310,38 +1352,10 @@ class UcieTL(
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   // Manager node to send and acquire traffic to partner die
   val managerNode = TLManagerNode(
-    Seq(
-      TLSlavePortParameters.v1(
-        managers = managerRegion.map { as =>
-          TLSlaveParameters.v1(
-            address = AddressSet.misaligned(as.base, as.mask + 1),
-            resources = device.reg,
-            regionType =
-              RegionType.UNCACHED, // Should be changed to CACHED eventually
-            executable = true,
-            supportsGet = TransferSizes(1, blockBytes),
-            supportsPutFull = TransferSizes(1, blockBytes),
-            supportsPutPartial = TransferSizes(1, blockBytes),
-            fifoId = Some(0)
-          )
-        },
-        beatBytes = beatBytes
-      )
-    )
+    Seq(UcieTL.managerPortParams(managerRegion, device, beatBytes, blockBytes))
   )
   // Client node to reply to send and acquire traffic from partner die
-  val clientNode = TLClientNode(
-    Seq(
-      TLMasterPortParameters.v1(
-        Seq(
-          TLMasterParameters.v1(
-            name = "ucie-client",
-            sourceId = IdRange(0, 1 << params.clientIdBits)
-          )
-        )
-      )
-    )
-  )
+  val clientNode = TLClientNode(Seq(UcieTL.clientPortParams(params)))
   val clkRegs = LazyModule(new UcieClkRegs(params, UcieTL.regBeatBytes))
   regs.clockNode := phyTestClockNode
   controller.clockNode := sidebandClockNode

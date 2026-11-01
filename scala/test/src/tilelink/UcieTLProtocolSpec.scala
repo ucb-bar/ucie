@@ -136,6 +136,34 @@ case class UcieTLRequest(
     data: BigInt
 )
 
+object UcieTLRequest {
+
+  /** A random script against `region`, over a small set of lines so reads see
+    * earlier writes. Every Get targets a line already written, since the RAM
+    * starts out random.
+    */
+  def script(
+      n: Int,
+      seed: Int,
+      region: AddressSet,
+      beatBytes: Int
+  ): Seq[UcieTLRequest] = {
+    val rand = new Random(seed)
+    val lines = Seq.tabulate(32)(i => region.base + i * beatBytes)
+    val mem = scala.collection.mutable.Map[BigInt, BigInt]()
+    Seq.fill(n) {
+      val addr = lines(rand.nextInt(lines.size))
+      if (mem.contains(addr) && rand.nextBoolean()) {
+        UcieTLRequest(addr, isWrite = false, data = mem(addr))
+      } else {
+        val data = BigInt(beatBytes * 8, rand)
+        mem(addr) = data
+        UcieTLRequest(addr, isWrite = true, data = data)
+      }
+    }
+  }
+}
+
 /** Issues a script of single-beat Puts and Gets, up to `nSources` at a time,
   * and scoreboards every response against it.
   *
@@ -290,25 +318,8 @@ class UcieTLProtocolTest(val scenario: UcieTLScenario)(implicit p: Parameters)
   val beatBytes = UcieTLFrame.dataBits / 8
   val region = AddressSet(0x10000, 0xffff)
 
-  /** A random script against `region`, over a small set of lines so reads see
-    * earlier writes. Every Get targets a line already written, since the RAM
-    * starts out random.
-    */
-  def script(n: Int, seed: Int): Seq[UcieTLRequest] = {
-    val rand = new Random(seed)
-    val lines = Seq.tabulate(32)(i => region.base + i * beatBytes)
-    val mem = scala.collection.mutable.Map[BigInt, BigInt]()
-    Seq.fill(n) {
-      val addr = lines(rand.nextInt(lines.size))
-      if (mem.contains(addr) && rand.nextBoolean()) {
-        UcieTLRequest(addr, isWrite = false, data = mem(addr))
-      } else {
-        val data = BigInt(UcieTLFrame.dataBits, rand)
-        mem(addr) = data
-        UcieTLRequest(addr, isWrite = true, data = data)
-      }
-    }
-  }
+  def script(n: Int, seed: Int): Seq[UcieTLRequest] =
+    UcieTLRequest.script(n, seed, region, beatBytes)
 
   val dies =
     Seq.fill(2)(LazyModule(new UcieTLProtocolDie(params, region, beatBytes)))
