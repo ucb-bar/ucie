@@ -3,7 +3,7 @@ package edu.berkeley.cs.uciedigital.logphy
 import edu.berkeley.cs.uciedigital.sideband._
 import edu.berkeley.cs.uciedigital.interfaces._
 import chisel3._
-import chisel3.layer.{Layer, LayerConfig, block}
+import chisel3.layer.block
 import chisel3.layers.Verification
 import chisel3.util._
 
