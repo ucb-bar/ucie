@@ -8,7 +8,6 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.chipsalliance.cde.config.Parameters
 import org.chipsalliance.diplomacy.lazymodule._
 import freechips.rocketchip.diplomacy.AddressSet
-import freechips.rocketchip.prci._
 import freechips.rocketchip.tilelink._
 import org.scalatest.funspec.AnyFunSpec
 
@@ -37,7 +36,6 @@ class UcieTLNoPhyTest(link: UcieNoPhyLink, nReqs: Int, seed: Int)(implicit
   val region = AddressSet(0x10000, 0xffff)
   val nDies = if (link == UcieNoPhyLink.Loopback) 1 else 2
 
-  val clockSource = ClockSourceNode(Seq.fill(nDies)(ClockSourceParameters()))
   val dies = Seq.fill(nDies)(
     LazyModule(new UcieTLNoPhy(params, Seq(region), beatBytes, beatBytes))
   )
@@ -55,7 +53,6 @@ class UcieTLNoPhyTest(link: UcieNoPhyLink, nReqs: Int, seed: Int)(implicit
     LazyModule(new TLRAM(region, cacheable = false, beatBytes = beatBytes))
   )
   for (i <- 0 until nDies) {
-    dies(i).digitalClockNode := clockSource
     dies(i).managerNode := drivers(i).node
     rams(i).node := dies(i).clientNode
   }
@@ -69,10 +66,6 @@ class UcieTLNoPhyTest(link: UcieNoPhyLink, nReqs: Int, seed: Int)(implicit
       val credits = Output(Vec(nDies, Vec(2, UInt(8.W))))
     })
 
-    clockSource.out.foreach { case (b, _) =>
-      b.clock := clock
-      b.reset := reset
-    }
     drivers.foreach { d =>
       d.module.io.start := true.B
       d.module.io.dReady := true.B

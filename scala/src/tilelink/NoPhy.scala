@@ -19,8 +19,9 @@ import testchipip.soc.{
   * Credit flow keeps the receiver from overflowing, and credits come back in
   * band, so the link may delay frames by any fixed number of cycles as long as
   * the credits (`UcieTLParams.tlBufferDepth`) cover the round trip. Both ends
-  * have to run on the same clock; `clock` and `reset` are the link's, for
-  * whatever carries the frames (e.g. a FireSim bridge).
+  * have to run on the same clock (the router's, i.e. the system bus's);
+  * `clock` and `reset` are the link's, for whatever carries the frames (e.g. a
+  * FireSim bridge).
   */
 class UciePacketIO(val frameBits: Int) extends ChipletIO {
   val clock = Output(Clock())
@@ -51,7 +52,13 @@ class UciePacketIO(val frameBits: Int) extends ChipletIO {
   *
   * There are no registers. TileLink mode and credit flow are always on, and
   * credit returns go out whenever they are due, since the link takes a frame
-  * every cycle. Everything runs on the clock from `digitalClockNode`.
+  * every cycle.
+  *
+  * Everything runs on the parent's clock, with no clock node of its own: the TL
+  * ports connect to the chiplet router without a crossing, so a separate link
+  * clock would only work while it happened to match the router's. Clocks the
+  * real link has beyond that (the PHY's word clock, the sideband) are meant to
+  * be modeled as rates and latencies in this clock, not as clock domains.
   */
 class UcieTLNoPhy(
     params: UcieTLParams,
@@ -62,8 +69,6 @@ class UcieTLNoPhy(
     extends LazyModule {
   override lazy val desiredName = s"UcieTLNoPhy${params.moduleSuffix}"
 
-  val digitalClockNode = ClockSinkNode(Seq(ClockSinkParameters()))
-
   val device = new SimpleDevice("ucie", Seq("ucbbar,ucie"))
   val managerNode = TLManagerNode(
     Seq(UcieTL.managerPortParams(managerRegion, device, beatBytes, blockBytes))
@@ -71,19 +76,13 @@ class UcieTLNoPhy(
   val clientNode = TLClientNode(Seq(UcieTL.clientPortParams(params)))
 
   override lazy val module = new UcieTLNoPhyImpl
-  class UcieTLNoPhyImpl extends LazyRawModuleImp(this) {
-    val clock = digitalClockNode.in(0)._1.clock
-    val reset = digitalClockNode.in(0)._1.reset
-    childClock := clock
-    childReset := reset
-    override def provideImplicitClockToLazyChildren = true
-
+  class UcieTLNoPhyImpl extends LazyModuleImp(this) {
     val (managerTl, _) = managerNode.in(0)
     val (clientTl, _) = clientNode.out(0)
 
-    val protocol = withClockAndReset(clock, reset) {
-      Module(new UcieTLProtocol(params, managerTl.params, clientTl.params))
-    }
+    val protocol = Module(
+      new UcieTLProtocol(params, managerTl.params, clientTl.params)
+    )
     val io = IO(new UciePacketIO(protocol.frameBits))
 
     protocol.io.manager <> managerTl
@@ -120,7 +119,7 @@ class UcieNoPhyChipletLink(
   val client_node = ucie.clientNode
   val manager_node = ucie.managerNode
   val control_manager_node: Option[TLRegisterNode] = None
-  val clock_node = Some(ucie.digitalClockNode)
+  val clock_node: Option[ClockNode] = None
   val top_IO = BundleBridgeSource(() =>
     new UciePacketIO(UcieTLFrame.frameBits(params.creditBits))
   )
