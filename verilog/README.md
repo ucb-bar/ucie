@@ -91,6 +91,7 @@ pins:
 | `rx_afe` | `vref`, `din`, `a_en`, `a_pc`, `b_en`, `b_pc`, `sel_a`, `dout`, `vdd`, `vss` |
 | `dcdl` | `clk_in`, `dl_ctrl`, `clk_out`, with `delay_offset` and `delay_gain` |
 | `clocking_distribution_model` | `clk_in`, `clk_out`, with `propagation_delay_mu` and `propagation_delay_sigma` |
+| `clock_tree_replica` | `din`, `dout`, with `propagation_delay_mu` and `propagation_delay_sigma` |
 
 Cells a level builds those out of are its own business and belong in its own
 directory, as do the benches that only make sense against them --
@@ -133,15 +134,25 @@ than near the bottom of it.
 
 ## Where the sampling point lands
 
-`phy` puts the forwarded clock through the global delay line, as TXCLKQ is in
-the PHY, and then through a fixed delay of two clock distribution delays and a
-quarter period, on the reasoning that the first cancels the distribution on
-each side and the second puts the clock in the middle of the eye. Two
-distribution delays are 400 ps and a UI is 62.5 ps, so the first part does not
-cancel -- it leaves 25 ps over -- and the deserializer's own input delay moves
-things again. Where the sampling edge actually lands is therefore left over
-from delays that were never meant to add up, and it moves when the models
-underneath do.
+Both ends of the link put a clock distribution network between a lane and its
+clock, and each one is matched on the other path. On the TX side, `phy` puts
+the forwarded clock through the global delay line, as TXCLKQ is in the PHY,
+and then through a fixed delay of one distribution delay, standing in for the
+forwarded clock's arm of the tree, which matches the arms the data lanes are
+clocked through. On the RX side the data lanes' clocks come through an arm of
+the RX tree, and each `rxdata_tile` puts its data through a
+`clock_tree_replica` of one, so data and clock reach the deserializer equally
+late; `verilog/common/rx_replica_tb.sv` times both at every level. The fixed
+delay adds a quarter period on top, to put the clock in the middle of the eye.
+
+Two delays on the RX data have no counterpart on the clock: the lane's delay
+line, which sits behind the replica and costs `DCDL_DELAY_OFS` with no taps on,
+and the deserializer's own input delay, `DES_IN_DELAY`. Together they are 40
+ps, most of a UI, that the quarter period was never sized for, so an untrained
+lane does not sample in the middle of one; the edge rates of the connect
+modules and the latches' setup and hold move it again, and the spread between
+each arm and its replica moves every lane a little either side of that. Where
+the sampling edge lands also moves when the models underneath do.
 
 Nothing is wrong with either model when it lands badly -- an untrained lane has
 no reason to be centred, which is the whole reason the forwarded clock has a
@@ -151,9 +162,11 @@ settles in the middle of the longest run of codes lane 0 receives at, and
 prints the sweep and the code it settled on.
 
 The sweep has to be on the global line. A lane's own delay line only trims it
-against the spread of the clock tree -- `TX_DCDL_TAPS` taps of
-`DCDL_DELAY_STEP`, a few ps in all -- where the global line covers a little
-over a UI.
+against the spread of the clock trees -- between the TX arms on one side, and
+between each RX arm and its replica on the other -- with `TX_DCDL_TAPS` taps
+of `DCDL_DELAY_STEP`, a few ps in all, where the global line covers a little
+over a UI. The RX lane's line is on the data, so more taps there move the
+sampling point earlier in the UI rather than later.
 
 ## Running
 

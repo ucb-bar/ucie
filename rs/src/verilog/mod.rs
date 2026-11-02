@@ -9,6 +9,7 @@ use const_format::concatcp;
 pub mod afe;
 pub mod phy;
 pub mod primitives;
+pub mod rx;
 pub mod serdes;
 pub mod training;
 

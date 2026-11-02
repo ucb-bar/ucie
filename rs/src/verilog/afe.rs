@@ -7,7 +7,7 @@
 
 /// The cells every level has to define, with the pins `verilog/README.md`
 /// lists. Everything else in a level's directory is its own business.
-pub const CONTRACT_CELLS: [&str; 7] = [
+pub const CONTRACT_CELLS: [&str; 8] = [
     "tx_tile_driver",
     "pad_driver_cell",
     "termination",
@@ -15,6 +15,7 @@ pub const CONTRACT_CELLS: [&str; 7] = [
     "rx_afe",
     "dcdl",
     "clocking_distribution_model",
+    "clock_tree_replica",
 ];
 
 #[cfg(test)]

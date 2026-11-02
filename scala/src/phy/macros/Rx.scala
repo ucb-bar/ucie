@@ -61,9 +61,11 @@ class RxAfeIO extends Bundle {
 
 class RxLaneCtlIO extends Bundle {
 
-  /** Delay taps on the sampling clock, thermometer coded as on the TX tile. A
+  /** Delay taps on the received data, thermometer coded as on the TX tile. A
     * one enables its tap. This is the lane's local trim; it moves where in the
-    * UI this lane samples without touching any other lane.
+    * UI this lane samples without touching any other lane. The line sits behind
+    * the lane's clock tree replica and the clock does not go through it, so
+    * more taps delay the data against the clock and sample earlier in the UI.
     */
   val Dctrl = UInt(RxDataLane.DelayTaps.W)
   val zen = Bool()
@@ -73,7 +75,13 @@ class RxLaneCtlIO extends Bundle {
 }
 
 /** One UCIe RX data tile: termination, the reference ladder, the sampling front
-  * end, a local delay line on the sampling clock, and the 1:32 deserializer.
+  * end, a clock tree replica and a local delay line on the data, and the 1:32
+  * deserializer.
+  *
+  * The lane's clock comes through an arm of the clock distribution network, so
+  * the data goes through a replica of one on its way to the deserializer and
+  * arrives as late as the clock that samples it. The delay line trims what the
+  * replica and the arm do not match.
   *
   * This is the macro itself rather than a wrapper around it. Its buses are
   * `Vec`s because the macro splits them into one pin per bit, and a `Vec` emits

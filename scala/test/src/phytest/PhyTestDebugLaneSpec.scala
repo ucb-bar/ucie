@@ -38,6 +38,10 @@ class PhyTestDebugLaneHarness(
   // The analog macros need their behavioral models here.
   val dut = Module(new PhyTest(numLanes = numLanes)(true))
   dut.io.regs := DontCare
+  // In the full block the divider resets come from the clock register
+  // block; the harness reset stands in for it here.
+  dut.io.txDividerRstb := (!reset.asBool).asAsyncReset
+  dut.io.rxDividerRstb := (!reset.asBool).asAsyncReset
 
   // Half the main clock, so one serializer edge lands on each main clock edge.
   val laneClk = RegInit(false.B)

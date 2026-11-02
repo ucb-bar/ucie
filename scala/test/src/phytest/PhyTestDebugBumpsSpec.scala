@@ -35,6 +35,10 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
 
   val dut = Module(new PhyTest(numLanes = numLanes)(true))
   dut.io.regs := DontCare
+  // In the full block the divider resets come from the clock register
+  // block; the harness reset stands in for it here.
+  dut.io.txDividerRstb := (!reset.asBool).asAsyncReset
+  dut.io.rxDividerRstb := (!reset.asBool).asAsyncReset
 
   // Both bands under TileLink, so the mainband and sideband testers stay in
   // reset and only the observation path is live.

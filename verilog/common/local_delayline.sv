@@ -1,8 +1,8 @@
 `timescale 1ps/100fs
 
-// Per-lane trim on a tile's high speed clock. `dl_ctrl` is thermometer coded,
-// so the delay follows the number of taps enabled rather than the value of the
-// bus.
+// Per-lane trim: on a TX tile's high speed clock, and on an RX data tile's
+// received data. `dl_ctrl` is thermometer coded, so the delay follows the
+// number of taps enabled rather than the value of the bus.
 module local_delayline #(
     parameter integer CTRL_BITWIDTH = 32,
     parameter real    DELAY_OFS     = `DCDL_DELAY_OFS,

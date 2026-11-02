@@ -67,14 +67,16 @@ global_delayline global_dl(
 );
 
 // A fixed delay after it, standing in for the forwarded clock's arm of the
-// clock tree. Its offset was meant to cancel the distribution on both sides and
-// centre the clock in the eye, which it does not quite do (see "Where the
+// TX clock tree, which matches the data lanes' arms, and a quarter period on
+// top to put the clock in the middle of the eye. The RX side's distribution
+// needs nothing here, since each data lane's clock tree replica cancels it.
+// What is left over still does not quite centre the clock (see "Where the
 // sampling point lands" in `verilog/README.md`); centring is the global line's
 // job, so this line's gain and control stay at zero.
 wire deskewed_clk_tx;
 dcdl #(
     .delay_gain(0),
-    .delay_offset(2 * `CLK_DIST_DELAY_MU + `CLK_PERIOD/4)
+    .delay_offset(`CLK_DIST_DELAY_MU + `CLK_PERIOD/4)
 ) dcdl_inst(
     .clk_in(clk_q),
     .dl_ctrl(0),
@@ -101,7 +103,8 @@ txdata_tile txclkn_tile(.intf(intf.txclkn), .D2D_TX(txclkn_bump));
 txdata_tile txval_tile(.intf(intf.txval), .D2D_TX(txval_bump));
 txdata_tile txtrk_tile(.intf(intf.txtrk), .D2D_TX(txtrk_bump));
 
-// The recovered clock, past the clock lane's gate, fans out to the data lanes.
+// The recovered clock, past the clock lane's gate, fans out to the data lanes,
+// whose clock tree replicas match this delay on their data.
 wire [`LANES-1:0] rxclk_dist_sed;
 wire rxclk_gated = intf.rxclkp.clkout;
 clocking_distribution_model #(
@@ -161,13 +164,14 @@ module phy_tb;
 
     // The global delay line's code, as a thermometer code. Nothing in this
     // loopback centres the forwarded clock in the data eye: `phy`'s fixed
-    // delay offsets it by two clock distribution delays and a quarter period,
-    // and two distribution delays are not a whole number of UI, so where the
-    // sampling edge lands is left over from delays that were never meant to
-    // add up. It lands inside the eye for some models and on the edge for
-    // others, so the bench sweeps this code over a UI and settles in the middle
-    // of the longest run of codes lane 0 receives at. One code serves every
-    // lane here, since a loopback puts them all through the same delays;
+    // delay and the RX lanes' clock tree replicas match the distribution on
+    // both sides, but the RX lane's delay line and the deserializer's input
+    // delay are on the data and have no counterpart on the clock, so where
+    // the sampling edge lands is left over from those. It lands inside the eye
+    // for some models and on the edge for others, so the bench sweeps this
+    // code over a UI and settles in the middle of the longest run of codes
+    // lane 0 receives at. One code serves every lane here, since a loopback
+    // puts them all through the same delays;
     // `verilog/common/training_tb.sv` is where the eye either side of it gets
     // measured.
     reg [`GLOBAL_DL_CTRL_BITWIDTH-1:0] phase_sel = 0;
@@ -359,7 +363,7 @@ module phy_tb;
     assign intf.txtrk.ENN_EQ = 0;
     assign intf.txtrk.Dctrl = 0;
 
-    // Both recovered clocks' gates open, as `rxClkGateEn` resets to. Shut, the
+    // Both recovered clocks' gates open, as `rxClkEn` = 1 sets them. Shut, the
     // clock lane hands the distribution, and so every data lane, no clock.
     assign intf.rxclkp.clk_gate_en = 1;
     assign intf.rxclkn.clk_gate_en = 1;
@@ -388,7 +392,10 @@ module phy_tb;
 
     assign intf.rxval.vdd = vdd;
     assign intf.rxval.vss = vss;
-    assign intf.rxval.clk = intf.rxclkp.clkout;
+    // Valid and track take lane 0's arm of the RX clock tree: their tiles have
+    // a replica of one on their data like every data lane's, and `phy` only
+    // models the sixteen arms the data lanes are clocked through.
+    assign intf.rxval.clk = intf.rxdata[0].clk;
     assign intf.rxval.rstb = ~reset;
     assign intf.rxval.zen = 1;
     assign intf.rxval.zctl = 0;
@@ -401,7 +408,7 @@ module phy_tb;
 
     assign intf.rxtrk.vdd = vdd;
     assign intf.rxtrk.vss = vss;
-    assign intf.rxtrk.clk = intf.rxclkp.clkout;
+    assign intf.rxtrk.clk = intf.rxdata[0].clk;
     assign intf.rxtrk.rstb = ~reset;
     assign intf.rxtrk.zen = 1;
     assign intf.rxtrk.zctl = 0;

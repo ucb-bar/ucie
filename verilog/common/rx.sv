@@ -214,7 +214,21 @@ module rx_data_lane (
   assign dout_30 = intf.dout[30];
   assign dout_31 = intf.dout[31];
   assign divclk = intf.divclk;
-  rxdata_tile tile(
+  // The replica in the tile stands in for the arm of the clock distribution
+  // network in front of `clk`, which here is `ucie_clk_dist_network.sv`: a
+  // tree of `clocking_distribution_model`s under `UCIE_CLK_SKEW`, and a plain
+  // fanout with no delay at all otherwise.
+`ifdef UCIE_CLK_SKEW
+  localparam real CLK_TREE_DELAY_MU = `CLK_DIST_DELAY_MU;
+  localparam real CLK_TREE_DELAY_SIGMA = `CLK_DIST_DELAY_SIGMA;
+`else
+  localparam real CLK_TREE_DELAY_MU = 0;
+  localparam real CLK_TREE_DELAY_SIGMA = 0;
+`endif
+  rxdata_tile #(
+    .CLK_TREE_DELAY_MU(CLK_TREE_DELAY_MU),
+    .CLK_TREE_DELAY_SIGMA(CLK_TREE_DELAY_SIGMA)
+  ) tile(
     .intf(intf),
     .din(din)
   );
@@ -310,7 +324,9 @@ endmodule
 
 interface rxdata_tile_intf;
     logic clk;
-    // Delay taps on the sampling clock, thermometer coded as on the TX tile.
+    // Delay taps on the received data, behind the clock tree replica,
+    // thermometer coded as on the TX tile. More taps delay the data and leave
+    // the clock where it is, so the clock samples earlier in the UI.
     logic [2**`SERDES_STAGES-1:0] Dctrl;
     logic divclk;
     logic rstb;
@@ -327,7 +343,20 @@ endinterface
 // and a bump routed through one arrives at the termination and the front end
 // through connect modules rather than as a shared analog node. See
 // `verilog/README.md`.
-module rxdata_tile(
+//
+// The lane's clock reaches it through an arm of the clock distribution
+// network, after the clock lane's front end, while its data has only been
+// through this lane's front end. So the data goes through a replica of an arm
+// before it is sampled, and arrives at the deserializer as late as the clock
+// does; `CLK_TREE_DELAY_MU` and `CLK_TREE_DELAY_SIGMA` are the arm's, so they
+// follow whatever distribution network the clock actually comes through. The
+// lane's delay line sits on the data too, behind the replica, and trims what
+// the replica and the arm do not match. The clock goes straight from the tree
+// to the deserializer.
+module rxdata_tile #(
+    parameter real CLK_TREE_DELAY_MU = `CLK_DIST_DELAY_MU,
+    parameter real CLK_TREE_DELAY_SIGMA = `CLK_DIST_DELAY_SIGMA
+)(
     rxdata_tile_intf intf,
     input din
 );
@@ -362,20 +391,35 @@ rx_afe afe(
     .vss(intf.vss)
 );
 
-// Local delay line on the sampling clock, the RX counterpart of the TX tile's.
-logic rxclkin;
+// Resolved to a logic level before the replica, as the clock lane's gate
+// resolves the clock before the tree, so that wherever a level's front end
+// hands over an analog output the two paths cross the same connect modules.
+logic dout_afe_dig;
+assign dout_afe_dig = dout_afe;
+
+wire dout_replica;
+clock_tree_replica #(
+    .propagation_delay_mu(CLK_TREE_DELAY_MU),
+    .propagation_delay_sigma(CLK_TREE_DELAY_SIGMA)
+) replica(
+    .din(dout_afe_dig),
+    .dout(dout_replica)
+);
+
+// Local delay line on the data, the RX counterpart of the TX tile's.
+logic dout_delayed;
 local_delayline rxdl(
-    .clk_in(intf.clk),
+    .clk_in(dout_replica),
     .dl_ctrl(intf.Dctrl),
-    .clk_out(rxclkin)
+    .clk_out(dout_delayed)
 );
 
 logic [`SERDES_STAGES-1:0] desclk;
-assign desclk[0] = rxclkin;
+assign desclk[0] = intf.clk;
 generate
     if (`SERDES_STAGES > 1) begin
         clkdiv clkdiv (
-            .clkin(rxclkin),
+            .clkin(intf.clk),
             .clkout(desclk[`SERDES_STAGES-1:1]),
             .rstb(intf.rstb)
         );
@@ -384,7 +428,7 @@ endgenerate
 assign intf.divclk = desclk[`SERDES_STAGES-1];
 
 tree_des des(
-    .din(dout_afe),
+    .din(dout_delayed),
     .clk(desclk),
     .dout(intf.dout)
 );
