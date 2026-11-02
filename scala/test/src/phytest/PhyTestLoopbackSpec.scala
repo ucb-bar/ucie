@@ -42,6 +42,10 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
 
   val dut = Module(new PhyTest(bufferDepthPerLane, numLanes)(true))
   dut.io.regs := DontCare
+  // In the full block the divider resets come from the clock register
+  // block; the harness reset stands in for it here.
+  dut.io.txDividerRstb := (!reset.asBool).asAsyncReset
+  dut.io.rxDividerRstb := (!reset.asBool).asAsyncReset
 
   val laneClk = RegInit(false.B)
   laneClk := !laneClk

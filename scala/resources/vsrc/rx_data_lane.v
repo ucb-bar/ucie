@@ -1,4 +1,4 @@
-// `Dctrl_*` are the sampling clock's delay taps. Like the TX tile's, they only
+// `Dctrl_*` are the received data's delay taps. Like the TX tile's, they only
 // shape analog timing, so this behavioral model accepts and ignores them; see
 // `verilog/common/rx.sv` for the model that resolves them.
 module rx_data_lane (
