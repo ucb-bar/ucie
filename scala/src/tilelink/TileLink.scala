@@ -1880,7 +1880,7 @@ class UcieChipletLink(
   val manager_node = ucie.managerNode
   // The router attaches a bare `TLRegisterNode`, and UcieTL's register port
   // is a crossbar in front of three: attach `regNode` to a control bus
-  // yourself.
+  // yourself, e.g. with `CanHaveUcieRegs`.
   val control_manager_node: Option[TLRegisterNode] = None
   val clock_node = Some(ucie.digitalClockNode)
   val top_IO = BundleBridgeSource(() => new UcieBumpsIO(params.numLanes))
