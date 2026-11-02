@@ -365,8 +365,8 @@ object Codegen {
   val trainEyeFinePoints: Int = 4
   val trainEyeFineStep: Int = 16
 
-  /** TX division codes an eye sweep visits: /1, /2 and /4, every ratio the
-    * TX divider has.
+  /** TX division codes an eye sweep visits: /1, /2 and /4, every ratio the TX
+    * divider has.
     *
     * Off an 8 GHz main clock those are 16, 8 and 4 GT/s.
     */

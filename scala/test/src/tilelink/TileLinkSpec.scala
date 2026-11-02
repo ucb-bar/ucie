@@ -2554,12 +2554,12 @@ endtask
   * An odd ratio goes through a duty cycle corrector, so each of them -- /15 of
   * the PHY test divider, /5 and /15 of the TX sideband one -- has to come out
   * high and low for exactly half its period, the same as the even ratios, which
-  * do not go through it. /6 and /12 are the /3 stage ahead of /2 stages rather
-  * than a count of their own, and have to come out at 50% with no corrector.
-  * The analog bypass pin runs at 5 GHz here, neither PLL's rate, so a ratio off
-  * it can only come out at its own period if the select really took the pin.
-  * With both clocks on the pin, neither PLL is held on for them, and an apply
-  * finishes with no PLL locked.
+  * do not go through it. /6 is /3 then /2, and /12 is /2, /3, /2, so both end
+  * in a /2 and have to come out at 50% with no corrector. The analog bypass pin
+  * runs at 5 GHz here, neither PLL's rate, so a ratio off it can only come out
+  * at its own period if the select really took the pin. With both clocks on the
+  * pin, neither PLL is held on for them, and an apply finishes with no PLL
+  * locked.
   */
 class DividerDutyTestDriver extends SVTestDriver {
 

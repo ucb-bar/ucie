@@ -53,9 +53,11 @@
 // An odd ratio cannot give an even mark to space on its own, so each odd
 // divider output that is used as a clock -- /15 of the PHY test divider, /5 and
 // /15 of the TX sideband one -- goes through a duty cycle corrector on its way
-// to the ratio select, which brings it to 50%. The even ratios end in a /2
-// stage and are 50% already -- /6 and /12 are the /3 stage ahead of one and
-// two of them -- and /1 is the source itself.
+// to the ratio select, which brings it to 50%. /15 is /3 then /5 in both
+// dividers. The even ratios end in a /2 stage and are 50% already -- /6 is /3
+// then /2, /10 is /5 then /2, and /12 is /2, /3, /2 -- and /1 is the source
+// itself. The counters here reach the same ratios and duty cycles as those
+// cascades, not their internal phases.
 //
 // A divider is held at zero while its bypass pin is selected, so deselecting
 // one starts a fresh period rather than landing mid-count.
