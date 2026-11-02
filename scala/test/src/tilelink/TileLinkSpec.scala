@@ -1465,7 +1465,7 @@ begin : clk_src_sel
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
   clear_gaps();
-  use_internal_clk(64'h1, 64'h4);
+  use_internal_clk(64'h1, 64'h6);
   `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply onto the PLLs did not finish");
   expect_clks(-1, -1, 1, "PhyTest and sideband onto the PLLs");
   wait_pll_lock();
@@ -1483,7 +1483,7 @@ begin : clk_src_sel
 
   // 3. PhyTest onto PLL8 /8, 1 GHz, and the sideband onto PLL12 /15, 800 MHz.
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_SRC_SEL, 64'h0);
-  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   clear_gaps();
@@ -2033,7 +2033,7 @@ begin : pll_clocking
   mark_gate_shuts();
 
   // PHY test clock onto PLL8 / 8, starting both PLLs.
-  use_internal_clk(0, 3);
+  use_internal_clk(0, 4);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   check_gate_shuts("Moving the PHY test clock onto PLL8", 1, 0, fails);
   `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
@@ -2175,7 +2175,7 @@ begin : clk_en
   `WRITE_UCIE(regDrv, `CLK_CFG_GATE_PHY_TEST, 64'h0);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_EN, 64'h0);
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
-  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h0);
   apply_clk_cfg();
   if (`CLOCKING_TILE.PhyTestClkEn !== 1'b0) begin
@@ -2344,7 +2344,7 @@ begin : clk_manual
   // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off, which
   // the FSM overrides while the divider takes it.
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
-  use_internal_clk(0, 3);
+  use_internal_clk(0, 4);
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   apply_clk_cfg();
   `WRITE_UCIE(regDrv, `CLK_EN, 64'h1);
@@ -2377,7 +2377,7 @@ begin : clk_manual
   want = clk_outs(); want.clkEn = 1'b0; step(`CLK_EN, 0, want, "clkEn", fails);
   want = clk_outs(); want.mainClkSel = 2'd1; step(`MAIN_CLK_SEL, 1, want, "mainClkSel", fails);
   want = clk_outs(); want.txClkDiv = 2'd2; step(`TX_CLK_DIV, 2, want, "txClkDiv", fails);
-  want = clk_outs(); want.txClkPhase = 4'd3; step(`TX_CLK_PHASE, 3, want, "txClkPhase", fails);
+  want = clk_outs(); want.txClkPhase = 3'd3; step(`TX_CLK_PHASE, 3, want, "txClkPhase", fails);
   want = clk_outs(); want.x2En = 1'b0; step(`X2_EN, 0, want, "x2En", fails);
   want = clk_outs(); want.pll12En = 1'b0; step(`PLL12_EN, 0, want, "pll12En", fails);
   want = clk_outs(); want.phyTestClkEn = 1'b0;
@@ -2391,7 +2391,7 @@ begin : clk_manual
   want = clk_outs(); want.phyTestClkBypassEn = 1'b1;
   step(`PHY_TEST_CLK_BYPASS_EN, 1, want, "phyTestClkBypassEn", fails);
   want = clk_outs(); want.sbClkEn = 1'b0; step(`SB_CLK_EN, 0, want, "sbClkEn", fails);
-  want = clk_outs(); want.sbClkDiv = 3'd3; step(`SB_CLK_DIV, 3, want, "sbClkDiv", fails);
+  want = clk_outs(); want.sbClkDiv = 2'd3; step(`SB_CLK_DIV, 3, want, "sbClkDiv", fails);
   want = clk_outs(); want.sbClkSrcSel = 1'b1; step(`SB_CLK_SRC_SEL, 1, want, "sbClkSrcSel", fails);
   want = clk_outs(); want.sbClkBypassEn = 1'b0;
   step(`SB_CLK_BYPASS_EN, 0, want, "sbClkBypassEn", fails);
@@ -2473,11 +2473,11 @@ typedef struct packed {
   logic pll12En;
   logic x2En;
   logic [1:0] txClkDiv;
-  logic [3:0] txClkPhase;
+  logic [2:0] txClkPhase;
   logic [2:0] phyTestClkDiv;
   logic phyTestClkSrcSel;
   logic phyTestClkBypassEn;
-  logic [2:0] sbClkDiv;
+  logic [1:0] sbClkDiv;
   logic sbClkSrcSel;
   logic sbClkBypassEn;
   logic rxClkFromTxQ;
@@ -2548,16 +2548,18 @@ endtask
   )
 }
 
-/** The PHY test and TX sideband dividers at every odd ratio, and off the analog
-  * bypass pin.
+/** The PHY test and TX sideband dividers at every odd ratio, at the PHY test
+  * divider's /6 and /12, and off the analog bypass pin.
   *
   * An odd ratio goes through a duty cycle corrector, so each of them -- /15 of
   * the PHY test divider, /5 and /15 of the TX sideband one -- has to come out
   * high and low for exactly half its period, the same as the even ratios, which
-  * do not go through it. The analog bypass pin runs at 5 GHz here, neither
-  * PLL's rate, so a ratio off it can only come out at its own period if the
-  * select really took the pin. With both clocks on the pin, neither PLL is held
-  * on for them, and an apply finishes with no PLL locked.
+  * do not go through it. /6 and /12 are the /3 stage ahead of /2 stages rather
+  * than a count of their own, and have to come out at 50% with no corrector.
+  * The analog bypass pin runs at 5 GHz here, neither PLL's rate, so a ratio off
+  * it can only come out at its own period if the select really took the pin.
+  * With both clocks on the pin, neither PLL is held on for them, and an apply
+  * finishes with no PLL locked.
   */
 class DividerDutyTestDriver extends SVTestDriver {
 
@@ -2575,7 +2577,7 @@ begin : divider_duty
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
 
   // Odd ratios off the PLLs.
-  use_internal_clk(0, 4);
+  use_internal_clk(0, 6);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   phytest_duty(hi, lo);
   check_duty("PHY test clock, PLL8 / 15", hi, lo, 1875.0, fails);
@@ -2605,12 +2607,20 @@ begin : divider_duty
   sb_duty(hi, lo);
   check_duty("TX sideband clock, analog bypass / 5", hi, lo, 1000.0, fails);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_SRC_SEL, 64'h2);
-  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
   apply_clk_cfg();
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   phytest_duty(hi, lo);
   check_duty("PHY test clock, analog bypass / 8", hi, lo, 1600.0, fails);
-  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
+  apply_clk_cfg();
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, analog bypass / 6", hi, lo, 1200.0, fails);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h5);
+  apply_clk_cfg();
+  phytest_duty(hi, lo);
+  check_duty("PHY test clock, analog bypass / 12", hi, lo, 2400.0, fails);
+  `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h6);
   apply_clk_cfg();
   phytest_duty(hi, lo);
   check_duty("PHY test clock, analog bypass / 15", hi, lo, 3000.0, fails);
@@ -2625,11 +2635,11 @@ begin : divider_duty
     $display("FAIL: a PLL was held on for a divider on the analog bypass pin");
     fails = fails + 1;
   end
-  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h4);
+  `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   apply_clk_cfg();
   `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply on the pin waited for a PLL");
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, analog bypass / 20, no PLL", hi, lo, 4000.0, fails);
+  check_duty("TX sideband clock, analog bypass / 15, no PLL", hi, lo, 3000.0, fails);
   phytest_duty(hi, lo);
   check_duty("PHY test clock, analog bypass / 15, no PLL", hi, lo, 3000.0, fails);
 

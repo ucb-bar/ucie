@@ -140,9 +140,19 @@ module training_tb;
     assign txclk_intf.CK = ck_q;
     assign txdata_intf.CK = ck;
 
-    // The data lane samples on the clock the clock lane recovered, which is
-    // what the clock distribution network hands it in the real PHY.
-    assign rxdata_intf.clk = rxclk_intf.clkout;
+    // The data lane samples on the clock the clock lane recovered, through an
+    // arm of the clock distribution network as in the real PHY. The data
+    // lane's clock tree replica matches it, so leaving the network out would
+    // leave the replica's delay unmatched.
+    wire [15:0] rxclk_dist;
+    clocking_distribution_model #(
+        .propagation_delay_mu(`CLK_DIST_DELAY_MU),
+        .propagation_delay_sigma(`CLK_DIST_DELAY_SIGMA)
+    ) rxclk_dist_inst(
+        .clk_in(rxclk_intf.clkout),
+        .clk_out(rxclk_dist)
+    );
+    assign rxdata_intf.clk = rxclk_dist[0];
     // No local RX trim in this bench; the sweep here moves the forwarded clock.
     assign rxdata_intf.Dctrl = '0;
 

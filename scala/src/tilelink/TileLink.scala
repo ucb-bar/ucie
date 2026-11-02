@@ -320,7 +320,7 @@ class UcieClkRegs(
           RegInit(false.B),
           RegInit(0.U(ClockingTile.txClkDivWidth.W)),
           RegInit(0.U(ClockingTile.txClkPhaseWidth.W)),
-          RegInit(3.U(ClockingTile.phyTestClkDivWidth.W)),
+          RegInit(4.U(ClockingTile.phyTestClkDivWidth.W)),
           RegInit(true.B),
           RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W)),
           RegInit(false.B),
@@ -461,7 +461,7 @@ class UcieClkRegs(
     // The PHY test and TX sideband divisions are not in the rate table, so they
     // have live copies of their own, reset to what the shadow registers say.
     val livePhyTestDiv = withClockAndReset(clock, reset) {
-      RegInit(3.U(ClockingTile.phyTestClkDivWidth.W))
+      RegInit(4.U(ClockingTile.phyTestClkDivWidth.W))
     }
     val liveSbDiv = withClockAndReset(clock, reset) {
       RegInit(2.U(ClockingTile.sbClkDivWidth.W))

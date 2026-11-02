@@ -19,18 +19,18 @@
 //
 //   main clock   the UCIe main clock: pll8, pll12, the PLL8 X2 clock, or the
 //                analog bypass pin, through the clock gate
-//   TXCLK        the TX data clock: the main clock divided by 1, 2, 4 or 8
+//   TXCLK        the TX data clock: the main clock divided by 1, 2 or 4
 //   TXCLKQ       the TX quadrature clock: the same division, phase shifted by
 //                a whole number of main clock half cycles, then through the
 //                global delay line
 //   PhyTestClk   the PHY test clock: the PHY test bypass pin, or pll8, pll12
-//                or the analog bypass pin divided by 1, 2, 4, 8 or 15 -- 1 GHz
-//                is /8 off pll8, 800 MHz /15 off pll12 -- through a clock gate
-//                of its own
+//                or the analog bypass pin divided by 1, 2, 4, 6, 8, 12 or 15
+//                -- 1 GHz is /8 off pll8 or /12 off pll12, 800 MHz /15 off
+//                pll12 -- through a clock gate of its own
 //   SbClk        the TX sideband clock: the sideband bypass pin, or pll8,
-//                pll12 or the analog bypass pin divided by 1, 5, 10, 15 or 20
-//                -- 800 MHz is /10 off pll8, /15 off pll12 -- through a clock
-//                gate of its own
+//                pll12 or the analog bypass pin divided by 1, 5, 10 or 15 --
+//                800 MHz is /10 off pll8, /15 off pll12 -- through a clock gate
+//                of its own
 //
 // The main clock gate sits straight after the main clock mux, so it stops the
 // TX divider -- the TX data and TX quadrature clocks both -- and the divider
@@ -54,7 +54,8 @@
 // divider output that is used as a clock -- /15 of the PHY test divider, /5 and
 // /15 of the TX sideband one -- goes through a duty cycle corrector on its way
 // to the ratio select, which brings it to 50%. The even ratios end in a /2
-// stage and are 50% already, and /1 is the source itself.
+// stage and are 50% already -- /6 and /12 are the /3 stage ahead of one and
+// two of them -- and /1 is the source itself.
 //
 // A divider is held at zero while its bypass pin is selected, so deselecting
 // one starts a fresh period rather than landing mid-count.
@@ -86,13 +87,14 @@ module clocking_tile(
   input Pll12En,
   // Enables the X2 multiplier. It doubles pll8, so pll8 has to be enabled too.
   input X2En,
-  // 0 /1, 1 /2, 2 /4, 3 /8.
+  // 0 /1, 1 /2, 2 /4; 3 is spare and selects /4 too.
   input [1:0] TxClkDiv,
   // The TX quadrature clock's lead over the TX data clock, in UCIe main clock
   // half cycles, 0 to 2*div-1.
-  input [3:0] TxClkPhase,
-  // Division of the source `PhyTestClkSrcSel` picks: 0 /1, 1 /2, 2 /4, 3 /8,
-  // 4 /15. 1 GHz is /8 off pll8, 800 MHz /15 off pll12.
+  input [2:0] TxClkPhase,
+  // Division of the source `PhyTestClkSrcSel` picks: 0 /1, 1 /2, 2 /4, 3 /6,
+  // 4 /8, 5 /12, 6 /15; 7 is spare and selects /15 too. 1 GHz is /8 off pll8
+  // or /12 off pll12, 800 MHz /15 off pll12.
   input [2:0] PhyTestClkDiv,
   // What the PHY test divider divides: 0 pll8, 1 pll12, 2 the analog bypass
   // pin; 3 is spare and selects the analog bypass pin too.
@@ -101,10 +103,10 @@ module clocking_tile(
   input PhyTestClkBypassEn,
   // Active high enable for the gate after the PHY test clock's bypass mux.
   input PhyTestClkEn,
-  // Division of the source `SbClkSrcSel` picks: 0 /1, 1 /5, 2 /10, 3 /15,
-  // 4 /20. The TX sideband clock runs at 800 MHz whatever the PHY test clock
-  // runs at, so it gets its own divider: /10 off pll8, /15 off pll12.
-  input [2:0] SbClkDiv,
+  // Division of the source `SbClkSrcSel` picks: 0 /1, 1 /5, 2 /10, 3 /15.
+  // The TX sideband clock runs at 800 MHz whatever the PHY test clock runs at,
+  // so it gets its own divider: /10 off pll8, /15 off pll12.
+  input [1:0] SbClkDiv,
   // What the TX sideband divider divides, coded as `PhyTestClkSrcSel`.
   input [1:0] SbClkSrcSel,
   // High takes the TX sideband clock from its own bypass pin.
@@ -223,12 +225,11 @@ module clocking_tile(
   // the gate shut neither output moves, whatever `TxClkDiv` or `TxClkPhase` do
   // meanwhile; the new setting shows on the first edge after the gate opens.
   wire [5:0] tx_span_in = (TxClkDiv == 2'd0) ? 6'd2 :
-                          (TxClkDiv == 2'd1) ? 6'd4 :
-                          (TxClkDiv == 2'd2) ? 6'd8 : 6'd16;
+                          (TxClkDiv == 2'd1) ? 6'd4 : 6'd8;
 
   reg [5:0] half_cnt = 6'd0;
   reg [1:0] tx_div_sel = 2'd0;
-  reg [3:0] tx_phase = 4'd0;
+  reg [2:0] tx_phase = 3'd0;
   always @(main_clk) begin
     if ((^half_cnt === 1'bx) || (half_cnt + 6'd1 >= tx_span_in))
       half_cnt <= 6'd0;
@@ -238,10 +239,9 @@ module clocking_tile(
   end
 
   wire [5:0] tx_span = (tx_div_sel == 2'd0) ? 6'd2 :
-                       (tx_div_sel == 2'd1) ? 6'd4 :
-                       (tx_div_sel == 2'd2) ? 6'd8 : 6'd16;
+                       (tx_div_sel == 2'd1) ? 6'd4 : 6'd8;
   wire [4:0] tx_div = tx_span[5:1];           // span is 2 * div half cycles
-  wire [5:0] q_cnt = (half_cnt + {2'b0, tx_phase}) % tx_span;
+  wire [5:0] q_cnt = (half_cnt + {3'b0, tx_phase}) % tx_span;
   wire tx_i = half_cnt < {1'b0, tx_div};
   wire tx_q = q_cnt < {1'b0, tx_div};
 
@@ -267,7 +267,9 @@ module clocking_tile(
   wire [5:0] phytest_div_in = (PhyTestClkDiv == 3'd0) ? 6'd1 :
                               (PhyTestClkDiv == 3'd1) ? 6'd2 :
                               (PhyTestClkDiv == 3'd2) ? 6'd4 :
-                              (PhyTestClkDiv == 3'd3) ? 6'd8 : 6'd15;
+                              (PhyTestClkDiv == 3'd3) ? 6'd6 :
+                              (PhyTestClkDiv == 3'd4) ? 6'd8 :
+                              (PhyTestClkDiv == 3'd5) ? 6'd12 : 6'd15;
 
   // Held at zero while the bypass pin is selected, so switching back to the
   // divider starts a fresh period.
@@ -311,10 +313,9 @@ module clocking_tile(
   // at a rate the PHY test clock does not.
   wire sb_src = (SbClkSrcSel == 2'd0) ? pll8 :
                 (SbClkSrcSel == 2'd1) ? pll12 : BypassClk;
-  wire [5:0] sb_div_in = (SbClkDiv == 3'd0) ? 6'd1 :
-                         (SbClkDiv == 3'd1) ? 6'd5 :
-                         (SbClkDiv == 3'd2) ? 6'd10 :
-                         (SbClkDiv == 3'd3) ? 6'd15 : 6'd20;
+  wire [5:0] sb_div_in = (SbClkDiv == 2'd0) ? 6'd1 :
+                         (SbClkDiv == 2'd1) ? 6'd5 :
+                         (SbClkDiv == 2'd2) ? 6'd10 : 6'd15;
 
   reg [5:0] sb_cnt = 6'd0;
   reg [5:0] sb_div = 6'd10;

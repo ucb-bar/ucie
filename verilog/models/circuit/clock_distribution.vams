@@ -146,3 +146,81 @@ module clocking_distribution_model(clk_in, clk_out);
     end
 
 endmodule
+
+// ============================================================================
+// Clock Tree Replica - Verilog-A Behavioral Model
+// ============================================================================
+//
+// One arm of the distribution network above, for a signal that has to arrive
+// with the same delay as a lane's clock without going through the tree: the
+// received data in each RX data lane.
+//
+// Delay: drawn once from N(propagation_delay_mu, propagation_delay_sigma),
+// independently of every arm of the tree, since a replica tracks an arm across
+// process, voltage and temperature but is not the same silicon.
+//
+// Noise: the same white and flicker phase noise as the tree, from a source of
+// the replica's own. The tree's noise comes from its root and is common to
+// every lane; the replica shares none of that root, so its noise does not
+// cancel against the clock's and adds to the jitter between the two. Sampled
+// on every input crossing rather than every falling one, since what passes
+// through a replica need not be a clock.
+//
+// Ports:
+//   din   - Input (electrical)
+//   dout  - Output (electrical), din delayed by the replica's delay + jitter
+//
+// ============================================================================
+
+module clock_tree_replica(din, dout);
+    input din; electrical din;
+    output dout; electrical dout;
+
+    parameter real vdd = 0.75;
+    parameter real clock_frequency = 8G; // clock frequency for noise modeling
+    parameter real white_noise_floor_dBcHz = -139.9;
+    parameter real flicker_noise_1Hz_dBcHz = -77.2;
+    parameter real propagation_delay_mu = 198p;
+    parameter real propagation_delay_sigma = 541f;
+
+    real delay;
+    integer seed;
+    integer sign;
+    real white_noise_floor_linear;
+    real white_noise_td;
+    real white_noise_filtered;
+    real flicker_noise_1Hz_linear;
+    real flicker_noise_td;
+    real total_phase_noise;
+    real total_time_noise_sampled;
+
+    analog begin
+        @(initial_step) begin
+            seed = $random + $abstime * 1e12;
+            total_time_noise_sampled = 0;
+            sign = (V(din) > vdd / 2) ? 1 : 0;
+            delay = propagation_delay_mu + propagation_delay_sigma * $rdist_normal(seed, 0, 1);
+        end
+
+        white_noise_floor_linear = 10**(white_noise_floor_dBcHz/10);
+        white_noise_td = white_noise(white_noise_floor_linear);
+        white_noise_filtered = laplace_nd(white_noise_td, {1.0}, {1.0, 1.0/(`M_PI*clock_frequency)});
+
+        flicker_noise_1Hz_linear = 10**(flicker_noise_1Hz_dBcHz/10);
+        flicker_noise_td = flicker_noise(flicker_noise_1Hz_linear, 1);
+
+        total_phase_noise = white_noise_filtered + flicker_noise_td;
+
+        @(cross(V(din) - vdd/2, 1)) begin
+            total_time_noise_sampled = total_phase_noise / (2 * `M_PI * clock_frequency);
+            sign = 1;
+        end
+        @(cross(V(din) - vdd/2, -1)) begin
+            total_time_noise_sampled = total_phase_noise / (2 * `M_PI * clock_frequency);
+            sign = 0;
+        end
+
+        V(dout) <+ transition(vdd * sign, delay + total_time_noise_sampled, 5p);
+    end
+
+endmodule

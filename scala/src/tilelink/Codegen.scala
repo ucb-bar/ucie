@@ -365,10 +365,10 @@ object Codegen {
   val trainEyeFinePoints: Int = 4
   val trainEyeFineStep: Int = 16
 
-  /** TX division codes an eye sweep visits: /1, /2 and /4.
+  /** TX division codes an eye sweep visits: /1, /2 and /4, every ratio the
+    * TX divider has.
     *
-    * Off an 8 GHz main clock those are 16, 8 and 4 GT/s. /8 is supported by the
-    * tile but doubles the sweep again for a rate that shows nothing new.
+    * Off an 8 GHz main clock those are 16, 8 and 4 GT/s.
     */
   val trainEyeDivs: Int = 3
 
@@ -1306,13 +1306,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   }
 
   /** Sets one RX lane's sampling point: `taps` of the delay line on its
-    * sampling clock enabled.
+    * received data enabled.
     *
-    * The receive-side counterpart of `set_tx_delay`. The delay sits on the
-    * clock this lane samples with, so it moves where in the UI this lane
-    * samples without touching any other lane, against a forwarded clock and a
-    * transmitter that have not moved. `Dctrl` is thermometer coded. The clock
-    * lanes have no delay line and ignore it.
+    * The receive-side counterpart of `set_tx_delay`. The delay sits on this
+    * lane's data, behind its clock tree replica, so it moves where in the UI
+    * this lane samples without touching any other lane, against a forwarded
+    * clock and a transmitter that have not moved. More taps delay the data
+    * against the clock, so the lane samples earlier in the UI. `Dctrl` is
+    * thermometer coded. The clock lanes have no delay line and ignore it.
     */
   def formatSetRxDelayFn(): String = {
     val body = new StringBuilder
