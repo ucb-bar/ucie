@@ -171,4 +171,22 @@ class UcieTLProtocol(
   dCreditCounter.io.ret.bits := Mux(rxIsD, rxD.credit_d, rxA.credit_d)
   dCreditCounter.io.mode := io.creditFlowEnable
   dAvail := dCreditCounter.io.avail
+
+  // Logs every TL beat at the frame interface, sent or received, with the
+  // cycle since reset. A beat's one-way latency is its "rx" cycle on the
+  // partner minus its "tx" cycle here, which only holds if both dies come out
+  // of reset on the same cycle of the same clock. Credit-only frames are not
+  // logged.
+  if (params.latencyMonitor) {
+    val cycle = RegInit(0.U(64.W))
+    cycle := cycle + 1.U
+    def chan(isD: Bool): UInt = Mux(isD, 'D'.U(8.W), 'A'.U(8.W))
+    val txIsD = UcieTLFrame.isD(io.tx.bits)
+    when(io.tx.fire && (clientTl.d.fire || managerTl.a.fire)) {
+      printf("ucie-lat tx %c %d\n", chan(txIsD), cycle)
+    }
+    when(io.rx.valid && rxTlValid) {
+      printf("ucie-lat rx %c %d\n", chan(rxIsD), cycle)
+    }
+  }
 }
