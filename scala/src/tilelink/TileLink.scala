@@ -62,6 +62,10 @@ case class UcieTLParams(
     clientIdBits: Int = 8,
     includeDefaultModels: Boolean = false,
     sim: Boolean = false,
+    // Simulation only: `printf`s every TL beat entering or leaving the
+    // protocol, with a cycle count since reset (see `UcieTLProtocol`), for
+    // measuring the link's latency.
+    latencyMonitor: Boolean = false,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
