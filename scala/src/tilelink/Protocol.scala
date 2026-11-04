@@ -188,5 +188,68 @@ class UcieTLProtocol(
     when(io.rx.valid && rxTlValid) {
       printf("ucie-lat rx %c %d\n", chan(rxIsD), cycle)
     }
+    // Every frame sent, credit-only ones (C) included, tagged with the die.
+    val txHasBeat = clientTl.d.fire || managerTl.a.fire
+    when(io.tx.fire) {
+      printf(
+        "ucie-frm %m %c %d\n",
+        Mux(txHasBeat, chan(txIsD), 'C'.U(8.W)),
+        cycle
+      )
+    }
+    // Every beat received, tagged with the die.
+    when(io.rx.valid && rxTlValid) {
+      printf("ucie-frx %m %c %d\n", chan(rxIsD), cycle)
+    }
+    // Each request's steps, by TL source, tagged with the die:
+    //   av  manager A first valid (request reaches the protocol)
+    //   af  manager A fire (its frame is sent)
+    //   ra  A beat lands in the rx buffer (partner side)
+    //   ca  client A fire (into the partner's SoC)
+    //   cd  client D fire (response frame sent)
+    //   rd  D beat lands in the rx buffer (requester side)
+    //   md  manager D fire (response back to the requester's SoC)
+    def req(ev: String, valid: Bool, source: UInt): Unit =
+      when(valid) {
+        printf(s"ucie-req %m $ev %d %d\n", source, cycle)
+      }
+    val aWaiting = RegInit(false.B)
+    when(managerTl.a.fire) {
+      aWaiting := false.B
+    }.elsewhen(managerTl.a.valid) {
+      aWaiting := true.B
+    }
+    req("av", managerTl.a.valid && !aWaiting, managerTl.a.bits.source)
+    req("af", managerTl.a.fire, managerTl.a.bits.source)
+    req("ra", rxABuffer.io.enq.fire, rxABuffer.io.enq.bits.source)
+    req("ca", clientTl.a.fire, clientTl.a.bits.source)
+    // dv: client D first valid (the partner's SoC has the response). While it
+    // waits to go, count the cycles the link wasn't ready and the cycles
+    // there was no D credit, and log both when it goes.
+    val dWaiting = RegInit(false.B)
+    val dNotReady = RegInit(0.U(32.W))
+    val dNoCredit = RegInit(0.U(32.W))
+    when(clientTl.d.fire) {
+      dWaiting := false.B
+      dNotReady := 0.U
+      dNoCredit := 0.U
+    }.elsewhen(clientTl.d.valid) {
+      dWaiting := true.B
+      dNotReady := dNotReady + !io.tx.ready
+      dNoCredit := dNoCredit + !dAvail
+    }
+    req("dv", clientTl.d.valid && !dWaiting, clientTl.d.bits.source)
+    when(clientTl.d.fire) {
+      printf(
+        "ucie-dst %m %d %d %d %d\n",
+        clientTl.d.bits.source,
+        dNotReady,
+        dNoCredit,
+        cycle
+      )
+    }
+    req("cd", clientTl.d.fire, clientTl.d.bits.source)
+    req("rd", rxDBuffer.io.enq.fire, rxDBuffer.io.enq.bits.source)
+    req("md", managerTl.d.fire, managerTl.d.bits.source)
   }
 }

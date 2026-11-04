@@ -23,6 +23,9 @@ object UcieNoPhyLink {
 
   /** Two dies whose frames reach each other `cycles` later. */
   case class Delayed(cycles: Int) extends UcieNoPhyLink
+
+  /** Two dies joined by `UcieLinkModel.connect`: rate-limited and delayed. */
+  case class Modeled(params: UcieLinkModelParams) extends UcieNoPhyLink
 }
 
 /** One or two `UcieTLNoPhy`s, each with a scripted driver (and scoreboard) on
@@ -75,8 +78,11 @@ class UcieTLNoPhyTest(link: UcieNoPhyLink, nReqs: Int, seed: Int)(implicit
     link match {
       case UcieNoPhyLink.Loopback => ios(0).loopback
       case UcieNoPhyLink.Connect  => ios(0).connect(ios(1))
+      case UcieNoPhyLink.Modeled(params) =>
+        UcieLinkModel.connect(ios(0), ios(1), params)
       case UcieNoPhyLink.Delayed(cycles) =>
         for (i <- 0 until 2) {
+          ios(i).txReady := true.B
           ios(1 - i).rx := ShiftRegister(
             ios(i).tx,
             cycles,
@@ -174,6 +180,9 @@ class UcieTLNoPhySpec extends AnyFunSpec with ChiselSim {
     }
     it("carries two-way traffic over a 40-cycle link") {
       run(UcieNoPhyLink.Delayed(40))
+    }
+    it("carries two-way traffic over the modeled 16 GT/s link at 1 GHz") {
+      run(UcieNoPhyLink.Modeled(UcieLinkModelParams()), timeout = 100000)
     }
   }
 }
