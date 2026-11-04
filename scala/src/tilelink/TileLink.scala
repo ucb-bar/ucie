@@ -66,6 +66,15 @@ case class UcieTLParams(
     // protocol, with a cycle count since reset (see `UcieTLProtocol`), for
     // measuring the link's latency.
     latencyMonitor: Boolean = false,
+    // PHY-less only (`phy = false`): frames the die can queue for the link
+    // while the link model holds `txReady` low, like `txAQ` in front of the
+    // controller. 0 for none: the protocol then waits on `txReady` directly.
+    noPhyTxQueueDepth: Int = 0,
+    // PHY-less only: the controller's RX crossing, from the sideband clock
+    // into this one, delivers frames only on cycles with a sideband edge. This
+    // is that clock's frequency over this one's (0.8 for 800 MHz into 1 GHz);
+    // 0 for no crossing (frames delivered the cycle they arrive).
+    noPhyRxClockRatio: Double = 0.0,
     ucieRegsBaseAddress: BigInt = 0x40000,
     // Frames the sideband TL receiver can hold before the digital domain has
     // to drain them. Must be a power of two.
