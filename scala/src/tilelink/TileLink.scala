@@ -1554,12 +1554,12 @@ object UcieTL {
     *
     * The clock registers answer in the cycle they are asked and the shrinker
     * can reuse an ID the cycle after, so one in flight issues a request every
-    * cycle. The PhyTest and controller blocks sit behind one-entry async
-    * queues (`regXing`), which pass a request only every ~7 chip cycles
-    * against a round trip of ~8, so two keep those queues full. The fixer lets
-    * only one block have requests in flight at a time, so two would do; four
-    * leaves a spare against those estimates. More than one at once only
-    * happens when several masters reach the registers together.
+    * cycle. The PhyTest and controller blocks sit behind one-entry async queues
+    * (`regXing`), which pass a request only every ~7 chip cycles against a
+    * round trip of ~8, so two keep those queues full. The fixer lets only one
+    * block have requests in flight at a time, so two would do; four leaves a
+    * spare against those estimates. More than one at once only happens when
+    * several masters reach the registers together.
     */
   val regsInFlight = 4
 
