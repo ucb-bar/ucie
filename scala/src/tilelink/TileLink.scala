@@ -1998,7 +1998,7 @@ class UcieTL(
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
       // The manager port's A channel, through `params.managerBuffer`; its D
-      // channel goes out through the same below.
+      // channel goes out through the same below (`managerD`).
       val managerPort = managerNode.in(0)._1
       val managerA = params.managerBuffer(managerPort.a)
 
@@ -2278,7 +2278,7 @@ class UcieTL(
         tlBundleA
       })
       clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
-      val managerD = rxDBuffer.io.deq.map(bits => {
+      val rxD = rxDBuffer.io.deq.map(bits => {
         val tlBundleD = Wire(chiselTypeOf(managerPort.d.bits))
         tlBundleD.opcode := bits.tl.opcode
         tlBundleD.param := bits.tl.param
@@ -2290,8 +2290,9 @@ class UcieTL(
         tlBundleD.corrupt := bits.tl.corrupt
         tlBundleD
       })
-      managerD.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
-      managerPort.d <> params.managerBuffer(managerD)
+      rxD.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
+      val managerD = params.managerBuffer(rxD)
+      managerPort.d <> managerD
       dontTouch(managerPort.d.bits.opcode)
 
       // The word the TL path puts on the lanes. Data and valid come through the
