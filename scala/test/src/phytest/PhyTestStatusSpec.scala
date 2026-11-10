@@ -30,7 +30,7 @@ class PhyTestStatusSpec extends AnyFunSpec with ChiselSim {
   val numLanes = 4
 
   describe("PhyTest track counters") {
-    it("should count track's ones and zeros whatever owns the mainband") {
+    it("should count track's ones, zeros, and even ones whatever owns the mainband") {
       simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         // TileLink owns the mainband, so the RX FSM is held throughout.
         c.io.regs.mainbandMode.poke(BandMode.tl)
@@ -45,26 +45,33 @@ class PhyTestStatusSpec extends AnyFunSpec with ChiselSim {
           c.io.rx.valid.poke(false.B)
           c.clock.step()
         }
-        def counts: (BigInt, BigInt) = (
+        // Ones, zeros, and ones on the even UIs.
+        def counts: (BigInt, BigInt, BigInt) = (
           c.io.regs.trackOnes.peek().litValue,
-          c.io.regs.trackZeros.peek().litValue
+          c.io.regs.trackZeros.peek().litValue,
+          c.io.regs.trackOnesEven.peek().litValue
         )
 
         send(10, BigInt("000000ff", 16))
-        assert(counts == (BigInt(80), BigInt(240)))
+        assert(counts == (BigInt(80), BigInt(240), BigInt(40)))
         assert(c.io.regs.rxPacketsReceived.peek().litValue == 0)
 
         c.io.regs.trackCntHold.poke(true.B)
         send(10, BigInt("ffffffff", 16))
-        assert(counts == (BigInt(80), BigInt(240)), "held")
+        assert(counts == (BigInt(80), BigInt(240), BigInt(40)), "held")
         c.io.regs.trackCntHold.poke(false.B)
         send(1, BigInt("ffffffff", 16))
-        assert(counts == (BigInt(112), BigInt(240)))
+        assert(counts == (BigInt(112), BigInt(240), BigInt(56)))
+        // Ones on the odd UIs only, then on the even ones only.
+        send(2, BigInt("aaaaaaaa", 16))
+        assert(counts == (BigInt(144), BigInt(272), BigInt(56)))
+        send(1, BigInt("55555555", 16))
+        assert(counts == (BigInt(160), BigInt(288), BigInt(72)))
 
         c.io.regs.trackCntRst.poke(true.B)
         c.clock.step()
         c.io.regs.trackCntRst.poke(false.B)
-        assert(counts == (BigInt(0), BigInt(0)))
+        assert(counts == (BigInt(0), BigInt(0), BigInt(0)))
       }
     }
   }

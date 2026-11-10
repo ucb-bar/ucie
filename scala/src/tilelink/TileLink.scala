@@ -1205,6 +1205,7 @@ class UcieTLRegs(
       val rxStartMode = RegInit(RxStartMode.valid)
       val rxBurstMode = RegInit(false.B)
       val rxSelfSync = RegInit(false.B)
+      val rxManualCheck = RegInit(false.B)
       val rxMonitor = RegInit(false.B)
       val rxCaptureMode = RegInit(CaptureMode.first)
       // Half the SRAM after the trigger, so it is centered in what is kept.
@@ -1343,6 +1344,7 @@ class UcieTLRegs(
       io.test.rxStartMode := applyShift(rxStartMode)
       io.test.rxBurstMode := applyShift(rxBurstMode)
       io.test.rxSelfSync := applyShift(rxSelfSync)
+      io.test.rxManualCheck := applyShift(rxManualCheck)
       io.test.rxMonitor := applyShift(rxMonitor)
       io.test.rxCaptureMode := applyShift(rxCaptureMode)
       io.test.rxCapturePostTrigger := applyShift(rxCapturePostTrigger)
@@ -1559,7 +1561,9 @@ class UcieTLRegs(
         toRegFieldR(
           applyShift(io.test.txDebugUnderflow),
           "txDebugFifoUnderflow"
-        )
+        ),
+        toRegFieldR(applyShift(io.test.trackOnesEven), "trackOnesEven"),
+        toRegFieldRw(rxManualCheck, "rxManualCheck")
       )
 
       require(
