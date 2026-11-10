@@ -23,7 +23,13 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
   val scoredLanes = 0 to PhyTest.trackLane(numLanes)
 
   /** One packet as the TX put it on the wire. */
-  case class Slot(data: Seq[BigInt], valid: BigInt, track: BigInt, clkp: BigInt) {
+  case class Slot(
+      data: Seq[BigInt],
+      valid: BigInt,
+      track: BigInt,
+      clkp: BigInt,
+      clkn: BigInt
+  ) {
     def isData: Boolean = valid != 0
     def clockOn: Boolean = clkp != 0
   }
@@ -32,7 +38,8 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     data = (0 until numLanes).map(c.io.tx.data(_).peek().litValue),
     valid = c.io.tx.valid.peek().litValue,
     track = c.io.tx.track.peek().litValue,
-    clkp = c.io.tx.clkp.peek().litValue
+    clkp = c.io.tx.clkp.peek().litValue,
+    clkn = c.io.tx.clkn.peek().litValue
   )
 
   /** Starts the TX and returns the `n` packets it sends from the first one
@@ -116,42 +123,60 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
 
   describe("PhyTest forwarded clock gating") {
     it("should run the clock through each burst, its preamble and postamble") {
-      val (pre, post, burst, idle, packets) = (2, 3, 4, 8, 8)
+      // Two and a half packets of postamble, in 8 UI units.
+      val (pre, postUnits, burst, idle, packets) = (2, 10, 4, 8, 8)
+      val unitsPerPacket = Phy.SerdesRatio / PhyTest.ClkPostambleUi
+      val (postFull, postPartUi) = (
+        postUnits / unitsPerPacket,
+        postUnits % unitsPerPacket * PhyTest.ClkPostambleUi
+      )
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         finiteRun(c, packets)
         bursts(c, burst, idle)
         c.io.regs.txClkGate.poke(true.B)
         c.io.regs.txClkPreamble.poke(pre.U)
-        c.io.regs.txClkPostamble.poke(post.U)
+        c.io.regs.txClkPostamble.poke(postUnits.U)
         assert(!slot(c).clockOn, "a gated clock is parked before the run")
 
         val sent = record(c, 40)
-        // (data, clock) per packet.
-        val gap = Seq.fill(post)((false, true)) ++
-          Seq.fill(idle - pre - post)((false, false)) ++
-          Seq.fill(pre)((false, true))
-        val expected = Seq.fill(pre)((false, true)) ++
-          Seq.fill(burst)((true, true)) ++ gap ++
-          Seq.fill(burst)((true, true)) ++
-          Seq.fill(post)((false, true))
-        val shape = sent.map(s => (s.isData, s.clockOn))
+        // (data, UIs the clock runs for) per packet. Bit 0 goes out first,
+        // so the part-clocked packet keeps its low bits.
+        val (on, partial, off) = (
+          (BigInt(1) << Phy.SerdesRatio) - 1,
+          (BigInt(1) << postPartUi) - 1,
+          BigInt(0)
+        )
+        val postamble = Seq.fill(postFull)((false, on)) :+ ((false, partial))
+        val gap = postamble ++
+          Seq.fill(idle - pre - postamble.length)((false, off)) ++
+          Seq.fill(pre)((false, on))
+        val expected = Seq.fill(pre)((false, on)) ++
+          Seq.fill(burst)((true, on)) ++ gap ++
+          Seq.fill(burst)((true, on)) ++ postamble
+        val shape = sent.map(s => (s.isData, s.clkp | s.clkn))
         assert(shape.take(expected.length) == expected)
-        assert(shape.drop(expected.length).forall(_ == (false, false)))
-        assert(sent.filter(_.clockOn).forall(_.clkp == clkPWord))
-        assert(sent.filter(!_.clockOn).forall(_.clkp == 0))
+        assert(shape.drop(expected.length).forall(_ == (false, off)))
+        for (s <- sent) {
+          val clocked = s.clkp | s.clkn
+          assert(s.clkp == (clkPWord & clocked))
+          assert(s.clkn == (clkNWord & clocked))
+        }
       }
     }
 
-    it("should score clean when the RX only sees packets the clock ran for") {
-      val packets = 24
+    /** Runs gated bursts into an RX that only sees the UIs the clock ran
+      * for, and returns the nominal counts and the packets received.
+      */
+    def gatedRun(postUnits: Int, packets: Int): (Seq[BigInt], BigInt) = {
+      var result: (Seq[BigInt], BigInt) = (Seq.empty, 0)
       simulate(new PhyTestRegLoopback(numLanes, rxNeedsClock = true)) { c =>
         setupLfsr(c)
         finiteRun(c, packets)
         bursts(c, burst = 6, idle = 10)
         c.io.regs.txClkGate.poke(true.B)
         c.io.regs.txClkPreamble.poke(2.U)
-        c.io.regs.txClkPostamble.poke(2.U)
+        c.io.regs.txClkPostamble.poke(postUnits.U)
         c.io.regs.rxBurstMode.poke(true.B)
         // Parked, so nothing more reaches the RX before the run.
         c.clock.step(2)
@@ -160,24 +185,43 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
         assert(c.io.regs.rxIdleWordsObserved.peek().litValue == idleWords)
         strobe(c, c.io.regs.txExecute)
         c.clock.step(packets * 3 + outputDelay)
-        assert(packetsReceived(c) == packets)
-        val counts = errors(c, PhyTest.NominalFraming)
-        for (lane <- scoredLanes) {
-          withClue(s"lane $lane: ") { assert(counts(lane) == 0) }
-        }
+        result = (errors(c, PhyTest.NominalFraming), packetsReceived(c))
       }
+      result
+    }
+
+    it("should score clean when the RX only sees the UIs the clock ran for") {
+      val packets = 24
+      // Two whole packets of postamble.
+      val (counts, received) = gatedRun(postUnits = 8, packets)
+      assert(received == packets)
+      for (lane <- scoredLanes) {
+        withClue(s"lane $lane: ") { assert(counts(lane) == 0) }
+      }
+    }
+
+    it("should move the RX's word boundary by a part-packet postamble") {
+      // 16 UI past the last whole packet, so after the first gap every RX
+      // word straddles two TX packets.
+      val (counts, _) = gatedRun(postUnits = 10, packets = 24)
+      assert((0 until numLanes).forall(counts(_) > 0))
     }
   }
 
   describe("PhyTest track clock") {
-    it("should send txClkP on track whatever the FSM is doing") {
+    // Not the forwarded clock's pattern, so it cannot be coming from there.
+    val trackWord = BigInt("00ff00ff", 16)
+
+    it("should send txTrackWord on track whatever the FSM is doing") {
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         c.io.regs.txTrackClk.poke(true.B)
-        assert(slot(c).track == clkPWord, "idle")
+        c.io.regs.txTrackWord.poke(trackWord.U)
+        assert(slot(c).track == trackWord, "idle")
         val sent = record(c, 8)
         assert(sent.forall(_.isData))
-        assert(sent.forall(_.track == clkPWord), "running")
+        assert(sent.forall(_.track == trackWord), "running")
+        assert(sent.forall(_.clkp == clkPWord))
       }
     }
 
@@ -185,6 +229,7 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         c.io.regs.txTrackClk.poke(true.B)
+        c.io.regs.txTrackWord.poke(trackWord.U)
         c.io.regs.txValidLaneSel.poke(Phy.trackValidLaneSel(numLanes).U)
         val sent = record(c, 8)
         assert(sent.forall(_.track == validWord))

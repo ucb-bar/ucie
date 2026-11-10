@@ -1945,9 +1945,29 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     )
     body.append(f.formatForLoop("ofs", 32, readChunkOuterLoop.toString))
+    body.append(
+      formatExpectClear(
+        Seq(
+          "txTestFifoUnderflow" -> "Mainband TX queue ran dry",
+          "rxTestFifoOverflow" -> "Mainband RX queue overflowed",
+          "txDebugFifoUnderflow" -> "TX debug lane queue ran dry"
+        )
+      )
+    )
     sb.append(f.formatFn("manual_simple", body.toString))
     sb.toString
   }
+
+  /** Asserts that each named sticky flag is still clear, with its message. */
+  def formatExpectClear(flags: Seq[(String, String)]): String =
+    flags.map { case (name, msg) =>
+      f.formatUcieAssertEq(
+        "regDrv",
+        f.formatConstantRef(name),
+        f.formatLong(0),
+        msg = Some(msg)
+      )
+    }.mkString
 
   /** A manual-mode run over the tester's on-chip loopback lane: the TX lane
     * feeds the RX lane directly, so this exercises the serializer, driver, AFE,
@@ -1992,6 +2012,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         f.formatConstantRef("testTargetLoopback")
       )
     )
+    // Arms the loopback TX queue's underflow flag, which only counts from a
+    // datapath reset taken with the loopback lane the target.
+    body.append(f.formatFnCall("reset_datapath"))
     body.append(
       formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeManual"))
     )
@@ -2049,6 +2072,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     )
     body.append(f.formatForLoop("ofs", packets, readChunkLoop.toString))
+    body.append(
+      formatExpectClear(
+        Seq(
+          "loopbackTxFifoUnderflow" -> "Loopback TX queue ran dry",
+          "loopbackRxFifoOverflow" -> "Loopback RX queue overflowed"
+        )
+      )
+    )
     sb.append(f.formatFn("manual_loopback", body.toString))
     sb.toString
   }
