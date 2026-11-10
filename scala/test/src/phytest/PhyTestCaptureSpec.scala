@@ -141,4 +141,76 @@ class PhyTestCaptureSpec extends AnyFunSpec with ChiselSim {
       }
     }
   }
+
+  describe("PhyTest capture start") {
+    import PhyTestRegLoopback._
+    val depth = sramPackets
+    val allLanes = ((1 << PhyTest.numTestLanes(numLanes)) - 1).U
+
+    it("should record from packet rxCaptureStart on") {
+      // Past the end of what the SRAM would otherwise keep.
+      val start = 3 * depth + 5
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c)
+        c.io.regs.rxCaptureStart.poke(start.U)
+        strobe(c, c.io.regs.txExecute)
+        // The RX frames on the TX's packet boundaries, so the `n`th data
+        // packet sent is packet `n` received.
+        val sent = (0 until start + 2 * depth)
+          .map { _ =>
+            val s = (
+              c.io.tx.valid.peek().litValue,
+              (0 until numLanes).map(c.io.tx.data(_).peek().litValue)
+            )
+            c.clock.step()
+            s
+          }
+          .collect { case (valid, data) if valid != 0 => data }
+        c.clock.step(outputDelay)
+        for (o <- 0 until depth; lane <- 0 until numLanes) {
+          withClue(s"entry $o lane $lane: ") {
+            assert(captured(c, lane, o) == sent(start + o)(lane))
+          }
+        }
+      }
+    }
+
+    it("should not trigger on an error before rxCaptureStart") {
+      val start = 4 * depth
+      val post = 4
+      val (lane, twin) = (1, 0)
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        def sameSeed(l: Int): BigInt = seed(if (l == lane) twin else l)
+        setupLfsr(c, txSeed = sameSeed, rxSeed = sameSeed)
+        c.io.regs.rxCaptureMode.poke(CaptureMode.error)
+        c.io.regs.rxCaptureStart.poke(start.U)
+        c.io.regs.rxCapturePostTrigger.poke(post.U)
+        c.io.regs.rxTriggerLaneMask.poke(allLanes)
+        c.io.regs.txInjectLane.poke(lane.U)
+        strobe(c, c.io.regs.txExecute)
+        c.clock.step(depth)
+
+        strobe(c, c.io.regs.txInjectError)
+        c.clock.step(depth)
+        assert(c.io.regs.rxPacketsReceived.peek().litValue < start)
+        assert(errors(c, PhyTest.NominalFraming)(lane) == 1, "it did land")
+        assert(!c.io.regs.rxCaptureTriggered.peek().litToBoolean)
+
+        // Far enough past the start to have written every entry.
+        c.clock.step(start)
+        strobe(c, c.io.regs.txInjectError)
+        c.clock.step(2 * depth)
+        assert(c.io.regs.rxCaptureTriggered.peek().litToBoolean)
+        val trigger = c.io.regs.rxCaptureTriggerPacket.peek().litValue.toInt
+        assert(trigger >= start + depth)
+        for (o <- 0 until depth) {
+          withClue(s"entry $o: ") {
+            val expected =
+              if (o == (trigger - start) % depth) BigInt(1) else BigInt(0)
+            assert((captured(c, twin, o) ^ captured(c, lane, o)) == expected)
+          }
+        }
+      }
+    }
+  }
 }

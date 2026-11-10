@@ -19,7 +19,7 @@ import edu.berkeley.cs.uciedigital.phy.{Phy, TxIO}
   *   delay every pattern lane one UI behind valid, so the RX latches onto the
   *   valid edge one UI before the pattern starts.
   * @param rxNeedsClock
-  *   only hand the RX a packet the forwarded clock was running for, the way a
+  *   only hand the RX the UIs the forwarded clock was running for, the way a
   *   real RX stops when the clock is parked.
   */
 class PhyTestRegLoopback(
@@ -58,22 +58,46 @@ class PhyTestRegLoopback(
 
   dut.io.tx.ready := true.B
   io.tx := dut.io.tx.bits
-  val rxFire = dut.io.tx.valid &&
-    (if (rxNeedsClock) dut.io.tx.bits.clkp =/= 0.U else true.B)
-  dut.io.rx.valid := rxFire
   // Bit 0 is the oldest UI, so delaying by one UI shifts each word up a bit
   // and pulls in the previous word's newest bit.
   def delayed(word: UInt): UInt =
     if (!dataDelay) word
     else {
-      val prev = RegEnable(word, 0.U, rxFire)
+      val prev = RegEnable(word, 0.U, dut.io.tx.valid)
       Cat(word(Phy.SerdesRatio - 2, 0), prev(Phy.SerdesRatio - 1))
     }
-  dut.io.rx.bits.valid := dut.io.tx.bits.valid
-  dut.io.rx.bits.track := delayed(dut.io.tx.bits.track)
+  // Data lanes, then valid and track.
+  val sent = dut.io.tx.bits.data.map(delayed) ++
+    Seq(dut.io.tx.bits.valid, delayed(dut.io.tx.bits.track))
+  val received =
+    if (!rxNeedsClock) {
+      dut.io.rx.valid := dut.io.tx.valid
+      sent
+    } else {
+      // The RX deserializer counts its word boundaries on forwarded-clock
+      // edges, so it takes only the UIs the clock ran for and hands over a
+      // word once it has a whole one. The TX only ever clocks a packet's
+      // first UIs, so those are its low `clocked` bits.
+      val clockedMask = dut.io.tx.bits.clkp | dut.io.tx.bits.clkn
+      val clocked =
+        Mux(dut.io.tx.valid, PopCount(clockedMask), 0.U)
+      val held = RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
+      val total = held +& clocked
+      val wordDone = total >= Phy.SerdesRatio.U
+      held := Mux(wordDone, total - Phy.SerdesRatio.U, total)
+      dut.io.rx.valid := wordDone
+      sent.map { word =>
+        val buf = RegInit(0.U(Phy.SerdesRatio.W))
+        val merged = buf | ((word & clockedMask) << held)
+        buf := Mux(wordDone, merged >> Phy.SerdesRatio, merged)
+        merged(Phy.SerdesRatio - 1, 0)
+      }
+    }
   for (lane <- 0 until numLanes) {
-    dut.io.rx.bits.data(lane) := delayed(dut.io.tx.bits.data(lane))
+    dut.io.rx.bits.data(lane) := received(lane)
   }
+  dut.io.rx.bits.valid := received(numLanes)
+  dut.io.rx.bits.track := received(numLanes + 1)
 }
 
 object PhyTestRegLoopback {

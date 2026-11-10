@@ -1220,8 +1220,15 @@ class UcieTLRegs(
       val txIdlePackets = RegInit(0.U(io.test.txIdlePackets.getWidth.W))
       val txClkGate = RegInit(false.B)
       val txClkPreamble = RegInit(4.U(io.test.txClkPreamble.getWidth.W))
-      val txClkPostamble = RegInit(4.U(io.test.txClkPostamble.getWidth.W))
+      // Four packets, like the preamble.
+      val txClkPostamble = RegInit(
+        (4 * Phy.SerdesRatio / PhyTest.ClkPostambleUi)
+          .U(io.test.txClkPostamble.getWidth.W)
+      )
       val txTrackClk = RegInit(false.B)
+      // A clock, as the forwarded-clock lanes carry it.
+      val txTrackWord = RegInit(BigInt("55555555", 16).U(32.W))
+      val rxCaptureStart = RegInit(0.U(io.test.rxCaptureStart.getWidth.W))
       val txInjectError = Wire(DecoupledIO(UInt(1.W)))
       txInjectError.ready := true.B
       val txInjectLane = RegInit(0.U(io.test.txInjectLane.getWidth.W))
@@ -1346,6 +1353,8 @@ class UcieTLRegs(
       io.test.txClkPreamble := applyShift(txClkPreamble)
       io.test.txClkPostamble := applyShift(txClkPostamble)
       io.test.txTrackClk := applyShift(txTrackClk)
+      io.test.txTrackWord := applyShift(txTrackWord)
+      io.test.rxCaptureStart := applyShift(rxCaptureStart)
       io.test.txInjectError := applyShift(txInjectError.valid)
       io.test.txInjectLane := applyShift(txInjectLane)
       io.test.trackCntRst := applyShift(trackCntRst.valid)
@@ -1540,6 +1549,16 @@ class UcieTLRegs(
         toRegFieldR(
           applyShift(io.test.loopbackRxOverflow),
           "loopbackRxFifoOverflow"
+        ),
+        toRegFieldRw(txTrackWord, "txTrackWord"),
+        toRegFieldRw(rxCaptureStart, "rxCaptureStart"),
+        toRegFieldR(
+          applyShift(io.test.loopbackTxUnderflow),
+          "loopbackTxFifoUnderflow"
+        ),
+        toRegFieldR(
+          applyShift(io.test.txDebugUnderflow),
+          "txDebugFifoUnderflow"
         )
       )
 
