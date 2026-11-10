@@ -21,7 +21,9 @@ import freechips.rocketchip.prci.{ClockSourceNode, ClockSourceParameters}
 
 import edu.berkeley.cs.uciedigital.phytest.{
   BandMode,
+  CaptureMode,
   PhyTest,
+  RxStartMode,
   TestTarget,
   TxTestMode,
   DataMode,
@@ -815,6 +817,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("controllerSelUcie", ControllerSel.ucie.litValue),
         ("bandModeManual", BandMode.manual.litValue),
         ("bandModeTl", BandMode.tl.litValue),
+        ("rxStartModeValid", RxStartMode.valid.litValue),
+        ("rxStartModeImmediate", RxStartMode.immediate.litValue),
+        ("captureModeFirst", CaptureMode.first.litValue),
+        ("captureModeError", CaptureMode.error.litValue),
         ("defaultClkP", Codegen.defaultClkP),
         ("defaultClkN", Codegen.defaultClkN),
         ("defaultValid", Codegen.defaultValid),

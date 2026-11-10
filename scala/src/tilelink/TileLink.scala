@@ -187,6 +187,18 @@ class UcieTLRegsIO(
   val creditFlowEnable = Output(Bool())
   val lastSeenTLReq = Input(UInt(addrWidth.W))
   val sbTlRxOverflow = Input(Bool())
+  // Puts `txClkP`/`txClkN` on the forwarded-clock lanes straight from the
+  // registers instead of from the selected controller's TX queue, whichever
+  // controller is selected, so the clock keeps running through an empty
+  // queue or a datapath reset. Overrides any clock gating the controller does.
+  val txClkDirect = Output(Bool())
+  // Sticky flags for PhyTest's mainband crossings, each in the clock domain of
+  // its PHY end: the TX queue ran dry while PhyTest was feeding it, and the
+  // RX queue was handed a word it had no room for. Either means the PHY test
+  // clock is slower than the packet rate, and words were lost. Cleared by the
+  // TX or RX datapath reset.
+  val txTestFifoUnderflow = Input(Bool())
+  val rxTestFifoOverflow = Input(Bool())
 }
 
 object UcieTLRegs {
@@ -1177,6 +1189,44 @@ class UcieTLRegs(
       val sbTlRxOverflow =
         RegNext(RegNext(io.sbTlRxOverflow, false.B), false.B)
 
+      // Controls layered on top of the original test modes. Every one resets to
+      // the value that leaves those modes exactly as they were. See
+      // `PhyTestRegsIO` for what each does.
+      val rxStartMode = RegInit(RxStartMode.valid)
+      val rxBurstMode = RegInit(false.B)
+      val rxSelfSync = RegInit(false.B)
+      val rxMonitor = RegInit(false.B)
+      val rxCaptureMode = RegInit(CaptureMode.first)
+      // Half the SRAM after the trigger, so it is centered in what is kept.
+      val rxCapturePostTrigger = RegInit(
+        (1 << (params.bufferDepthPerLane - 5 - 1))
+          .U(io.test.rxCapturePostTrigger.getWidth.W)
+      )
+      val rxTriggerLaneMask = RegInit(
+        ((BigInt(1) << PhyTest.numTestLanes(params.numLanes)) - 1)
+          .U(io.test.rxTriggerLaneMask.getWidth.W)
+      )
+      val txBurstPackets = RegInit(0.U(io.test.txBurstPackets.getWidth.W))
+      val txIdlePackets = RegInit(0.U(io.test.txIdlePackets.getWidth.W))
+      val txClkGate = RegInit(false.B)
+      val txClkPreamble = RegInit(4.U(io.test.txClkPreamble.getWidth.W))
+      val txClkPostamble = RegInit(4.U(io.test.txClkPostamble.getWidth.W))
+      val txTrackClk = RegInit(false.B)
+      val txInjectError = Wire(DecoupledIO(UInt(1.W)))
+      txInjectError.ready := true.B
+      val txInjectLane = RegInit(0.U(io.test.txInjectLane.getWidth.W))
+      val trackCntRst = Wire(DecoupledIO(UInt(1.W)))
+      trackCntRst.ready := true.B
+      val trackCntHold = RegInit(false.B)
+      val txClkDirect = RegInit(false.B)
+      io.txClkDirect := txClkDirect
+      // 2-FF syncs, like `sbTlRxOverflow`: each flag is sticky and set on a
+      // packet clock.
+      val txTestFifoUnderflow =
+        RegNext(RegNext(io.txTestFifoUnderflow, false.B), false.B)
+      val rxTestFifoOverflow =
+        RegNext(RegNext(io.rxTestFifoOverflow, false.B), false.B)
+
       txDatapathRst.ready := true.B
       txFsmRst.ready := true.B
       txExecute.ready := true.B
@@ -1272,6 +1322,24 @@ class UcieTLRegs(
       )
       io.test.txDebugPacketsToSend := applyShift(debugTxPacketsToSend)
       io.test.txDebugData := applyShift(debugData)
+
+      io.test.rxStartMode := applyShift(rxStartMode)
+      io.test.rxBurstMode := applyShift(rxBurstMode)
+      io.test.rxSelfSync := applyShift(rxSelfSync)
+      io.test.rxMonitor := applyShift(rxMonitor)
+      io.test.rxCaptureMode := applyShift(rxCaptureMode)
+      io.test.rxCapturePostTrigger := applyShift(rxCapturePostTrigger)
+      io.test.rxTriggerLaneMask := applyShift(rxTriggerLaneMask)
+      io.test.txBurstPackets := applyShift(txBurstPackets)
+      io.test.txIdlePackets := applyShift(txIdlePackets)
+      io.test.txClkGate := applyShift(txClkGate)
+      io.test.txClkPreamble := applyShift(txClkPreamble)
+      io.test.txClkPostamble := applyShift(txClkPostamble)
+      io.test.txTrackClk := applyShift(txTrackClk)
+      io.test.txInjectError := applyShift(txInjectError.valid)
+      io.test.txInjectLane := applyShift(txInjectLane)
+      io.test.trackCntRst := applyShift(trackCntRst.valid)
+      io.test.trackCntHold := applyShift(trackCntHold)
 
       // String name should always be camel case with an underscore to separate indices.
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
@@ -1426,6 +1494,43 @@ class UcieTLRegs(
         toRegFieldR(applyShift(io.test.sb.rxOverflow), "sbRxOverflow"),
         RegField.w(1, sbRxRst, RegFieldDesc("sbRxRst", "")),
         toRegFieldR(sbTlRxOverflow, "sbTlRxOverflow")
+      ) ++ Seq(
+        // Everything from here on was added after the original test modes, and
+        // goes at the end so that no earlier address moves.
+        toRegFieldRw(rxStartMode, "rxStartMode"),
+        toRegFieldRw(rxBurstMode, "rxBurstMode"),
+        toRegFieldRw(rxSelfSync, "rxSelfSync"),
+        toRegFieldRw(rxMonitor, "rxMonitor"),
+        toRegFieldRw(rxCaptureMode, "rxCaptureMode"),
+        toRegFieldRw(rxCapturePostTrigger, "rxCapturePostTrigger"),
+        toRegFieldRw(rxTriggerLaneMask, "rxTriggerLaneMask"),
+        toRegFieldR(
+          applyShift(io.test.rxCaptureTriggered),
+          "rxCaptureTriggered"
+        ),
+        toRegFieldR(
+          applyShift(io.test.rxCaptureTriggerPacket),
+          "rxCaptureTriggerPacket"
+        ),
+        toRegFieldRw(txBurstPackets, "txBurstPackets"),
+        toRegFieldRw(txIdlePackets, "txIdlePackets"),
+        toRegFieldRw(txClkGate, "txClkGate"),
+        toRegFieldRw(txClkPreamble, "txClkPreamble"),
+        toRegFieldRw(txClkPostamble, "txClkPostamble"),
+        toRegFieldRw(txTrackClk, "txTrackClk"),
+        RegField.w(1, txInjectError, RegFieldDesc("txInjectError", "")),
+        toRegFieldRw(txInjectLane, "txInjectLane"),
+        toRegFieldR(applyShift(io.test.trackOnes), "trackOnes"),
+        toRegFieldR(applyShift(io.test.trackZeros), "trackZeros"),
+        RegField.w(1, trackCntRst, RegFieldDesc("trackCntRst", "")),
+        toRegFieldRw(trackCntHold, "trackCntHold"),
+        toRegFieldRw(txClkDirect, "txClkDirect"),
+        toRegFieldR(txTestFifoUnderflow, "txTestFifoUnderflow"),
+        toRegFieldR(rxTestFifoOverflow, "rxTestFifoOverflow"),
+        toRegFieldR(
+          applyShift(io.test.loopbackRxOverflow),
+          "loopbackRxFifoOverflow"
+        )
       )
 
       require(
@@ -1805,6 +1910,25 @@ class UcieTL(
     rxTestFifo.io.deq_clock := phy.io.clkRst.phyTestClk
     rxTestFifo.io.deq_reset := phy.io.clkRst.phyTestRst
     test.io.rx <> rxTestFifo.io.deq
+
+    // PhyTest's crossings drop words silently when the PHY test clock is
+    // slower than the packet rate, which reads exactly like bit errors on the
+    // link. Flag it instead. PhyTest drains its RX queue whatever owns the
+    // mainband, so that flag is always armed; it only feeds its TX queue while
+    // it drives the mainband itself.
+    val selTestMb = !selUcie && !selMbTl
+    regs.module.io.txTestFifoUnderflow := withClockAndReset(
+      phy.io.clkRst.txDivClk,
+      phy.io.clkRst.txDatapathRstSync
+    ) {
+      PhyTest.underflowFlag(txTestFifo.io.deq.valid, selTestMb)
+    }
+    regs.module.io.rxTestFifoOverflow := withClockAndReset(
+      phy.io.clkRst.rxDivClk,
+      phy.io.clkRst.rxDatapathRstSync
+    ) {
+      PhyTest.overflowFlag(rxTestFifo.io.enq.ready)
+    }
 
     val rxUcieFifo =
       Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
@@ -2288,6 +2412,12 @@ class UcieTL(
           )
         )
       )
+      // Or the clock lanes skip the queues altogether. The words are held
+      // registers, so like the selects above they need no synchronizer.
+      when(regs.module.io.txClkDirect) {
+        phy.io.tx.clkp := regs.module.io.test.txClkP
+        phy.io.tx.clkn := regs.module.io.test.txClkN
+      }
 
       val creditAValid =
         rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid

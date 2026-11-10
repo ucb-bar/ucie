@@ -49,6 +49,32 @@ object TxTestMode extends ChiselEnum {
   val lfsr = Value(1.U(1.W))
 }
 
+/** What starts the RX recording. */
+object RxStartMode extends ChiselEnum {
+
+  /** The first one seen on the lane `rxValidLaneSel` names. */
+  val valid = Value(0.U(1.W))
+
+  /** The first word the RX receives, framed on its own word boundary. For
+    * looking at what a lane receives when nothing on the link can be trusted to
+    * frame it.
+    */
+  val immediate = Value(1.U(1.W))
+}
+
+/** What the RX capture SRAM keeps. */
+object CaptureMode extends ChiselEnum {
+
+  /** The first `2^bufferDepthPerLane` bits per lane after recording starts. */
+  val first = Value(0.U(1.W))
+
+  /** A window around the first bit error. The SRAM is written circularly until
+    * a scored lane reports an error, then for `rxCapturePostTrigger` more
+    * packets, and then left alone.
+    */
+  val error = Value(1.U(1.W))
+}
+
 /** State of the TX test FSM. */
 object TxTestState extends ChiselEnum {
 
@@ -156,6 +182,36 @@ class PhyTestRegsIO(
   val txDataChunkOut = Output(UInt(128.W))
   // State of the TX test FSM.
   val txTestState = Output(TxTestState())
+  // Bursts: with both nonzero, the TX sends `txBurstPackets` packets, then
+  // `txIdlePackets` idle packets, and repeats until `txPacketsToSend` have
+  // gone out. An idle packet carries zeros on valid and on every pattern lane,
+  // and the pattern does not advance across it, so the packets that do go out
+  // are the same stream a continuous run sends. Either one zero sends
+  // continuously.
+  //
+  // The RX needs `rxBurstMode` to skip the idle packets.
+  val txBurstPackets = Input(UInt(32.W))
+  val txIdlePackets = Input(UInt(32.W))
+  // Gates the forwarded clock. The clock lanes then carry `txClkP`/`txClkN`
+  // only from `txClkPreamble` packets before a burst -- or before the first
+  // packet, without bursts -- until `txClkPostamble` packets after it, and
+  // zeros the rest of the time, as the UCIe controller parks them. With no
+  // clock edges arriving, the partner's RX stops handing over words, so its
+  // datapath reset cannot release either; reset it with the clock running.
+  val txClkGate = Input(Bool())
+  val txClkPreamble = Input(UInt(16.W))
+  val txClkPostamble = Input(UInt(16.W))
+  // Sends `txClkP` on the track lane, continuously and whatever the test mode,
+  // the way the UCIe controller sends track. Valid moved onto track by
+  // `txValidLaneSel` still takes precedence.
+  val txTrackClk = Input(Bool())
+  // Flips bit 0 of the next packet sent on lane `txInjectLane`, indexed like
+  // every other per-lane vector here. Takes effect on the first packet sent
+  // after the strobe, so a strobe before `txExecute` hits the first packet.
+  // Cleared by an FSM reset.
+  val txInjectError = Input(Bool())
+  val txInjectLane =
+    Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
 
   // RX CONTROL
   // ====================
@@ -226,6 +282,62 @@ class PhyTestRegsIO(
   val rxDataOffset = Input(UInt((bufferDepthPerLane - 5).W))
   // Data chunk at the given chunk offset for inspect the received data.
   val rxDataChunk = Output(UInt(32.W))
+  // What starts recording.
+  val rxStartMode = Input(RxStartMode())
+  // Only process packets whose valid word, on the lane `rxValidLaneSel`
+  // names, reads closer to `rxLfsrValid` than to zero; the rest are idle
+  // packets between bursts and are not counted, scored, captured, or folded
+  // into the signature. Needs a valid waveform with bit 0 set, so that the RX
+  // frames on the TX's packet boundaries and no packet straddles a burst edge.
+  // Ignored with `TestTarget.loopback`, which has no valid lane.
+  val rxBurstMode = Input(Bool())
+  // Scores each pattern lane against its own received history instead of
+  // against `rxLfsrSeed`: every bit is checked against the XOR of the bits
+  // the LFSR taps say produced it. A lane then needs no seed, and its count
+  // does not depend on the valid edge or on any other lane, so lane to lane
+  // skew of any size reads clean. While set, the nominal count of every lane
+  // that carries an LFSR pattern reports this score instead; valid and the
+  // early and late counts are scored as before. A `TxTestMode.manual` pattern
+  // is not an LFSR stream and reads as errors.
+  //
+  // The first two packets fill the history and are not scored, and a single
+  // bit error is counted `1 + PhyTest.LfsrTaps.size` times.
+  val rxSelfSync = Input(Bool())
+  // Keeps the RX FSM running while TileLink drives the mainband, so the
+  // capture SRAM and the signature see the TileLink traffic. The TX FSM is
+  // still held.
+  val rxMonitor = Input(Bool())
+  // What the capture SRAM keeps.
+  val rxCaptureMode = Input(CaptureMode())
+  // Packets captured after the trigger in `CaptureMode.error`.
+  val rxCapturePostTrigger = Input(UInt((bufferDepthPerLane - 5 + 1).W))
+  // Lanes whose nominal count can trigger `CaptureMode.error`, indexed like
+  // every other per-lane vector here. Only the lanes of the current target
+  // are ever considered: data, valid, and track on the mainband, and the
+  // loopback lane in loopback. Clear any lane that is not carrying its
+  // pattern -- track under `txTrackClk`, or a lane whose driver is off -- or
+  // it triggers on the first packet.
+  val rxTriggerLaneMask =
+    Input(UInt(PhyTest.numTestLanes(numLanes).W))
+  // Whether `CaptureMode.error` has triggered since the last FSM reset, and
+  // the `rxPacketsReceived` index of the packet that triggered it. That
+  // packet sits at this index modulo the SRAM depth, and the SRAM holds the
+  // packets up to `rxCapturePostTrigger` after it.
+  val rxCaptureTriggered = Output(Bool())
+  val rxCaptureTriggerPacket = Output(UInt(64.W))
+  // Ones and zeros received on the track lane, counted on every word the RX
+  // hands over whatever owns the mainband, for runtime recalibration. Raw
+  // words, not framed by valid. Both stop together once either would
+  // overflow, so their ratio stays exact. Cleared only by `trackCntRst`;
+  // `trackCntHold` stops them so the pair can be read at one instant.
+  val trackOnes = Output(UInt(32.W))
+  val trackZeros = Output(UInt(32.W))
+  val trackCntRst = Input(Bool())
+  val trackCntHold = Input(Bool())
+  // Sticky: the loopback receiver handed over a word its queue had no room
+  // for, because the PHY test clock drains it slower than words arrive.
+  // Cleared by the RX datapath reset.
+  val loopbackRxOverflow = Output(Bool())
 
   // DEBUG CIRCUITRY CONTROL
   // ===========================
@@ -387,6 +499,57 @@ object PhyTest {
     }
     val feedback = SignatureTaps.map(t => (folded >> (t - 1)) & 1).reduce(_ ^ _)
     ((folded << 1) & SignatureMask) | feedback
+  }
+
+  /** Bits of a received pattern word that disagree with the LFSR recurrence,
+    * given the two words before it.
+    *
+    * The TX sends its Fibonacci LFSR's output in the order it was generated,
+    * so every bit on the wire is the XOR of the bits `LfsrTaps` UIs before it.
+    * `history` holds the previous word in its high half and the one before in
+    * its low half, which is the `LfsrWidth` bits the largest tap reaches back.
+    */
+  def selfSyncErrors(word: UInt, history: UInt): UInt = {
+    val window = Cat(word, history)
+    VecInit((0 until Phy.SerdesRatio).map { j =>
+      LfsrTaps.toSeq
+        .map(t => window(LfsrWidth + j - t))
+        .reduce(_ ^ _) ^ word(j)
+    }).asUInt
+  }
+
+  /** Sticky flag for a queue whose producer cannot be held off, set when it
+    * offers a word the queue has no room for. Called in the enqueue clock
+    * domain and reset with it.
+    *
+    * Ready is also low for a few cycles after reset, until the two ends have
+    * handshaken, which is not a full queue, so the flag only arms once ready
+    * has been seen.
+    */
+  def overflowFlag(enqReady: Bool): Bool = {
+    val primed = RegInit(false.B)
+    val flag = RegInit(false.B)
+    when(enqReady) { primed := true.B }
+    when(primed && !enqReady) { flag := true.B }
+    flag
+  }
+
+  /** Sticky flag for a queue whose consumer takes a word every cycle, set when
+    * the queue runs dry. Called in the dequeue clock domain and reset with it.
+    *
+    * The queue is empty after reset until the producer's first word arrives,
+    * and empty whenever its producer is not the one feeding it, so the flag
+    * only arms once a word has been seen with `feeding` high throughout since
+    * the reset.
+    */
+  def underflowFlag(deqValid: Bool, feeding: Bool): Bool = {
+    val fedSinceReset = RegInit(true.B)
+    val primed = RegInit(false.B)
+    val flag = RegInit(false.B)
+    when(!feeding) { fedSinceReset := false.B }
+    when(deqValid) { primed := true.B }
+    when(fedSinceReset && feeding && primed && !deqValid) { flag := true.B }
+    flag
   }
 }
 
@@ -669,6 +832,15 @@ class PhyTest(
   )
   rxLoopbackFifo.io.deq_clock := clock
   rxLoopbackFifo.io.deq_reset := reset
+  // With no valid on the enqueue side, a full queue loses the word.
+  val rxLoopbackOverflow = withClockAndReset(
+    rxLoopbackLane.io.divclk.asClock,
+    !rxLoopbackRstSync.io.rstbSync
+  ) {
+    PhyTest.overflowFlag(rxLoopbackFifo.io.enq.ready)
+  }
+  io.regs.loopbackRxOverflow :=
+    RegNext(RegNext(rxLoopbackOverflow, false.B), false.B)
 
   // TX registers
   val txReset = io.regs.txFsmRst || !mbManual || reset.asBool
@@ -701,7 +873,8 @@ class PhyTest(
   )
 
   // RX registers
-  val rxReset = io.regs.rxFsmRst || !mbManual || reset.asBool
+  val rxReset =
+    io.regs.rxFsmRst || (!mbManual && !io.regs.rxMonitor) || reset.asBool
   val rxPacketsReceived = withReset(rxReset) {
     RegInit(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
   }
@@ -872,27 +1045,63 @@ class PhyTest(
     }
   }
 
+  // The words the TX logic below builds. Error injection is applied on the
+  // way out to `io.tx` and the loopback lane, at the very end.
+  val txWord = Wire(new TxIO(numLanes))
   for (lane <- 0 until numLanes) {
-    io.tx.bits.data(lane) := 0.U
+    txWord.data(lane) := 0.U
   }
-  io.tx.bits.valid := 0.U
-  io.tx.bits.track := 0.U
+  txWord.valid := 0.U
+  txWord.track := 0.U
   // Needs to be true whenever PhyTest owns the mainband, so that clock and
   // track keep going out even when data isn't valid.
   io.tx.valid := mbManual
 
   // The forwarded-clock lanes carry a fixed pattern rather than a test one.
-  io.tx.bits.clkp := io.regs.txClkP
-  io.tx.bits.clkn := io.regs.txClkN
+  // `txClkGate` parks them below.
+  txWord.clkp := io.regs.txClkP
+  txWord.clkn := io.regs.txClkN
 
   // Unlike `io.tx.valid`, only true when data is valid.
   val tx_valid = Wire(Bool())
   tx_valid := false.B
+  // Whether the run still has data to send, bursts aside: `tx_valid` is this
+  // outside the idle packets between bursts.
+  val txWantData = Wire(Bool())
+  txWantData := false.B
 
-  txLoopbackEnq.bits := 0.U
+  // BURSTS AND CLOCK GATING
+  //
+  // A run is a sequence of bursts with gaps of idle packets between them.
+  // Without bursts or clock gating there is one burst and no gap, which is
+  // the continuous run. With clock gating a run also opens with a gap of
+  // `txClkPreamble` packets, so that the clock is up before the first packet.
+  // Every count here is of packets the target accepted, i.e. of 32 UI on the
+  // wire.
+  val txBursting =
+    io.regs.txBurstPackets =/= 0.U && io.regs.txIdlePackets =/= 0.U
+  val txInGap = withReset(txReset) { RegInit(false.B) }
+  // The gap the clock preamble opens a run with, rather than one between
+  // bursts.
+  val txInPreamble = withReset(txReset) { RegInit(false.B) }
+  val txGapCount = withReset(txReset) { RegInit(0.U(32.W)) }
+  val txBurstCount = withReset(txReset) { RegInit(0.U(32.W)) }
+  val txGapLen =
+    Mux(txInPreamble, io.regs.txClkPreamble, io.regs.txIdlePackets)
+  // Packets since the last data packet, saturating, for the postamble.
+  // Starts saturated, so a gated clock stays parked until a run starts.
+  val txSinceDataMax = (1 << 16) - 1
+  val txSinceData = withReset(txReset) {
+    RegInit(txSinceDataMax.U(16.W))
+  }
+
   // The loopback lane only carries traffic when it is the selected target, so
-  // that a mainband run leaves it quiet.
-  txLoopbackEnq.valid := tx_valid && io.regs.testTarget === TestTarget.loopback
+  // that a mainband run leaves it quiet. It also takes the idle packets of a
+  // gap, so that the gap lasts on the wire.
+  txLoopbackEnq.valid := (tx_valid || (txState === TxTestState.run && txInGap)) &&
+    io.regs.testTarget === TestTarget.loopback
+  val txLoopbackWord = Wire(UInt(Phy.SerdesRatio.W))
+  txLoopbackWord := 0.U
 
   // Ready of whichever target the TX FSM is driving.
   val txTargetReady = Mux(
@@ -914,6 +1123,10 @@ class PhyTest(
 
       when(io.regs.txExecute) {
         txState := TxTestState.run
+        when(io.regs.txClkGate && io.regs.txClkPreamble =/= 0.U) {
+          txInGap := true.B
+          txInPreamble := true.B
+        }
       }
     }
     is(TxTestState.run) {
@@ -921,8 +1134,9 @@ class PhyTest(
         is(TxTestMode.manual) {
           // Need to load first chunk ahead of time so that we can constantly send data.
           when(loadedFirstChunk) {
-            // Increment address when packet is enqueued.
-            when(txTargetReady) {
+            // Increment address when packet is enqueued. A gap enqueues idle
+            // packets instead, so the address holds through one.
+            when(txTargetReady && !txInGap) {
               inputBufferAddr := (inputBufferAddrReg + 1.U) % txManualRepeatPeriod
             }.otherwise {
               inputBufferAddr := inputBufferAddrReg % txManualRepeatPeriod
@@ -930,10 +1144,10 @@ class PhyTest(
             // Only send the next packet if we still need to send more bits.
             switch(io.regs.txDataMode) {
               is(DataMode.finite) {
-                tx_valid := txPacketsEnqueued < io.regs.txPacketsToSend
+                txWantData := txPacketsEnqueued < io.regs.txPacketsToSend
               }
               is(DataMode.infinite) {
-                tx_valid := true.B
+                txWantData := true.B
               }
             }
           }.otherwise {
@@ -944,14 +1158,35 @@ class PhyTest(
         is(TxTestMode.lfsr) {
           switch(io.regs.txDataMode) {
             is(DataMode.finite) {
-              tx_valid := txPacketsEnqueued < io.regs.txPacketsToSend
+              txWantData := txPacketsEnqueued < io.regs.txPacketsToSend
             }
             is(DataMode.infinite) {
-              tx_valid := true.B
+              txWantData := true.B
             }
           }
         }
       }
+      tx_valid := txWantData && !txInGap
+
+      // Step through the bursts and the gaps between them.
+      when(txTargetReady) {
+        when(txInGap) {
+          txGapCount := txGapCount + 1.U
+          when(txGapCount + 1.U >= txGapLen) {
+            txInGap := false.B
+            txInPreamble := false.B
+          }
+        }.elsewhen(tx_valid && txBursting) {
+          when(txBurstCount + 1.U >= io.regs.txBurstPackets) {
+            txBurstCount := 0.U
+            txInGap := true.B
+            txGapCount := 0.U
+          }.otherwise {
+            txBurstCount := txBurstCount + 1.U
+          }
+        }
+      }
+
       when(tx_valid) {
         switch(io.regs.txTestMode) {
           is(TxTestMode.manual) {
@@ -962,13 +1197,13 @@ class PhyTest(
                 def sramWord(lane: Int): UInt =
                   inputRdPorts(lane >> 2).asTypeOf(Vec(4, UInt(32.W)))(lane % 4)
                 for (lane <- 0 until numLanes) {
-                  io.tx.bits.data(lane) := sramWord(lane)
+                  txWord.data(lane) := sramWord(lane)
                 }
-                io.tx.bits.valid := sramWord(PhyTest.validLane(numLanes))
-                io.tx.bits.track := sramWord(PhyTest.trackLane(numLanes))
+                txWord.valid := sramWord(PhyTest.validLane(numLanes))
+                txWord.track := sramWord(PhyTest.trackLane(numLanes))
               }
               is(TestTarget.loopback) {
-                txLoopbackEnq.bits := inputRdPorts((numLanes + 2) >> 2)
+                txLoopbackWord := inputRdPorts((numLanes + 2) >> 2)
                   .asTypeOf(Vec(4, UInt(32.W)))((numLanes + 2) % 4)
               }
             }
@@ -981,13 +1216,13 @@ class PhyTest(
                 def lfsrWord(lane: Int): UInt =
                   Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
                 for (lane <- 0 until numLanes) {
-                  io.tx.bits.data(lane) := lfsrWord(lane)
+                  txWord.data(lane) := lfsrWord(lane)
                 }
-                io.tx.bits.valid := io.regs.txValid
-                io.tx.bits.track := lfsrWord(PhyTest.trackLane(numLanes))
+                txWord.valid := io.regs.txValid
+                txWord.track := lfsrWord(PhyTest.trackLane(numLanes))
               }
               is(TestTarget.loopback) {
-                txLoopbackEnq.bits := Reverse(
+                txLoopbackWord := Reverse(
                   txLfsrs(PhyTest.loopbackLane(numLanes)).io.out.asUInt
                 )(31, 0)
               }
@@ -1015,12 +1250,36 @@ class PhyTest(
       }
 
       when(
-        (io.regs.txTestMode === TxTestMode.lfsr || loadedFirstChunk) && !tx_valid
+        (io.regs.txTestMode === TxTestMode.lfsr || loadedFirstChunk) && !txWantData
       ) {
         txState := TxTestState.done
       }
     }
     is(TxTestState.done) {}
+  }
+
+  when(txTargetReady) {
+    when(tx_valid) {
+      txSinceData := 0.U
+    }.elsewhen(txSinceData =/= txSinceDataMax.U) {
+      txSinceData := txSinceData + 1.U
+    }
+  }
+  // Whether the clock lanes carry the clock in this packet. A gated clock
+  // runs through every data packet, for `txClkPostamble` packets after one,
+  // and for the last `txClkPreamble` packets of a gap, which covers the whole
+  // of the gap a gated run opens with.
+  val txClkOn = !io.regs.txClkGate || tx_valid ||
+    txSinceData < io.regs.txClkPostamble ||
+    (txState === TxTestState.run && txInGap &&
+      txGapLen - txGapCount <= io.regs.txClkPreamble)
+  when(!txClkOn) {
+    txWord.clkp := 0.U
+    txWord.clkn := 0.U
+  }
+
+  when(io.regs.txTrackClk) {
+    txWord.track := io.regs.txClkP
   }
 
   // Valid goes out on whichever physical lane `txValidLaneSel` names, so a
@@ -1029,12 +1288,35 @@ class PhyTest(
   // a lane, the tester does not shuffle the displaced payload anywhere.
   for (lane <- 0 until numLanes) {
     when(io.regs.txValidLaneSel === lane.U) {
-      io.tx.bits.data(lane) := io.tx.bits.valid
+      txWord.data(lane) := txWord.valid
     }
   }
   when(io.regs.txValidLaneSel === Phy.trackValidLaneSel(numLanes).U) {
-    io.tx.bits.track := io.tx.bits.valid
+    txWord.track := txWord.valid
   }
+
+  // ERROR INJECTION
+  //
+  // Flips bit 0 of one lane in the next packet sent after the strobe.
+  val txInjectArmed = withReset(txReset) { RegInit(false.B) }
+  val txInjectNow = txInjectArmed && tx_valid && txTargetReady
+  when(txInjectNow) {
+    txInjectArmed := false.B
+  }
+  when(io.regs.txInjectError) {
+    txInjectArmed := true.B
+  }
+  def injected(word: UInt, lane: Int): UInt =
+    word ^ (txInjectNow && io.regs.txInjectLane === lane.U).asUInt
+
+  io.tx.bits := txWord
+  for (lane <- 0 until numLanes) {
+    io.tx.bits.data(lane) := injected(txWord.data(lane), lane)
+  }
+  io.tx.bits.valid := injected(txWord.valid, PhyTest.validLane(numLanes))
+  io.tx.bits.track := injected(txWord.track, PhyTest.trackLane(numLanes))
+  txLoopbackEnq.bits :=
+    injected(txLoopbackWord, PhyTest.loopbackLane(numLanes))
 
   // RX logic
 
@@ -1097,6 +1379,73 @@ class PhyTest(
     rxErrorMask(f)(i) := 0.U
   }
 
+  // Whether the packet completing this cycle is processed: counted, scored,
+  // and folded into the signature. Driven by the RX logic below.
+  val rxProcessPacket = Wire(Bool())
+  rxProcessPacket := false.B
+
+  // SELF-SYNCHRONIZING CHECK
+  //
+  // The last two packets each lane received, newest in the high half, for
+  // `PhyTest.selfSyncErrors`. Valid never carries an LFSR pattern, so its
+  // history is never read and optimizes away.
+  val rxHistory = withReset(rxReset) {
+    RegInit(
+      VecInit(
+        Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(PhyTest.LfsrWidth.W))
+      )
+    )
+  }
+  // Packets processed since the FSM reset, up to the two the history holds.
+  val rxHistoryFill = withReset(rxReset) { RegInit(0.U(2.W)) }
+  val rxHistoryFull = rxHistoryFill === 2.U
+  when(rxProcessPacket && !rxHistoryFull) {
+    rxHistoryFill := rxHistoryFill + 1.U
+  }
+
+  // ERROR-TRIGGERED CAPTURE
+  //
+  // `rxErrorMask` is a register, so a packet's errors show up the cycle after
+  // it was processed, by which point `rxPacketsReceived` has already counted
+  // it. The packet itself was written into the SRAM before the trigger, since
+  // the capture was still open then.
+  val rxCaptureError = io.regs.rxCaptureMode === CaptureMode.error
+  val rxTriggered = withReset(rxReset) { RegInit(false.B) }
+  val rxTriggerPacket = withReset(rxReset) {
+    RegInit(0.U(rxPacketsReceived.getWidth.W))
+  }
+  val rxCaptureRemaining = withReset(rxReset) {
+    RegInit(0.U(io.regs.rxCapturePostTrigger.getWidth.W))
+  }
+  // Only lanes that carry the current target's traffic can trigger. The
+  // others compare whatever they happen to receive against a pattern.
+  val rxTargetLanes = Mux(
+    io.regs.testTarget === TestTarget.mainband,
+    ((1 << (PhyTest.trackLane(numLanes) + 1)) - 1).U,
+    (1 << PhyTest.loopbackLane(numLanes)).U
+  )
+  val rxTriggerLanes = rxTargetLanes & io.regs.rxTriggerLaneMask
+  val rxAnyError = (0 until PhyTest.numTestLanes(numLanes))
+    .map(lane =>
+      rxTriggerLanes(lane) &&
+        rxErrorMask(PhyTest.NominalFraming)(lane).orR
+    )
+    .reduce(_ || _)
+  val rxTriggerNow = rxCaptureError && !rxTriggered && rxAnyError
+  val rxCaptureLeft =
+    Mux(rxTriggerNow, io.regs.rxCapturePostTrigger, rxCaptureRemaining)
+  val rxCaptureOpen = !(rxTriggered || rxTriggerNow) || rxCaptureLeft =/= 0.U
+  when(rxTriggerNow) {
+    rxTriggered := true.B
+    rxTriggerPacket := rxPacketsReceived - 1.U
+    rxCaptureRemaining := rxCaptureLeft
+  }
+  when((rxTriggered || rxTriggerNow) && shouldWrite) {
+    rxCaptureRemaining := rxCaptureLeft - 1.U
+  }
+  io.regs.rxCaptureTriggered := rxTriggered
+  io.regs.rxCaptureTriggerPacket := rxTriggerPacket
+
   // Check valid streak after each packet is dequeued.
   when(
     Mux(
@@ -1123,6 +1472,12 @@ class PhyTest(
         startIdx := i.U
         rxReceiveOffset := Phy.SerdesRatio.U - i.U
       }
+    }
+    // Or start on the first word, as it stands.
+    when(!recordingStarted && io.regs.rxStartMode === RxStartMode.immediate) {
+      startRecording := true.B
+      startIdx := 0.U
+      rxReceiveOffset := 0.U
     }
 
     // Free running, deliberately not saturating. Read it twice: a changed
@@ -1154,9 +1509,22 @@ class PhyTest(
     }.otherwise {
       val fullPacketReceived =
         rxReceiveOffset +& Phy.SerdesRatio.U - startIdx >= 32.U
+      // In burst mode, a packet whose valid word reads closer to idle than to
+      // the waveform falls between bursts. Closer rather than equal, so that a
+      // bit error on valid does not turn one into the other.
+      val alignedValidWord = rxLaneWords(io.regs.rxValidLaneSel)
+      val packetIsValid = !io.regs.rxBurstMode ||
+        io.regs.testTarget === TestTarget.loopback ||
+        PopCount(alignedValidWord ^ io.regs.rxLfsrValid) <
+        PopCount(alignedValidWord)
       val shouldProcessPacket =
-        fullPacketReceived && (io.regs.rxDataMode === DataMode.infinite || rxPacketsReceived < io.regs.rxPacketsToReceive)
-      shouldWrite := rxPacketsReceived < maxSramPackets && fullPacketReceived
+        fullPacketReceived && packetIsValid && (io.regs.rxDataMode === DataMode.infinite || rxPacketsReceived < io.regs.rxPacketsToReceive)
+      rxProcessPacket := shouldProcessPacket
+      shouldWrite := Mux(
+        rxCaptureError,
+        shouldProcessPacket && rxCaptureOpen,
+        rxPacketsReceived < maxSramPackets && fullPacketReceived && packetIsValid
+      )
       // Every packet counted by `rxPacketsReceived` goes into the signature,
       // including the ones past the end of the capture SRAM.
       rxSignatureUpdate := shouldProcessPacket
@@ -1197,6 +1565,13 @@ class PhyTest(
         rxLaneWords(lane) := newData(31, 0)
 
         when(shouldProcessPacket) {
+          rxHistory(lane) := Cat(
+            newData(31, 0),
+            rxHistory(lane)(PhyTest.LfsrWidth - 1, Phy.SerdesRatio)
+          )
+        }
+
+        when(shouldProcessPacket) {
           // Score the packet against the reference at all three framings so
           // that a valid bit error at alignment time does not invalidate the
           // run.
@@ -1232,8 +1607,15 @@ class PhyTest(
             when(carriesValid) {
               scoreAgainstValid(lane)
             }.otherwise {
-              rxErrorMask(PhyTest.NominalFraming)(lane) :=
+              rxErrorMask(PhyTest.NominalFraming)(lane) := Mux(
+                io.regs.rxSelfSync,
+                Mux(
+                  rxHistoryFull,
+                  PhyTest.selfSyncErrors(newData(31, 0), rxHistory(lane)),
+                  0.U
+                ),
                 newData(31, 0) ^ refWord(state)
+              )
               rxErrorMask(PhyTest.EarlyFraming)(lane) :=
                 newData(31, 0) ^ refWordAdvanced(state)
               rxErrorMask(PhyTest.LateFraming)(lane) :=
@@ -1245,4 +1627,22 @@ class PhyTest(
     }
   }
 
+  // TRACK COUNTERS
+  //
+  // Every word the RX hands over, whether or not the RX FSM is running.
+  val trackCntReset = io.regs.trackCntRst || reset.asBool
+  val trackOnes = withReset(trackCntReset) { RegInit(0.U(32.W)) }
+  val trackZeros = withReset(trackCntReset) { RegInit(0.U(32.W)) }
+  val trackWordOnes = PopCount(io.rx.bits.track)
+  val trackOnesNext = trackOnes +& trackWordOnes
+  val trackZerosNext = trackZeros +& (Phy.SerdesRatio.U - trackWordOnes)
+  when(
+    io.rx.fire && !io.regs.trackCntHold &&
+      !trackOnesNext(32) && !trackZerosNext(32)
+  ) {
+    trackOnes := trackOnesNext
+    trackZeros := trackZerosNext
+  }
+  io.regs.trackOnes := trackOnes
+  io.regs.trackZeros := trackZeros
 }
