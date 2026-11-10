@@ -180,7 +180,8 @@ class PhyTestRegsIO(
   val txDataOffset = Input(UInt((bufferDepthPerLane - 5).W))
   // 128-bit data chunk to write (32 bits per lane).
   val txDataChunkIn = Flipped(DecoupledIO(UInt(128.W)))
-  // Data chunk at the given chunk offset for inspecting the data to be sent. Only available in idle/done mode.
+  // Data chunk at the given chunk offset for inspecting the data to be sent. Only available in idle/done mode,
+  // and with `rxManualCheck` clear.
   val txDataChunkOut = Output(UInt(128.W))
   // State of the TX test FSM.
   val txTestState = Output(TxTestState())
@@ -252,7 +253,7 @@ class PhyTestRegsIO(
   val rxPacketsToReceive = Input(UInt(bitCounterWidth.W))
   // The number of bit errors per lane since the last FSM reset, against the pattern
   // as framed by the valid edge the RX latched onto. Only applicable in
-  // `TxTestMode.lsfr`.
+  // `TxTestMode.lsfr`, or in `TxTestMode.manual` under `rxManualCheck`.
   val rxBitErrors =
     Output(Vec(PhyTest.numTestLanes(numLanes), UInt(bitCounterWidth.W)))
   // The same counts against the pattern framed one UI earlier than the valid edge
@@ -314,6 +315,22 @@ class PhyTestRegsIO(
   // The first two packets fill the history and are not scored, and a single
   // bit error is counted `1 + PhyTest.LfsrTaps.size` times.
   val rxSelfSync = Input(Bool())
+  // Scores against a `TxTestMode.manual` pattern instead of the RX LFSRs:
+  // load the partner's pattern into this die's TX pattern SRAM through
+  // `txDataChunkIn`, and its repeat period into `txManualRepeatPeriod`. The
+  // `n`th packet processed is checked against row `n` modulo that period, so
+  // the RX has to start on the partner's first packet, i.e. on valid. Each
+  // lane's nominal count is against its own slot of the row, valid included.
+  // Unlike against the LFSRs, that holds for a lane the partner moved valid
+  // onto too, so load valid's waveform into that lane's slot. The early and
+  // late counts stay at zero, and `rxSelfSync` is ignored.
+  //
+  // The RX reads the SRAM through the port the TX sends from, so this only
+  // works while this die's TX is not sending a manual pattern; an LFSR run is
+  // fine. It also takes `txDataChunkOut` over. The counts land a cycle later
+  // than against the LFSRs, which `rxPauseCounters` and `CaptureMode.error`
+  // both allow for.
+  val rxManualCheck = Input(Bool())
   // Keeps the RX FSM running while TileLink drives the mainband, so the
   // capture SRAM and the signature see the TileLink traffic. The TX FSM is
   // still held.
@@ -350,6 +367,14 @@ class PhyTestRegsIO(
   // `trackCntHold` stops them so the pair can be read at one instant.
   val trackOnes = Output(UInt(32.W))
   val trackZeros = Output(UInt(32.W))
+  // The ones of `trackOnes` that landed on the even UIs of a word. The RX
+  // samples alternate UIs on alternate clock edges, the even ones on the
+  // rising edge in `rx_data_lane.v`, so with track's shuffler at its reset
+  // value this and `trackOnes - trackOnesEven` are each edge's count, out of
+  // `(trackOnes + trackZeros) / 2` samples apiece. With a clock on track the
+  // two move opposite ways as the sampling point drifts, which leaves the
+  // total where it was.
+  val trackOnesEven = Output(UInt(32.W))
   val trackCntRst = Input(Bool())
   val trackCntHold = Input(Bool())
   // Sticky: the loopback receiver handed over a word its queue had no room
@@ -972,6 +997,11 @@ class PhyTest(
     lfsr.io.increment := false.B
     lfsr
   })
+  // The row of the TX pattern SRAM the next packet processed is checked
+  // against under `rxManualCheck`.
+  val rxManualRow = withReset(rxReset) {
+    RegInit(0.U((bufferDepthPerLane - 5).W))
+  }
 
   // The `Phy.SerdesRatio` pattern bits a packet is compared against, oldest bit
   // first, in the same order the TX shifts them out of its own LFSR.
@@ -1051,6 +1081,10 @@ class PhyTest(
   )
   val inputBufferAddr = Wire(UInt((bufferDepthPerLane - 5).W))
   inputBufferAddr := io.regs.txDataOffset
+  // A manual TX run below takes the port back.
+  when(io.regs.rxManualCheck) {
+    inputBufferAddr := rxManualRow
+  }
   val inputRdPorts =
     (0 until numSrams).map(i => inputBuffer(i)(inputBufferAddr))
   val inputWrPorts =
@@ -1073,10 +1107,18 @@ class PhyTest(
   })
   val shouldWrite = Wire(Bool())
   shouldWrite := false.B
+  // Drops a write already on its way down the pipeline. Driven by the
+  // error-triggered capture below.
+  val rxWriteCancel = Wire(Bool())
+  rxWriteCancel := false.B
   val outputBufferAddrDelayed = ShiftRegister(outputBufferAddr, 2, true.B)
-  val toWriteDelayed = toWrite.map(w => ShiftRegister(w, 2, true.B))
+  // Every processed packet goes down the pipeline, and the manual pattern
+  // check below takes its words from the first stage.
+  val toWriteStaged = toWrite.map(w => RegNext(w))
+  val toWriteDelayed = toWriteStaged.map(w => RegNext(w))
   // Needs to default to false.
-  val shouldWriteDelayed = ShiftRegister(shouldWrite, 2, false.B, true.B)
+  val shouldWriteStaged = RegNext(shouldWrite, false.B)
+  val shouldWriteDelayed = RegNext(shouldWriteStaged && !rxWriteCancel, false.B)
   val outputRdPorts =
     (0 until numSrams).map(i => outputBuffer(i)(io.regs.rxDataOffset))
   val outputWrPorts =
@@ -1427,16 +1469,24 @@ class PhyTest(
       newRxBitErrors
     )
   }
+  // The manual check's counts land a cycle behind the LFSR ones, so they stop
+  // a cycle later to cover the same packets as `rxPacketsReceived`.
+  val rxPauseErrors = Mux(
+    io.regs.rxManualCheck,
+    RegNext(io.regs.rxPauseCounters, false.B),
+    io.regs.rxPauseCounters
+  )
   when(io.regs.rxPauseCounters) {
     rxPacketsReceivedOutput := rxPacketsReceivedOutput
-    rxBitErrorsOutput := rxBitErrorsOutput
     rxSignatureOutput := rxSignatureOutput
   }.otherwise {
     rxPacketsReceivedOutput := RegNext(rxPacketsReceived)
-    rxBitErrorsOutput := rxBitErrors
     // Same pipelining as `rxPacketsReceived` so that a paused signature always
     // covers exactly the number of packets reported alongside it.
     rxSignatureOutput := RegNext(rxSignature)
+  }
+  when(!rxPauseErrors) {
+    rxBitErrorsOutput := rxBitErrors
   }
 
   // Dumb RX logic (starts recording as soon as valid goes high and never stops)
@@ -1490,6 +1540,16 @@ class PhyTest(
   // it was processed, by which point `rxPacketsReceived` has already counted
   // it. The packet itself was written into the SRAM before the trigger, since
   // the capture was still open then.
+  //
+  // Under `rxManualCheck` they show a cycle later still, so the packet after
+  // may have been counted too, and be on its way into the SRAM. It counts
+  // toward the packets kept after the trigger, and is dropped if there are to
+  // be none.
+  val rxProcessedLast = withReset(rxReset) {
+    RegNext(rxProcessPacket, false.B)
+  }
+  val rxScoredBehind = io.regs.rxManualCheck && rxProcessedLast
+  val rxWriteInFlight = io.regs.rxManualCheck && shouldWriteStaged
   val rxCaptureError = io.regs.rxCaptureMode === CaptureMode.error
   val rxTriggered = withReset(rxReset) { RegInit(false.B) }
   val rxTriggerPacket = withReset(rxReset) {
@@ -1515,13 +1575,22 @@ class PhyTest(
   // The errors showing now are the previous packet's, so that packet is at or
   // past the start once the count is past it.
   val rxTriggerNow = rxCaptureError && !rxTriggered && rxAnyError &&
-    rxPacketsReceived > io.regs.rxCaptureStart
-  val rxCaptureLeft =
-    Mux(rxTriggerNow, io.regs.rxCapturePostTrigger, rxCaptureRemaining)
+    rxPacketsReceived > io.regs.rxCaptureStart +& rxScoredBehind
+  val rxPostTriggerNone = io.regs.rxCapturePostTrigger === 0.U
+  rxWriteCancel := rxTriggerNow && rxWriteInFlight && rxPostTriggerNone
+  val rxCaptureLeft = Mux(
+    rxTriggerNow,
+    Mux(
+      rxPostTriggerNone,
+      0.U,
+      io.regs.rxCapturePostTrigger - rxWriteInFlight
+    ),
+    rxCaptureRemaining
+  )
   val rxCaptureOpen = !(rxTriggered || rxTriggerNow) || rxCaptureLeft =/= 0.U
   when(rxTriggerNow) {
     rxTriggered := true.B
-    rxTriggerPacket := rxPacketsReceived - 1.U
+    rxTriggerPacket := rxPacketsReceived - 1.U - rxScoredBehind
     rxCaptureRemaining := rxCaptureLeft
   }
   when((rxTriggered || rxTriggerNow) && shouldWrite) {
@@ -1643,9 +1712,7 @@ class PhyTest(
         when(fullPacketReceived) {
           runningData(lane) := newData >> 32.U
         }
-        when(shouldWrite) {
-          toWrite(lane >> 2)(lane % 4) := newData(31, 0)
-        }
+        toWrite(lane >> 2)(lane % 4) := newData(31, 0)
         rxLaneWords(lane) := newData(31, 0)
 
         when(shouldProcessPacket) {
@@ -1711,12 +1778,45 @@ class PhyTest(
     }
   }
 
+  // MANUAL PATTERN CHECK
+  //
+  // The TX pattern SRAM is read on the row the next packet processed is due
+  // to be checked against, so the row arrives the cycle after that packet,
+  // alongside its words one stage down the capture pipeline. Reading off a
+  // register keeps the late decision of whether a packet is processed off
+  // the SRAM's address. Overrides every mask the LFSR scoring above set.
+  when(rxProcessPacket) {
+    rxManualRow := Mux(
+      rxManualRow +& 1.U >= txManualRepeatPeriod,
+      0.U,
+      rxManualRow + 1.U
+    )
+  }
+  when(io.regs.rxManualCheck) {
+    for (
+      f <- 0 until PhyTest.NumFramings;
+      lane <- 0 until PhyTest.numTestLanes(numLanes)
+    ) {
+      rxErrorMask(f)(lane) := 0.U
+    }
+    when(rxProcessedLast) {
+      def rowWord(lane: Int): UInt =
+        inputRdPorts(lane >> 2).asTypeOf(Vec(4, UInt(32.W)))(lane % 4)
+      for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
+        rxErrorMask(PhyTest.NominalFraming)(lane) :=
+          toWriteStaged(lane >> 2)(lane % 4) ^ rowWord(lane)
+      }
+    }
+  }
+
   // TRACK COUNTERS
   //
   // Every word the RX hands over, whether or not the RX FSM is running.
   val trackCntReset = io.regs.trackCntRst || reset.asBool
   val trackOnes = withReset(trackCntReset) { RegInit(0.U(32.W)) }
   val trackZeros = withReset(trackCntReset) { RegInit(0.U(32.W)) }
+  // Never more than `trackOnes`, so it cannot overflow first.
+  val trackOnesEven = withReset(trackCntReset) { RegInit(0.U(32.W)) }
   val trackWordOnes = PopCount(io.rx.bits.track)
   val trackOnesNext = trackOnes +& trackWordOnes
   val trackZerosNext = trackZeros +& (Phy.SerdesRatio.U - trackWordOnes)
@@ -1726,7 +1826,10 @@ class PhyTest(
   ) {
     trackOnes := trackOnesNext
     trackZeros := trackZerosNext
+    trackOnesEven := trackOnesEven +
+      PopCount((0 until Phy.SerdesRatio by 2).map(io.rx.bits.track(_)))
   }
   io.regs.trackOnes := trackOnes
   io.regs.trackZeros := trackZeros
+  io.regs.trackOnesEven := trackOnesEven
 }
