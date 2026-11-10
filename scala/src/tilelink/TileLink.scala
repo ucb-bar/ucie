@@ -35,6 +35,7 @@ import edu.berkeley.cs.uciedigital.phy.macros.{
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClockingTile
 import freechips.rocketchip.util.AsyncQueueParams
 import freechips.rocketchip.util.AsyncQueue
+import freechips.rocketchip.diplomacy.BufferParams
 import freechips.rocketchip.diplomacy.RegionType
 import freechips.rocketchip.diplomacy.TransferSizes
 import freechips.rocketchip.diplomacy.IdRange
@@ -75,7 +76,16 @@ case class UcieTLParams(
     // `ClkDistLayout`). A physical network is laid out for one instance, so an
     // instance that uses one should have a `moduleId` of its own.
     clkDistLayout: edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout =
-      edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral
+      edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkDistLayout.Behavioral,
+    // Queues on the manager port, between it and the link logic: on the A
+    // channel coming in and the D channel going out. None by default, the
+    // port then being the logic's own. With them, every manager port signal
+    // is a queue's register or feeds only one, so a bus outside whose `ready`
+    // depends on `valid` in the same cycle -- an arbiter in front of several
+    // links -- cannot close a combinational loop through the link. A link
+    // hardened as a block of its own wants that at its boundary. Costs a
+    // cycle each way.
+    managerBuffer: BufferParams = BufferParams.none
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
@@ -1539,6 +1549,20 @@ object UcieTL {
     */
   val regBeatBytes = 8
 
+  /** Register port requests in flight at once: the source IDs its shrinker
+    * hands out, and so the flight bits its FIFO fixer keeps.
+    *
+    * The clock registers answer in the cycle they are asked and the shrinker
+    * can reuse an ID the cycle after, so one in flight issues a request every
+    * cycle. The PhyTest and controller blocks sit behind one-entry async
+    * queues (`regXing`), which pass a request only every ~7 chip cycles
+    * against a round trip of ~8, so two keep those queues full. The fixer lets
+    * only one block have requests in flight at a time, so two would do; four
+    * leaves a spare against those estimates. More than one at once only
+    * happens when several masters reach the registers together.
+    */
+  val regsInFlight = 4
+
   /** Bits in a framed TL packet: the wider of the two channel payloads plus the
     * one-bit tag that says which channel it is. The mainband pads this out to
     * `numLanes * Phy.SerdesRatio` bits; the sideband shifts exactly this many.
@@ -1674,6 +1698,14 @@ class UcieTL(
   // one-entry async queue, like the debug module's register port. The FIFO
   // fixer makes the port one FIFO domain, which a fragmenter in front of it
   // needs, and the name node keeps it called `regs`.
+  //
+  // The source shrinker keeps the fixer small. The fixer keeps a flight bit
+  // per source ID it sees, and a fragmenter in front of the port hands on
+  // every bus source ID times its fragments as one in-order client: behind
+  // Iris's control bus fragmenter that was 20112 flight bits, 11% of the
+  // cells of its two links. Behind the shrinker the fixer tracks
+  // `UcieTL.regsInFlight` IDs, and still keeps requests to one block back to
+  // back and a request to another waiting until every response is in.
   private val regXbar = TLXbar()
   private val regXing = AsynchronousCrossing(depth = 1)
   regs.crossIn(regs.node)(ValName("phytest_regs"))(regXing) := regXbar
@@ -1681,7 +1713,8 @@ class UcieTL(
     regXbar
   clkRegs.node := regXbar
   val regNode: TLInwardNode =
-    regXbar :=* TLFIFOFixer(TLFIFOFixer.all) :=* TLNameNode("regs")
+    regXbar :=* TLFIFOFixer(TLFIFOFixer.all) :=*
+      TLSourceShrinker(UcieTL.regsInFlight) :=* TLNameNode("regs")
 
   override lazy val module = new UcieTLImpl
   class UcieTLImpl extends LazyRawModuleImp(this) {
@@ -1964,7 +1997,10 @@ class UcieTL(
 
     withClockAndReset(childClock, childReset) {
       val clientTl = clientNode.out(0)._1
-      val managerTl = managerNode.in(0)._1
+      // The manager port's A channel, through `params.managerBuffer`; its D
+      // channel goes out through the same below.
+      val managerPort = managerNode.in(0)._1
+      val managerA = params.managerBuffer(managerPort.a)
 
       val ucieClientTlD = Wire(new UcieTLBundleD)
       val ucieManagerTlA = Wire(new UcieTLBundleA)
@@ -1991,29 +2027,29 @@ class UcieTL(
       ucieClientTlD.corrupt := clientTl.d.bits.corrupt
 
       require(
-        ucieManagerTlA.opcode.getWidth >= managerTl.a.bits.opcode.getWidth
+        ucieManagerTlA.opcode.getWidth >= managerA.bits.opcode.getWidth
       )
-      require(ucieManagerTlA.param.getWidth >= managerTl.a.bits.param.getWidth)
-      require(ucieManagerTlA.size.getWidth >= managerTl.a.bits.size.getWidth)
+      require(ucieManagerTlA.param.getWidth >= managerA.bits.param.getWidth)
+      require(ucieManagerTlA.size.getWidth >= managerA.bits.size.getWidth)
       require(
-        ucieManagerTlA.address.getWidth >= managerTl.a.bits.address.getWidth
+        ucieManagerTlA.address.getWidth >= managerA.bits.address.getWidth
       )
-      require(ucieManagerTlA.mask.getWidth >= managerTl.a.bits.mask.getWidth)
-      require(ucieManagerTlA.data.getWidth >= managerTl.a.bits.data.getWidth)
+      require(ucieManagerTlA.mask.getWidth >= managerA.bits.mask.getWidth)
+      require(ucieManagerTlA.data.getWidth >= managerA.bits.data.getWidth)
       require(
-        ucieManagerTlA.source.getWidth >= managerTl.a.bits.source.getWidth
+        ucieManagerTlA.source.getWidth >= managerA.bits.source.getWidth
       )
       require(
-        ucieManagerTlA.corrupt.getWidth >= managerTl.a.bits.corrupt.getWidth
+        ucieManagerTlA.corrupt.getWidth >= managerA.bits.corrupt.getWidth
       )
-      ucieManagerTlA.opcode := managerTl.a.bits.opcode
-      ucieManagerTlA.param := managerTl.a.bits.param
-      ucieManagerTlA.size := managerTl.a.bits.size
-      ucieManagerTlA.address := managerTl.a.bits.address
-      ucieManagerTlA.mask := managerTl.a.bits.mask
-      ucieManagerTlA.data := managerTl.a.bits.data
-      ucieManagerTlA.source := managerTl.a.bits.source
-      ucieManagerTlA.corrupt := managerTl.a.bits.corrupt
+      ucieManagerTlA.opcode := managerA.bits.opcode
+      ucieManagerTlA.param := managerA.bits.param
+      ucieManagerTlA.size := managerA.bits.size
+      ucieManagerTlA.address := managerA.bits.address
+      ucieManagerTlA.mask := managerA.bits.mask
+      ucieManagerTlA.data := managerA.bits.data
+      ucieManagerTlA.source := managerA.bits.source
+      ucieManagerTlA.corrupt := managerA.bits.corrupt
 
       val creditBits = params.creditBits
 
@@ -2030,7 +2066,7 @@ class UcieTL(
       creditRetTimer := creditRetTimer + 1.U
       creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
       creditRetValid := ((clientTl.d.fire ||
-        managerTl.a.fire ||
+        managerA.fire ||
         creditRetTimer === (1 << params.creditRetTimerWidth - 1).U ||
         aCreditsToReturn > params.creditRetThreshhold.U ||
         dCreditsToReturn > params.creditRetThreshhold.U) &&
@@ -2054,7 +2090,7 @@ class UcieTL(
       ucieClientTxD.tl := ucieClientTlD
 
       val ucieManagerTxA = Wire(new UcieTXA(creditBits))
-      ucieManagerTxA.tl_valid := managerTl.a.fire
+      ucieManagerTxA.tl_valid := managerA.fire
       ucieManagerTxA.credit_valid := creditRetValid
       ucieManagerTxA.credit_a := aCreditsToReturn
       ucieManagerTxA.credit_d := dCreditsToReturn
@@ -2065,8 +2101,8 @@ class UcieTL(
       ucieManagerTxA.tl := ucieManagerTlA
 
       val lastSeenAddr = RegInit(0.U(64.W))
-      when(managerTl.a.valid) {
-        lastSeenAddr := managerTl.a.bits.address
+      when(managerA.valid) {
+        lastSeenAddr := managerA.bits.address
       }
       regs.module.io.lastSeenTLReq := lastSeenAddr
       regs.module.io.sbTlRxOverflow := sbTl.io.rxOverflow
@@ -2079,7 +2115,7 @@ class UcieTL(
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Always true to send clock when tl path.
       txTlFifo.io.enq.valid := selMbTl
-      val txValid = clientTl.d.fire || managerTl.a.fire || creditRetValid
+      val txValid = clientTl.d.fire || managerA.fire || creditRetValid
       txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
@@ -2104,7 +2140,7 @@ class UcieTL(
       )
 
       val ucieTxBeat = (clientTl.d.valid && dAvail) ||
-        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
+        (managerA.valid && aAvail && !clientTl.d.valid) ||
         creditRetValid
       txAQ.io.enq.valid := selUcie && ucieTxBeat
       txAQ.io.enq.bits.data := txFramedData.asTypeOf(txAQ.io.enq.bits.data)
@@ -2121,7 +2157,7 @@ class UcieTL(
       // in. `sbTl.io.tx.ready` is a plain register, so letting it feed back into
       // the offer through `creditRetValid` cannot close a combinational loop.
       sbTl.io.tx.valid := selSbTl && ((clientTl.d.valid && dAvail) ||
-        (managerTl.a.valid && aAvail && !clientTl.d.valid) ||
+        (managerA.valid && aAvail && !clientTl.d.valid) ||
         creditRetValid)
       sbTl.io.tx.bits := txFramedData
 
@@ -2138,7 +2174,7 @@ class UcieTL(
       )
 
       clientTl.d.ready := txEnqReady && dAvail
-      managerTl.a.ready := txEnqReady && aAvail && !clientTl.d.valid
+      managerA.ready := txEnqReady && aAvail && !clientTl.d.valid
 
       when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
         aCreditsToReturn := aCreditsToReturn + 1.U
@@ -2242,8 +2278,8 @@ class UcieTL(
         tlBundleA
       })
       clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
-      managerTl.d <> rxDBuffer.io.deq.map(bits => {
-        val tlBundleD = Wire(chiselTypeOf(managerTl.d.bits))
+      val managerD = rxDBuffer.io.deq.map(bits => {
+        val tlBundleD = Wire(chiselTypeOf(managerPort.d.bits))
         tlBundleD.opcode := bits.tl.opcode
         tlBundleD.param := bits.tl.param
         tlBundleD.size := bits.tl.size
@@ -2254,8 +2290,9 @@ class UcieTL(
         tlBundleD.corrupt := bits.tl.corrupt
         tlBundleD
       })
-      managerTl.d.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
-      dontTouch(managerTl.d.bits.opcode)
+      managerD.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
+      managerPort.d <> params.managerBuffer(managerD)
+      dontTouch(managerPort.d.bits.opcode)
 
       // The word the TL path puts on the lanes. Data and valid come through the
       // queue; the clock and track lanes are forced to their fixed patterns
@@ -2297,7 +2334,7 @@ class UcieTL(
       val aCreditCounter = Module(
         new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
       )
-      aCreditCounter.io.used := managerTl.a.fire
+      aCreditCounter.io.used := managerA.fire
       aCreditCounter.io.ret.valid := creditAValid || creditDValid
       aCreditCounter.io.ret.bits := Mux(
         creditAValid,
