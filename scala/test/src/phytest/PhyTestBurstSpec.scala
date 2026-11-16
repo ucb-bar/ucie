@@ -47,6 +47,7 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     */
   def record(c: PhyTestRegLoopback, n: Int): Seq[Slot] = {
     strobe(c, c.io.regs.txExecute)
+    c.clock.step(txOutputDelay)
     (0 until n).map { _ =>
       val s = slot(c)
       c.clock.step()
@@ -123,8 +124,11 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
 
   describe("PhyTest forwarded clock gating") {
     it("should run the clock through each burst, its preamble and postamble") {
-      // Two and a half packets of postamble, in 8 UI units.
-      val (pre, postUnits, burst, idle, packets) = (2, 10, 4, 8, 8)
+      // Two packets and 6 UI of postamble: three forwarded clock cycles into
+      // the third packet, which only the 2 UI unit can say.
+      val postUi = 2 * Phy.SerdesRatio + 6
+      val (pre, postUnits, burst, idle, packets) =
+        (2, postUi / PhyTest.ClkPostambleUi, 4, 8, 8)
       val unitsPerPacket = Phy.SerdesRatio / PhyTest.ClkPostambleUi
       val (postFull, postPartUi) = (
         postUnits / unitsPerPacket,
@@ -137,6 +141,7 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
         c.io.regs.txClkGate.poke(true.B)
         c.io.regs.txClkPreamble.poke(pre.U)
         c.io.regs.txClkPostamble.poke(postUnits.U)
+        c.clock.step(1 + txOutputDelay)
         assert(!slot(c).clockOn, "a gated clock is parked before the run")
 
         val sent = record(c, 40)
@@ -154,29 +159,34 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
         val expected = Seq.fill(pre)((false, on)) ++
           Seq.fill(burst)((true, on)) ++ gap ++
           Seq.fill(burst)((true, on)) ++ postamble
-        val shape = sent.map(s => (s.isData, s.clkp | s.clkn))
-        assert(shape.take(expected.length) == expected)
-        assert(shape.drop(expected.length).forall(_ == (false, off)))
-        for (s <- sent) {
-          val clocked = s.clkp | s.clkn
-          assert(s.clkp == (clkPWord & clocked))
-          assert(s.clkn == (clkNWord & clocked))
-        }
+        // Parked low: P low and N high.
+        def lanes(isData: Boolean, clocked: BigInt) =
+          (isData, clkPWord & clocked, (clkNWord & clocked) | (on ^ clocked))
+        val shape = sent.map(s => (s.isData, s.clkp, s.clkn))
+        assert(shape.take(expected.length) == expected.map((lanes _).tupled))
+        assert(shape.drop(expected.length).forall(_ == lanes(false, off)))
       }
     }
 
     /** Runs gated bursts into an RX that only sees the UIs the clock ran
       * for, and returns the nominal counts and the packets received.
       */
-    def gatedRun(postUnits: Int, packets: Int): (Seq[BigInt], BigInt) = {
+    def gatedRun(
+        postUi: Int,
+        packets: Int,
+        pre: Int = 2,
+        alternate: Boolean = false
+    ): (Seq[BigInt], BigInt) = {
+      val postUnits = postUi / PhyTest.ClkPostambleUi
       var result: (Seq[BigInt], BigInt) = (Seq.empty, 0)
       simulate(new PhyTestRegLoopback(numLanes, rxNeedsClock = true)) { c =>
         setupLfsr(c)
         finiteRun(c, packets)
         bursts(c, burst = 6, idle = 10)
         c.io.regs.txClkGate.poke(true.B)
-        c.io.regs.txClkPreamble.poke(2.U)
+        c.io.regs.txClkPreamble.poke(pre.U)
         c.io.regs.txClkPostamble.poke(postUnits.U)
+        c.io.regs.txClkParkAlternate.poke(alternate.B)
         c.io.regs.rxBurstMode.poke(true.B)
         // Parked, so nothing more reaches the RX before the run.
         c.clock.step(2)
@@ -193,7 +203,7 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     it("should score clean when the RX only sees the UIs the clock ran for") {
       val packets = 24
       // Two whole packets of postamble.
-      val (counts, received) = gatedRun(postUnits = 8, packets)
+      val (counts, received) = gatedRun(postUi = 2 * Phy.SerdesRatio, packets)
       assert(received == packets)
       for (lane <- scoredLanes) {
         withClue(s"lane $lane: ") { assert(counts(lane) == 0) }
@@ -203,8 +213,118 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     it("should move the RX's word boundary by a part-packet postamble") {
       // 16 UI past the last whole packet, so after the first gap every RX
       // word straddles two TX packets.
-      val (counts, _) = gatedRun(postUnits = 10, packets = 24)
+      val (counts, _) =
+        gatedRun(postUi = 2 * Phy.SerdesRatio + 16, packets = 24)
       assert((0 until numLanes).forall(counts(_) > 0))
+    }
+
+    it("should move the RX's word boundary by as little as one clock cycle") {
+      // 2 UI past the last whole packet: the finest postamble step. Shifted
+      // 2, 4 or 6 UI, the valid word reads no closer to the waveform than to
+      // idle, so `rxBurstMode` drops every burst after the first.
+      val (_, received) =
+        gatedRun(postUi = 2 * Phy.SerdesRatio + 2, packets = 24)
+      assert(received == 6)
+    }
+
+    for (alternate <- Seq(false, true)) {
+      val parks = if (alternate) "parking high and low in turn" else "parked low"
+      it(s"should score clean with UCIe's gating and a packet of postamble, $parks") {
+        // No preamble. A high park holds back the postamble's last edge until
+        // just before the next burst, so every gap still carries a packet's
+        // worth and the RX word boundary stays put.
+        val packets = 24
+        val (counts, received) =
+          gatedRun(postUi = Phy.SerdesRatio, packets, pre = 0, alternate)
+        assert(received == packets)
+        for (lane <- scoredLanes) {
+          withClue(s"lane $lane: ") { assert(counts(lane) == 0) }
+        }
+      }
+
+      it(s"should gate the clock as UCIe's strobe mode asks, $parks") {
+        val postUi = Phy.SerdesRatio
+        simulate(new PhyTestRegLoopback(numLanes)) { c =>
+          setupLfsr(c)
+          bursts(c, burst = 2, idle = 3)
+          c.io.regs.txClkGate.poke(true.B)
+          c.io.regs.txClkPostamble.poke((postUi / PhyTest.ClkPostambleUi).U)
+          c.io.regs.txClkParkAlternate.poke(alternate.B)
+          c.clock.step(4)
+          // Every packet from here on, across two runs: three bursts, then
+          // one more.
+          val sent = scala.collection.mutable.ArrayBuffer[Slot]()
+          def step(n: Int): Unit = for (_ <- 0 until n) {
+            sent += slot(c)
+            c.clock.step()
+          }
+          def run(packets: Int, cycles: Int): Unit = {
+            finiteRun(c, packets)
+            c.io.regs.txExecute.poke(true.B)
+            step(1)
+            c.io.regs.txExecute.poke(false.B)
+            step(cycles)
+          }
+          step(3)
+          run(packets = 6, cycles = 24)
+          c.io.regs.txFsmRst.poke(true.B)
+          c.io.regs.rxFsmRst.poke(true.B)
+          step(1)
+          c.io.regs.txFsmRst.poke(false.B)
+          c.io.regs.rxFsmRst.poke(false.B)
+          step(4)
+          run(packets = 2, cycles = 12)
+
+          // The lanes UI by UI, oldest first.
+          def bits(w: BigInt) = (0 until Phy.SerdesRatio).map(w.testBit)
+          val p = sent.flatMap(s => bits(s.clkp))
+          val n = sent.flatMap(s => bits(s.clkn))
+          val data = sent.flatMap(s => Seq.fill(Phy.SerdesRatio)(s.isData))
+          assert(p.indices.forall(t => n(t) == !p(t)), "differential")
+          // An edge at the start of a UI samples it.
+          val edge = p.indices.map(t => t > 0 && p(t) != p(t - 1))
+          def edges(from: Int, until: Int) = (from until until).count(edge)
+
+          // Bursts, by their first and last UIs.
+          val starts =
+            data.indices.filter(t => data(t) && (t == 0 || !data(t - 1)))
+          val ends = data.indices.filter(t =>
+            data(t) && (t == data.length - 1 || !data(t + 1))
+          )
+          assert(starts.length == 4)
+          assert(data.indices.filter(data).forall(edge), "runs through data")
+          // Parked before the first burst, at whatever the gating left.
+          var level = p(0)
+          assert(edges(0, starts(0)) == (if (level) 1 else 0))
+          val gaps = ends.init.zip(starts.tail)
+          for (((last, first), i) <- gaps.zipWithIndex) withClue(s"gap $i: ") {
+            val postEnd = last + postUi
+            // UCIe's parked level alternates; low when it doesn't.
+            val high = p(postEnd)
+            assert(high == (alternate && !level))
+            level = high
+            // Clock through the postamble. A high park keeps its last
+            // rising edge's level through the UI the postamble ends on.
+            assert((last + 1 until postEnd).forall(edge))
+            assert(edge(postEnd) == !high)
+            // A packet's worth of edges either way.
+            assert(edges(last + 1, first) == postUi)
+            // Parked for a multiple of 8 UI, low for its last 1 to 8.
+            assert((first - 1 - postEnd) % 8 == 0)
+            val lowFor = (first - 1 to postEnd by -1).takeWhile(!p(_)).length
+            if (high) {
+              assert(lowFor >= 1 && lowFor <= 8)
+              assert(edges(postEnd + 1, first) == 1)
+            } else {
+              assert(lowFor == first - postEnd)
+              assert(edges(postEnd + 1, first) == 0)
+            }
+            assert(p(first), "the first data UI's edge is a rising one")
+          }
+          // And the run ends parked at the next level in turn.
+          assert(p.last == (alternate && !level))
+        }
+      }
     }
   }
 
@@ -217,6 +337,7 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
         setupLfsr(c)
         c.io.regs.txTrackClk.poke(true.B)
         c.io.regs.txTrackWord.poke(trackWord.U)
+        c.clock.step(1 + txOutputDelay)
         assert(slot(c).track == trackWord, "idle")
         val sent = record(c, 8)
         assert(sent.forall(_.isData))

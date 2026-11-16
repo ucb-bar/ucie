@@ -56,6 +56,11 @@ trait Formatter {
     */
   def formatBlock(body: String): String
   def formatPrintStmt(msg: String): String
+  /** Declares a 64-bit variable. SystemVerilog takes declarations only at the
+    * start of a block, so open one with `formatBlock` and declare first.
+    */
+  def formatDeclare(name: String): String
+  def formatAssign(name: String, value: String): String
   def breakStmt(): String
   def formatWaitCycles(n: Int): String
   def formatBool(bool: Boolean): String
@@ -157,6 +162,8 @@ end
   def formatPrintStmt(msg: String): String = {
     s"$$display(\"${Codegen.escapeString(msg)}\");\n"
   }
+  def formatDeclare(name: String): String = s"reg [63:0] $name;\n"
+  def formatAssign(name: String, value: String): String = s"$name = $value;\n"
   def breakStmt(): String = {
     "break;\n"
   }
@@ -286,6 +293,12 @@ object Codegen {
   val txCtlDelayLsb: BigInt =
     txCtlLsb("Dctrl", TxLaneCtlIO.raw(0, 0, 0, 0, 1))
 
+  /** Every bit of `Dctrl` inside the packed `TxLaneCtlIO` word, so a delay can
+    * be changed without touching the driver and equalizer fields around it.
+    */
+  val txCtlDelayMask: BigInt =
+    ((BigInt(1) << TxLane.DelayTaps) - 1) << txCtlDelayLsb.toInt
+
   /** Bit positions of the driver rails inside the packed `TxLaneCtlIO` word, so
     * software can turn any segment of any stack on or off by itself. Every rail
     * is active high but `ENP_EQ`, which is active low, so a high impedance
@@ -314,7 +327,7 @@ object Codegen {
     * Any nonzero value does; the RX scores what it receives against its own
     * LFSR run from the same seed, so the two only have to agree.
     */
-  val trainLfsrSeed: BigInt = BigInt("0123456789abcdef", 16)
+  val trainLfsrSeed: BigInt = PhyTest.DefaultLfsrSeed
 
   /** Data lanes a training run sweeps, which is all of them.
     *
@@ -424,21 +437,29 @@ object Codegen {
     */
   val trainSlipRatio: Int = 4
 
-  /** How many times `run_lfsr` reads back the packet count before giving up.
-    *
-    * The window covers the tail of the run's programming writes plus the burst
-    * behind them, not the burst alone. Eight only worked because the burst
-    * happened to finish before the first read back; two extra writes in
-    * `reset_fsms` pushed it past the window and every run scored a partial
-    * count. It also bounds what a run that never finishes costs -- every code
-    * outside the eye during a sweep -- so raise it only as far as needed.
+  /** The most times `run_lfsr` reads back the packet count. It returns as soon
+    * as every packet is in, or once the count has stood still for
+    * `packetStallReads` reads after starting to climb, so this only bounds a
+    * run that receives nothing at all -- every code outside the eye during a
+    * sweep. The same as the testbenches' own `wait_for_packets`.
     */
-  val trainPollTries: Int = 16
+  val trainPollTries: Int = 1024
+
+  /** Reads the packet count may sit still, once packets have started
+    * arriving, before `run_lfsr` decides the receiver has stopped. A bound on
+    * the count standing still rather than on the reads is the same condition
+    * at every rate: a burst at /4 takes four times as long to land, and a
+    * fixed number of reads that covers it at /1 comes back short there.
+    */
+  val packetStallReads: Int = 32
+
+  /** Reads `setup_ucie_digital` waits for the link to come up. */
+  val linkUpPollTries: Int = 1 << 24
 
   /** Reads of `clkCfgBusy` an apply is given to finish. Has to cover the ungate
     * wait, which is a PLL wake-up rather than a handful of cycles.
     */
-  val applyPollTries: Int = 256
+  val applyPollTries: Int = 1 << 16
 
   /** Words the RX must have handled after a datapath reset before transmission
     * starts.
@@ -452,10 +473,23 @@ object Codegen {
     */
   val rxSettleWords: Int = 4
 
+  /** Packets `align_rx_words` runs to measure the RX word boundary. The RX
+    * frames on the first, so a few is plenty.
+    */
+  val alignRxPackets: Int = 4
+
+  /** The forwarded clock postamble `setup_ucie_digital` sets for the
+    * controller, which shares PhyTest's gating registers: two packets, which
+    * deliver a burst's last word whatever the RX word alignment, untrained.
+    * One packet only does at some alignments (`ucie/docs/phytest_bringup.md`,
+    * section 8).
+    */
+  val controllerClkPostambleUi: Int = 2 * Phy.SerdesRatio
+
   /** Polls allowed while waiting for that. Generous: a division the part does
     * not otherwise exercise should still clear it.
     */
-  val rxSettleTries: Int = 64
+  val rxSettleTries: Int = 4096
 
   // Bits within the DVSEC LinkControl word (UcieLinkDvsecRegs.scala) to set
   // for digital-controller bring-up: raw_format_enable (bit 0, the only
@@ -657,6 +691,10 @@ ${Codegen.indent(body)}
   def formatPrintStmt(msg: String): String =
     s"""printf("${Codegen.escapeString(msg)}\\n");\n"""
 
+  def formatDeclare(name: String): String = s"uint64_t $name;\n"
+
+  def formatAssign(name: String, value: String): String = s"$name = $value;\n"
+
   def breakStmt(): String = "break;\n"
 
   def formatWaitCycles(n: Int): String =
@@ -827,15 +865,37 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("defaultTrack", Codegen.defaultTrack),
         ("enableDriverCtl", Codegen.enableDriverCtl),
         ("enableTxCtl", Codegen.enableTxCtl),
+        ("disableDriverCtl", PadDriverCtlIO.off.litValue),
+        ("disableTxCtl", TxLaneCtlIO.off.litValue),
+        ("txCtlDelayMask", Codegen.txCtlDelayMask),
         ("txCtlDelayLsb", Codegen.txCtlDelayLsb),
         ("txCtlEnpLsb", Codegen.txCtlEnpLsb),
         ("txCtlEnnLsb", Codegen.txCtlEnnLsb),
         ("txCtlEnpEqLsb", Codegen.txCtlEnpEqLsb),
         ("txCtlEnnEqLsb", Codegen.txCtlEnnEqLsb),
         ("trainLfsrSeed", Codegen.trainLfsrSeed),
+        // Lane `i`'s seed out of reset, and from `seed_lfsrs`, is
+        // `trainLfsrSeed + i * lfsrSeedLaneStep`.
+        ("lfsrSeedLaneStep", PhyTest.LfsrSeedLaneStep),
         ("trainDataLanes", BigInt(Codegen.trainDataLanes(params.numLanes))),
         ("trainValidLane", BigInt(Codegen.trainValidLane(params.numLanes))),
         ("trainScoreLanes", BigInt(Codegen.trainScoreLanes(params.numLanes))),
+        // The layout of every per-lane PhyTest vector (seeds, error counts,
+        // `txInjectLane`, `rxDataLane`): the data lanes, then valid, track
+        // and the loopback lane.
+        ("numTestLanes", BigInt(PhyTest.numTestLanes(params.numLanes))),
+        ("validLane", BigInt(PhyTest.validLane(params.numLanes))),
+        ("trackLane", BigInt(PhyTest.trackLane(params.numLanes))),
+        ("loopbackLane", BigInt(PhyTest.loopbackLane(params.numLanes))),
+        // `txValidLaneSel`/`rxValidLaneSel` codes for valid where it belongs
+        // and for valid moved onto track.
+        ("defaultValidLaneSel", BigInt(Phy.defaultValidLaneSel(params.numLanes))),
+        ("trackValidLaneSel", BigInt(Phy.trackValidLaneSel(params.numLanes))),
+        // Packets per lane in the TX pattern SRAM and the RX capture SRAM.
+        ("sramPackets", BigInt(1) << (params.bufferDepthPerLane - 5)),
+        ("clkPostambleUi", BigInt(PhyTest.ClkPostambleUi)),
+        // Chip clock cycles each `clkMeter*` register counts over.
+        ("clkMeterWindowCycles", BigInt(UcieClkRegs.meterWindowCycles)),
         ("rateCfgMainClkSelLsb", BigInt(Codegen.rateCfgMainClkSelLsb)),
         ("rateCfgTxClkDivLsb", BigInt(Codegen.rateCfgTxClkDivLsb)),
         ("trainEyeFinePoints", BigInt(Codegen.trainEyeFinePoints)),
@@ -976,18 +1036,29 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * has not moved is the same thing as moving where in the UI the far receiver
     * samples. `Dctrl` is thermometer coded.
     */
+  /** Sets `taps` of a TX lane's delay line, leaving its driver and
+    * equalizer settings as they were. The lane has to have been enabled
+    * (`setup_ucie` does every lane).
+    *
+    * Only with the clock gated: see `set_clk_en`.
+    */
   def formatSetTxDelayFn(): String = {
     val body = new StringBuilder
+    val tileAddr = s"${f.formatConstantRef("txctl")} + lane * " +
+      s"${f.formatConstantRef("txctlWidth")} + ${f.formatConstantRef("txctlTileOfs")}"
+    val tile = new StringBuilder
+    tile.append(f.formatReadReg("regDrv", "tile", tileAddr, declareVar = true))
+    val mask = f.formatConstantRef("txCtlDelayMask")
     val delayCode =
-      s"(${f.formatConstantRef("enableTxCtl")} | " +
-        s"(((${f.formatLong(1)} << taps) - ${f.formatLong(1)}) << " +
-        s"${f.formatConstantRef("txCtlDelayLsb")}))"
-    body.append(
+      s"((tile & ~$mask) | ((((${f.formatLong(1)} << taps) - ${f.formatLong(1)}) << " +
+        s"${f.formatConstantRef("txCtlDelayLsb")}) & $mask))"
+    tile.append(
       f.formatFnCall(
         "write_txctl",
         args = Seq("lane", f.formatConstantRef("txctlTileOfs"), delayCode)
       )
     )
+    body.append(f.formatBlock(tile.toString))
     f.formatFn(
       "set_tx_delay",
       body.toString,
@@ -1135,17 +1206,30 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   def formatApplyClkCfgFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("clkCfgApply", f.formatLong(1)))
+    val wait = new StringBuilder
+    wait.append(f.formatDeclare("busy"))
+    wait.append(f.formatAssign("busy", f.formatLong(1)))
     val pollBody = new StringBuilder
     pollBody.append(
       f.formatReadReg(
         "regDrv",
         "busy",
         f.formatConstantRef("clkCfgBusy"),
-        declareVar = true
+        declareVar = false
       )
     )
     pollBody.append(f.formatIfStmt("busy == 0", f.breakStmt()))
-    body.append(f.formatForLoop("w", Codegen.applyPollTries, pollBody.toString))
+    wait.append(f.formatForLoop("w", Codegen.applyPollTries, pollBody.toString))
+    wait.append(
+      f.formatIfStmt(
+        "busy != 0",
+        f.formatPrintStmt(
+          "apply_clk_cfg: the apply never finished; a PLL it waits on may " +
+            "not be locking (see clkMeter* and pllLockObserved)"
+        )
+      )
+    )
+    body.append(f.formatBlock(wait.toString))
     f.formatFn("apply_clk_cfg", body.toString)
   }
 
@@ -1298,10 +1382,13 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     */
   def formatSetGlobalDelayFn(): String = {
     val body = new StringBuilder
+    // `taps` = 64 is every tap; shifting a 64-bit one by 64 is undefined in
+    // C and comes out as no taps on RV64.
     body.append(
       formatWriteNamedReg(
         "clkPhaseSel",
-        s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})"
+        s"((taps >= 64) ? ~${f.formatLong(0)} : " +
+          s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)}))"
       )
     )
     f.formatFn(
@@ -1365,20 +1452,26 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * across a `reset_fsms`, which reseeds from them, so a sweep seeds once and
     * then reruns as often as it likes.
     */
+  /** Puts every lane's TX and RX seed back to its reset value, a different
+    * one per lane (`PhyTest.defaultLfsrSeed`), so that both dies of a link
+    * agree on every lane and no two lanes send the same stream.
+    */
   def formatSeedLfsrsFn(): String = {
     val seedLoop = new StringBuilder
+    val seed = s"(${f.formatConstantRef("trainLfsrSeed")} + i * " +
+      s"${f.formatConstantRef("lfsrSeedLaneStep")})"
     seedLoop.append(
       f.formatWriteReg(
         "regDrv",
         s"${f.formatConstantRef("txLfsrSeed")} + i * ${f.formatConstantRef("txLfsrSeedWidth")}",
-        f.formatConstantRef("trainLfsrSeed")
+        seed
       )
     )
     seedLoop.append(
       f.formatWriteReg(
         "regDrv",
         s"${f.formatConstantRef("rxLfsrSeed")} + i * ${f.formatConstantRef("rxLfsrSeedWidth")}",
-        f.formatConstantRef("trainLfsrSeed")
+        seed
       )
     )
     f.formatFn(
@@ -1412,18 +1505,33 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     // transition, aligns on a mid-pattern word, and every lane reads dirty at
     // every phase. Idle reads are the portable way to wait here.
     val settle = new StringBuilder
-    settle.append(
-      f.formatReadReg(
-        "regDrv",
-        "settle_w",
-        f.formatConstantRef("rxIdleWordsObserved"),
-        declareVar = true
+    locally {
+      settle.append(f.formatDeclare("settle_w"))
+      settle.append(f.formatAssign("settle_w", f.formatLong(0)))
+      val poll = new StringBuilder
+      poll.append(
+        f.formatReadReg(
+          "regDrv",
+          "settle_w",
+          f.formatConstantRef("rxIdleWordsObserved"),
+          declareVar = false
+        )
       )
-    )
-    settle.append(
-      f.formatIfStmt(s"settle_w >= ${Codegen.rxSettleWords}", f.breakStmt())
-    )
-    body.append(f.formatForLoop("s", Codegen.rxSettleTries, settle.toString))
+      poll.append(
+        f.formatIfStmt(s"settle_w >= ${Codegen.rxSettleWords}", f.breakStmt())
+      )
+      settle.append(f.formatForLoop("s", Codegen.rxSettleTries, poll.toString))
+      settle.append(
+        f.formatIfStmt(
+          s"settle_w < ${Codegen.rxSettleWords}",
+          f.formatPrintStmt(
+            "run_lfsr: the RX is handing over no words; no forwarded clock " +
+              "is arriving (see clkMeterRxDiv)"
+          )
+        )
+      )
+    }
+    body.append(f.formatBlock(settle.toString))
 
     body.append(
       formatWriteNamedReg(
@@ -1449,22 +1557,91 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(formatWriteNamedReg("txPacketsToSend", "packets"))
     body.append(formatWriteNamedReg("txExecute", f.formatLong(1)))
 
-    val pollBody = new StringBuilder
-    pollBody.append(
-      f.formatReadReg(
-        "regDrv",
-        "r",
-        f.formatConstantRef("rxPacketsReceived"),
-        declareVar = true
+    // Wait while packets are still arriving rather than for a fixed number of
+    // reads: see `Codegen.packetStallReads`.
+    val wait = new StringBuilder
+    locally {
+      wait.append(f.formatDeclare("r"))
+      wait.append(f.formatDeclare("prev"))
+      wait.append(f.formatDeclare("stalls"))
+      wait.append(f.formatAssign("r", f.formatLong(0)))
+      wait.append(f.formatAssign("prev", s"~${f.formatLong(0)}"))
+      wait.append(f.formatAssign("stalls", f.formatLong(0)))
+      val pollBody = new StringBuilder
+      pollBody.append(
+        f.formatReadReg(
+          "regDrv",
+          "r",
+          f.formatConstantRef("rxPacketsReceived"),
+          declareVar = false
+        )
       )
-    )
-    pollBody.append(f.formatIfStmt("r >= packets", f.breakStmt()))
-    body.append(f.formatForLoop("w", Codegen.trainPollTries, pollBody.toString))
+      pollBody.append(f.formatIfStmt("r >= packets", f.breakStmt()))
+      pollBody.append(
+        f.formatIfStmt(
+          "r != prev || r == 0",
+          f.formatAssign("stalls", f.formatLong(0))
+        )
+      )
+      pollBody.append(
+        f.formatIfStmt(
+          "r == prev && r != 0",
+          f.formatAssign("stalls", s"stalls + ${f.formatLong(1)}")
+        )
+      )
+      pollBody.append(f.formatAssign("prev", "r"))
+      pollBody.append(
+        f.formatIfStmt(s"stalls >= ${Codegen.packetStallReads}", f.breakStmt())
+      )
+      wait.append(
+        f.formatForLoop("w", Codegen.trainPollTries, pollBody.toString)
+      )
+      wait.append(
+        f.formatIfStmt(
+          "r < packets",
+          f.formatPrintStmt(
+            "run_lfsr: the receiver stopped short of the packets asked for"
+          )
+        )
+      )
+    }
+    body.append(f.formatBlock(wait.toString))
 
     f.formatFn(
       "run_lfsr",
       body.toString,
       args = Seq(Arg("packets", Datatype.Long))
+    )
+  }
+
+  /** Turns every observation pad driver (`debugDriverctl_*`) and the TX
+    * data debug lane's driver on (`en` = 1) or off (`en` = 0).
+    */
+  def formatEnableDebugDriversFn(): String = {
+    val body = new StringBuilder
+    val loopBody = new StringBuilder
+    loopBody.append(
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("debugDriverctl")} + 8 * i",
+        s"(en ? ${f.formatConstantRef("enableDriverCtl")} : " +
+          s"${f.formatConstantRef("disableDriverCtl")})"
+      )
+    )
+    body.append(
+      f.formatForLoop("i", PhyTest.NumDebugDrivers, loopBody.toString)
+    )
+    body.append(
+      formatWriteNamedReg(
+        "debugTxctlTile",
+        s"(en ? ${f.formatConstantRef("enableTxCtl")} : " +
+          s"${f.formatConstantRef("disableTxCtl")})"
+      )
+    )
+    f.formatFn(
+      "enable_debug_drivers",
+      body.toString,
+      args = Seq(Arg("en", Datatype.Long))
     )
   }
 
@@ -1528,22 +1705,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
     )
 
-    {
-      val loopBody = new StringBuilder
-      loopBody.append(
-        f.formatWriteReg(
-          "regDrv",
-          s"${f.formatConstantRef("debugDriverctl")} + 8 * i",
-          f.formatConstantRef("enableDriverCtl")
-        )
-      )
-      body.append(
-        f.formatForLoop("i", PhyTest.NumDebugDrivers, loopBody.toString)
-      )
-    }
-    body.append(
-      formatWriteNamedReg("debugTxctlTile", f.formatConstantRef("enableTxCtl"))
-    )
+    // Every observation driver off: driving full-rate clocks off chip disturbs
+    // the link (on Kodiak the TX clock tap put every 6 GHz lane at 50%), so a
+    // link test runs with them off and `enable_debug_drivers` turns them on
+    // for a scope.
+    body.append(f.formatFnCall("enable_debug_drivers", Seq(f.formatLong(0))))
     // Put every divider -- the global ones and the one in each tile -- into a
     // known phase with each other, once. After this the clock gate alone is
     // enough: it is latched on the UCIe main clock's low phase, so gating and
@@ -1588,6 +1754,96 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * contract `setup_ucie` gives PhyTest callers by leaving the PHY ready to
     * go, just enforced here by polling instead.
     */
+  /** Lines every RX lane's word boundary up with the far TX's words (see
+    * `PhyRegsIO.rxAlign`), for a controller that cannot frame its words
+    * itself the way PhyTest frames on valid. PhyTest sends a short LFSR run,
+    * its RX frames on valid and reports where in its own word the run started
+    * (`rxFrameOffset`), and that goes into every lane's `rxAlign`. The far TX
+    * has to be sending the same: in loopback it is this die's own. Leaves
+    * PhyTest owning the mainband, and the alignment at 0 if the RX framed
+    * nothing.
+    *
+    * The boundary stays put until the RX dividers are next reset, or a gated
+    * clock's gap carries a number of edges that is not a whole word, so this
+    * goes after both.
+    */
+  def formatAlignRxWordsFn(): String = {
+    val body = new StringBuilder
+    body.append(
+      formatWriteNamedReg(
+        "controllerSel",
+        f.formatConstantRef("controllerSelPhytest")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("mainbandMode", f.formatConstantRef("bandModeManual"))
+    )
+    body.append(
+      formatWriteNamedReg("txClkP", f.formatConstantRef("defaultClkP"))
+    )
+    body.append(
+      formatWriteNamedReg("txClkN", f.formatConstantRef("defaultClkN"))
+    )
+    // Its UI 0 set, which is what makes the first set bit the RX sees mark
+    // where the far TX's word starts.
+    body.append(
+      formatWriteNamedReg("txValid", f.formatConstantRef("defaultValid"))
+    )
+    body.append(
+      formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
+    )
+    def writeAlign(value: String) = f.formatForLoop(
+      "lane",
+      Phy.numRxDataLanes(params.numLanes),
+      f.formatWriteReg(
+        "regDrv",
+        s"${f.formatConstantRef("rxAlign")} + lane * ${f.formatConstantRef("rxAlignWidth")}",
+        value
+      )
+    )
+    // Measured on the deserializers' own boundary.
+    body.append(writeAlign(f.formatLong(0)))
+    body.append(f.formatFnCall("seed_lfsrs"))
+    body.append(
+      f.formatFnCall(
+        "run_lfsr",
+        args = Seq(f.formatLong(Codegen.alignRxPackets.toLong))
+      )
+    )
+    // Both declared up front: SystemVerilog takes no declaration after a
+    // statement in a block.
+    val apply = new StringBuilder
+    apply.append(f.formatDeclare("received"))
+    apply.append(f.formatDeclare("offset"))
+    apply.append(
+      f.formatReadReg(
+        "regDrv",
+        "received",
+        f.formatConstantRef("rxPacketsReceived"),
+        declareVar = false
+      )
+    )
+    apply.append(
+      f.formatReadReg(
+        "regDrv",
+        "offset",
+        f.formatConstantRef("rxFrameOffset"),
+        declareVar = false
+      )
+    )
+    apply.append(
+      f.formatIfStmt(
+        "received == 0",
+        f.formatPrintStmt(
+          "align_rx_words: the RX framed nothing, so rxAlign stays at 0"
+        )
+      )
+    )
+    apply.append(f.formatIfStmt("received != 0", writeAlign("offset")))
+    body.append(f.formatBlock(apply.toString))
+    f.formatFn("align_rx_words", body.toString)
+  }
+
   def formatSetupUcieDigitalFn(): String = {
     val sb = new StringBuilder
     val body = new StringBuilder
@@ -1668,6 +1924,21 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     }
 
+    // The controller takes words on the deserializers' boundary as they come,
+    // so line that up with its TX's first, while PhyTest still has the lanes.
+    body.append(f.formatFnCall("align_rx_words"))
+
+    // In strobe mode the controller gates the forwarded clock in ACTIVE, with
+    // the postamble it shares with PhyTest.
+    body.append(
+      formatWriteNamedReg(
+        "txClkPostamble",
+        f.formatLong(
+          (Codegen.controllerClkPostambleUi / PhyTest.ClkPostambleUi).toLong
+        )
+      )
+    )
+
     // Hand the mainband/sideband muxes to the digital controller BEFORE
     // kicking off training below: phy.io.sb.txClk/txData (TileLink.scala) mux
     // on this same controllerSel, so if it's written after start_link_training,
@@ -1721,7 +1992,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         f.formatReadReg(
           "regDrv",
           "linkStatus",
-          f.formatConstantRef("rawFormatEnabled")
+          f.formatConstantRef("rawFormatEnabled"),
+          declareVar = false
         )
       )
       whileBody.append(
@@ -1732,7 +2004,21 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
           f.breakStmt()
         )
       )
-      body.append(f.formatWhileLoop(f.formatBool(true), whileBody.toString))
+      val wait = new StringBuilder
+      wait.append(f.formatDeclare("linkStatus"))
+      wait.append(f.formatAssign("linkStatus", f.formatLong(0)))
+      wait.append(
+        f.formatForLoop("w", Codegen.linkUpPollTries, whileBody.toString)
+      )
+      wait.append(
+        f.formatIfStmt(
+          s"((linkStatus >> ${f.formatLong(Codegen.linkStatusLinkUpBit.toLong)}) & ${f.formatLong(1)}) == 0",
+          f.formatPrintStmt(
+            "setup_ucie_digital: link training never brought the link up"
+          )
+        )
+      )
+      body.append(f.formatBlock(wait.toString))
     }
 
     sb.append(f.formatFn("setup_ucie_digital", body.toString))
@@ -2243,10 +2529,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.append(formatSetTxDelayFn())
     sb.append(formatSetRxVrefFn())
     sb.append(formatSetRxDelayFn())
+    sb.append(formatEnableDebugDriversFn())
     sb.append(formatSetupUcieFn())
     sb.append(formatSetupUcieDigitalFn())
     sb.append(formatSeedLfsrsFn())
     sb.append(formatRunLfsrFn())
+    sb.append(formatAlignRxWordsFn())
     sb.append(formatWriteTxDataChunkFn())
     sb.append(formatManualSimpleLoopbackFn())
     sb.append(formatManualLoopbackFn())
@@ -2336,13 +2624,18 @@ object GenUcieHeader {
     sb.append(cg.formatSetRxVrefFn())
     sb.append(cg.formatSetRxDelayFn())
     sb.append("\n")
+    sb.append(cg.formatEnableDebugDriversFn())
     sb.append(cg.formatSetupUcieFn())
     sb.append("\n")
-    sb.append(cg.formatSetupUcieDigitalFn())
-    sb.append("\n")
+    // In C a function has to come before its callers: `setup_ucie_digital`
+    // calls `align_rx_words`, which runs PhyTest through the two before it.
     sb.append(cg.formatSeedLfsrsFn())
     sb.append("\n")
     sb.append(cg.formatRunLfsrFn())
+    sb.append("\n")
+    sb.append(cg.formatAlignRxWordsFn())
+    sb.append("\n")
+    sb.append(cg.formatSetupUcieDigitalFn())
     sb.append("\n#endif\n")
     sb.toString
   }

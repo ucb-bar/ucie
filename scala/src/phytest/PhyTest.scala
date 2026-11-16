@@ -190,27 +190,60 @@ class PhyTestRegsIO(
   // gone out. An idle packet carries zeros on valid and on every pattern lane,
   // and the pattern does not advance across it, so the packets that do go out
   // are the same stream a continuous run sends. Either one zero sends
-  // continuously.
+  // continuously. On the mainband the idle packets are `TxClkGater`'s, at the
+  // PHY end: PhyTest only queues data.
   //
   // The RX needs `rxBurstMode` to skip the idle packets.
   val txBurstPackets = Input(UInt(32.W))
   val txIdlePackets = Input(UInt(32.W))
-  // Gates the forwarded clock. The clock lanes then carry `txClkP`/`txClkN`
-  // only from `txClkPreamble` packets before a burst -- or before the first
-  // packet, without bursts -- until `txClkPostamble` times
-  // `PhyTest.ClkPostambleUi` UI after it, and zeros the rest of the time, as
-  // the UCIe controller parks them. With no clock edges arriving, the
-  // partner's RX stops handing over words, so its datapath reset cannot
-  // release either; reset it with the clock running.
+  // Gates the forwarded clock, as UCIe's strobe mode does, for PhyTest's
+  // own runs and for TileLink frames on the mainband alike: `TxClkGater` at
+  // the PHY end runs the clock only from `txClkPreamble` packets before data
+  // until `txClkPostamble` times `PhyTest.ClkPostambleUi` UI after it, and
+  // parks it the rest of the time. Parked, each lane holds its pattern's UI 1
+  // level: with the usual patterns P low and N high, a differential low. With
+  // `txClkParkAlternate` every other park holds the UI 0 levels instead, a
+  // differential high, as UCIe asks. A high park keeps the level of the
+  // postamble's last rising edge, so the falling edge after it goes out
+  // `PhyTest.ClkPreconditionUi` UI before the clock next runs instead, the 1
+  // to 8 UI of differential low UCIe asks for before the first edge. Either
+  // way a gap carries exactly the postamble's edges. With no clock edges
+  // arriving, the partner's RX stops handing over words, so its datapath
+  // reset cannot release either; reset it with the clock running. The UCIe
+  // controller uses the same settings once it negotiates strobe mode.
   //
-  // A postamble that ends partway through a packet clocks only that packet's
-  // first UIs. The partner's RX counts its word boundaries on those edges, so
-  // across the gap they move by the postamble modulo 32 UI. PhyTest's RX
-  // frames once per run, so it only scores the bursts after the first clean
-  // when the postamble is a whole number of packets.
+  // UCIe also asks for a parked period that is a multiple of 8 UI. Gaps are
+  // whole packets, so that means a postamble that is a multiple of 8 UI.
+  //
+  // The partner's RX counts its word boundaries on the edges a gap carries,
+  // so each gap moves them by the postamble modulo 32 UI. PhyTest's RX picks
+  // its framing once per run and never moves it, so every burst scores clean
+  // only when the postamble is a whole number of packets (a multiple of 32
+  // UI). Otherwise only the first burst does.
+  //
+  // The RX also needs clock after a burst's last UI to hand that word over at
+  // all: 17 edges after the one that samples that UI -- one for the tile to
+  // put out the word it ends, on its divided clock's falling edge, and 16 to
+  // the RX divided clock's next rising edge, which its queue takes the word
+  // on -- plus up to 31 more to finish that word first. With the forwarded
+  // clock centred on the data that is 18 to 48 UI. A high park holds its last
+  // edge back, but the RX always needs an odd number, so that never changes
+  // the postamble it needs. The 32 UI default covers a burst that ends 17 UI
+  // or more into an RX word, which a divider realign followed by one gap of
+  // 40 UI sets up (`ucie/docs/phytest_bringup.md`, section 8); two packets
+  // (64 UI) cover every alignment. The same holds in `TxTestMode.manual`,
+  // whose pattern sets nothing on the clock lanes.
+  //
+  // UCIe sends no preamble, so with `txClkPreamble` = 0 the clock's first
+  // edge has to sample the first data UI. At the global delay's reset value
+  // the clock trails the data by just over a UI and that UI is lost; centre
+  // the clock first.
   val txClkGate = Input(Bool())
   val txClkPreamble = Input(UInt(16.W))
   val txClkPostamble = Input(UInt(16.W))
+  // Alternates the level a gated clock parks at between differential low and
+  // high, as UCIe asks. Off, it always parks low. See `txClkGate`.
+  val txClkParkAlternate = Input(Bool())
   // Sends `txTrackWord` on the track lane in every packet, whatever the test
   // mode, instead of track's own pattern: a clock, the way the UCIe
   // controller sends track, or any other fixed waveform. Valid moved onto
@@ -224,6 +257,22 @@ class PhyTestRegsIO(
   val txInjectError = Input(Bool())
   val txInjectLane =
     Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
+  // Per-lane pattern sources, for setting lanes up as crosstalk aggressors and
+  // victims. In `TxTestMode.lfsr`, bit `i` of `txLaneFixed` sends `txFixedWord`
+  // in every packet on lane `i` instead of its LFSR stream -- all zeros or all
+  // ones holds the lane at a static level -- and bit `i` of `txLaneInvert` sends
+  // lane `i`'s stream inverted. Fixed wins over inverted. Lanes are indexed
+  // like every per-lane vector here; the bits for valid are ignored, since
+  // valid always carries the framing waveform. Every LFSR keeps advancing, so a
+  // lane rejoins its stream in step when its bit clears. `txTrackClk`,
+  // `txValidLaneSel` and error injection still act on top. No effect in
+  // `TxTestMode.manual`, whose pattern already says what every lane sends.
+  //
+  // The partner's RX has to expect the same: `rxLaneFixed`, `rxLaneInvert` and
+  // `rxFixedWord`.
+  val txLaneFixed = Input(UInt(PhyTest.numTestLanes(numLanes).W))
+  val txLaneInvert = Input(UInt(PhyTest.numTestLanes(numLanes).W))
+  val txFixedWord = Input(UInt(Phy.SerdesRatio.W))
 
   // RX CONTROL
   // ====================
@@ -268,8 +317,38 @@ class PhyTestRegsIO(
   val rxBitErrorsLate =
     Output(Vec(PhyTest.numTestLanes(numLanes), UInt(bitCounterWidth.W)))
   // Pause the `rxPacketsReceived`, `rxBitErrors`, and `rxSignature` outputs to read
-  // them atomically.
+  // them atomically. The error class counts below pause with them.
   val rxPauseCounters = Input(Bool())
+  // Where the nominal bit errors landed. Per lane, bit `i` of a 32-bit mask
+  // sets once an error has landed on UI `i` of a packet as the RX framed it;
+  // read lane `rxErrPosLane`'s from `rxErrPosMask` (zero past the last lane).
+  // `rxLaneErrored` has a bit per lane, set once that lane has counted any
+  // error, so one read screens them all. Only the lanes the current target
+  // runs over collect bits. Cleared by the RX FSM reset. Not frozen by
+  // `rxPauseCounters`, but they only ever gain bits, so a read mid-run is a
+  // lower bound.
+  //
+  // A bit that keeps landing on the same UI points at one phase of a
+  // serializer or deserializer rather than at the channel.
+  val rxErrPosLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
+  val rxErrPosMask = Output(UInt(Phy.SerdesRatio.W))
+  val rxLaneErrored = Output(UInt(PhyTest.numTestLanes(numLanes).W))
+  // The nominal bit errors of lane `rxErrClassLane`, split four ways: by the
+  // clock edge that sampled the UI, and by the bit that was sent. `Rise` counts
+  // UIs the lane's deserializer samples on the rising edge of its clock -- the
+  // even UIs of its own word, whatever the framing -- and `Fall` the odd ones.
+  // `One` counts ones read as zeros, `Zero` zeros read as ones. Errors piling
+  // up on one edge point at the clock's duty cycle or one comparator phase;
+  // on one value, at a threshold (`vrefSel`) off the middle of the eye.
+  //
+  // Paused with the other counts and cleared by the RX FSM reset. Changing
+  // the lane does not clear them, so reset the RX FSM after changing it.
+  val rxErrClassLane =
+    Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
+  val rxErrRiseOne = Output(UInt(bitCounterWidth.W))
+  val rxErrRiseZero = Output(UInt(bitCounterWidth.W))
+  val rxErrFallOne = Output(UInt(bitCounterWidth.W))
+  val rxErrFallZero = Output(UInt(bitCounterWidth.W))
   // A MISR derived from the packets received since the last FSM reset. Unlike
   // `rxBitErrors`, this works for any TX test mode: compare it against
   // `PhyTest.signatureNext` folded over the expected stream to check patterns the
@@ -288,6 +367,12 @@ class PhyTestRegsIO(
   // `run_lfsr` waits on it too: the datapath reset releases through a
   // synchronizer on the RX divided clock, so no fixed delay covers every rate.
   val rxIdleWordsObserved = Output(UInt(32.W))
+  // The UI of the RX's own word that the run's first packet started on: where
+  // its first set bit on valid landed, so with the far TX sending a valid
+  // waveform whose UI 0 is set, where the far TX's words start. 0 until the
+  // RX frames, and on a run framed by `RxStartMode.immediate`. Cleared by an
+  // RX FSM reset. `align_rx_words` writes it into `rxAlign`.
+  val rxFrameOffset = Output(UInt(log2Ceil(Phy.SerdesRatio).W))
   // Data chunk lane in output buffer.
   val rxDataLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
   // Data chunk offset in output buffer.
@@ -331,6 +416,17 @@ class PhyTestRegsIO(
   // than against the LFSRs, which `rxPauseCounters` and `CaptureMode.error`
   // both allow for.
   val rxManualCheck = Input(Bool())
+  // What a lane is scored against when the partner's `txLaneFixed` or
+  // `txLaneInvert` has it send something other than its LFSR stream: bit `i`
+  // of `rxLaneFixed` scores lane `i` against `rxFixedWord`, and bit `i` of
+  // `rxLaneInvert` against its reference inverted, at all three framings
+  // (a slipped fixed word is a rotation of it). Neither is an LFSR stream, so
+  // these lanes are scored this way under `rxSelfSync` too. Ignored for valid,
+  // for a lane carrying valid, and under `rxManualCheck`, whose reference
+  // already holds every lane's word.
+  val rxLaneFixed = Input(UInt(PhyTest.numTestLanes(numLanes).W))
+  val rxLaneInvert = Input(UInt(PhyTest.numTestLanes(numLanes).W))
+  val rxFixedWord = Input(UInt(Phy.SerdesRatio.W))
   // Keeps the RX FSM running while TileLink drives the mainband, so the
   // capture SRAM and the signature see the TileLink traffic. The TX FSM is
   // still held.
@@ -452,7 +548,13 @@ class PhyTestIO(
 
   // PHY INTERFACE
   // ====================
+  // Only words that carry data; `TxClkGater` at the PHY end makes the rest.
   val tx = new DecoupledIO(new TxIO(numLanes))
+  // Alongside each word on `tx`: whether `TxClkGater` leaves `txIdlePackets`
+  // packets of gap after it, which ends a burst, and whether the run has more
+  // data after it.
+  val txGapAfter = Output(Bool())
+  val txContinues = Output(Bool())
   val rx = Flipped(new DecoupledIO(new RxIO(numLanes)))
   val sb = Flipped(new SbIO)
   // The 800 MHz TX sideband clock the sideband tester serializes on, and its
@@ -500,13 +602,33 @@ object PhyTest {
     */
   val DebugBufferPackets = 32
 
-  /** UI per unit of `txClkPostamble`. */
-  val ClkPostambleUi = 8
+  /** Every lane's LFSR seed out of reset, TX and RX alike, and what the
+    * generated `seed_lfsrs` writes back. Different on every lane: with one
+    * seed everywhere, every lane switches together, which is the worst case
+    * for supply noise and crosstalk, and lanes swapped anywhere between the TX
+    * and the RX read clean.
+    */
+  val DefaultLfsrSeed = BigInt("0123456789abcdef", 16)
+  val LfsrSeedLaneStep = BigInt("1111", 16)
+  def defaultLfsrSeed(lane: Int): BigInt =
+    (DefaultLfsrSeed + lane * LfsrSeedLaneStep) &
+      ((BigInt(1) << LfsrWidth) - 1)
+
+  /** UI per unit of `txClkPostamble`: one forwarded clock cycle, a rising and
+    * a falling edge.
+    */
+  val ClkPostambleUi = 2
   require(
     Phy.SerdesRatio % ClkPostambleUi == 0 &&
       isPow2(Phy.SerdesRatio / ClkPostambleUi),
     s"a packet must be a power-of-two number of $ClkPostambleUi UI postamble units"
   )
+
+  /** UI a gated clock spends low before it runs again after a high park,
+    * which UCIe allows to be 1 to 8.
+    */
+  val ClkPreconditionUi = 2
+  require(ClkPreconditionUi >= 1 && ClkPreconditionUi <= 8)
 
   /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
     * one).
@@ -901,10 +1023,12 @@ class PhyTest(
   // The deserializer has no valid of its own: it hands over a word every
   // divided cycle whether or not the TX is sending.
   rxLoopbackFifo.io.enq.valid := true.B
-  // The tile updates its word on the same divided clock edge the queue
-  // enqueues on, so the two pass on the tile's clock to output delay alone.
-  // `sample_negedge` takes the word through a register on the falling edge
-  // instead, half a word period from the update. No latency either way.
+  // The tile puts its word out on the falling edge of its divided clock and
+  // the queue enqueues on the rising edge, half a word period later, as the
+  // mainband's queues do on `rxDivClk`. `sample_negedge` takes the word
+  // through a register on the falling edge instead, the backup phase in case
+  // the tile updates on the other edge from the one modelled. No latency
+  // either way.
   val rxLoopbackWordNeg = withClockAndReset(
     (!rxLoopbackLane.io.divclk).asClock,
     !rxLoopbackRstSync.io.rstbSync
@@ -1160,45 +1284,47 @@ class PhyTest(
   }
   txWord.valid := 0.U
   txWord.track := 0.U
-  // Needs to be true whenever PhyTest owns the mainband, so that clock and
-  // track keep going out even when data isn't valid.
-  io.tx.valid := mbManual
+
+  // A pattern lane's LFSR word as `txLaneFixed` and `txLaneInvert` have it
+  // sent.
+  def txLaneWord(lane: Int, lfsr: UInt): UInt =
+    Mux(
+      io.regs.txLaneFixed(lane),
+      io.regs.txFixedWord,
+      Mux(io.regs.txLaneInvert(lane), ~lfsr, lfsr)
+    )
 
   // The forwarded-clock lanes carry a fixed pattern rather than a test one,
   // driven below where `txClkGate` parks them.
 
-  // Unlike `io.tx.valid`, only true when data is valid.
+  // True for a data packet, whichever target it goes to.
   val tx_valid = Wire(Bool())
   tx_valid := false.B
+  // The mainband only takes data: between data words `TxClkGater` keeps the
+  // lanes going itself, clock and track included.
+  io.tx.valid := mbManual && tx_valid &&
+    io.regs.testTarget === TestTarget.mainband
   // Whether the run still has data to send, bursts aside: `tx_valid` is this
   // outside the idle packets between bursts.
   val txWantData = Wire(Bool())
   txWantData := false.B
 
-  // BURSTS AND CLOCK GATING
+  // BURSTS
   //
-  // A run is a sequence of bursts with gaps of idle packets between them.
-  // Without bursts or clock gating there is one burst and no gap, which is
-  // the continuous run. With clock gating a run also opens with a gap of
-  // `txClkPreamble` packets, so that the clock is up before the first packet.
-  // Every count here is of packets the target accepted, i.e. of 32 UI on the
-  // wire.
+  // A run is a sequence of bursts with gaps of `txIdlePackets` packets between
+  // them. Without bursts there is one burst and no gap, which is the
+  // continuous run. On the mainband `TxClkGater` makes the gaps, after the
+  // packet that ends a burst (`txGapAfter`), and the clock gating with them.
+  // On the loopback lane, which has no forwarded clock, the gaps are idle
+  // packets from here. Every count here is of packets the target accepted.
   val txBursting =
     io.regs.txBurstPackets =/= 0.U && io.regs.txIdlePackets =/= 0.U
   val txInGap = withReset(txReset) { RegInit(false.B) }
-  // The gap the clock preamble opens a run with, rather than one between
-  // bursts.
-  val txInPreamble = withReset(txReset) { RegInit(false.B) }
   val txGapCount = withReset(txReset) { RegInit(0.U(32.W)) }
   val txBurstCount = withReset(txReset) { RegInit(0.U(32.W)) }
-  val txGapLen =
-    Mux(txInPreamble, io.regs.txClkPreamble, io.regs.txIdlePackets)
-  // Packets since the last data packet, saturating, for the postamble.
-  // Starts saturated, so a gated clock stays parked until a run starts.
-  val txSinceDataMax = (1 << 16) - 1
-  val txSinceData = withReset(txReset) {
-    RegInit(txSinceDataMax.U(16.W))
-  }
+  val txGapLen = io.regs.txIdlePackets
+  val txBurstEnds =
+    txBursting && txBurstCount + 1.U >= io.regs.txBurstPackets
 
   // The loopback lane only carries traffic when it is the selected target, so
   // that a mainband run leaves it quiet. While it is, it takes a word every
@@ -1229,10 +1355,6 @@ class PhyTest(
 
       when(io.regs.txExecute) {
         txState := TxTestState.run
-        when(io.regs.txClkGate && io.regs.txClkPreamble =/= 0.U) {
-          txInGap := true.B
-          txInPreamble := true.B
-        }
       }
     }
     is(TxTestState.run) {
@@ -1280,12 +1402,11 @@ class PhyTest(
           txGapCount := txGapCount + 1.U
           when(txGapCount + 1.U >= txGapLen) {
             txInGap := false.B
-            txInPreamble := false.B
           }
         }.elsewhen(tx_valid && txBursting) {
-          when(txBurstCount + 1.U >= io.regs.txBurstPackets) {
+          when(txBurstEnds) {
             txBurstCount := 0.U
-            txInGap := true.B
+            txInGap := io.regs.testTarget === TestTarget.loopback
             txGapCount := 0.U
           }.otherwise {
             txBurstCount := txBurstCount + 1.U
@@ -1317,10 +1438,11 @@ class PhyTest(
           is(TxTestMode.lfsr) {
             switch(io.regs.testTarget) {
               is(TestTarget.mainband) {
-                // Every pattern lane takes its own LFSR; valid takes the
-                // framing waveform instead.
+                // Every pattern lane takes its own LFSR, or a fixed word or
+                // its stream inverted; valid takes the framing waveform
+                // instead.
                 def lfsrWord(lane: Int): UInt =
-                  Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
+                  txLaneWord(lane, Reverse(txLfsrs(lane).io.out.asUInt)(31, 0))
                 for (lane <- 0 until numLanes) {
                   txWord.data(lane) := lfsrWord(lane)
                 }
@@ -1328,9 +1450,11 @@ class PhyTest(
                 txWord.track := lfsrWord(PhyTest.trackLane(numLanes))
               }
               is(TestTarget.loopback) {
-                txLoopbackWord := Reverse(
-                  txLfsrs(PhyTest.loopbackLane(numLanes)).io.out.asUInt
-                )(31, 0)
+                val lane = PhyTest.loopbackLane(numLanes)
+                txLoopbackWord := txLaneWord(
+                  lane,
+                  Reverse(txLfsrs(lane).io.out.asUInt)(31, 0)
+                )
               }
             }
           }
@@ -1364,42 +1488,14 @@ class PhyTest(
     is(TxTestState.done) {}
   }
 
-  when(txTargetReady) {
-    when(tx_valid) {
-      txSinceData := 0.U
-    }.elsewhen(txSinceData =/= txSinceDataMax.U) {
-      txSinceData := txSinceData + 1.U
-    }
-  }
-  // Which UIs of this packet the clock lanes carry the clock for. A gated
-  // clock runs through every data packet, for `txClkPostamble` units after
-  // one, and for the last `txClkPreamble` packets of a gap, which covers the
-  // whole of the gap a gated run opens with. Bit 0 goes out first, so a
-  // postamble ending partway through a packet keeps its low bits.
-  val txPostambleUnitsPerPacket = Phy.SerdesRatio / PhyTest.ClkPostambleUi
-  val txPostamblePackets =
-    io.regs.txClkPostamble >> log2Ceil(txPostambleUnitsPerPacket)
-  val txPostambleUnitsLeft =
-    io.regs.txClkPostamble(log2Ceil(txPostambleUnitsPerPacket) - 1, 0)
-  val txClkFull = !io.regs.txClkGate || tx_valid ||
-    txSinceData < txPostamblePackets ||
-    (txState === TxTestState.run && txInGap &&
-      txGapLen - txGapCount <= io.regs.txClkPreamble)
-  val txClkMask = Mux(
-    txClkFull,
-    Fill(Phy.SerdesRatio, 1.U(1.W)),
-    Mux(
-      txSinceData === txPostamblePackets,
-      VecInit(
-        (0 until txPostambleUnitsPerPacket).map(n =>
-          ((BigInt(1) << (n * PhyTest.ClkPostambleUi)) - 1).U(Phy.SerdesRatio.W)
-        )
-      )(txPostambleUnitsLeft),
-      0.U
-    )
-  )
-  txWord.clkp := io.regs.txClkP & txClkMask
-  txWord.clkn := io.regs.txClkN & txClkMask
+  // A data packet runs the clock all through; `TxClkGater` makes the
+  // words around it, gated or not.
+  txWord.clkp := io.regs.txClkP
+  txWord.clkn := io.regs.txClkN
+  io.txContinues := io.regs.txDataMode === DataMode.infinite ||
+    txPacketsEnqueued + 1.U < io.regs.txPacketsToSend
+  // No gap after the run's last burst: nothing follows it to gap before.
+  io.txGapAfter := txBurstEnds && io.txContinues
 
   when(io.regs.txTrackClk) {
     txWord.track := io.regs.txTrackWord
@@ -1432,14 +1528,17 @@ class PhyTest(
   def injected(word: UInt, lane: Int): UInt =
     word ^ (txInjectNow && io.regs.txInjectLane === lane.U).asUInt
 
-  io.tx.bits := txWord
+  val txWordInjected = Wire(new TxIO(numLanes))
+  txWordInjected := txWord
   for (lane <- 0 until numLanes) {
-    io.tx.bits.data(lane) := injected(txWord.data(lane), lane)
+    txWordInjected.data(lane) := injected(txWord.data(lane), lane)
   }
-  io.tx.bits.valid := injected(txWord.valid, PhyTest.validLane(numLanes))
-  io.tx.bits.track := injected(txWord.track, PhyTest.trackLane(numLanes))
+  txWordInjected.valid := injected(txWord.valid, PhyTest.validLane(numLanes))
+  txWordInjected.track := injected(txWord.track, PhyTest.trackLane(numLanes))
   txLoopbackEnq.bits :=
     injected(txLoopbackWord, PhyTest.loopbackLane(numLanes))
+
+  io.tx.bits := txWordInjected
 
   // RX logic
 
@@ -1497,6 +1596,11 @@ class PhyTest(
   val startIdx = Wire(UInt(log2Ceil(Phy.SerdesRatio).W))
   startRecording := false.B
   startIdx := 0.U
+  val rxFrameOffset = withReset(rxReset) {
+    RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
+  }
+  when(startRecording) { rxFrameOffset := startIdx }
+  io.regs.rxFrameOffset := rxFrameOffset
 
   // numLanes data lanes, 1 valid lane, 1 track lane, 1 loopback lane.
   val runningData = withReset(rxReset) {
@@ -1598,6 +1702,80 @@ class PhyTest(
   }
   io.regs.rxCaptureTriggered := rxTriggered
   io.regs.rxCaptureTriggerPacket := rxTriggerPacket
+
+  // ERROR LOCATIONS AND CLASSES
+  //
+  // Both read the nominal masks the counts above add up, in the cycle they do,
+  // and only on the lanes that carry the current target's traffic.
+  val rxNominalMasks = VecInit(
+    (0 until PhyTest.numTestLanes(numLanes)).map(lane =>
+      Mux(
+        rxTargetLanes(lane),
+        rxErrorMask(PhyTest.NominalFraming)(lane),
+        0.U
+      )
+    )
+  )
+  val rxErrPos = withReset(rxReset) {
+    RegInit(VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(32.W))))
+  }
+  for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
+    rxErrPos(lane) := rxErrPos(lane) | rxNominalMasks(lane)
+  }
+  io.regs.rxErrPosMask := Mux(
+    io.regs.rxErrPosLane < PhyTest.numTestLanes(numLanes).U,
+    rxErrPos(io.regs.rxErrPosLane),
+    0.U
+  )
+  io.regs.rxLaneErrored := VecInit(rxErrPos.map(_.orR)).asUInt
+
+  // The word each mask was scored from: one capture pipeline stage down, or
+  // two under the manual check, whose masks land a cycle later.
+  def rxScoredWord(lane: Int): UInt = Mux(
+    io.regs.rxManualCheck,
+    toWriteDelayed(lane >> 2)(lane % 4),
+    toWriteStaged(lane >> 2)(lane % 4)
+  )
+  val rxClassValid = io.regs.rxErrClassLane < PhyTest.numTestLanes(numLanes).U
+  val rxClassMask = Mux(
+    rxClassValid,
+    rxNominalMasks(io.regs.rxErrClassLane),
+    0.U
+  )
+  val rxClassSent = VecInit(
+    (0 until PhyTest.numTestLanes(numLanes)).map(rxScoredWord)
+  )(io.regs.rxErrClassLane) ^ rxClassMask
+  // Packet UI `i` is UI `i + startIdx` of the lane's own word, and the
+  // deserializer samples that word's even UIs on its clock's rising edge.
+  // `rxReceiveOffset` is 32 - `startIdx`, so it has the same parity.
+  val rxRiseUis = Mux(
+    rxReceiveOffset(0),
+    BigInt("aaaaaaaa", 16).U(32.W),
+    BigInt("55555555", 16).U(32.W)
+  )
+  val rxErrClasses = Seq(
+    rxClassMask & rxRiseUis & rxClassSent,
+    rxClassMask & rxRiseUis & ~rxClassSent,
+    rxClassMask & ~rxRiseUis & rxClassSent,
+    rxClassMask & ~rxRiseUis & ~rxClassSent
+  )
+  val rxErrClassCounts = withReset(rxReset) {
+    RegInit(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
+  }
+  val rxErrClassOutput = withReset(rxReset) {
+    RegInit(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
+  }
+  for ((errs, i) <- rxErrClasses.zipWithIndex) {
+    val next = rxErrClassCounts(i) +& PopCount(errs)
+    rxErrClassCounts(i) := Mux(next > maxBitCount, maxBitCount, next)
+  }
+  when(!rxPauseErrors) {
+    rxErrClassOutput := rxErrClassCounts
+  }
+  io.regs.rxErrRiseOne := rxErrClassOutput(0)
+  io.regs.rxErrRiseZero := rxErrClassOutput(1)
+  io.regs.rxErrFallOne := rxErrClassOutput(2)
+  io.regs.rxErrFallZero := rxErrClassOutput(3)
 
   // Check valid streak after each packet is dequeued.
   when(
@@ -1755,22 +1933,35 @@ class PhyTest(
               } else {
                 false.B
               }
+            // What the partner's `txLaneFixed`/`txLaneInvert` made of this
+            // lane's stream, at each framing. A fixed word repeats every
+            // packet, so a UI's slip is a rotation of it, as for valid.
+            val fixed = io.regs.rxLaneFixed(lane)
+            val inverted = io.regs.rxLaneInvert(lane)
+            def expected(ref: UInt, fixedRef: UInt): UInt =
+              Mux(fixed, fixedRef, Mux(inverted, ~ref, ref))
             when(carriesValid) {
               scoreAgainstValid(lane)
             }.otherwise {
               rxErrorMask(PhyTest.NominalFraming)(lane) := Mux(
-                io.regs.rxSelfSync,
+                io.regs.rxSelfSync && !fixed && !inverted,
                 Mux(
                   rxHistoryFull,
                   PhyTest.selfSyncErrors(newData(31, 0), rxHistory(lane)),
                   0.U
                 ),
-                newData(31, 0) ^ refWord(state)
+                newData(31, 0) ^ expected(refWord(state), io.regs.rxFixedWord)
               )
               rxErrorMask(PhyTest.EarlyFraming)(lane) :=
-                newData(31, 0) ^ refWordAdvanced(state)
+                newData(31, 0) ^ expected(
+                  refWordAdvanced(state),
+                  validRefAdvanced(io.regs.rxFixedWord)
+                )
               rxErrorMask(PhyTest.LateFraming)(lane) :=
-                newData(31, 0) ^ refWordDelayed(state)
+                newData(31, 0) ^ expected(
+                  refWordDelayed(state),
+                  validRefDelayed(io.regs.rxFixedWord)
+                )
             }
           }
         }

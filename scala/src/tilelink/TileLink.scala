@@ -209,6 +209,14 @@ class UcieTLRegsIO(
   // TX or RX datapath reset.
   val txTestFifoUnderflow = Input(Bool())
   val rxTestFifoOverflow = Input(Bool())
+  // Sticky, from the RX divided clock: the UCIe controller's RX queue was
+  // handed a word it had no room for while the controller had the lanes,
+  // because the packet clock outran the sideband clock the controller drains
+  // it on. Cleared by the RX datapath reset.
+  val controllerRxFifoOverflow = Input(Bool())
+  // Caps how many words PhyTest keeps in its TX queue; zero leaves it
+  // uncapped. See `txQueueLimit` in the register map.
+  val txQueueLimit = Output(UInt(UcieTLRegs.txQueueLimitWidth.W))
 }
 
 object UcieTLRegs {
@@ -223,6 +231,16 @@ object UcieTLRegs {
     * UCIe controller's controls.
     */
   val regionSize = UcieController.ctrlBase
+
+  /** Width of `txQueueLimit`, enough to name any occupancy of the TX queue. */
+  val txQueueLimitWidth = 6
+
+  /** `txQueueLimit` out of reset: half the TX queue, which holds with the PHY
+    * test clock anywhere down to the packet clock, where 10 is the least that
+    * does, and keeps a word's wait in the queue to about half what a full
+    * queue costs.
+    */
+  val txQueueLimitReset = 16
 }
 
 /** Clock source controls, on a clock of their own.
@@ -306,6 +324,10 @@ class UcieClkRegs(
       val clksReady = Output(Bool())
       val clksReadyFreqSel = Output(UInt(4.W))
       val clksUngated = Output(Bool())
+      // The clocks the meters below count, in `UcieClkRegs.meteredClocks`
+      // order.
+      val meterClocks =
+        Input(Vec(UcieClkRegs.meteredClocks.length, Clock()))
     })
 
     // Reset defaults describe a part that has been told nothing: the PHY test
@@ -392,6 +414,66 @@ class UcieClkRegs(
       stage0 := io.pllLock
       stage1 := stage0
       stage1
+    }
+
+    // CLOCK METERS
+    //
+    // Cycles each of the PHY's clocks ran in the last
+    // `UcieClkRegs.meterWindowCycles` cycles of this block's clock, so software
+    // can see whether a clock is running, and at what rate, from the one block
+    // that always answers. Before touching the PhyTest registers, a nonzero
+    // `clkMeterPhyTest` says that access will not hang; `clkMeterRxDiv` says
+    // whether the partner's forwarded clock is arriving at all.
+    //
+    // Each clock runs a counter of its own whose Gray code crosses into this
+    // domain; a Gray code changes one bit per count, so a sample of it is
+    // always a count it held. The counters run off the chip reset alone, so a
+    // meter keeps counting through the UCIe reset and any datapath reset.
+    def grayToBinary(g: UInt): UInt =
+      VecInit((0 until g.getWidth).map(i => g(g.getWidth - 1, i).xorR)).asUInt
+    val meterWindow = withClockAndReset(clock, reset) {
+      RegInit(0.U(log2Ceil(UcieClkRegs.meterWindowCycles).W))
+    }
+    meterWindow := meterWindow + 1.U
+    val clkMeters = io.meterClocks.map { clk =>
+      val gray = withClockAndReset(clk, reset.asAsyncReset) {
+        val count = RegInit(0.U(UcieClkRegs.meterWidth.W))
+        count := count + 1.U
+        val gray = RegInit(0.U(UcieClkRegs.meterWidth.W))
+        gray := count ^ (count >> 1)
+        gray
+      }
+      withClockAndReset(clock, reset) {
+        val now = grayToBinary(
+          freechips.rocketchip.util.SynchronizerShiftReg(gray, 2)
+        )
+        val last = RegInit(0.U(UcieClkRegs.meterWidth.W))
+        val rate = RegInit(0.U(UcieClkRegs.meterWidth.W))
+        when(meterWindow === 0.U) {
+          rate := now - last
+          last := now
+        }
+        rate
+      }
+    }
+
+    // Sticky per PLL, PLL8 in bit 0: the PLL lost lock while enabled, after
+    // having locked since it was last enabled. Written to zero to clear.
+    val pllLockLost = withClockAndReset(clock, reset) {
+      RegInit(VecInit(Seq.fill(2)(false.B)))
+    }
+    val pllLockedSinceEn = withClockAndReset(clock, reset) {
+      RegInit(VecInit(Seq.fill(2)(false.B)))
+    }
+    for ((en, i) <- Seq(io.pll8En, io.pll12En).zipWithIndex) {
+      when(!en) {
+        pllLockedSinceEn(i) := false.B
+      }.elsewhen(pllLockSync(i)) {
+        pllLockedSinceEn(i) := true.B
+      }
+      when(en && pllLockedSinceEn(i) && !pllLockSync(i)) {
+        pllLockLost(i) := true.B
+      }
     }
     // Two more selects, held like the rest.
     val (sbClkDiv, sbClkBypassEn, rxClkFromTxQ) =
@@ -554,7 +636,14 @@ class UcieClkRegs(
     // is in the reset's domain and behind the same crossbar, so a response
     // lost to the reset wedges it. `setup_ucie` asserts this first, with both
     // quiet.
-    val ucieRstReq = withClockAndReset(clock, reset) { RegInit(true.B) }
+    //
+    // Set by the chip reset asynchronously: the UCIe domains run on clocks of
+    // their own, which may well be running before the chip clock is, and a
+    // synchronous reset would leave them out of reset, in whatever state they
+    // powered up in, until the chip clock's first edge.
+    val ucieRstReq = withClockAndReset(clock, reset.asAsyncReset) {
+      RegInit(true.B)
+    }
     io.ucieRst := ucieRstReq
 
     // Resets the clock dividers of one direction: the global one in the PHY
@@ -869,6 +958,10 @@ class UcieClkRegs(
         toRegFieldRw(manualClksReady, "manualClksReady"),
         toRegFieldRw(manualClksReadyFreqSel, "manualClksReadyFreqSel"),
         toRegFieldRw(manualClksUngated, "manualClksUngated")
+      ) ++ UcieClkRegs.meteredClocks.zip(clkMeters).map { case (name, rate) =>
+        toRegFieldR(rate, s"clkMeter$name")
+      } ++ Seq(
+        toRegFieldRw(pllLockLost, "pllLockLost")
       )
       // The table sits at a fixed slot so that adding a scalar does not move
       // every entry -- which means adding one too many silently lands on top
@@ -944,6 +1037,17 @@ class ClkRateCfgIO extends Bundle {
 }
 
 object UcieClkRegs {
+
+  /** The clocks the clock meters count, in register order. */
+  val meteredClocks = Seq("PhyTest", "Sb", "TxDiv", "RxDiv")
+
+  /** Chip clock cycles each meter counts over. At a 500 MHz chip clock that
+    * is 2.048 us, so a count of N is N / 2.048 MHz.
+    */
+  val meterWindowCycles = 1024
+
+  /** Width of each meter's count: a clock up to 64x the chip clock. */
+  val meterWidth = 16
 
   /** Rates the translation table holds, one per `SpeedMode` code. */
   val rateCfgs = 8
@@ -1034,10 +1138,12 @@ class UcieTLRegs(
       val testTarget = RegInit(TestTarget.mainband)
       val txTestMode = RegInit(TxTestMode.manual)
       val txDataMode = RegInit(DataMode.finite)
+      // A different seed per lane out of reset, so that a run started
+      // without writing any still has every lane on its own stream.
       val txLfsrSeed = RegInit(
         VecInit(
-          Seq.fill(PhyTest.numTestLanes(params.numLanes))(
-            1.U(io.test.txLfsrSeed(0).getWidth.W)
+          (0 until PhyTest.numTestLanes(params.numLanes)).map(lane =>
+            PhyTest.defaultLfsrSeed(lane).U(io.test.txLfsrSeed(0).getWidth.W)
           )
         )
       )
@@ -1049,8 +1155,10 @@ class UcieTLRegs(
         RegInit(0.U(io.test.txManualRepeatPeriod.getWidth.W))
       val txPacketsToSend =
         RegInit(0.U(io.test.txPacketsToSend.getWidth.W))
-      val txClkP = RegInit(0.U(32.W))
-      val txClkN = RegInit(0.U(32.W))
+      // A running forwarded clock out of reset, so that `TxClkGater` and
+      // `txClkDirect` clock the link before anything is written.
+      val txClkP = RegInit(Codegen.defaultClkP.U(32.W))
+      val txClkN = RegInit(Codegen.defaultClkN.U(32.W))
       val txValid = RegInit(0.U(32.W))
       val txDataLaneGroup =
         RegInit(0.U(io.test.txDataLaneGroup.getWidth.W))
@@ -1060,8 +1168,8 @@ class UcieTLRegs(
       val rxDataMode = RegInit(DataMode.infinite)
       val rxLfsrSeed = RegInit(
         VecInit(
-          Seq.fill(PhyTest.numTestLanes(params.numLanes))(
-            1.U(io.test.rxLfsrSeed(0).getWidth.W)
+          (0 until PhyTest.numTestLanes(params.numLanes)).map(lane =>
+            PhyTest.defaultLfsrSeed(lane).U(io.test.rxLfsrSeed(0).getWidth.W)
           )
         )
       )
@@ -1220,12 +1328,14 @@ class UcieTLRegs(
       val txBurstPackets = RegInit(0.U(io.test.txBurstPackets.getWidth.W))
       val txIdlePackets = RegInit(0.U(io.test.txIdlePackets.getWidth.W))
       val txClkGate = RegInit(false.B)
-      val txClkPreamble = RegInit(4.U(io.test.txClkPreamble.getWidth.W))
-      // Four packets, like the preamble.
+      // No preamble, as UCIe sends, and a packet of postamble: twice what
+      // UCIe asks for, but a whole packet keeps the RX word boundary in place.
+      // See `PhyTestRegsIO.txClkGate`.
+      val txClkPreamble = RegInit(0.U(io.test.txClkPreamble.getWidth.W))
       val txClkPostamble = RegInit(
-        (4 * Phy.SerdesRatio / PhyTest.ClkPostambleUi)
-          .U(io.test.txClkPostamble.getWidth.W)
+        (32 / PhyTest.ClkPostambleUi).U(io.test.txClkPostamble.getWidth.W)
       )
+      val txClkParkAlternate = RegInit(true.B)
       val txTrackClk = RegInit(false.B)
       // A clock, as the forwarded-clock lanes carry it.
       val txTrackWord = RegInit(BigInt("55555555", 16).U(32.W))
@@ -1244,6 +1354,30 @@ class UcieTLRegs(
         RegNext(RegNext(io.txTestFifoUnderflow, false.B), false.B)
       val rxTestFifoOverflow =
         RegNext(RegNext(io.rxTestFifoOverflow, false.B), false.B)
+      val controllerRxFifoOverflow =
+        RegNext(RegNext(io.controllerRxFifoOverflow, false.B), false.B)
+      val txLaneFixed = RegInit(0.U(io.test.txLaneFixed.getWidth.W))
+      val txLaneInvert = RegInit(0.U(io.test.txLaneInvert.getWidth.W))
+      val txFixedWord = RegInit(0.U(io.test.txFixedWord.getWidth.W))
+      val rxLaneFixed = RegInit(0.U(io.test.rxLaneFixed.getWidth.W))
+      val rxLaneInvert = RegInit(0.U(io.test.rxLaneInvert.getWidth.W))
+      val rxFixedWord = RegInit(0.U(io.test.rxFixedWord.getWidth.W))
+      val rxErrPosLane = RegInit(0.U(io.test.rxErrPosLane.getWidth.W))
+      val rxErrClassLane = RegInit(0.U(io.test.rxErrClassLane.getWidth.W))
+      // Caps the words PhyTest keeps in its TX queue, for a low latency from
+      // its TX to the wire; zero leaves the queue to fill, which costs its
+      // whole depth. A cap too small for the queue's own synchronizer lag
+      // runs it dry, which `txTestFifoUnderflow` reports. The closer the PHY
+      // test clock is to the packet clock, the larger the cap has to be: at
+      // 16 GT/s, 8 holds with an 800 MHz PHY test clock and 10 with a 500 MHz
+      // one, the slowest that keeps up. See `UcieTLRegs.txQueueLimitReset`.
+      val txQueueLimit =
+        RegInit(UcieTLRegs.txQueueLimitReset.U(UcieTLRegs.txQueueLimitWidth.W))
+      io.txQueueLimit := txQueueLimit
+      // See `PhyRegsIO.rxAlign`.
+      val rxAlign = RegInit(
+        VecInit(Seq.fill(Phy.numRxDataLanes(params.numLanes))(0.U(5.W)))
+      )
 
       txDatapathRst.ready := true.B
       txFsmRst.ready := true.B
@@ -1290,7 +1424,11 @@ class UcieTLRegs(
       io.test.txTestMode := applyShift(txTestMode)
       io.test.txDataMode := applyShift(txDataMode)
       io.test.txLfsrSeed := applyShift(txLfsrSeed)
-      io.test.txDatapathRst := applyShift(stretched(txDatapathRst.valid))
+      // Registered: each one ends up on an asynchronous reset synchronizer's
+      // input, where a glitch out of the write decode or the counter compare
+      // would reset the datapath mid-run.
+      io.test.txDatapathRst :=
+        applyShift(RegNext(stretched(txDatapathRst.valid), false.B))
       io.test.txFsmRst := applyShift(stretched(txFsmRst.valid))
       io.test.txExecute := applyShift(txExecute.valid)
       io.test.txManualRepeatPeriod := applyShift(txManualRepeatPeriod)
@@ -1301,7 +1439,8 @@ class UcieTLRegs(
       io.test.rxDataMode := applyShift(rxDataMode)
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
       io.test.rxLfsrValid := applyShift(rxLfsrValid)
-      io.test.rxDatapathRst := applyShift(stretched(rxDatapathRst.valid))
+      io.test.rxDatapathRst :=
+        applyShift(RegNext(stretched(rxDatapathRst.valid), false.B))
       io.test.rxFsmRst := applyShift(stretched(rxFsmRst.valid))
       io.test.rxPacketsToReceive := applyShift(rxPacketsToReceive)
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
@@ -1318,6 +1457,7 @@ class UcieTLRegs(
       io.test.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
+      io.phy.rxAlign := applyShift(rxAlign)
       // The last lane control slot belongs to the tester's loopback pair, which
       // lives in PhyTest rather than in the PHY.
       io.test.loopbackTxctl := applyShift(txctl(params.numLanes + 4))
@@ -1354,6 +1494,7 @@ class UcieTLRegs(
       io.test.txClkGate := applyShift(txClkGate)
       io.test.txClkPreamble := applyShift(txClkPreamble)
       io.test.txClkPostamble := applyShift(txClkPostamble)
+      io.test.txClkParkAlternate := applyShift(txClkParkAlternate)
       io.test.txTrackClk := applyShift(txTrackClk)
       io.test.txTrackWord := applyShift(txTrackWord)
       io.test.rxCaptureStart := applyShift(rxCaptureStart)
@@ -1361,6 +1502,14 @@ class UcieTLRegs(
       io.test.txInjectLane := applyShift(txInjectLane)
       io.test.trackCntRst := applyShift(trackCntRst.valid)
       io.test.trackCntHold := applyShift(trackCntHold)
+      io.test.txLaneFixed := applyShift(txLaneFixed)
+      io.test.txLaneInvert := applyShift(txLaneInvert)
+      io.test.txFixedWord := applyShift(txFixedWord)
+      io.test.rxLaneFixed := applyShift(rxLaneFixed)
+      io.test.rxLaneInvert := applyShift(rxLaneInvert)
+      io.test.rxFixedWord := applyShift(rxFixedWord)
+      io.test.rxErrPosLane := applyShift(rxErrPosLane)
+      io.test.rxErrClassLane := applyShift(rxErrClassLane)
 
       // String name should always be camel case with an underscore to separate indices.
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
@@ -1563,8 +1712,29 @@ class UcieTLRegs(
           "txDebugFifoUnderflow"
         ),
         toRegFieldR(applyShift(io.test.trackOnesEven), "trackOnesEven"),
-        toRegFieldRw(rxManualCheck, "rxManualCheck")
-      )
+        toRegFieldRw(rxManualCheck, "rxManualCheck"),
+        toRegFieldRw(txLaneFixed, "txLaneFixed"),
+        toRegFieldRw(txLaneInvert, "txLaneInvert"),
+        toRegFieldRw(txFixedWord, "txFixedWord"),
+        toRegFieldRw(rxLaneFixed, "rxLaneFixed"),
+        toRegFieldRw(rxLaneInvert, "rxLaneInvert"),
+        toRegFieldRw(rxFixedWord, "rxFixedWord"),
+        toRegFieldR(applyShift(io.test.rxLaneErrored), "rxLaneErrored"),
+        toRegFieldRw(rxErrPosLane, "rxErrPosLane"),
+        toRegFieldR(applyShift(io.test.rxErrPosMask), "rxErrPosMask"),
+        toRegFieldRw(rxErrClassLane, "rxErrClassLane"),
+        toRegFieldR(applyShift(io.test.rxErrRiseOne), "rxErrRiseOne"),
+        toRegFieldR(applyShift(io.test.rxErrRiseZero), "rxErrRiseZero"),
+        toRegFieldR(applyShift(io.test.rxErrFallOne), "rxErrFallOne"),
+        toRegFieldR(applyShift(io.test.rxErrFallZero), "rxErrFallZero"),
+        toRegFieldR(controllerRxFifoOverflow, "controllerRxFifoOverflow"),
+        toRegFieldRw(txQueueLimit, "txQueueLimit"),
+        // At the end, out of place, so that no register before them moves.
+        toRegFieldRw(txClkParkAlternate, "txClkParkAlternate"),
+        toRegFieldR(applyShift(io.test.rxFrameOffset), "rxFrameOffset")
+      ) ++ rxAlign.zipWithIndex.map { case (a, i) =>
+        toRegFieldRw(a, s"rxAlign_$i")
+      }
 
       require(
         mmioRegs.size * 8 <= UcieTLRegs.regionSize,
@@ -1900,6 +2070,12 @@ class UcieTL(
     test.io.rxDividerRstb := clkRegs.module.io.rxDividerRstb
     phy.io.clkRst.mainClkSel := clkRegs.module.io.mainClkSel
     phy.io.clkRst.pll8En := clkRegs.module.io.pll8En
+    clkRegs.module.io.meterClocks := VecInit(
+      phy.io.clkRst.phyTestClk,
+      phy.io.clkRst.sbClk,
+      phy.io.clkRst.txDivClk,
+      phy.io.clkRst.rxDivClk
+    )
     phy.io.clkRst.pll12En := clkRegs.module.io.pll12En
     phy.io.clkRst.x2En := clkRegs.module.io.x2En
     phy.io.clkRst.txClkDiv := clkRegs.module.io.txClkDiv
@@ -1940,14 +2116,57 @@ class UcieTL(
     // datapath after changing a select, which empties every queue on the packet
     // clocks, both ends, and starts whichever controller now has the lanes from
     // clean queues.
-    val txTestFifo =
-      Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
+    val txTestFifo = Module(
+      new AsyncQueue(new TxQueueWord(params.numLanes), params.queueParams)
+    )
     txTestFifo.io.enq_clock := phy.io.clkRst.phyTestClk
     txTestFifo.io.enq_reset := phy.io.clkRst.phyTestRst
     txTestFifo.io.deq_clock := phy.io.clkRst.txDivClk
     txTestFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-    txTestFifo.io.deq.ready := true.B
-    txTestFifo.io.enq <> test.io.tx
+
+    // PhyTest offers a word every cycle and its clock outruns the packet
+    // clock, so left alone it keeps this queue full and every word waits
+    // behind the whole of it -- `queueParams.depth` words of latency, about
+    // 30 words of PhyTest's 33 from its TX to its RX at 16 GT/s. A nonzero
+    // `txQueueLimit`, the reset value, holds PhyTest off once that many words
+    // are in the queue. The count is made at this end, of words enqueued less the
+    // dequeues the PHY end reports back as a Gray-coded count, so it lags
+    // behind dequeues and only ever reads high: the queue never holds more
+    // than the cap, and a cap too small to cover that lag shows up as
+    // `txTestFifoUnderflow`.
+    val txQueueCountWidth = log2Ceil(params.queueParams.depth) + 1
+    val txTestDequeuedGray = withClockAndReset(
+      phy.io.clkRst.txDivClk,
+      phy.io.clkRst.txDatapathRstSync
+    ) {
+      val count = RegInit(0.U(txQueueCountWidth.W))
+      when(txTestFifo.io.deq.fire) { count := count + 1.U }
+      val gray = RegInit(0.U(txQueueCountWidth.W))
+      gray := count ^ (count >> 1)
+      gray
+    }
+    val txTestQueued = withClockAndReset(
+      phy.io.clkRst.phyTestClk,
+      phy.io.clkRst.phyTestRst
+    ) {
+      val enqueued = RegInit(0.U(txQueueCountWidth.W))
+      when(txTestFifo.io.enq.fire) { enqueued := enqueued + 1.U }
+      // The datapath reset empties the queue, both ends.
+      when(regs.module.io.test.txDatapathRst) { enqueued := 0.U }
+      val gray =
+        freechips.rocketchip.util.SynchronizerShiftReg(txTestDequeuedGray, 3)
+      val dequeued = VecInit(
+        (0 until txQueueCountWidth).map(i => gray(txQueueCountWidth - 1, i).xorR)
+      ).asUInt
+      enqueued - dequeued
+    }
+    val txQueueRoom = regs.module.io.txQueueLimit === 0.U ||
+      txTestQueued < regs.module.io.txQueueLimit
+    txTestFifo.io.enq.valid := test.io.tx.valid && txQueueRoom
+    txTestFifo.io.enq.bits.word := test.io.tx.bits
+    txTestFifo.io.enq.bits.gapAfter := test.io.txGapAfter
+    txTestFifo.io.enq.bits.continues := test.io.txContinues
+    test.io.tx.ready := txTestFifo.io.enq.ready && txQueueRoom
 
     val txUcieFifo =
       Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
@@ -1970,15 +2189,10 @@ class UcieTL(
     // PhyTest's crossings drop words silently when the PHY test clock is
     // slower than the packet rate, which reads exactly like bit errors on the
     // link. Flag it instead. PhyTest drains its RX queue whatever owns the
-    // mainband, so that flag is always armed; it only feeds its TX queue while
-    // it drives the mainband itself.
+    // mainband, so that flag is always armed. Its TX queue is empty between
+    // runs and bursts by design, so `TxClkGater` flags it, and only where a
+    // word said more of its run follows; see there.
     val selTestMb = !selUcie && !selMbTl
-    regs.module.io.txTestFifoUnderflow := withClockAndReset(
-      phy.io.clkRst.txDivClk,
-      phy.io.clkRst.txDatapathRstSync
-    ) {
-      PhyTest.underflowFlag(txTestFifo.io.deq.valid, selTestMb)
-    }
     regs.module.io.rxTestFifoOverflow := withClockAndReset(
       phy.io.clkRst.rxDivClk,
       phy.io.clkRst.rxDatapathRstSync
@@ -2008,7 +2222,7 @@ class UcieTL(
     // reset, until the two ends have handshaken, and this end only starts once
     // the partner forwards a clock. That is not a full queue either, so the
     // check also waits for the queue to be ready.
-    withClockAndReset(
+    regs.module.io.controllerRxFifoOverflow := withClockAndReset(
       phy.io.clkRst.rxDivClk,
       phy.io.clkRst.rxDatapathRstSync
     ) {
@@ -2016,16 +2230,21 @@ class UcieTL(
       when(!selUcie) { selectedSinceReset := false.B }
       val rxUcieFifoPrimed = RegInit(false.B)
       when(rxUcieFifo.io.enq.ready) { rxUcieFifoPrimed := true.B }
+      val overflow = selUcie && selectedSinceReset && rxUcieFifoPrimed &&
+        !rxUcieFifo.io.enq.ready
       block(Verification) {
         block(Verification.Assert) {
           assert(
-            !(selUcie && selectedSinceReset && rxUcieFifoPrimed &&
-              !rxUcieFifo.io.enq.ready),
+            !overflow,
             "UcieTL: the controller's RX queue overflowed; the PHY's packet " +
               "clock is faster than the sideband clock the controller runs on"
           )
         }
       }
+      // And on silicon, where nothing asserts.
+      val flag = RegInit(false.B)
+      when(overflow) { flag := true.B }
+      flag
     }
 
     // The UCIe controller, on the TX sideband clock with its register block.
@@ -2209,6 +2428,8 @@ class UcieTL(
       val creditsFull = Wire(Bool())
       val aAvail = Wire(Bool())
       val dAvail = Wire(Bool())
+      // Whether the selected TL path can take a frame this cycle.
+      val txPathReady = Wire(Bool())
 
       creditRetTimer := creditRetTimer + 1.U
       creditsFull := aCreditsToReturn === 0.U && dCreditsToReturn === 0.U
@@ -2219,11 +2440,9 @@ class UcieTL(
         dCreditsToReturn > params.creditRetThreshhold.U) &&
         !creditsFull &&
         (selUcie || selMbTl || selSbTl) &&
-        // The mainband carries a frame every cycle, so a return always gets a
-        // ride. The sideband carries one frame at a time, and returning credits
-        // clears the counters whether or not the frame goes out, so hold the
-        // return off until the serializer can take it.
-        (!selSbTl || sbTl.io.tx.ready))
+        // Returning credits clears the counters whether or not the frame goes
+        // out, so hold the return off until the selected path can take it.
+        txPathReady)
 
       val ucieClientTxD = Wire(new UcieTXD(creditBits))
       ucieClientTxD.tl_valid := clientTl.d.fire
@@ -2260,10 +2479,15 @@ class UcieTL(
         Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
-      // Always true to send clock when tl path.
-      txTlFifo.io.enq.valid := selMbTl
+      // Only frames that carry something go in. The PHY end puts out an idle
+      // frame whenever the queue is empty (see `tlTxWord`), so a frame never
+      // waits behind idle ones: with idle frames queued as well, the queue sat
+      // full whenever the bus clock outran the packet clock, and every frame
+      // waited out all of it.
       val txValid = clientTl.d.fire || managerA.fire || creditRetValid
-      txTlFifo.io.enq.bits.valid := Mux(txValid, "h0000ffff".U, 0.U)
+      txTlFifo.io.enq.valid := selMbTl && txValid
+      txTlFifo.io.enq.bits.valid := "h0000ffff".U
+      // Overwritten at the PHY end; see `tlTxWord`.
       txTlFifo.io.enq.bits.track := "h55555555".U
       txTlFifo.io.enq.bits.clkp := "h55555555".U
       txTlFifo.io.enq.bits.clkn := "haaaaaaaa".U
@@ -2320,6 +2544,8 @@ class UcieTL(
         )
       )
 
+      txPathReady := txEnqReady
+
       clientTl.d.ready := txEnqReady && dAvail
       managerA.ready := txEnqReady && aAvail && !clientTl.d.valid
 
@@ -2340,8 +2566,7 @@ class UcieTL(
       txTlFifo.io.enq_reset := childReset
       txTlFifo.io.deq_clock := phy.io.clkRst.txDivClk
       txTlFifo.io.deq_reset := phy.io.clkRst.txDatapathRstSync
-      // Always drained, like the PHY's other TX queues.
-      txTlFifo.io.deq.ready := true.B
+      // Drained by `TxClkGater` below.
 
       val rxTlFifo =
         Module(new AsyncQueue(new RxIO(params.numLanes), params.queueParams))
@@ -2442,39 +2667,86 @@ class UcieTL(
       managerPort.d <> managerD
       dontTouch(managerPort.d.bits.opcode)
 
-      // The word the TL path puts on the lanes. Data and valid come through the
-      // queue; the clock and track lanes are forced to their fixed patterns
-      // here regardless of what it carried. The queue is enqueued
-      // unconditionally while the mainband is in `tl` mode, so these keep going
-      // out through gaps in TL traffic rather than stopping with it.
+      // A TL frame as it goes on the lanes: data and valid from the queue,
+      // the clock and track lanes running.
       val tlTxWord = Wire(new TxIO(params.numLanes))
-      tlTxWord.data := txTlFifo.io.deq.bits.data
-      tlTxWord.valid := txTlFifo.io.deq.bits.valid
+      tlTxWord := txTlFifo.io.deq.bits
       tlTxWord.track := "h55555555".U
-      tlTxWord.clkp := "h55555555".U
-      tlTxWord.clkn := "haaaaaaaa".U
+      tlTxWord.clkp := regs.module.io.test.txClkP
+      tlTxWord.clkn := regs.module.io.test.txClkN
 
-      // The lanes carry whichever of the TL path, the controller and PhyTest is
-      // selected, and nothing while it has no word ready.
-      phy.io.tx := Mux(
+      // Every word the lanes carry comes out of `TxClkGater`: the selected
+      // controller's next queued word, or between them one of its own, idle
+      // with the clock running or gated. Each controller queues only words
+      // that carry something, so nothing waits behind idle words. The others'
+      // queues are drained and their words dropped, as ever.
+      val txGater = withClockAndReset(
+        phy.io.clkRst.txDivClk,
+        phy.io.clkRst.txDatapathRstSync
+      ) { Module(new TxClkGater(params.numLanes)) }
+      def queued(w: TxIO): TxQueueWord = {
+        val q = Wire(new TxQueueWord(params.numLanes))
+        q.word := w
+        q.gapAfter := false.B
+        q.continues := false.B
+        q
+      }
+      txGater.io.in.valid := Mux(
         selMbTl,
-        Mux(txTlFifo.io.deq.valid, tlTxWord, 0.U.asTypeOf(phy.io.tx)),
+        txTlFifo.io.deq.valid,
+        Mux(selUcie, txUcieFifo.io.deq.valid, txTestFifo.io.deq.valid)
+      )
+      txGater.io.in.bits := Mux(
+        selMbTl,
+        queued(tlTxWord),
+        Mux(selUcie, queued(txUcieFifo.io.deq.bits), txTestFifo.io.deq.bits)
+      )
+      txTlFifo.io.deq.ready := !selMbTl || txGater.io.in.ready
+      txUcieFifo.io.deq.ready := !selUcie || txGater.io.in.ready
+      txTestFifo.io.deq.ready := !selTestMb || txGater.io.in.ready
+      // PhyTest's bands gate on `txClkGate`, the controller once it has
+      // negotiated strobe mode and reached ACTIVE. Either can change at any
+      // time, so it crosses into the packet clock through a synchronizer.
+      // The rest are quasi-static registers, shared by every controller.
+      val testRegs = regs.module.io.test
+      val gateNow = Mux(
+        selUcie,
+        ucieDigital.io.phyFacingIo.ctrl.mbTxClkGate,
+        testRegs.txClkGate
+      )
+      txGater.io.gate := withClockAndReset(
+        phy.io.clkRst.txDivClk,
+        phy.io.clkRst.txDatapathRstSync
+      ) { freechips.rocketchip.util.SynchronizerShiftReg(gateNow, 2) }
+      txGater.io.preamble := testRegs.txClkPreamble
+      txGater.io.postamble := testRegs.txClkPostamble
+      txGater.io.idlePackets := testRegs.txIdlePackets
+      txGater.io.parkAlternate := testRegs.txClkParkAlternate
+      txGater.io.clkP := testRegs.txClkP
+      txGater.io.clkN := testRegs.txClkN
+      // What each controller sends between words: valid low and the data
+      // lanes at zero, and track as that controller runs it.
+      txGater.io.fill := 0.U.asTypeOf(txGater.io.fill)
+      txGater.io.fill.track := Mux(
+        selMbTl,
+        "h55555555".U,
         Mux(
           selUcie,
+          testRegs.txClkP,
           Mux(
-            txUcieFifo.io.deq.valid,
-            txUcieFifo.io.deq.bits,
-            0.U.asTypeOf(phy.io.tx)
-          ),
-          Mux(
-            txTestFifo.io.deq.valid,
-            txTestFifo.io.deq.bits,
-            0.U.asTypeOf(phy.io.tx)
+            testRegs.txTrackClk &&
+              testRegs.txValidLaneSel =/= Phy.trackValidLaneSel(params.numLanes).U,
+            testRegs.txTrackWord,
+            0.U
           )
         )
       )
-      // Or the clock lanes skip the queues altogether. The words are held
-      // registers, so like the selects above they need no synchronizer.
+      regs.module.io.txTestFifoUnderflow := txGater.io.underflow
+
+      phy.io.tx := txGater.io.out
+      // Or the clock lanes skip the queues and the gating altogether. The
+      // words are held registers, so like the selects above they need no
+      // synchronizer.
       when(regs.module.io.txClkDirect) {
         phy.io.tx.clkp := regs.module.io.test.txClkP
         phy.io.tx.clkn := regs.module.io.test.txClkN

@@ -177,7 +177,7 @@ pub fn simulate(
 /// being written out once per module.
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::fs::read_to_string;
+    use std::fs::read;
 
     use anyhow::Result;
 
@@ -191,7 +191,9 @@ pub(crate) mod tests {
     pub fn run(level: Level, tb: &str) -> Result<String> {
         let work_dir = out_dir(format!("{}_{}", tb, level.dir_name()));
         simulate(get_src_files(level), tb, &work_dir)?;
-        Ok(read_to_string(work_dir.join("xrun.out"))?)
+        // Lossy, because Xcelium has been seen to print raw bytes in place of
+        // an instance name in a connect module warning, at either level.
+        Ok(String::from_utf8_lossy(&read(work_dir.join("xrun.out"))?).into_owned())
     }
 
     /// Runs `tb` and fails if it printed anything the benches use to report a
