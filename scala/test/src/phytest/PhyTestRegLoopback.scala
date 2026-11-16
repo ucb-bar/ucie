@@ -6,8 +6,9 @@ import chisel3.simulator.PeekPokeAPI._
 
 import edu.berkeley.cs.uciedigital.phy.{Phy, TxIO}
 
-/** Loops PhyTest's mainband TX straight back onto its own RX, with every
-  * control register brought out to the test.
+/** Loops PhyTest's mainband TX back onto its own RX through a [[TxClkGater]],
+  * as the PHY end has it, with every control register brought out to the
+  * test.
   *
   * Unlike [[PhyTestLfsrLoopback]], which fixes the mode it runs, this leaves
   * every register to the test, so one harness covers every mode layered on top
@@ -30,7 +31,7 @@ class PhyTestRegLoopback(
   val io = IO(new Bundle {
     val regs =
       new PhyTestRegsIO(PhyTestRegLoopback.bufferDepthPerLane, numLanes)
-    // What the TX sends, every cycle: the RX takes it the same cycle.
+    // What goes on the lanes, every cycle: the RX takes it the same cycle.
     val tx = Output(new TxIO(numLanes))
   })
 
@@ -56,39 +57,77 @@ class PhyTestRegLoopback(
   dut.io.sb.rxClk := false.B.asClock
   dut.io.sb.rxData := false.B
 
-  dut.io.tx.ready := true.B
-  io.tx := dut.io.tx.bits
+  // PhyTest queues only data; the gater makes every other word, from the
+  // same registers the full block gives it.
+  val gater = Module(new TxClkGater(numLanes))
+  gater.io.in.valid := dut.io.tx.valid
+  gater.io.in.bits.word := dut.io.tx.bits
+  gater.io.in.bits.gapAfter := dut.io.txGapAfter
+  gater.io.in.bits.continues := dut.io.txContinues
+  dut.io.tx.ready := gater.io.in.ready
+  gater.io.gate := io.regs.txClkGate
+  gater.io.preamble := io.regs.txClkPreamble
+  gater.io.postamble := io.regs.txClkPostamble
+  gater.io.idlePackets := io.regs.txIdlePackets
+  gater.io.parkAlternate := io.regs.txClkParkAlternate
+  gater.io.clkP := io.regs.txClkP
+  gater.io.clkN := io.regs.txClkN
+  gater.io.fill := 0.U.asTypeOf(gater.io.fill)
+  gater.io.fill.track := Mux(
+    io.regs.txTrackClk &&
+      io.regs.txValidLaneSel =/= Phy.trackValidLaneSel(numLanes).U,
+    io.regs.txTrackWord,
+    0.U
+  )
+  val out = gater.io.out
+  io.tx := out
+  // The lanes only carry PhyTest's words while it drives the mainband.
+  val driving = io.regs.mainbandMode === BandMode.manual
+
   // Bit 0 is the oldest UI, so delaying by one UI shifts each word up a bit
   // and pulls in the previous word's newest bit.
   def delayed(word: UInt): UInt =
     if (!dataDelay) word
     else {
-      val prev = RegEnable(word, 0.U, dut.io.tx.valid)
+      val prev = RegEnable(word, 0.U, driving)
       Cat(word(Phy.SerdesRatio - 2, 0), prev(Phy.SerdesRatio - 1))
     }
   // Data lanes, then valid and track.
-  val sent = dut.io.tx.bits.data.map(delayed) ++
-    Seq(dut.io.tx.bits.valid, delayed(dut.io.tx.bits.track))
+  val sent = out.data.map(delayed) ++ Seq(out.valid, delayed(out.track))
   val received =
     if (!rxNeedsClock) {
-      dut.io.rx.valid := dut.io.tx.valid
+      dut.io.rx.valid := driving
       sent
     } else {
       // The RX deserializer counts its word boundaries on forwarded-clock
-      // edges, so it takes only the UIs the clock ran for and hands over a
-      // word once it has a whole one. The TX only ever clocks a packet's
-      // first UIs, so those are its low `clocked` bits.
-      val clockedMask = dut.io.tx.bits.clkp | dut.io.tx.bits.clkn
-      val clocked =
-        Mux(dut.io.tx.valid, PopCount(clockedMask), 0.U)
+      // edges, so it takes only the UIs an edge samples and hands over a
+      // word once it has a whole one. The clock lanes change at the start of
+      // a UI and the clock is centred on the data, so an edge on P samples
+      // the UI it starts: a parked clock samples nothing, and a high park's
+      // late falling edge samples the UI it comes in.
+      val clkp = out.clkp
+      val lastClkp =
+        RegEnable(clkp(Phy.SerdesRatio - 1), false.B, driving)
+      val edges = Mux(
+        driving,
+        clkp ^ Cat(clkp(Phy.SerdesRatio - 2, 0), lastClkp),
+        0.U
+      )
       val held = RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
-      val total = held +& clocked
+      val total = held +& PopCount(edges)
       val wordDone = total >= Phy.SerdesRatio.U
       held := Mux(wordDone, total - Phy.SerdesRatio.U, total)
       dut.io.rx.valid := wordDone
+      // The UIs of `word` an edge sampled, in order, in its low bits.
+      def sampled(word: UInt): UInt = (0 until Phy.SerdesRatio)
+        .map { t =>
+          val before = if (t == 0) 0.U else PopCount(edges(t - 1, 0))
+          Mux(edges(t), word(t).asUInt << before, 0.U)
+        }
+        .reduce(_ | _)
       sent.map { word =>
         val buf = RegInit(0.U(Phy.SerdesRatio.W))
-        val merged = buf | ((word & clockedMask) << held)
+        val merged = buf | (sampled(word) << held)
         buf := Mux(wordDone, merged >> Phy.SerdesRatio, merged)
         merged(Phy.SerdesRatio - 1, 0)
       }
@@ -166,6 +205,11 @@ object PhyTestRegLoopback {
 
   /** The counts and the packet count sit behind a couple of registers. */
   val outputDelay = 3
+
+  /** Packets between the TX building one and it reaching `io.tx`: none, since
+    * the gater passes a queued word straight through.
+    */
+  val txOutputDelay = 0
 
   def errors(c: PhyTestRegLoopback, framing: Int): Seq[BigInt] = {
     val counts = framing match {

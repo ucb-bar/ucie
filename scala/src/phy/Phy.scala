@@ -336,6 +336,15 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // forwarded-clock lanes recover a clock rather than a word, so only their AFE
   // settings do anything.
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
+  // Per RX lane (data, valid, track), how many UI later than the
+  // deserializer's own the word handed on starts: the word is UI `rxAlign` to
+  // 31 of one deserializer word followed by UI 0 to `rxAlign - 1` of the next,
+  // in the order received. Which UI land in a deserializer word depends on
+  // where the RX dividers came out of reset relative to the forwarded clock,
+  // and nothing lines that up with the far TX's words, so a controller that
+  // cannot frame on its own, as PhyTest does on valid, needs this set to
+  // where the far TX's words start. `align_rx_words` measures it with PhyTest.
+  val rxAlign = Input(Vec(Phy.numRxDataLanes(numLanes), UInt(5.W)))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -449,11 +458,17 @@ class Phy(
   // Global clock dividers.
   //
   // Both dividers come out of reset with every stage of the cascade toggling on
-  // the first edge, so `clkout_3` rises on the same edge the lane serdes loads
-  // its word on. Handing words over on that edge would sample them as they
-  // change, so both directions invert it: the TX and RX divided clocks then
-  // rise half a word period away from the load, in the middle of the stable
-  // window. The serdes shares each direction's reset, so that phase is fixed.
+  // the first edge, and so do the dividers inside the lane tiles, which share
+  // each direction's reset: `clkout_3` runs in step with every tile's divided
+  // clock in that direction. The two directions then hand words over on
+  // opposite edges of it, each half a word period from where the tile acts:
+  //
+  //  - A TX tile loads its word on the rising edge of its divided clock, so
+  //    the TX divided clock is `clkout_3` inverted and the queue presents each
+  //    word half a word period ahead of the load.
+  //  - An RX tile puts its word out on the falling edge of its divided clock,
+  //    so the RX divided clock is `clkout_3` itself and the queue enqueues
+  //    each word half a word period after it appears.
   // TX
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
@@ -468,7 +483,7 @@ class Phy(
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
   rxClkDiv.io.resetb := io.clkRst.rxDividerRstb
-  io.clkRst.rxDivClk := (!rxClkDiv.io.clkout_3.asBool).asClock
+  io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
   val rxRstSync = Module(new RstSync)
   rxRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.rxDatapathRst)
   rxRstSync.io.clk := io.clkRst.rxDivClk
@@ -620,11 +635,37 @@ class Phy(
     )
   )
 
-  for (lane <- 0 until numLanes) {
-    io.rx.data(lane) := rxLaneWord(lane)
+  // Each lane's word moved onto the far TX's boundary. A far word that starts
+  // `rxAlign` UI into one deserializer word ends in the next, so it is UI
+  // `rxAlign` to 31 of the previous word and UI 0 to `rxAlign - 1` of this one:
+  // bit 0 is the first UI received past the shuffler, and the previous word is
+  // the one the RX queues took on the `rxDivClk` edge before. At 0 it is this
+  // word, with no added latency: the previous word would cost a whole word of
+  // forwarded clock after a gated burst's last UI before the RX handed it on.
+  val rxLanePrev = withClockAndReset(
+    io.clkRst.rxDivClk,
+    io.clkRst.rxDatapathRstSync
+  ) {
+    RegNext(rxLaneWord, 0.U.asTypeOf(chiselTypeOf(rxLaneWord)))
   }
-  io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
-  io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
+  val rxLaneAligned = VecInit(
+    (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
+      Mux(
+        io.regs.rxAlign(lane) === 0.U,
+        rxLaneWord(lane),
+        (Cat(rxLaneWord(lane), rxLanePrev(lane)) >> io.regs.rxAlign(lane))(
+          Phy.SerdesRatio - 1,
+          0
+        )
+      )
+    )
+  )
+
+  for (lane <- 0 until numLanes) {
+    io.rx.data(lane) := rxLaneAligned(lane)
+  }
+  io.rx.valid := rxLaneAligned(Phy.validLane(numLanes))
+  io.rx.track := rxLaneAligned(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
 
 }
