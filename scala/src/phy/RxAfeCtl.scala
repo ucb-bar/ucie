@@ -56,7 +56,7 @@ object RxAfeCtl {
   }
 }
 
-class RxAfeCtl extends Module with RequireSyncReset {
+class RxAfeCtl extends Module with RequireAsyncReset {
   val io = IO(new RxAfeCtlIO)
 
   val state = RegInit(RxAfeCtlState.sA)

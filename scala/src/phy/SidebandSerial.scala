@@ -82,7 +82,7 @@ class SidebandSerial(packetBits: Int, rxQueueDepth: Int) extends Module {
   txQueue.io.txReset := io.txReset || io.txRst
 
   val (txClkEn, txDataBit) =
-    withClockAndReset(io.txClock, txQueue.io.txResetSync) {
+    withClockAndReset(io.txClock, txQueue.io.txResetSync.asAsyncReset) {
       val txShift = Reg(UInt(packetBits.W))
       val txBitIdx = RegInit(0.U(bitIdxBits.W))
       val txBusy = RegInit(false.B)
@@ -125,7 +125,14 @@ class SidebandSerial(packetBits: Int, rxQueueDepth: Int) extends Module {
 
   // RX
   // ====================
-  val rxReset = io.rxRst || reset.asBool
+  // One flop, so that the deserializer's asynchronous reset can't glitch on
+  // the decode of modes behind `rxRst`: set by this module's reset, and
+  // otherwise `rxRst` a cycle late. Its release isn't synchronized to the
+  // forwarded clock, which only runs while a packet is coming in, so a
+  // synchronizer on it would eat the first packet's first edges. It is
+  // released with that clock idle instead: `rxRst` comes from settings and
+  // strobes that software changes with the partner quiet.
+  val rxReset = withReset(reset.asAsyncReset) { RegNext(io.rxRst, true.B) }
   val negFwClock = (!io.sb.rxClk.asBool).asClock
 
   val rxQueue = Module(
