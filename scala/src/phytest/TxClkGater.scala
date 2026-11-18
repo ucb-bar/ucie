@@ -17,42 +17,42 @@ class TxQueueWord(numLanes: Int) extends Bundle {
 }
 
 /** Puts a word on the TX lanes every packet, whichever controller drives them:
-  * the controller's next queued word when there is one and nothing else is
-  * due, and otherwise a word of its own. Controllers therefore queue only the
-  * words that carry something, and nothing waits behind idle words.
+  * the controller's next queued word when there is one and nothing else is due,
+  * and otherwise a word of its own. Controllers therefore queue only the words
+  * that carry something, and nothing waits behind idle words.
   *
   * A word of its own carries `fill` on the data, valid and track lanes. Its
-  * clock lanes run `clkP`/`clkN` unless `gate` is set, in which case the
-  * clock runs only around data, the way UCIe's strobe mode asks:
+  * clock lanes run `clkP`/`clkN` unless `gate` is set, in which case the clock
+  * runs only around data, the way UCIe's strobe mode asks:
   *
-  *  - after a word from the queue it runs on for `postamble` units of
-  *    `PhyTest.ClkPostambleUi` UI, then parks;
-  *  - parked, each lane holds its pattern's UI 1 level (with the usual
-  *    patterns, P low and N high: a differential low), or with
-  *    `parkAlternate`, every other park, its UI 0 level (a differential high);
-  *  - a high park keeps the level of the postamble's last rising edge through
-  *    the UI it would have fallen on, and that falling edge goes out
-  *    `PhyTest.ClkPreconditionUi` UI before the clock runs again instead, so
-  *    every gap carries exactly the postamble's edges and the far RX's word
-  *    boundary stays where it was whenever that is a whole word;
-  *  - before data after a park, `preamble` words of running clock.
+  *   - after a word from the queue it runs on for `postamble` units of
+  *     `PhyTest.ClkPostambleUi` UI, then parks;
+  *   - parked, each lane holds its pattern's UI 1 level (with the usual
+  *     patterns, P low and N high: a differential low), or with
+  *     `parkAlternate`, every other park, its UI 0 level (a differential high);
+  *   - a high park keeps the level of the postamble's last rising edge through
+  *     the UI it would have fallen on, and that falling edge goes out
+  *     `PhyTest.ClkPreconditionUi` UI before the clock runs again instead, so
+  *     every gap carries exactly the postamble's edges and the far RX's word
+  *     boundary stays where it was whenever that is a whole word;
+  *   - before data after a park, `preamble` words of running clock.
   *
   * A queued word goes out exactly as queued, clock lanes included, so a
-  * controller's own clock patterns pass straight through. A park straight
-  * after one (`postamble` = 0) stays low, since a high park would change that
-  * word's last UI; so does one that comes from the queue running dry.
+  * controller's own clock patterns pass straight through. A park straight after
+  * one (`postamble` = 0) stays low, since a high park would change that word's
+  * last UI; so does one that comes from the queue running dry.
   *
   * Gaps come one of two ways. After a word with `gapAfter`, exactly
-  * `idlePackets` words of its own, with the preamble in the last of them and
-  * a precondition in the word before it, as PhyTest's bursts have always had.
+  * `idlePackets` words of its own, with the preamble in the last of them and a
+  * precondition in the word before it, as PhyTest's bursts have always had.
   * Otherwise for as long as the queue is empty; then the clock can only start
   * once the next word is there, so after a high park one word goes out first
   * just for the precondition.
   *
-  * Every setting but `gate` is a quasi-static register, read as it stands
-  * each packet; change one only while the queue is empty and no gap is
-  * running. `gate` may change at any time: it applies from the next word.
-  * Runs on the TX divided clock, one word per cycle.
+  * Every setting but `gate` is a quasi-static register, read as it stands each
+  * packet; change one only while the queue is empty and no gap is running.
+  * `gate` may change at any time: it applies from the next word. Runs on the TX
+  * divided clock, one word per cycle.
   */
 class TxClkGater(numLanes: Int) extends Module {
   val io = IO(new Bundle {

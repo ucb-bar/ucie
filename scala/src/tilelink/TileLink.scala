@@ -237,8 +237,8 @@ object UcieTLRegs {
 
   /** `txQueueLimit` out of reset: half the TX queue, which holds with the PHY
     * test clock anywhere down to the packet clock, where 10 is the least that
-    * does, and keeps a word's wait in the queue to about half what a full
-    * queue costs.
+    * does, and keeps a word's wait in the queue to about half what a full queue
+    * costs.
     */
   val txQueueLimitReset = 16
 }
@@ -445,8 +445,8 @@ class UcieClkRegs(
       VecInit((0 until g.getWidth).map(i => g(g.getWidth - 1, i).xorR)).asUInt
     val meterWindow = RegInit(0.U(log2Ceil(UcieClkRegs.meterWindowCycles).W))
     meterWindow := meterWindow + 1.U
-    val clkMeters = io.meterClocks.zip(UcieClkRegs.meteredClocks).map {
-      case (clk, name) =>
+    val clkMeters =
+      io.meterClocks.zip(UcieClkRegs.meteredClocks).map { case (clk, name) =>
         val counterRstSync = Module(new RstSync()(params.includeDefaultModels))
         counterRstSync.suggestName(s"meterRstSync$name")
         counterRstSync.io.clk := clk
@@ -469,7 +469,7 @@ class UcieClkRegs(
           last := now
         }
         rate
-    }
+      }
 
     // Sticky per PLL, PLL8 in bit 0: the PLL lost lock while enabled, after
     // having locked since it was last enabled. Written to zero to clear.
@@ -1020,8 +1020,8 @@ object UcieClkRegs {
   /** The clocks the clock meters count, in register order. */
   val meteredClocks = Seq("PhyTest", "Sb", "TxDiv", "RxDiv")
 
-  /** Chip clock cycles each meter counts over. At a 500 MHz chip clock that
-    * is 2.048 us, so a count of N is N / 2.048 MHz.
+  /** Chip clock cycles each meter counts over. At a 500 MHz chip clock that is
+    * 2.048 us, so a count of N is N / 2.048 MHz.
     */
   val meterWindowCycles = 1024
 
@@ -2168,7 +2168,9 @@ class UcieTL(
       val gray =
         freechips.rocketchip.util.SynchronizerShiftReg(txTestDequeuedGray, 3)
       val dequeued = VecInit(
-        (0 until txQueueCountWidth).map(i => gray(txQueueCountWidth - 1, i).xorR)
+        (0 until txQueueCountWidth).map(i =>
+          gray(txQueueCountWidth - 1, i).xorR
+        )
       ).asUInt
       enqueued - dequeued
     }
@@ -2747,7 +2749,9 @@ class UcieTL(
           testRegs.txClkP,
           Mux(
             testRegs.txTrackClk &&
-              testRegs.txValidLaneSel =/= Phy.trackValidLaneSel(params.numLanes).U,
+              testRegs.txValidLaneSel =/= Phy
+                .trackValidLaneSel(params.numLanes)
+                .U,
             testRegs.txTrackWord,
             0.U
           )

@@ -616,10 +616,10 @@ object PhyTest {
   val DebugBufferPackets = 32
 
   /** Every lane's LFSR seed out of reset, TX and RX alike, and what the
-    * generated `seed_lfsrs` writes back. Different on every lane: with one
-    * seed everywhere, every lane switches together, which is the worst case
-    * for supply noise and crosstalk, and lanes swapped anywhere between the TX
-    * and the RX read clean.
+    * generated `seed_lfsrs` writes back. Different on every lane: with one seed
+    * everywhere, every lane switches together, which is the worst case for
+    * supply noise and crosstalk, and lanes swapped anywhere between the TX and
+    * the RX read clean.
     */
   val DefaultLfsrSeed = BigInt("0123456789abcdef", 16)
   val LfsrSeedLaneStep = BigInt("1111", 16)
@@ -627,8 +627,8 @@ object PhyTest {
     (DefaultLfsrSeed + lane * LfsrSeedLaneStep) &
       ((BigInt(1) << LfsrWidth) - 1)
 
-  /** UI per unit of `txClkPostamble`: one forwarded clock cycle, a rising and
-    * a falling edge.
+  /** UI per unit of `txClkPostamble`: one forwarded clock cycle, a rising and a
+    * falling edge.
     */
   val ClkPostambleUi = 2
   require(
@@ -637,8 +637,8 @@ object PhyTest {
     s"a packet must be a power-of-two number of $ClkPostambleUi UI postamble units"
   )
 
-  /** UI a gated clock spends low before it runs again after a high park,
-    * which UCIe allows to be 1 to 8.
+  /** UI a gated clock spends low before it runs again after a high park, which
+    * UCIe allows to be 1 to 8.
     */
   val ClkPreconditionUi = 2
   require(ClkPreconditionUi >= 1 && ClkPreconditionUi <= 8)
@@ -704,8 +704,8 @@ object PhyTest {
   /** Bits of a received pattern word that disagree with the LFSR recurrence,
     * given the two words before it.
     *
-    * The TX sends its Fibonacci LFSR's output in the order it was generated,
-    * so every bit on the wire is the XOR of the bits `LfsrTaps` UIs before it.
+    * The TX sends its Fibonacci LFSR's output in the order it was generated, so
+    * every bit on the wire is the XOR of the bits `LfsrTaps` UIs before it.
     * `history` holds the previous word in its high half and the one before in
     * its low half, which is the `LfsrWidth` bits the largest tap reaches back.
     */
@@ -944,7 +944,8 @@ class PhyTest(
   val txDebugRst = io.regs.txDebugFsmRst || reset.asBool
   val txDebugState = softRegInit(txDebugRst)(TxTestState.idle)
   val txDebugPacketsEnqueued = softRegInit(txDebugRst)(0.U(bitCounterWidth.W))
-  val txDebugAddr = softRegInit(txDebugRst)(0.U(log2Ceil(PhyTest.DebugBufferPackets).W))
+  val txDebugAddr =
+    softRegInit(txDebugRst)(0.U(log2Ceil(PhyTest.DebugBufferPackets).W))
   val txDebugLfsr = Module(
     new FibonacciLFSR(
       PhyTest.LfsrWidth,
@@ -1129,7 +1130,8 @@ class PhyTest(
   // RX registers
   val rxReset =
     io.regs.rxFsmRst || (!mbManual && !io.regs.rxMonitor) || reset.asBool
-  val rxPacketsReceived = softRegInit(rxReset)(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
+  val rxPacketsReceived =
+    softRegInit(rxReset)(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
   // A bit offset within a word, so `log2Ceil(SerdesRatio)` bits is right: the
   // assigned `SerdesRatio - startIdx` is a full word when the valid lane's set
   // bit lands on bit 0, and a full word offset is the same as no offset. The
@@ -1659,7 +1661,8 @@ class PhyTest(
 
   // numLanes data lanes, 1 valid lane, 1 track lane, 1 loopback lane. Until
   // recording starts, the last word received.
-  val runningData = softRegInit(rxReset)(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
+  val runningData =
+    softRegInit(rxReset)(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
 
   for (
     f <- 0 until PhyTest.NumFramings;
@@ -1679,10 +1682,10 @@ class PhyTest(
   // `PhyTest.selfSyncErrors`. Valid never carries an LFSR pattern, so its
   // history is never read and optimizes away.
   val rxHistory = softRegInit(rxReset)(
-      VecInit(
-        Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(PhyTest.LfsrWidth.W))
-      )
+    VecInit(
+      Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(PhyTest.LfsrWidth.W))
     )
+  )
   // Packets processed since the FSM reset, up to the two the history holds.
   val rxHistoryFill = softRegInit(rxReset)(0.U(2.W))
   val rxHistoryFull = rxHistoryFill === 2.U
@@ -1707,7 +1710,8 @@ class PhyTest(
   val rxCaptureError = io.regs.rxCaptureMode === CaptureMode.error
   val rxTriggered = softRegInit(rxReset)(false.B)
   val rxTriggerPacket = softRegInit(rxReset)(0.U(rxPacketsReceived.getWidth.W))
-  val rxCaptureRemaining = softRegInit(rxReset)(0.U(io.regs.rxCapturePostTrigger.getWidth.W))
+  val rxCaptureRemaining =
+    softRegInit(rxReset)(0.U(io.regs.rxCapturePostTrigger.getWidth.W))
   // Only lanes that carry the current target's traffic can trigger. The
   // others compare whatever they happen to receive against a pattern.
   val rxTargetLanes = Mux(
@@ -1762,7 +1766,9 @@ class PhyTest(
       )
     )
   )
-  val rxErrPos = softRegInit(rxReset)(VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(32.W))))
+  val rxErrPos = softRegInit(rxReset)(
+    VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(32.W)))
+  )
   for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
     rxErrPos(lane) := rxErrPos(lane) | rxNominalMasks(lane)
   }
@@ -1808,8 +1814,12 @@ class PhyTest(
     rxClassMask & ~rxRiseUis & rxClassSent,
     rxClassMask & ~rxRiseUis & ~rxClassSent
   )
-  val rxErrClassCounts = softRegInit(rxReset)(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
-  val rxErrClassOutput = softRegInit(rxReset)(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
+  val rxErrClassCounts = softRegInit(rxReset)(
+    VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W)))
+  )
+  val rxErrClassOutput = softRegInit(rxReset)(
+    VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W)))
+  )
   for ((errs, i) <- rxErrClasses.zipWithIndex) {
     val next = rxErrClassCounts(i) +& PopCount(errs)
     rxErrClassCounts(i) := Mux(next > maxBitCount, maxBitCount, next)

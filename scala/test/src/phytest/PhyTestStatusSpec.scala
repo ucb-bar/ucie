@@ -30,7 +30,9 @@ class PhyTestStatusSpec extends AnyFunSpec with ChiselSim {
   val numLanes = 4
 
   describe("PhyTest track counters") {
-    it("should count track's ones, zeros, and even ones whatever owns the mainband") {
+    it(
+      "should count track's ones, zeros, and even ones whatever owns the mainband"
+    ) {
       simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
         // TileLink owns the mainband, so the RX FSM is held throughout.
         c.io.regs.mainbandMode.poke(BandMode.tl)

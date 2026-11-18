@@ -95,8 +95,8 @@ class PhyTestManualCheckSpec extends AnyFunSpec with ChiselSim {
     c.io.rx.valid.poke(false.B)
   }
 
-  /** The counts and the packet count sit behind a couple of registers, and
-    * the manual check's a cycle more.
+  /** The counts and the packet count sit behind a couple of registers, and the
+    * manual check's a cycle more.
     */
   def settle(c: PhyTest): Unit =
     c.clock.step(PhyTestRegLoopback.outputDelay + 1)
@@ -123,10 +123,14 @@ class PhyTestManualCheckSpec extends AnyFunSpec with ChiselSim {
         settle(c)
         assert(packetsReceived(c) == n)
         val expected = (0 until numTestLanes).map { lane =>
-          flips.collect { case ((_, l), bits) if l == lane => bits.bitCount }.sum
+          flips.collect {
+            case ((_, l), bits) if l == lane => bits.bitCount
+          }.sum
         }
         assert(errors(c) == expected.map(BigInt(_)))
-        for (counts <- Seq(c.io.regs.rxBitErrorsEarly, c.io.regs.rxBitErrorsLate)) {
+        for (
+          counts <- Seq(c.io.regs.rxBitErrorsEarly, c.io.regs.rxBitErrorsLate)
+        ) {
           assert(counts.map(_.peek().litValue).forall(_ == 0))
         }
       }
@@ -183,14 +187,21 @@ class PhyTestManualCheckSpec extends AnyFunSpec with ChiselSim {
     }
 
     for (post <- Seq(0, 3)) {
-      it(s"should trigger the capture on the packet in error, keeping $post after") {
+      it(
+        s"should trigger the capture on the packet in error, keeping $post after"
+      ) {
         val (trigger, lane, bit) = (40, 2, BigInt(1) << 9)
         simulate(new PhyTest(numLanes = numLanes)(true)) { c =>
           setup(c)
           c.io.regs.rxCaptureMode.poke(CaptureMode.error)
           c.io.regs.rxCapturePostTrigger.poke(post.U)
           c.io.regs.rxTriggerLaneMask.poke(((1 << numTestLanes) - 1).U)
-          drive(c, 0, trigger + 20, (p, l) => if (p == trigger && l == lane) bit else 0)
+          drive(
+            c,
+            0,
+            trigger + 20,
+            (p, l) => if (p == trigger && l == lane) bit else 0
+          )
           settle(c)
           assert(c.io.regs.rxCaptureTriggered.peek().litToBoolean)
           assert(
