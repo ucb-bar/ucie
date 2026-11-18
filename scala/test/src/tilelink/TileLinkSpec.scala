@@ -67,8 +67,8 @@ abstract class SVTestDriver extends TestDriver {
   /** Chip clock cycles before the run is called hung. */
   def timeoutCycles: Int = 100000
 
-  /** Whether to dump waveforms outside FSDB builds. A long run at 8 GHz makes
-    * a dump of everything far too large to be worth writing.
+  /** Whether to dump waveforms outside FSDB builds. A long run at 8 GHz makes a
+    * dump of everything far too large to be worth writing.
     */
   def dumpWaves: Boolean = true
 
@@ -307,7 +307,10 @@ ${Codegen.indent(moduleItems)}
       $$fsdbDumpfile(fsdbfile);
       $$fsdbDumpvars(0, SimTop, "+all");
     end
-`else${if (dumpWaves) "\n    $dumpfile(\"trace.vcd\");\n    $dumpvars(0);" else ""}
+`else${
+          if (dumpWaves) "\n    $dumpfile(\"trace.vcd\");\n    $dumpvars(0);"
+          else ""
+        }
 `endif
     reset = 1'b1;
     repeat(5) @(posedge digitalClock);
@@ -1718,23 +1721,23 @@ manual_loopback();
 }
 
 /** Where a PhyTest word spends its time between the TX FSM and the RX FSM, how
-  * much forwarded clock the receiver needs after the last data UI, and what
-  * the clock meters read. `PhyTestQueueCapTestDriver` covers the TX queue's
-  * cap, which takes far longer runs than these.
+  * much forwarded clock the receiver needs after the last data UI, and what the
+  * clock meters read. `PhyTestQueueCapTestDriver` covers the TX queue's cap,
+  * which takes far longer runs than these.
   *
   * Stages are timestamped hierarchically on the first data word of a run (a
   * word whose valid word is nonzero): at each queue's ports, and at the TX
   * valid bump, which the harness loops straight back to the RX valid bump. A
-  * port is sampled on its clock's edge, so a word shows at the edge that
-  * takes it.
+  * port is sampled on its clock's edge, so a word shows at the edge that takes
+  * it.
   *
   * The postamble a single gated burst needs depends on where its last data UI
   * falls in the RX's word, and that moves with every partial postamble the RX
   * has seen. So every point starts from realigned dividers, puts the RX word
   * boundary `offset` UI along with a shifting run whose own postamble is
-  * `offset` UI, and only then measures, at every even offset. Done with the
-  * RX lanes on their default handoff edge and on the backup
-  * (`sample_negedge`) one, and in manual mode at the worst offset.
+  * `offset` UI, and only then measures, at every even offset. Done with the RX
+  * lanes on their default handoff edge and on the backup (`sample_negedge`)
+  * one, and in manual mode at the worst offset.
   */
 class PhyTestLatencyTestDriver extends SVTestDriver {
   override def timeoutCycles = 4000000
@@ -2015,18 +2018,18 @@ endtask
 /** Gated bursts with a packet of postamble, on the silicon handoff timing,
   * parked low and parking high and low in turn.
   *
-  * A packet is enough only for a burst that ends 17 UI or more into an RX
-  * word: the RX needs 17 edges after the one that samples the last data UI,
-  * plus whatever it takes to finish that word. Dividers realigned behind a
-  * parked clock start every burst 16 UI into an RX word, so it ends 15 UI
-  * into one and needs 33. One gap of 40 UI moves that to 23, which needs 25.
-  * This checks both: without that gap the last packet never arrives, and with
-  * it every burst arrives whole and clean.
+  * A packet is enough only for a burst that ends 17 UI or more into an RX word:
+  * the RX needs 17 edges after the one that samples the last data UI, plus
+  * whatever it takes to finish that word. Dividers realigned behind a parked
+  * clock start every burst 16 UI into an RX word, so it ends 15 UI into one and
+  * needs 33. One gap of 40 UI moves that to 23, which needs 25. This checks
+  * both: without that gap the last packet never arrives, and with it every
+  * burst arrives whole and clean.
   */
-/** PhyTest's TX queue cap over long runs, where a cap too small for the
-  * queue's synchronizer lag runs it dry. `holds` is the smallest cap that has
-  * to, and `failsAt` one that has to run it dry, so that this measures the lag
-  * rather than passing anything.
+/** PhyTest's TX queue cap over long runs, where a cap too small for the queue's
+  * synchronizer lag runs it dry. `holds` is the smallest cap that has to, and
+  * `failsAt` one that has to run it dry, so that this measures the lag rather
+  * than passing anything.
   */
 object PhyTestQueueCapTestDriver {
   val stimulus = """
@@ -2086,8 +2089,7 @@ localparam int CAPS [9] = '{0, 24, 16, 14, 12, 10, 8, 6, 4};
 """.trim
 }
 
-/** At this harness's clocks: an 800 MHz PHY test clock against 500 MHz
-  * packets.
+/** At this harness's clocks: an 800 MHz PHY test clock against 500 MHz packets.
   */
 class PhyTestQueueCapTestDriver extends SVTestDriver {
   override def timeoutCycles = 2000000
@@ -2370,12 +2372,13 @@ class PhyTestGatedBurstsProgramEqualRateTestDriver extends SVTestDriver {
 }
 
 object TlSimpleTestDriver {
-  /** `gate` parks the forwarded clock between frames once the link is up,
-    * with two packets of postamble so that a frame's last word reaches the
-    * far RX whatever its word alignment. The clock is centred on the data
-    * first, as training leaves it: with no preamble the first edge after a
-    * park has to sample a frame's first UI, which at the global delay's reset
-    * value it does not.
+
+  /** `gate` parks the forwarded clock between frames once the link is up, with
+    * two packets of postamble so that a frame's last word reaches the far RX
+    * whatever its word alignment. The clock is centred on the data first, as
+    * training leaves it: with no preamble the first edge after a park has to
+    * sample a frame's first UI, which at the global delay's reset value it does
+    * not.
     */
   def stimulus(gate: Boolean) = s"""
 tl_simple();
@@ -2433,8 +2436,8 @@ class TlSimpleSlowLinkTestDriver extends SVTestDriver {
   * frames at UI 0. The UI delays then move whole lanes on either side of the
   * link: with data lane 0 held back `d` UI at the RX and every other lane,
   * valid and track included, `d` UI at the TX, every lane arrives together,
-  * reads clean, and frames `d` UI into the word. Odd, and past a word, so
-  * every stage of both shifters moves something.
+  * reads clean, and frames `d` UI into the word. Odd, and past a word, so every
+  * stage of both shifters moves something.
   */
 class UiDelayTestDriver extends SVTestDriver {
   val rxLanes =
@@ -3795,7 +3798,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should hold a capped TX queue with the PHY test clock at the packet clock using Verilator") {
+    it(
+      "should hold a capped TX queue with the PHY test clock at the packet clock using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new PhyTestQueueCapEqualRateTestDriver),
@@ -3804,7 +3809,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should keep gated bursts whole with a packet of postamble using Verilator") {
+    it(
+      "should keep gated bursts whole with a packet of postamble using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new PhyTestGatedTrainingTestDriver),
@@ -3813,7 +3820,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should run the bring-up program's gated bursts at equal rates using Verilator") {
+    it(
+      "should run the bring-up program's gated bursts at equal rates using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new PhyTestGatedBurstsProgramEqualRateTestDriver),
@@ -3822,7 +3831,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should keep gated bursts whole with the PHY test clock at the packet clock using Verilator") {
+    it(
+      "should keep gated bursts whole with the PHY test clock at the packet clock using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new PhyTestGatedTrainingEqualRateTestDriver),
@@ -3849,7 +3860,9 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
-    it("should support simple TL test with the link slower than the bus using Verilator") {
+    it(
+      "should support simple TL test with the link slower than the bus using Verilator"
+    ) {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new TlSimpleSlowLinkTestDriver),

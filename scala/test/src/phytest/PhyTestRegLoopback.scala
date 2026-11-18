@@ -7,8 +7,7 @@ import chisel3.simulator.PeekPokeAPI._
 import edu.berkeley.cs.uciedigital.phy.{Phy, TxIO}
 
 /** Loops PhyTest's mainband TX back onto its own RX through a [[TxClkGater]],
-  * as the PHY end has it, with every control register brought out to the
-  * test.
+  * as the PHY end has it, with every control register brought out to the test.
   *
   * Unlike [[PhyTestLfsrLoopback]], which fixes the mode it runs, this leaves
   * every register to the test, so one harness covers every mode layered on top
@@ -148,8 +147,8 @@ object PhyTestRegLoopback {
   val bufferDepthPerLane = 10
   val sramPackets = 1 << (bufferDepthPerLane - 5)
 
-  /** The valid waveform every test sends. Bit 0 is set, so the RX frames on
-    * the TX's packet boundaries.
+  /** The valid waveform every test sends. Bit 0 is set, so the RX frames on the
+    * TX's packet boundaries.
     */
   val validWord = BigInt("0f0f0f0f", 16)
   val clkPWord = BigInt("55555555", 16)

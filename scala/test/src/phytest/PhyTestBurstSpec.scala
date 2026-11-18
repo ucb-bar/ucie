@@ -66,7 +66,9 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
   }
 
   describe("PhyTest TX bursts") {
-    it("should send bursts of the continuous stream separated by idle packets") {
+    it(
+      "should send bursts of the continuous stream separated by idle packets"
+    ) {
       val packets = 18
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
@@ -79,9 +81,11 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
 
         // 4 on, 3 off, ..., with the last burst cut short by the count.
         val expectedShape =
-          (0 until packets).grouped(4).toSeq.map(_.length).flatMap(n =>
-            Seq.fill(n)(true) ++ Seq.fill(3)(false)
-          )
+          (0 until packets)
+            .grouped(4)
+            .toSeq
+            .map(_.length)
+            .flatMap(n => Seq.fill(n)(true) ++ Seq.fill(3)(false))
         assert(
           sent.map(_.isData).take(expectedShape.length) == expectedShape
         )
@@ -168,8 +172,8 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    /** Runs gated bursts into an RX that only sees the UIs the clock ran
-      * for, and returns the nominal counts and the packets received.
+    /** Runs gated bursts into an RX that only sees the UIs the clock ran for,
+      * and returns the nominal counts and the packets received.
       */
     def gatedRun(
         postUi: Int,
@@ -228,8 +232,11 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     }
 
     for (alternate <- Seq(false, true)) {
-      val parks = if (alternate) "parking high and low in turn" else "parked low"
-      it(s"should score clean with UCIe's gating and a packet of postamble, $parks") {
+      val parks =
+        if (alternate) "parking high and low in turn" else "parked low"
+      it(
+        s"should score clean with UCIe's gating and a packet of postamble, $parks"
+      ) {
         // No preamble. A high park holds back the postamble's last edge until
         // just before the next burst, so every gap still carries a packet's
         // worth and the RX word boundary stays put.

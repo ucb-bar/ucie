@@ -47,16 +47,28 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
     c.io.regs.rxLaneErrored.peek().litValue
 
   describe("PhyTest per-lane pattern sources") {
-    it("should send a fixed word or the inverted stream where asked, clean when the RX expects it") {
+    it(
+      "should send a fixed word or the inverted stream where asked, clean when the RX expects it"
+    ) {
       val (fixedLane, invertedLanes) = (1, Seq(3, PhyTest.trackLane(numLanes)))
       val fixedWord = BigInt("00ff00ff", 16)
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         val inverted = invertedLanes.map(BigInt(1) << _).sum
-        for ((fixed, invert, word) <- Seq(
-            (c.io.regs.txLaneFixed, c.io.regs.txLaneInvert, c.io.regs.txFixedWord),
-            (c.io.regs.rxLaneFixed, c.io.regs.rxLaneInvert, c.io.regs.rxFixedWord)
-          )) {
+        for (
+          (fixed, invert, word) <- Seq(
+            (
+              c.io.regs.txLaneFixed,
+              c.io.regs.txLaneInvert,
+              c.io.regs.txFixedWord
+            ),
+            (
+              c.io.regs.rxLaneFixed,
+              c.io.regs.rxLaneInvert,
+              c.io.regs.rxFixedWord
+            )
+          )
+        ) {
           fixed.poke((BigInt(1) << fixedLane).U)
           invert.poke(inverted.U)
           word.poke(fixedWord.U)
@@ -76,7 +88,9 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("should read every bit wrong where the TX inverts and the RX does not, half on each edge") {
+    it(
+      "should read every bit wrong where the TX inverts and the RX does not, half on each edge"
+    ) {
       val lane = 2
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
@@ -115,14 +129,26 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("should score fixed and inverted lanes against their expectation under rxSelfSync") {
+    it(
+      "should score fixed and inverted lanes against their expectation under rxSelfSync"
+    ) {
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         c.io.regs.rxSelfSync.poke(true.B)
-        for ((fixed, invert, word) <- Seq(
-            (c.io.regs.txLaneFixed, c.io.regs.txLaneInvert, c.io.regs.txFixedWord),
-            (c.io.regs.rxLaneFixed, c.io.regs.rxLaneInvert, c.io.regs.rxFixedWord)
-          )) {
+        for (
+          (fixed, invert, word) <- Seq(
+            (
+              c.io.regs.txLaneFixed,
+              c.io.regs.txLaneInvert,
+              c.io.regs.txFixedWord
+            ),
+            (
+              c.io.regs.rxLaneFixed,
+              c.io.regs.rxLaneInvert,
+              c.io.regs.rxFixedWord
+            )
+          )
+        ) {
           fixed.poke((BigInt(1) << 0).U)
           invert.poke((BigInt(1) << 2).U)
           word.poke(BigInt("ffffffff", 16).U)
@@ -138,7 +164,9 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
   }
 
   describe("PhyTest error locations and classes") {
-    it("should place one injected error by lane, UI, edge and the bit that was sent") {
+    it(
+      "should place one injected error by lane, UI, edge and the bit that was sent"
+    ) {
       val lane = 1
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
@@ -165,7 +193,9 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    it("should freeze the class counts under rxPauseCounters and clear them with the RX FSM") {
+    it(
+      "should freeze the class counts under rxPauseCounters and clear them with the RX FSM"
+    ) {
       val lane = 2
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)

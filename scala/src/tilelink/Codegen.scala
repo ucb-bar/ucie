@@ -56,6 +56,7 @@ trait Formatter {
     */
   def formatBlock(body: String): String
   def formatPrintStmt(msg: String): String
+
   /** Declares a 64-bit variable. SystemVerilog takes declarations only at the
     * start of a block, so open one with `formatBlock` and declare first.
     */
@@ -445,11 +446,11 @@ object Codegen {
     */
   val trainPollTries: Int = 1024
 
-  /** Reads the packet count may sit still, once packets have started
-    * arriving, before `run_lfsr` decides the receiver has stopped. A bound on
-    * the count standing still rather than on the reads is the same condition
-    * at every rate: a burst at /4 takes four times as long to land, and a
-    * fixed number of reads that covers it at /1 comes back short there.
+  /** Reads the packet count may sit still, once packets have started arriving,
+    * before `run_lfsr` decides the receiver has stopped. A bound on the count
+    * standing still rather than on the reads is the same condition at every
+    * rate: a burst at /4 takes four times as long to land, and a fixed number
+    * of reads that covers it at /1 comes back short there.
     */
   val packetStallReads: Int = 32
 
@@ -480,8 +481,8 @@ object Codegen {
 
   /** The forwarded clock postamble `setup_ucie_digital` sets for the
     * controller, which shares PhyTest's gating registers: two packets, which
-    * deliver a burst's last word whatever the RX word alignment, untrained.
-    * One packet only does at some alignments (`ucie/docs/phytest_bringup.md`,
+    * deliver a burst's last word whatever the RX word alignment, untrained. One
+    * packet only does at some alignments (`ucie/docs/phytest_bringup.md`,
     * section 8).
     */
   val controllerClkPostambleUi: Int = 2 * Phy.SerdesRatio
@@ -889,7 +890,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("loopbackLane", BigInt(PhyTest.loopbackLane(params.numLanes))),
         // `txValidLaneSel`/`rxValidLaneSel` codes for valid where it belongs
         // and for valid moved onto track.
-        ("defaultValidLaneSel", BigInt(Phy.defaultValidLaneSel(params.numLanes))),
+        (
+          "defaultValidLaneSel",
+          BigInt(Phy.defaultValidLaneSel(params.numLanes))
+        ),
         ("trackValidLaneSel", BigInt(Phy.trackValidLaneSel(params.numLanes))),
         // Packets per lane in the TX pattern SRAM and the RX capture SRAM.
         ("sramPackets", BigInt(1) << (params.bufferDepthPerLane - 5)),
@@ -1036,9 +1040,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * has not moved is the same thing as moving where in the UI the far receiver
     * samples. `Dctrl` is thermometer coded.
     */
-  /** Sets `taps` of a TX lane's delay line, leaving its driver and
-    * equalizer settings as they were. The lane has to have been enabled
-    * (`setup_ucie` does every lane).
+  /** Sets `taps` of a TX lane's delay line, leaving its driver and equalizer
+    * settings as they were. The lane has to have been enabled (`setup_ucie`
+    * does every lane).
     *
     * Only with the clock gated: see `set_clk_en`.
     */
@@ -1452,9 +1456,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * across a `reset_fsms`, which reseeds from them, so a sweep seeds once and
     * then reruns as often as it likes.
     */
-  /** Puts every lane's TX and RX seed back to its reset value, a different
-    * one per lane (`PhyTest.defaultLfsrSeed`), so that both dies of a link
-    * agree on every lane and no two lanes send the same stream.
+  /** Puts every lane's TX and RX seed back to its reset value, a different one
+    * per lane (`PhyTest.defaultLfsrSeed`), so that both dies of a link agree on
+    * every lane and no two lanes send the same stream.
     */
   def formatSeedLfsrsFn(): String = {
     val seedLoop = new StringBuilder
@@ -1614,8 +1618,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Turns every observation pad driver (`debugDriverctl_*`) and the TX
-    * data debug lane's driver on (`en` = 1) or off (`en` = 0).
+  /** Turns every observation pad driver (`debugDriverctl_*`) and the TX data
+    * debug lane's driver on (`en` = 1) or off (`en` = 0).
     */
   def formatEnableDebugDriversFn(): String = {
     val body = new StringBuilder
@@ -1759,10 +1763,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * itself the way PhyTest frames on valid. PhyTest sends a short LFSR run,
     * its RX frames on valid and reports where in its own word the run started
     * (`rxFrameOffset`), and every lane's `rxUiDelay` becomes the rest of that
-    * word, which puts the run's start at UI 0 of the next. The far TX has to
-    * be sending the same: in loopback it is this die's own. Leaves PhyTest
-    * owning the mainband, and every delay at 0 if the RX framed nothing, so
-    * lane to lane skew has to be taken out after this.
+    * word, which puts the run's start at UI 0 of the next. The far TX has to be
+    * sending the same: in loopback it is this die's own. Leaves PhyTest owning
+    * the mainband, and every delay at 0 if the RX framed nothing, so lane to
+    * lane skew has to be taken out after this.
     *
     * The boundary stays put until the RX dividers are next reset, or a gated
     * clock's gap carries a number of edges that is not a whole word, so this
@@ -2022,7 +2026,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
       wait.append(
         f.formatIfStmt(
-          s"((linkStatus >> ${f.formatLong(Codegen.linkStatusLinkUpBit.toLong)}) & ${f.formatLong(1)}) == 0",
+          s"((linkStatus >> ${f.formatLong(Codegen.linkStatusLinkUpBit.toLong)}) & ${f
+              .formatLong(1)}) == 0",
           f.formatPrintStmt(
             "setup_ucie_digital: link training never brought the link up"
           )
