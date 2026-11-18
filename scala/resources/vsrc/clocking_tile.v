@@ -140,10 +140,11 @@ module clocking_tile(
   timeunit 1ps;
   timeprecision 1fs;
 
-  localparam real PHASE_TAP_PS = 1.086;   // matches `global_delayline`
+  localparam real PHASE_TAP_PS = 1.57;   // matches `global_delayline`
   // How long a PLL takes to settle once enabled. Short next to a real one so
   // that a rate sweep does not dominate a run, long enough that an apply that
   // ungates without waiting is visibly wrong.
+  localparam real PHASE_OFS_PS = 826; // phase offset of 826ps
   parameter real PLL_LOCK_PS = 1000000.0;   // 1 us
 
   // ---- Two PLLs, each locking a half period to the ref clock ----
@@ -255,7 +256,7 @@ module clocking_tile(
     for (pi = 0; pi < 64; pi = pi + 1) phase_taps = phase_taps + PhaseSel[pi];
   end
   real phase_delay;
-  always @(*) phase_delay = phase_taps * PHASE_TAP_PS;
+  always @(*) phase_delay = phase_taps * PHASE_TAP_PS + PHASE_OFS_PS;
 
   reg q_delayed = 1'b0;
   always @(tx_q) q_delayed <= #(phase_delay) tx_q;
