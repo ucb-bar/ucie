@@ -81,6 +81,25 @@ object Phy {
   def treeBitOrder(t: Int): Int =
     (0 until 5).map(b => ((t >> b) & 1) << (4 - b)).sum
 
+  // The most UI `PhyRegsIO.txUiDelay` and `rxUiDelay` hold a lane back: two
+  // words, enough to take any boundary onto any other and still leave a word
+  // of lane to lane skew to take out.
+  val MaxUiDelay = 2 * SerdesRatio
+  val uiDelayWidth = log2Ceil(MaxUiDelay + 1)
+
+  // A lane's stream held back `delay` UI: UI `t` of the result is the UI
+  // `delay` before UI `t` of `word`, reaching back across the two words
+  // before it. At 0 it is `word` itself, with no added latency, and above
+  // `MaxUiDelay` it is `MaxUiDelay`. Takes one word per cycle of the clock
+  // it is called under.
+  def delayUi(word: UInt, delay: UInt): UInt = {
+    val prev = RegNext(word, 0.U)
+    val prev2 = RegNext(prev, 0.U)
+    val clamped =
+      Mux(delay > MaxUiDelay.U, MaxUiDelay.U, delay)
+    (Cat(word, prev, prev2) >> (MaxUiDelay.U - clamped))(SerdesRatio - 1, 0)
+  }
+
   // Instance names for the lane tiles. The PHY does not otherwise care what a
   // lane carries, but the physical flow and every waveform are far easier to
   // read when the tiles are named for their role.
@@ -336,15 +355,28 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // forwarded-clock lanes recover a clock rather than a word, so only their AFE
   // settings do anything.
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
-  // Per RX lane (data, valid, track), how many UI later than the
-  // deserializer's own the word handed on starts: the word is UI `rxAlign` to
-  // 31 of one deserializer word followed by UI 0 to `rxAlign - 1` of the next,
-  // in the order received. Which UI land in a deserializer word depends on
-  // where the RX dividers came out of reset relative to the forwarded clock,
-  // and nothing lines that up with the far TX's words, so a controller that
-  // cannot frame on its own, as PhyTest does on valid, needs this set to
-  // where the far TX's words start. `align_rx_words` measures it with PhyTest.
-  val rxAlign = Input(Vec(Phy.numRxDataLanes(numLanes), UInt(5.W)))
+  // Per TX lane, indexed like `txctl`, how many whole UI late the lane sends
+  // every UI, 0 to `Phy.MaxUiDelay`, ahead of the serializer: at 1, a word's
+  // last UI goes out first in the next word. For taking lane to lane skew of
+  // whole UI out at the far RX; the tile's `Dctrl` does fractions of one. A
+  // gated clock's postamble has to cover the largest delay on a data lane, or
+  // the end of a burst goes out with no clock. On a forwarded clock lane an
+  // odd delay inverts the clock against the data.
+  val txUiDelay =
+    Input(Vec(Phy.numTxLanes(numLanes), UInt(Phy.uiDelayWidth.W)))
+  // Per RX lane (data, valid, track), how many whole UI late the lane hands
+  // every UI on, 0 to `Phy.MaxUiDelay`, past the shuffler: at 1, a
+  // deserializer word's last UI is the first of the next word handed on.
+  // Which UI land in a deserializer word depends on where the RX dividers
+  // came out of reset relative to the forwarded clock, and nothing lines that
+  // up with the far TX's words, so a controller that cannot frame on its own,
+  // as PhyTest does on valid, needs every lane's delay to put its words where
+  // the far TX's start. `align_rx_words` measures that with PhyTest. Lanes set
+  // apart take out whole UI of lane to lane skew. After a gated burst the RX
+  // hands on its last word only once `rxUiDelay` more UI of forwarded clock
+  // have come in.
+  val rxUiDelay =
+    Input(Vec(Phy.numRxDataLanes(numLanes), UInt(Phy.uiDelayWidth.W)))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -498,6 +530,16 @@ class Phy(
   txLaneDin(Phy.trackLane(numLanes)) := io.tx.track
   txLaneDin(Phy.clkPLane(numLanes)) := io.tx.clkp
   txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
+  val txLaneDelayed = withClockAndReset(
+    io.clkRst.txDivClk,
+    io.clkRst.txDatapathRstSync
+  ) {
+    VecInit(
+      (0 until Phy.numTxLanes(numLanes)).map(lane =>
+        Phy.delayUi(txLaneDin(lane), io.regs.txUiDelay(lane))
+      )
+    )
+  }
 
   // The backup TX handoff phase. The queue hands a word over on the rising edge
   // of `txDivClk` and the tiles load half a word period later, which is only
@@ -510,7 +552,7 @@ class Phy(
     (!io.clkRst.txDivClk.asBool).asClock,
     io.clkRst.txDatapathRstSync
   ) {
-    RegNext(txLaneDin, 0.U.asTypeOf(chiselTypeOf(txLaneDin)))
+    RegNext(txLaneDelayed, 0.U.asTypeOf(chiselTypeOf(txLaneDelayed)))
   }
 
   // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
@@ -524,7 +566,7 @@ class Phy(
     txShuffler.io.din := Mux(
       io.regs.txctl(lane).sample_negedge,
       txLaneDinNeg(lane),
-      txLaneDin(lane)
+      txLaneDelayed(lane)
     )
     txShuffler.io.permutation := io.regs.txctl(lane).shuffler
 
@@ -635,37 +677,24 @@ class Phy(
     )
   )
 
-  // Each lane's word moved onto the far TX's boundary. A far word that starts
-  // `rxAlign` UI into one deserializer word ends in the next, so it is UI
-  // `rxAlign` to 31 of the previous word and UI 0 to `rxAlign - 1` of this one:
-  // bit 0 is the first UI received past the shuffler, and the previous word is
-  // the one the RX queues took on the `rxDivClk` edge before. At 0 it is this
-  // word, with no added latency: the previous word would cost a whole word of
-  // forwarded clock after a gated burst's last UI before the RX handed it on.
-  val rxLanePrev = withClockAndReset(
+  // The words the RX queues take on each `rxDivClk` edge, so the delay counts
+  // UI as they came off the shufflers.
+  val rxLaneDelayed = withClockAndReset(
     io.clkRst.rxDivClk,
     io.clkRst.rxDatapathRstSync
   ) {
-    RegNext(rxLaneWord, 0.U.asTypeOf(chiselTypeOf(rxLaneWord)))
-  }
-  val rxLaneAligned = VecInit(
-    (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
-      Mux(
-        io.regs.rxAlign(lane) === 0.U,
-        rxLaneWord(lane),
-        (Cat(rxLaneWord(lane), rxLanePrev(lane)) >> io.regs.rxAlign(lane))(
-          Phy.SerdesRatio - 1,
-          0
-        )
+    VecInit(
+      (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
+        Phy.delayUi(rxLaneWord(lane), io.regs.rxUiDelay(lane))
       )
     )
-  )
+  }
 
   for (lane <- 0 until numLanes) {
-    io.rx.data(lane) := rxLaneAligned(lane)
+    io.rx.data(lane) := rxLaneDelayed(lane)
   }
-  io.rx.valid := rxLaneAligned(Phy.validLane(numLanes))
-  io.rx.track := rxLaneAligned(Phy.trackLane(numLanes))
+  io.rx.valid := rxLaneDelayed(Phy.validLane(numLanes))
+  io.rx.track := rxLaneDelayed(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
 
 }
