@@ -345,6 +345,10 @@ class PhyTestRegsIO(
   // the lane does not clear them, so reset the RX FSM after changing it.
   val rxErrClassLane =
     Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
+  // The PHY's `rxUiDelay`, which moves a lane's UI that far against its
+  // deserializer's clock edges, so the split above can follow the edges.
+  val rxUiDelay =
+    Input(Vec(Phy.numRxDataLanes(numLanes), UInt(Phy.uiDelayWidth.W)))
   val rxErrRiseOne = Output(UInt(bitCounterWidth.W))
   val rxErrRiseZero = Output(UInt(bitCounterWidth.W))
   val rxErrFallOne = Output(UInt(bitCounterWidth.W))
@@ -368,10 +372,11 @@ class PhyTestRegsIO(
   // synchronizer on the RX divided clock, so no fixed delay covers every rate.
   val rxIdleWordsObserved = Output(UInt(32.W))
   // The UI of the RX's own word that the run's first packet started on: where
-  // its first set bit on valid landed, so with the far TX sending a valid
-  // waveform whose UI 0 is set, where the far TX's words start. 0 until the
-  // RX frames, and on a run framed by `RxStartMode.immediate`. Cleared by an
-  // RX FSM reset. `align_rx_words` writes it into `rxAlign`.
+  // the run of set bits on valid that started recording began, so with the
+  // far TX sending a valid waveform whose UI 0 is set, where the far TX's
+  // words start. 0 until the RX frames, and on a run framed by
+  // `RxStartMode.immediate`. Cleared by an RX FSM reset. `align_rx_words` sets
+  // every lane's `rxUiDelay` from it.
   val rxFrameOffset = Output(UInt(log2Ceil(Phy.SerdesRatio).W))
   // Data chunk lane in output buffer.
   val rxDataLane = Input(UInt(log2Ceil(PhyTest.numTestLanes(numLanes)).W))
@@ -381,6 +386,14 @@ class PhyTestRegsIO(
   val rxDataChunk = Output(UInt(32.W))
   // What starts recording.
   val rxStartMode = Input(RxStartMode())
+  // With `RxStartMode.valid`, how many UI in a row valid has to be set for
+  // recording to start, on the first of them. The run may straddle two words.
+  // 0 and 1 both start on the first set bit, and above `Phy.SerdesRatio` reads
+  // as `Phy.SerdesRatio`. No more than the valid waveform's first run, or
+  // recording never starts. Out of reset
+  // `PhyTest.rxValidStartThresholdReset`. The loopback lane starts on its
+  // first set bit whatever this says.
+  val rxValidStartThreshold = Input(UInt(log2Ceil(Phy.SerdesRatio + 1).W))
   // Only process packets whose valid word, on the lane `rxValidLaneSel`
   // names, reads closer to `rxLfsrValid` than to zero; the rest are idle
   // packets between bursts and are not counted, scored, captured, or folded
@@ -629,6 +642,12 @@ object PhyTest {
     */
   val ClkPreconditionUi = 2
   require(ClkPreconditionUi >= 1 && ClkPreconditionUi <= 8)
+
+  /** `rxValidStartThreshold` out of reset: the longest run of set bits the
+    * default valid waveform, `0x0f0f0f0f`, starts with, so a single bit error
+    * on an idle valid lane does not frame a run.
+    */
+  val rxValidStartThresholdReset = 4
 
   /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
     * one).
@@ -1544,7 +1563,7 @@ class PhyTest(
 
   io.rx.ready := true.B
   rxLoopbackFifo.io.deq.ready := true.B
-  // The lane the RX frames on: recording starts at the first one seen on it.
+  // The lane the RX frames on.
   val rxValidLaneWord =
     Phy.rxLaneWords(io.rx.bits, numLanes)(io.regs.rxValidLaneSel)
   // The loopback receiver hands over a word every divided cycle whether or not
@@ -1593,16 +1612,42 @@ class PhyTest(
   val rxIdleWordsReg = withReset(rxReset) { RegInit(0.U(32.W)) }
   io.regs.rxIdleWordsObserved := rxIdleWordsReg
   val startRecording = Wire(Bool())
-  val startIdx = Wire(UInt(log2Ceil(Phy.SerdesRatio).W))
+  // Where the first packet starts, counting the previous word's UI as 0 to 31
+  // and this word's as 32 to 63: in the previous word when the run of valid
+  // that starts recording began there.
+  val startPos = Wire(UInt(log2Ceil(2 * Phy.SerdesRatio).W))
   startRecording := false.B
-  startIdx := 0.U
+  startPos := Phy.SerdesRatio.U
+  val startInPrev = startRecording && !startPos(log2Ceil(Phy.SerdesRatio))
+  // Where in this word the data the start takes from it begins: all of it
+  // when the packet started in the previous word.
+  val startIdx = Mux(
+    startRecording && !startInPrev,
+    startPos(log2Ceil(Phy.SerdesRatio) - 1, 0),
+    0.U
+  )
   val rxFrameOffset = withReset(rxReset) {
     RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
   }
-  when(startRecording) { rxFrameOffset := startIdx }
+  when(startRecording) {
+    rxFrameOffset := startPos(log2Ceil(Phy.SerdesRatio) - 1, 0)
+    rxReceiveOffset :=
+      Phy.SerdesRatio.U - startPos(log2Ceil(Phy.SerdesRatio) - 1, 0)
+  }
   io.regs.rxFrameOffset := rxFrameOffset
+  // Where this word's data lands in `runningData`: past the part of the
+  // previous word the first packet keeps, on a start there.
+  val rxOffsetNow = Mux(
+    startInPrev,
+    (Phy.SerdesRatio.U - startPos(log2Ceil(Phy.SerdesRatio) - 1, 0))(
+      log2Ceil(Phy.SerdesRatio) - 1,
+      0
+    ),
+    rxReceiveOffset
+  )
 
-  // numLanes data lanes, 1 valid lane, 1 track lane, 1 loopback lane.
+  // numLanes data lanes, 1 valid lane, 1 track lane, 1 loopback lane. Until
+  // recording starts, the last word received.
   val runningData = withReset(rxReset) {
     RegInit(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
   }
@@ -1745,11 +1790,16 @@ class PhyTest(
   val rxClassSent = VecInit(
     (0 until PhyTest.numTestLanes(numLanes)).map(rxScoredWord)
   )(io.regs.rxErrClassLane) ^ rxClassMask
-  // Packet UI `i` is UI `i + startIdx` of the lane's own word, and the
-  // deserializer samples that word's even UIs on its clock's rising edge.
-  // `rxReceiveOffset` is 32 - `startIdx`, so it has the same parity.
+  // Packet UI `i` is UI `i + startIdx` of the lane's word, UI
+  // `i + startIdx - rxUiDelay` of the deserializer's, and the deserializer
+  // samples its word's even UIs on its clock's rising edge. `rxOffsetNow` is
+  // 32 - `startIdx`, so it has the same parity. The loopback lane has no
+  // delay.
+  val rxClassDelayOdd =
+    io.regs.rxErrClassLane < Phy.numRxDataLanes(numLanes).U &&
+      VecInit(io.regs.rxUiDelay.map(_(0)))(io.regs.rxErrClassLane)
   val rxRiseUis = Mux(
-    rxReceiveOffset(0),
+    rxOffsetNow(0) ^ rxClassDelayOdd,
     BigInt("aaaaaaaa", 16).U(32.W),
     BigInt("55555555", 16).U(32.W)
   )
@@ -1786,29 +1836,49 @@ class PhyTest(
     )
   ) {
 
-    // Find correct start index if recording hasn't started already.
-    for (i <- Phy.SerdesRatio - 1 to 0 by -1) {
-      val shouldStartRecording = Wire(Bool())
-      shouldStartRecording := false.B
-      switch(io.regs.testTarget) {
-        is(TestTarget.mainband) {
-          shouldStartRecording := rxValidLaneWord(i)
-        }
-        is(TestTarget.loopback) {
-          shouldStartRecording := rxLoopbackFifo.io.deq.bits(i)
-        }
-      }
-      when(!recordingStarted && shouldStartRecording) {
+    // Find where recording starts if it hasn't already: the first run of
+    // `rxValidStartThreshold` set bits on valid that ends in this word, or
+    // the loopback lane's first set bit, since that lane carries data. One
+    // that ended in the previous word would have started it there.
+    val loopbackTarget = io.regs.testTarget === TestTarget.loopback
+    val startWindow = Cat(
+      0.U(Phy.SerdesRatio.W),
+      Mux(loopbackTarget, rxLoopbackFifo.io.deq.bits, rxValidLaneWord),
+      Mux(
+        loopbackTarget,
+        runningData(PhyTest.loopbackLane(numLanes)),
+        runningData(io.regs.rxValidLaneSel)
+      )
+    )
+    val threshold = Mux(
+      loopbackTarget || io.regs.rxValidStartThreshold === 0.U,
+      1.U,
+      Mux(
+        io.regs.rxValidStartThreshold > Phy.SerdesRatio.U,
+        Phy.SerdesRatio.U,
+        io.regs.rxValidStartThreshold
+      )
+    )
+    val thresholdMask =
+      ((1.U((Phy.SerdesRatio + 1).W) << threshold) - 1.U)(
+        Phy.SerdesRatio - 1,
+        0
+      )
+    for (p <- 2 * Phy.SerdesRatio - 1 to 0 by -1) {
+      val run = (startWindow(p + Phy.SerdesRatio - 1, p) & thresholdMask) ===
+        thresholdMask
+      val endsHere =
+        if (p >= Phy.SerdesRatio) true.B
+        else threshold > (Phy.SerdesRatio - p).U
+      when(!recordingStarted && run && endsHere) {
         startRecording := true.B
-        startIdx := i.U
-        rxReceiveOffset := Phy.SerdesRatio.U - i.U
+        startPos := p.U
       }
     }
     // Or start on the first word, as it stands.
     when(!recordingStarted && io.regs.rxStartMode === RxStartMode.immediate) {
       startRecording := true.B
-      startIdx := 0.U
-      rxReceiveOffset := 0.U
+      startPos := Phy.SerdesRatio.U
     }
 
     // Free running, deliberately not saturating. Read it twice: a changed
@@ -1839,7 +1909,7 @@ class PhyTest(
       }
     }.otherwise {
       val fullPacketReceived =
-        rxReceiveOffset +& Phy.SerdesRatio.U - startIdx >= 32.U
+        rxOffsetNow +& Phy.SerdesRatio.U - startIdx >= 32.U
       // In burst mode, a packet whose valid word reads closer to idle than to
       // the waveform falls between bursts. Closer rather than equal, so that a
       // bit error on valid does not turn one into the other.
@@ -1860,7 +1930,7 @@ class PhyTest(
       // including the ones past the end of the capture SRAM.
       rxSignatureUpdate := shouldProcessPacket
       val dataMask = Wire(UInt(64.W))
-      dataMask := ((1.U << (Phy.SerdesRatio.U - startIdx)) - 1.U) << rxReceiveOffset
+      dataMask := ((1.U << (Phy.SerdesRatio.U - startIdx)) - 1.U) << rxOffsetNow
       val keepMask = Wire(UInt(64.W))
       keepMask := ~dataMask
       when(shouldProcessPacket) {
@@ -1883,9 +1953,16 @@ class PhyTest(
           rxLoopbackData
         }
         val data = Wire(UInt(64.W))
-        data := (rawData << rxReceiveOffset) >> startIdx
+        data := (rawData << rxOffsetNow) >> startIdx
+        // On a start in the previous word, the part of it the first packet
+        // keeps.
+        val kept = Mux(
+          startInPrev,
+          runningData(lane) >> startPos(log2Ceil(Phy.SerdesRatio) - 1, 0),
+          runningData(lane)
+        )
         val newData = Wire(UInt(64.W))
-        newData := (data & dataMask) | (runningData(lane) & keepMask)
+        newData := (data & dataMask) | (kept & keepMask)
         runningData(lane) := newData(31, 0)
         when(fullPacketReceived) {
           runningData(lane) := newData >> 32.U

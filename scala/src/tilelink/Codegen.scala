@@ -1755,13 +1755,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * go, just enforced here by polling instead.
     */
   /** Lines every RX lane's word boundary up with the far TX's words (see
-    * `PhyRegsIO.rxAlign`), for a controller that cannot frame its words
+    * `PhyRegsIO.rxUiDelay`), for a controller that cannot frame its words
     * itself the way PhyTest frames on valid. PhyTest sends a short LFSR run,
     * its RX frames on valid and reports where in its own word the run started
-    * (`rxFrameOffset`), and that goes into every lane's `rxAlign`. The far TX
-    * has to be sending the same: in loopback it is this die's own. Leaves
-    * PhyTest owning the mainband, and the alignment at 0 if the RX framed
-    * nothing.
+    * (`rxFrameOffset`), and every lane's `rxUiDelay` becomes the rest of that
+    * word, which puts the run's start at UI 0 of the next. The far TX has to
+    * be sending the same: in loopback it is this die's own. Leaves PhyTest
+    * owning the mainband, and every delay at 0 if the RX framed nothing, so
+    * lane to lane skew has to be taken out after this.
     *
     * The boundary stays put until the RX dividers are next reset, or a gated
     * clock's gap carries a number of edges that is not a whole word, so this
@@ -1792,17 +1793,17 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(
       formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
     )
-    def writeAlign(value: String) = f.formatForLoop(
+    def writeDelay(value: String) = f.formatForLoop(
       "lane",
       Phy.numRxDataLanes(params.numLanes),
       f.formatWriteReg(
         "regDrv",
-        s"${f.formatConstantRef("rxAlign")} + lane * ${f.formatConstantRef("rxAlignWidth")}",
+        s"${f.formatConstantRef("rxUiDelay")} + lane * ${f.formatConstantRef("rxUiDelayWidth")}",
         value
       )
     )
     // Measured on the deserializers' own boundary.
-    body.append(writeAlign(f.formatLong(0)))
+    body.append(writeDelay(f.formatLong(0)))
     body.append(f.formatFnCall("seed_lfsrs"))
     body.append(
       f.formatFnCall(
@@ -1835,11 +1836,16 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       f.formatIfStmt(
         "received == 0",
         f.formatPrintStmt(
-          "align_rx_words: the RX framed nothing, so rxAlign stays at 0"
+          "align_rx_words: the RX framed nothing, so rxUiDelay stays at 0"
         )
       )
     )
-    apply.append(f.formatIfStmt("received != 0", writeAlign("offset")))
+    apply.append(
+      f.formatIfStmt(
+        "received != 0",
+        writeDelay(s"(${Phy.SerdesRatio} - offset) % ${Phy.SerdesRatio}")
+      )
+    )
     body.append(f.formatBlock(apply.toString))
     f.formatFn("align_rx_words", body.toString)
   }
@@ -1953,6 +1959,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
     // Then empty the mainband queues of whatever PhyTest left in them.
     body.append(f.formatFnCall("reset_datapath"))
+    // And only now let the controller run, so it starts from reset on lanes
+    // that are its own rather than on whatever went by while it was not
+    // selected.
+    body.append(formatWriteNamedReg("ucieControllerRst", f.formatLong(0)))
 
     // DVSEC LinkControl packs raw_format_enable and start_link_training
     // alongside target_link_width/target_link_speed (see

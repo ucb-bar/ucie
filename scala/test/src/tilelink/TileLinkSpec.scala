@@ -2429,6 +2429,46 @@ class TlSimpleSlowLinkTestDriver extends SVTestDriver {
   )
 }
 
+/** `align_rx_words` puts the RX's words on the TX's boundary, so a run then
+  * frames at UI 0. The UI delays then move whole lanes on either side of the
+  * link: with data lane 0 held back `d` UI at the RX and every other lane,
+  * valid and track included, `d` UI at the TX, every lane arrives together,
+  * reads clean, and frames `d` UI into the word. Odd, and past a word, so
+  * every stage of both shifters moves something.
+  */
+class UiDelayTestDriver extends SVTestDriver {
+  val rxLanes =
+    edu.berkeley.cs.uciedigital.phy.Phy.numRxDataLanes(UcieTLParams().numLanes)
+  setStimulus(
+    "UiDelayTestDriver",
+    s"""
+begin : ui_delay
+  reg [63:0] base, offset, received, errored;
+  int d;
+  setup_ucie();
+  align_rx_words();
+  `READ_UCIE(regDrv, `RX_UI_DELAY, base);
+  $$display("align_rx_words set every rxUiDelay to %0d", base);
+  for (int k = 0; k < 3; k++) begin
+    d = k == 0 ? 0 : k == 1 ? 1 : 33;
+    for (int l = 0; l < $rxLanes; l++) begin
+      `WRITE_UCIE(regDrv, `TX_UI_DELAY + l * `TX_UI_DELAY_WIDTH, l == 0 ? 0 : d);
+      `WRITE_UCIE(regDrv, `RX_UI_DELAY + l * `RX_UI_DELAY_WIDTH, l == 0 ? base + d : base);
+    end
+    run_lfsr(16);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    `READ_UCIE(regDrv, `RX_FRAME_OFFSET, offset);
+    `READ_UCIE(regDrv, `RX_LANE_ERRORED, errored);
+    $$display("lanes %0d UI late: %0d packets, framed at UI %0d, lanes errored %0h",
+      d, received, offset, errored);
+    if (received != 16 || offset != d % 32 || errored != 0)
+      $$fatal(1, "the lanes did not arrive together, framed %0d UI in", d % 32);
+  end
+end
+""".trim
+  )
+}
+
 class SbManualTestDriver extends SVTestDriver {
   setStimulus(
     "SbManualTestDriver",
@@ -3815,6 +3855,15 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         new SimTop(new TlSimpleSlowLinkTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_with_the_link_slower_than_the_bus_using_Verilator"
+      )
+    }
+
+    it("should align RX words and move whole lanes by UI using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new UiDelayTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_align_RX_words_and_move_whole_lanes_by_UI_using_Verilator"
       )
     }
 

@@ -1312,6 +1312,11 @@ class UcieTLRegs(
       // `PhyTestRegsIO` for what each does.
       val rxStartMode = RegInit(RxStartMode.valid)
       val rxBurstMode = RegInit(false.B)
+      val rxValidStartThreshold = RegInit(
+        PhyTest.rxValidStartThresholdReset.U(
+          log2Ceil(Phy.SerdesRatio + 1).W
+        )
+      )
       val rxSelfSync = RegInit(false.B)
       val rxManualCheck = RegInit(false.B)
       val rxMonitor = RegInit(false.B)
@@ -1374,9 +1379,20 @@ class UcieTLRegs(
       val txQueueLimit =
         RegInit(UcieTLRegs.txQueueLimitReset.U(UcieTLRegs.txQueueLimitWidth.W))
       io.txQueueLimit := txQueueLimit
-      // See `PhyRegsIO.rxAlign`.
-      val rxAlign = RegInit(
-        VecInit(Seq.fill(Phy.numRxDataLanes(params.numLanes))(0.U(5.W)))
+      // See `PhyRegsIO.txUiDelay` and `rxUiDelay`.
+      val txUiDelay = RegInit(
+        VecInit(
+          Seq.fill(Phy.numTxLanes(params.numLanes))(
+            0.U(Phy.uiDelayWidth.W)
+          )
+        )
+      )
+      val rxUiDelay = RegInit(
+        VecInit(
+          Seq.fill(Phy.numRxDataLanes(params.numLanes))(
+            0.U(Phy.uiDelayWidth.W)
+          )
+        )
       )
 
       txDatapathRst.ready := true.B
@@ -1457,7 +1473,9 @@ class UcieTLRegs(
       io.test.rxValidLaneSel := applyShift(rxValidLaneSel)
       io.phy.txctl := applyShift(VecInit(txctl.take(params.numLanes + 4)))
       io.phy.rxctl := applyShift(VecInit(rxctl.take(params.numLanes + 4)))
-      io.phy.rxAlign := applyShift(rxAlign)
+      io.phy.txUiDelay := applyShift(txUiDelay)
+      io.phy.rxUiDelay := applyShift(rxUiDelay)
+      io.test.rxUiDelay := applyShift(rxUiDelay)
       // The last lane control slot belongs to the tester's loopback pair, which
       // lives in PhyTest rather than in the PHY.
       io.test.loopbackTxctl := applyShift(txctl(params.numLanes + 4))
@@ -1483,6 +1501,7 @@ class UcieTLRegs(
 
       io.test.rxStartMode := applyShift(rxStartMode)
       io.test.rxBurstMode := applyShift(rxBurstMode)
+      io.test.rxValidStartThreshold := applyShift(rxValidStartThreshold)
       io.test.rxSelfSync := applyShift(rxSelfSync)
       io.test.rxManualCheck := applyShift(rxManualCheck)
       io.test.rxMonitor := applyShift(rxMonitor)
@@ -1732,9 +1751,11 @@ class UcieTLRegs(
         // At the end, out of place, so that no register before them moves.
         toRegFieldRw(txClkParkAlternate, "txClkParkAlternate"),
         toRegFieldR(applyShift(io.test.rxFrameOffset), "rxFrameOffset")
-      ) ++ rxAlign.zipWithIndex.map { case (a, i) =>
-        toRegFieldRw(a, s"rxAlign_$i")
-      }
+      ) ++ txUiDelay.zipWithIndex.map { case (d, i) =>
+        toRegFieldRw(d, s"txUiDelay_$i")
+      } ++ rxUiDelay.zipWithIndex.map { case (d, i) =>
+        toRegFieldRw(d, s"rxUiDelay_$i")
+      } ++ Seq(toRegFieldRw(rxValidStartThreshold, "rxValidStartThreshold"))
 
       require(
         mmioRegs.size * 8 <= UcieTLRegs.regionSize,
@@ -1804,6 +1825,15 @@ class UcieController(
       top.io.ctrl.linkReset := linkReset
       top.io.ctrl.pwrGood := pwrGood
       top.io.ctrl.retryTrainingAmt := retryTrainingAmt
+      // Holds the controller -- logical PHY, adapter, protocol layer -- in
+      // reset, leaving these registers and the crossing into them alone. It
+      // hears the RX words and the partner's sideband whichever controller
+      // has the lanes, so out of reset while PhyTest or the TL path has them
+      // it would train against their traffic in the background. Set by the
+      // UCIe reset; `setup_ucie_digital` clears it once the controller has
+      // the lanes.
+      val controllerRst = RegInit(true.B)
+      top.reset := reset.asBool || controllerRst
 
       val (spec, _, _) =
         UcieRegBlock.build(top.io.regBlockIo.get, reset, regParams, specBase)
@@ -1820,6 +1850,9 @@ class UcieController(
             retryTrainingAmt,
             RegFieldDesc("ucieRetryTrainingAmt", "")
           )
+        ),
+        (ctrlBase + 24) -> Seq(
+          RegField(1, controllerRst, RegFieldDesc("ucieControllerRst", ""))
         )
       )
     }
