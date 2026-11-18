@@ -62,7 +62,10 @@ class PhyTestLfsrLoopback(
 
   // The tester carries analog macros (the observation bump drivers, the TX data
   // debug lane, and the loopback pair), so this needs their behavioral models.
-  val dut = Module(new PhyTest(numLanes = numLanes)(true))
+  // PhyTest resets asynchronously, as it does in the full block.
+  val dut = withReset(reset.asAsyncReset) {
+    Module(new PhyTest(numLanes = numLanes)(true))
+  }
   dut.io.regs := DontCare
   // In the full block the divider resets come from the clock register
   // block; the harness reset stands in for it here.

@@ -761,8 +761,34 @@ class PhyTest(
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32)
 )(implicit includeDefaultModels: Boolean = false)
     extends Module
-    with RequireSyncReset {
+    with RequireAsyncReset {
   val io = IO(new PhyTestIO(bufferDepthPerLane, numLanes, bitCounterWidth))
+
+  // Every register here resets asynchronously on its domain's reset, which
+  // asserts with the UCIe reset and releases on that domain's own clock. So
+  // from the moment the chip reset asserts, the lanes, termination, AFE and
+  // pad controls behind this block hold their reset values, whether or not
+  // the PHY test clock has started.
+  //
+  // The software resets -- the FSM and counter strobes, and the modes that
+  // hold an FSM -- are synchronous clears on top: each returns its registers
+  // to their reset values the cycle it is set, over anything else written to
+  // them that cycle, exactly as the synchronous resets these once were did.
+  // They stay synchronous because they are built from registers and modes,
+  // and a combination like that can glitch, which an asynchronous reset pin
+  // would take as a reset. The clears are applied at the end of the module,
+  // after every other write, which is what gives them that priority.
+  private val softClears = scala.collection.mutable.ArrayBuffer[() => Unit]()
+  private def softRegInit[T <: Data](clear: Bool)(init: T): T = {
+    val r = RegInit(init)
+    softClears += (() => when(clear) { r := init })
+    r
+  }
+  private def softRegNext[T <: Data](clear: Bool)(next: T, init: T): T = {
+    val r = softRegInit(clear)(init)
+    r := next
+    r
+  }
 
   // The clock dividers -- the global ones in the PHY and the one inside every
   // tile, these lanes' included -- come off the divider resets and nothing
@@ -784,6 +810,11 @@ class PhyTest(
   // actually flushes the datapath instead of freezing it.
   io.txDatapathRst := io.regs.txDatapathRst
   io.rxDatapathRst := io.regs.rxDatapathRst
+  // The same strobes, set by this module's reset, off a flop each for the
+  // debug and loopback lanes' own datapath synchronizers, so that neither
+  // synchronizer's asynchronous input is an OR that could glitch.
+  val txDatapathRstReg = RegNext(io.regs.txDatapathRst, true.B)
+  val rxDatapathRstReg = RegNext(io.regs.rxDatapathRst, true.B)
 
   // The two bands are independent: either can carry TileLink while the other
   // stays under test control.
@@ -867,19 +898,19 @@ class PhyTest(
     // words on.
     val divRstSync = Module(new RstSync)
     divRstSync.suggestName(s"${name}_div_rst_sync")
-    divRstSync.io.rstbAsync := !(reset.asBool || io.regs.txDatapathRst)
+    divRstSync.io.rstbAsync := !txDatapathRstReg
     divRstSync.io.clk := io.debug.txDivClk
 
     val fifo = Module(new AsyncQueue(UInt(Phy.SerdesRatio.W), queueParams))
     fifo.suggestName(s"${name}_fifo")
     fifo.io.enq_clock := clock
-    fifo.io.enq_reset := reset
+    fifo.io.enq_reset := reset.asBool
     fifo.io.deq_clock := io.debug.txDivClk
     fifo.io.deq_reset := !divRstSync.io.rstbSync
     fifo.io.deq.ready := true.B
     val underflow = withClockAndReset(
       io.debug.txDivClk,
-      !divRstSync.io.rstbSync
+      (!divRstSync.io.rstbSync).asAsyncReset
     ) {
       PhyTest.underflowFlag(fifo.io.deq.valid, feeding)
     }
@@ -890,7 +921,7 @@ class PhyTest(
     // the word relaunched on the other edge of the TX divided clock.
     val dinNeg = withClockAndReset(
       (!io.debug.txDivClk.asBool).asClock,
-      !divRstSync.io.rstbSync
+      (!divRstSync.io.rstbSync).asAsyncReset
     ) {
       RegNext(din, 0.U(Phy.SerdesRatio.W))
     }
@@ -911,13 +942,9 @@ class PhyTest(
   // and there is no capture SRAM behind it, so the manual buffer is the
   // registers themselves.
   val txDebugRst = io.regs.txDebugFsmRst || reset.asBool
-  val txDebugState = withReset(txDebugRst) { RegInit(TxTestState.idle) }
-  val txDebugPacketsEnqueued = withReset(txDebugRst) {
-    RegInit(0.U(bitCounterWidth.W))
-  }
-  val txDebugAddr = withReset(txDebugRst) {
-    RegInit(0.U(log2Ceil(PhyTest.DebugBufferPackets).W))
-  }
+  val txDebugState = softRegInit(txDebugRst)(TxTestState.idle)
+  val txDebugPacketsEnqueued = softRegInit(txDebugRst)(0.U(bitCounterWidth.W))
+  val txDebugAddr = softRegInit(txDebugRst)(0.U(log2Ceil(PhyTest.DebugBufferPackets).W))
   val txDebugLfsr = Module(
     new FibonacciLFSR(
       PhyTest.LfsrWidth,
@@ -1031,7 +1058,7 @@ class PhyTest(
 
   val rxLoopbackRstSync = Module(new RstSync)
   rxLoopbackRstSync.suggestName("rxloopback_div_rst_sync")
-  rxLoopbackRstSync.io.rstbAsync := !(reset.asBool || io.regs.rxDatapathRst)
+  rxLoopbackRstSync.io.rstbAsync := !rxDatapathRstReg
   rxLoopbackRstSync.io.clk := rxLoopbackLane.io.divclk.asClock
 
   val rxLoopbackFifo = Module(
@@ -1050,7 +1077,7 @@ class PhyTest(
   // either way.
   val rxLoopbackWordNeg = withClockAndReset(
     (!rxLoopbackLane.io.divclk).asClock,
-    !rxLoopbackRstSync.io.rstbSync
+    (!rxLoopbackRstSync.io.rstbSync).asAsyncReset
   ) {
     RegNext(rxLoopbackShuffler.io.dout, 0.U(Phy.SerdesRatio.W))
   }
@@ -1060,11 +1087,11 @@ class PhyTest(
     rxLoopbackShuffler.io.dout
   )
   rxLoopbackFifo.io.deq_clock := clock
-  rxLoopbackFifo.io.deq_reset := reset
+  rxLoopbackFifo.io.deq_reset := reset.asBool
   // With no valid on the enqueue side, a full queue loses the word.
   val rxLoopbackOverflow = withClockAndReset(
     rxLoopbackLane.io.divclk.asClock,
-    !rxLoopbackRstSync.io.rstbSync
+    (!rxLoopbackRstSync.io.rstbSync).asAsyncReset
   ) {
     PhyTest.overflowFlag(rxLoopbackFifo.io.enq.ready)
   }
@@ -1073,11 +1100,9 @@ class PhyTest(
 
   // TX registers
   val txReset = io.regs.txFsmRst || !mbManual || reset.asBool
-  val txState = withReset(txReset) { RegInit(TxTestState.idle) }
-  val txPacketsEnqueued = withReset(txReset) { RegInit(0.U(bitCounterWidth.W)) }
-  val inputBufferAddrReg = withReset(txReset) {
-    RegInit(0.U((bufferDepthPerLane - 5).W))
-  }
+  val txState = softRegInit(txReset)(TxTestState.idle)
+  val txPacketsEnqueued = softRegInit(txReset)(0.U(bitCounterWidth.W))
+  val inputBufferAddrReg = softRegInit(txReset)(0.U((bufferDepthPerLane - 5).W))
   // One LFSR per lane, indexed like every other per-lane vector. The valid
   // lane's is never read -- valid carries a framing waveform, not a pattern --
   // so it optimizes away.
@@ -1094,7 +1119,7 @@ class PhyTest(
     lfsr.io.increment := false.B
     lfsr
   })
-  val loadedFirstChunk = withReset(txReset) { RegInit(false.B) }
+  val loadedFirstChunk = softRegInit(txReset)(false.B)
   val txManualRepeatPeriod = Mux(
     io.regs.txManualRepeatPeriod === 0.U || io.regs.txManualRepeatPeriod > maxSramPackets,
     maxSramPackets,
@@ -1104,16 +1129,12 @@ class PhyTest(
   // RX registers
   val rxReset =
     io.regs.rxFsmRst || (!mbManual && !io.regs.rxMonitor) || reset.asBool
-  val rxPacketsReceived = withReset(rxReset) {
-    RegInit(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
-  }
+  val rxPacketsReceived = softRegInit(rxReset)(0.U((64 - log2Ceil(Phy.SerdesRatio)).W))
   // A bit offset within a word, so `log2Ceil(SerdesRatio)` bits is right: the
   // assigned `SerdesRatio - startIdx` is a full word when the valid lane's set
   // bit lands on bit 0, and a full word offset is the same as no offset. The
   // wrap to zero is the modulo, not a truncation bug.
-  val rxReceiveOffset = withReset(rxReset) {
-    RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
-  }
+  val rxReceiveOffset = softRegInit(rxReset)(0.U(log2Ceil(Phy.SerdesRatio).W))
   /// One count per framing per lane: numLanes data lanes, 1 valid lane, 1 loopback
   /// lane. See `rxBitErrorsEarly` in `PhyTestRegsIO` for what the framings mean.
   def perFramingPerLane(width: Int) = VecInit(
@@ -1121,12 +1142,10 @@ class PhyTest(
       VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(width.W)))
     )
   )
-  val rxBitErrors = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
-  val rxPacketsReceivedOutput = withReset(rxReset) { RegInit(0.U(64.W)) }
-  val rxErrorMask = withReset(rxReset) {
-    RegInit(perFramingPerLane(Phy.SerdesRatio))
-  }
-  val rxBitErrorsOutput = withReset(rxReset) { RegInit(perFramingPerLane(64)) }
+  val rxBitErrors = softRegInit(rxReset)(perFramingPerLane(64))
+  val rxPacketsReceivedOutput = softRegInit(rxReset)(0.U(64.W))
+  val rxErrorMask = softRegInit(rxReset)(perFramingPerLane(Phy.SerdesRatio))
+  val rxBitErrorsOutput = softRegInit(rxReset)(perFramingPerLane(64))
   val rxLfsrs = (0 until PhyTest.numTestLanes(numLanes)).map((i: Int) => {
     val lfsr = Module(
       new FibonacciLFSR(
@@ -1142,9 +1161,7 @@ class PhyTest(
   })
   // The row of the TX pattern SRAM the next packet processed is checked
   // against under `rxManualCheck`.
-  val rxManualRow = withReset(rxReset) {
-    RegInit(0.U((bufferDepthPerLane - 5).W))
-  }
+  val rxManualRow = softRegInit(rxReset)(0.U((bufferDepthPerLane - 5).W))
 
   // The `Phy.SerdesRatio` pattern bits a packet is compared against, oldest bit
   // first, in the same order the TX shifts them out of its own LFSR.
@@ -1174,12 +1191,8 @@ class PhyTest(
   def validRefDelayed(word: UInt): UInt =
     Cat(word(Phy.SerdesRatio - 2, 0), word(Phy.SerdesRatio - 1))
 
-  val rxSignature = withReset(rxReset) {
-    RegInit(0.U(PhyTest.SignatureWidth.W))
-  }
-  val rxSignatureOutput = withReset(rxReset) {
-    RegInit(0.U(PhyTest.SignatureWidth.W))
-  }
+  val rxSignature = softRegInit(rxReset)(0.U(PhyTest.SignatureWidth.W))
+  val rxSignatureOutput = softRegInit(rxReset)(0.U(PhyTest.SignatureWidth.W))
   /// Lane words of the packet that completed this cycle, and whether that packet
   /// should be folded into the signature. Driven by the RX logic further below.
   val rxLaneWords = Wire(Vec(numLanes + 3, UInt(Phy.SerdesRatio.W)))
@@ -1338,9 +1351,9 @@ class PhyTest(
   // packets from here. Every count here is of packets the target accepted.
   val txBursting =
     io.regs.txBurstPackets =/= 0.U && io.regs.txIdlePackets =/= 0.U
-  val txInGap = withReset(txReset) { RegInit(false.B) }
-  val txGapCount = withReset(txReset) { RegInit(0.U(32.W)) }
-  val txBurstCount = withReset(txReset) { RegInit(0.U(32.W)) }
+  val txInGap = softRegInit(txReset)(false.B)
+  val txGapCount = softRegInit(txReset)(0.U(32.W))
+  val txBurstCount = softRegInit(txReset)(0.U(32.W))
   val txGapLen = io.regs.txIdlePackets
   val txBurstEnds =
     txBursting && txBurstCount + 1.U >= io.regs.txBurstPackets
@@ -1536,7 +1549,7 @@ class PhyTest(
   // ERROR INJECTION
   //
   // Flips bit 0 of one lane in the next packet sent after the strobe.
-  val txInjectArmed = withReset(txReset) { RegInit(false.B) }
+  val txInjectArmed = softRegInit(txReset)(false.B)
   val txInjectNow = txInjectArmed && tx_valid && txTargetReady
   when(txInjectNow) {
     txInjectArmed := false.B
@@ -1608,8 +1621,8 @@ class PhyTest(
   }
 
   // Dumb RX logic (starts recording as soon as valid goes high and never stops)
-  val recordingStarted = withReset(rxReset) { RegInit(false.B) }
-  val rxIdleWordsReg = withReset(rxReset) { RegInit(0.U(32.W)) }
+  val recordingStarted = softRegInit(rxReset)(false.B)
+  val rxIdleWordsReg = softRegInit(rxReset)(0.U(32.W))
   io.regs.rxIdleWordsObserved := rxIdleWordsReg
   val startRecording = Wire(Bool())
   // Where the first packet starts, counting the previous word's UI as 0 to 31
@@ -1626,9 +1639,7 @@ class PhyTest(
     startPos(log2Ceil(Phy.SerdesRatio) - 1, 0),
     0.U
   )
-  val rxFrameOffset = withReset(rxReset) {
-    RegInit(0.U(log2Ceil(Phy.SerdesRatio).W))
-  }
+  val rxFrameOffset = softRegInit(rxReset)(0.U(log2Ceil(Phy.SerdesRatio).W))
   when(startRecording) {
     rxFrameOffset := startPos(log2Ceil(Phy.SerdesRatio) - 1, 0)
     rxReceiveOffset :=
@@ -1648,9 +1659,7 @@ class PhyTest(
 
   // numLanes data lanes, 1 valid lane, 1 track lane, 1 loopback lane. Until
   // recording starts, the last word received.
-  val runningData = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
-  }
+  val runningData = softRegInit(rxReset)(VecInit(Seq.fill(numLanes + 3)(0.U(32.W))))
 
   for (
     f <- 0 until PhyTest.NumFramings;
@@ -1669,15 +1678,13 @@ class PhyTest(
   // The last two packets each lane received, newest in the high half, for
   // `PhyTest.selfSyncErrors`. Valid never carries an LFSR pattern, so its
   // history is never read and optimizes away.
-  val rxHistory = withReset(rxReset) {
-    RegInit(
+  val rxHistory = softRegInit(rxReset)(
       VecInit(
         Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(PhyTest.LfsrWidth.W))
       )
     )
-  }
   // Packets processed since the FSM reset, up to the two the history holds.
-  val rxHistoryFill = withReset(rxReset) { RegInit(0.U(2.W)) }
+  val rxHistoryFill = softRegInit(rxReset)(0.U(2.W))
   val rxHistoryFull = rxHistoryFill === 2.U
   when(rxProcessPacket && !rxHistoryFull) {
     rxHistoryFill := rxHistoryFill + 1.U
@@ -1694,19 +1701,13 @@ class PhyTest(
   // may have been counted too, and be on its way into the SRAM. It counts
   // toward the packets kept after the trigger, and is dropped if there are to
   // be none.
-  val rxProcessedLast = withReset(rxReset) {
-    RegNext(rxProcessPacket, false.B)
-  }
+  val rxProcessedLast = softRegNext(rxReset)(rxProcessPacket, false.B)
   val rxScoredBehind = io.regs.rxManualCheck && rxProcessedLast
   val rxWriteInFlight = io.regs.rxManualCheck && shouldWriteStaged
   val rxCaptureError = io.regs.rxCaptureMode === CaptureMode.error
-  val rxTriggered = withReset(rxReset) { RegInit(false.B) }
-  val rxTriggerPacket = withReset(rxReset) {
-    RegInit(0.U(rxPacketsReceived.getWidth.W))
-  }
-  val rxCaptureRemaining = withReset(rxReset) {
-    RegInit(0.U(io.regs.rxCapturePostTrigger.getWidth.W))
-  }
+  val rxTriggered = softRegInit(rxReset)(false.B)
+  val rxTriggerPacket = softRegInit(rxReset)(0.U(rxPacketsReceived.getWidth.W))
+  val rxCaptureRemaining = softRegInit(rxReset)(0.U(io.regs.rxCapturePostTrigger.getWidth.W))
   // Only lanes that carry the current target's traffic can trigger. The
   // others compare whatever they happen to receive against a pattern.
   val rxTargetLanes = Mux(
@@ -1761,9 +1762,7 @@ class PhyTest(
       )
     )
   )
-  val rxErrPos = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(32.W))))
-  }
+  val rxErrPos = softRegInit(rxReset)(VecInit(Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(32.W))))
   for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
     rxErrPos(lane) := rxErrPos(lane) | rxNominalMasks(lane)
   }
@@ -1809,12 +1808,8 @@ class PhyTest(
     rxClassMask & ~rxRiseUis & rxClassSent,
     rxClassMask & ~rxRiseUis & ~rxClassSent
   )
-  val rxErrClassCounts = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
-  }
-  val rxErrClassOutput = withReset(rxReset) {
-    RegInit(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
-  }
+  val rxErrClassCounts = softRegInit(rxReset)(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
+  val rxErrClassOutput = softRegInit(rxReset)(VecInit(Seq.fill(rxErrClasses.length)(0.U(bitCounterWidth.W))))
   for ((errs, i) <- rxErrClasses.zipWithIndex) {
     val next = rxErrClassCounts(i) +& PopCount(errs)
     rxErrClassCounts(i) := Mux(next > maxBitCount, maxBitCount, next)
@@ -2081,10 +2076,10 @@ class PhyTest(
   //
   // Every word the RX hands over, whether or not the RX FSM is running.
   val trackCntReset = io.regs.trackCntRst || reset.asBool
-  val trackOnes = withReset(trackCntReset) { RegInit(0.U(32.W)) }
-  val trackZeros = withReset(trackCntReset) { RegInit(0.U(32.W)) }
+  val trackOnes = softRegInit(trackCntReset)(0.U(32.W))
+  val trackZeros = softRegInit(trackCntReset)(0.U(32.W))
   // Never more than `trackOnes`, so it cannot overflow first.
-  val trackOnesEven = withReset(trackCntReset) { RegInit(0.U(32.W)) }
+  val trackOnesEven = softRegInit(trackCntReset)(0.U(32.W))
   val trackWordOnes = PopCount(io.rx.bits.track)
   val trackOnesNext = trackOnes +& trackWordOnes
   val trackZerosNext = trackZeros +& (Phy.SerdesRatio.U - trackWordOnes)
@@ -2100,4 +2095,7 @@ class PhyTest(
   io.regs.trackOnes := trackOnes
   io.regs.trackZeros := trackZeros
   io.regs.trackOnesEven := trackOnesEven
+
+  // Last, so that each software reset wins over every other write.
+  softClears.foreach(_())
 }

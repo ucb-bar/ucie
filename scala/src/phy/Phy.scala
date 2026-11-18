@@ -502,12 +502,26 @@ class Phy(
   //    so the RX divided clock is `clkout_3` itself and the queue enqueues
   //    each word half a word period after it appears.
   // TX
+  // Each datapath reset comes off a flop, so that its synchronizer's
+  // asynchronous input can't glitch the way an OR of the UCIe reset and the
+  // software strobe could. Set by the PHY test domain's reset, which asserts
+  // with the UCIe reset whether or not that clock runs, and otherwise the
+  // strobe, which is synchronous to the PHY test clock.
+  val (txDatapathRstReg, rxDatapathRstReg) = withClockAndReset(
+    io.clkRst.phyTestClk,
+    io.clkRst.phyTestRst.asAsyncReset
+  ) {
+    (
+      RegNext(io.clkRst.txDatapathRst, true.B),
+      RegNext(io.clkRst.rxDatapathRst, true.B)
+    )
+  }
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
   txClkDiv.io.resetb := io.clkRst.txDividerRstb
   io.clkRst.txDivClk := (!txClkDiv.io.clkout_3.asBool).asClock
   val txRstSync = Module(new RstSync)
-  txRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.txDatapathRst)
+  txRstSync.io.rstbAsync := !txDatapathRstReg
   txRstSync.io.clk := io.clkRst.txDivClk
   io.clkRst.txDatapathRstSync := !txRstSync.io.rstbSync
   io.debug.txDivClk := io.clkRst.txDivClk
@@ -517,7 +531,7 @@ class Phy(
   rxClkDiv.io.resetb := io.clkRst.rxDividerRstb
   io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
   val rxRstSync = Module(new RstSync)
-  rxRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.rxDatapathRst)
+  rxRstSync.io.rstbAsync := !rxDatapathRstReg
   rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDatapathRstSync := !rxRstSync.io.rstbSync
 
@@ -532,7 +546,7 @@ class Phy(
   txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
   val txLaneDelayed = withClockAndReset(
     io.clkRst.txDivClk,
-    io.clkRst.txDatapathRstSync
+    io.clkRst.txDatapathRstSync.asAsyncReset
   ) {
     VecInit(
       (0 until Phy.numTxLanes(numLanes)).map(lane =>
@@ -550,7 +564,7 @@ class Phy(
   // lane that moves sends one word period later than one that did not.
   val txLaneDinNeg = withClockAndReset(
     (!io.clkRst.txDivClk.asBool).asClock,
-    io.clkRst.txDatapathRstSync
+    io.clkRst.txDatapathRstSync.asAsyncReset
   ) {
     RegNext(txLaneDelayed, 0.U.asTypeOf(chiselTypeOf(txLaneDelayed)))
   }
@@ -600,7 +614,7 @@ class Phy(
   val rxLaneDout = Wire(
     Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
   )
-  withClockAndReset(io.clkRst.phyTestClk, io.clkRst.phyTestRst) {
+  withClockAndReset(io.clkRst.phyTestClk, io.clkRst.phyTestRst.asAsyncReset) {
     // Set up clocking
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
@@ -663,7 +677,7 @@ class Phy(
   // reads a register in its own domain. Same one word period of added latency.
   val rxLaneDoutNeg = withClockAndReset(
     (!io.clkRst.rxDivClk.asBool).asClock,
-    io.clkRst.rxDatapathRstSync
+    io.clkRst.rxDatapathRstSync.asAsyncReset
   ) {
     RegNext(rxLaneDout, 0.U.asTypeOf(chiselTypeOf(rxLaneDout)))
   }
@@ -681,7 +695,7 @@ class Phy(
   // UI as they came off the shufflers.
   val rxLaneDelayed = withClockAndReset(
     io.clkRst.rxDivClk,
-    io.clkRst.rxDatapathRstSync
+    io.clkRst.rxDatapathRstSync.asAsyncReset
   ) {
     VecInit(
       (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
