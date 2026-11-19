@@ -172,8 +172,9 @@ vcs \\
     os.makeDir.all(path / os.up)
     // `-sysv_ext +.v` compiles `.v` files as SystemVerilog too, as `-sverilog`
     // does for VCS: some behavioral models use SystemVerilog in a `.v` file,
-    // such as the `timeunit` in `clocking_tile.v`. Not `-sv`, which would take
-    // the `.vams` models and the disciplines they include as SystemVerilog.
+    // such as the `timeunit` in `main_clk_sel_core.v`. Not `-sv`, which would
+    // take the `.vams` models and the disciplines they include as
+    // SystemVerilog.
     os.write.over(
       path,
       s"""#!/bin/bash
@@ -265,7 +266,12 @@ ${
             "ucie_clk_dist_network.sv",
             "ucie_clk_div4.v",
             "debug_clkmux.v",
-            "clocking_tile.v",
+            "pll8g_top.v",
+            "pll12g_top.v",
+            "main_clk_sel_core.v",
+            "global_delayline_gate.v",
+            "phytest_div_core.v",
+            "sb_div_core.v",
             "clock_receiver.v",
             "IO_ESD.v",
             "ucie_esd_routable.v",
