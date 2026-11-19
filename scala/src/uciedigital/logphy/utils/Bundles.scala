@@ -110,6 +110,11 @@ class PhyControlToPhyIO(afeParams: AfeParams) extends Bundle {
   val clockPhaseSelect = UInt(afeParams.clockPhaseSelBitWidth.W)
   val doElectricalIdleTx = Bool()
   val doElectricalIdleRx = Bool()
+
+  // Gate the forwarded clock between data words: the link negotiated strobe
+  // mode and is in ACTIVE, the one state that gates it so far. The PHY parks
+  // the clock whenever no word is queued (`TxClkGater`).
+  val mbTxClkGate = Bool()
 }
 
 class SubFsmControlIO extends Bundle {

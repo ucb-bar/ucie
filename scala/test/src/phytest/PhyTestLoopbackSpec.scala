@@ -40,8 +40,15 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     val state = Output(TxTestState())
   })
 
-  val dut = Module(new PhyTest(bufferDepthPerLane, numLanes)(true))
+  // PhyTest resets asynchronously, as it does in the full block.
+  val dut = withReset(reset.asAsyncReset) {
+    Module(new PhyTest(bufferDepthPerLane, numLanes)(true))
+  }
   dut.io.regs := DontCare
+  // As out of reset. The loopback lane frames on its first set bit whatever
+  // this says, and the pattern below has bit 0 set without three more after
+  // it.
+  dut.io.regs.rxValidStartThreshold := PhyTest.rxValidStartThresholdReset.U
   // In the full block the divider resets come from the clock register
   // block; the harness reset stands in for it here.
   dut.io.txDividerRstb := (!reset.asBool).asAsyncReset

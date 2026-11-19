@@ -9,8 +9,9 @@
 // and the stages would come back holding whatever phase they had.
 //
 // All four stages leave reset at zero and so rise together on the first input
-// edge; `Phy` depends on that to place `clkout_3` half a word period from the
-// edge the lane serdes loads on.
+// edge, as the dividers inside the lane tiles do; `Phy` depends on that to keep
+// `clkout_3` in step with the tiles, whose words it hands over half a word
+// period from the edge they act on.
 module ucie_clk_div4(
    input clk, resetb,
    output reg clkout_0, clkout_1, clkout_2, clkout_3

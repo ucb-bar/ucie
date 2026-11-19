@@ -81,6 +81,25 @@ object Phy {
   def treeBitOrder(t: Int): Int =
     (0 until 5).map(b => ((t >> b) & 1) << (4 - b)).sum
 
+  // The most UI `PhyRegsIO.txUiDelay` and `rxUiDelay` hold a lane back: two
+  // words, enough to take any boundary onto any other and still leave a word
+  // of lane to lane skew to take out.
+  val MaxUiDelay = 2 * SerdesRatio
+  val uiDelayWidth = log2Ceil(MaxUiDelay + 1)
+
+  // A lane's stream held back `delay` UI: UI `t` of the result is the UI
+  // `delay` before UI `t` of `word`, reaching back across the two words
+  // before it. At 0 it is `word` itself, with no added latency, and above
+  // `MaxUiDelay` it is `MaxUiDelay`. Takes one word per cycle of the clock
+  // it is called under.
+  def delayUi(word: UInt, delay: UInt): UInt = {
+    val prev = RegNext(word, 0.U)
+    val prev2 = RegNext(prev, 0.U)
+    val clamped =
+      Mux(delay > MaxUiDelay.U, MaxUiDelay.U, delay)
+    (Cat(word, prev, prev2) >> (MaxUiDelay.U - clamped))(SerdesRatio - 1, 0)
+  }
+
   // Instance names for the lane tiles. The PHY does not otherwise care what a
   // lane carries, but the physical flow and every waveform are far easier to
   // read when the tiles are named for their role.
@@ -336,6 +355,28 @@ class PhyRegsIO(numLanes: Int = 16) extends Bundle {
   // forwarded-clock lanes recover a clock rather than a word, so only their AFE
   // settings do anything.
   val rxctl = Input(Vec(numLanes + 4, new RxLaneDigitalCtlIO))
+  // Per TX lane, indexed like `txctl`, how many whole UI late the lane sends
+  // every UI, 0 to `Phy.MaxUiDelay`, ahead of the serializer: at 1, a word's
+  // last UI goes out first in the next word. For taking lane to lane skew of
+  // whole UI out at the far RX; the tile's `Dctrl` does fractions of one. A
+  // gated clock's postamble has to cover the largest delay on a data lane, or
+  // the end of a burst goes out with no clock. On a forwarded clock lane an
+  // odd delay inverts the clock against the data.
+  val txUiDelay =
+    Input(Vec(Phy.numTxLanes(numLanes), UInt(Phy.uiDelayWidth.W)))
+  // Per RX lane (data, valid, track), how many whole UI late the lane hands
+  // every UI on, 0 to `Phy.MaxUiDelay`, past the shuffler: at 1, a
+  // deserializer word's last UI is the first of the next word handed on.
+  // Which UI land in a deserializer word depends on where the RX dividers
+  // came out of reset relative to the forwarded clock, and nothing lines that
+  // up with the far TX's words, so a controller that cannot frame on its own,
+  // as PhyTest does on valid, needs every lane's delay to put its words where
+  // the far TX's start. `align_rx_words` measures that with PhyTest. Lanes set
+  // apart take out whole UI of lane to lane skew. After a gated burst the RX
+  // hands on its last word only once `rxUiDelay` more UI of forwarded clock
+  // have come in.
+  val rxUiDelay =
+    Input(Vec(Phy.numRxDataLanes(numLanes), UInt(Phy.uiDelayWidth.W)))
 }
 
 class PhyIO(numLanes: Int = 16) extends Bundle {
@@ -449,18 +490,38 @@ class Phy(
   // Global clock dividers.
   //
   // Both dividers come out of reset with every stage of the cascade toggling on
-  // the first edge, so `clkout_3` rises on the same edge the lane serdes loads
-  // its word on. Handing words over on that edge would sample them as they
-  // change, so both directions invert it: the TX and RX divided clocks then
-  // rise half a word period away from the load, in the middle of the stable
-  // window. The serdes shares each direction's reset, so that phase is fixed.
+  // the first edge, and so do the dividers inside the lane tiles, which share
+  // each direction's reset: `clkout_3` runs in step with every tile's divided
+  // clock in that direction. The two directions then hand words over on
+  // opposite edges of it, each half a word period from where the tile acts:
+  //
+  //  - A TX tile loads its word on the rising edge of its divided clock, so
+  //    the TX divided clock is `clkout_3` inverted and the queue presents each
+  //    word half a word period ahead of the load.
+  //  - An RX tile puts its word out on the falling edge of its divided clock,
+  //    so the RX divided clock is `clkout_3` itself and the queue enqueues
+  //    each word half a word period after it appears.
   // TX
+  // Each datapath reset comes off a flop, so that its synchronizer's
+  // asynchronous input can't glitch the way an OR of the UCIe reset and the
+  // software strobe could. Set by the PHY test domain's reset, which asserts
+  // with the UCIe reset whether or not that clock runs, and otherwise the
+  // strobe, which is synchronous to the PHY test clock.
+  val (txDatapathRstReg, rxDatapathRstReg) = withClockAndReset(
+    io.clkRst.phyTestClk,
+    io.clkRst.phyTestRst.asAsyncReset
+  ) {
+    (
+      RegNext(io.clkRst.txDatapathRst, true.B),
+      RegNext(io.clkRst.rxDatapathRst, true.B)
+    )
+  }
   val txClkDiv = Module(new ClkDiv4)
   txClkDiv.io.clk := clkDist.io.txClkDivClk
   txClkDiv.io.resetb := io.clkRst.txDividerRstb
   io.clkRst.txDivClk := (!txClkDiv.io.clkout_3.asBool).asClock
   val txRstSync = Module(new RstSync)
-  txRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.txDatapathRst)
+  txRstSync.io.rstbAsync := !txDatapathRstReg
   txRstSync.io.clk := io.clkRst.txDivClk
   io.clkRst.txDatapathRstSync := !txRstSync.io.rstbSync
   io.debug.txDivClk := io.clkRst.txDivClk
@@ -468,9 +529,9 @@ class Phy(
   val rxClkDiv = Module(new ClkDiv4)
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
   rxClkDiv.io.resetb := io.clkRst.rxDividerRstb
-  io.clkRst.rxDivClk := (!rxClkDiv.io.clkout_3.asBool).asClock
+  io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
   val rxRstSync = Module(new RstSync)
-  rxRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.rxDatapathRst)
+  rxRstSync.io.rstbAsync := !rxDatapathRstReg
   rxRstSync.io.clk := io.clkRst.rxDivClk
   io.clkRst.rxDatapathRstSync := !rxRstSync.io.rstbSync
 
@@ -483,6 +544,16 @@ class Phy(
   txLaneDin(Phy.trackLane(numLanes)) := io.tx.track
   txLaneDin(Phy.clkPLane(numLanes)) := io.tx.clkp
   txLaneDin(Phy.clkNLane(numLanes)) := io.tx.clkn
+  val txLaneDelayed = withClockAndReset(
+    io.clkRst.txDivClk,
+    io.clkRst.txDatapathRstSync.asAsyncReset
+  ) {
+    VecInit(
+      (0 until Phy.numTxLanes(numLanes)).map(lane =>
+        Phy.delayUi(txLaneDin(lane), io.regs.txUiDelay(lane))
+      )
+    )
+  }
 
   // The backup TX handoff phase. The queue hands a word over on the rising edge
   // of `txDivClk` and the tiles load half a word period later, which is only
@@ -493,9 +564,9 @@ class Phy(
   // lane that moves sends one word period later than one that did not.
   val txLaneDinNeg = withClockAndReset(
     (!io.clkRst.txDivClk.asBool).asClock,
-    io.clkRst.txDatapathRstSync
+    io.clkRst.txDatapathRstSync.asAsyncReset
   ) {
-    RegNext(txLaneDin, 0.U.asTypeOf(chiselTypeOf(txLaneDin)))
+    RegNext(txLaneDelayed, 0.U.asTypeOf(chiselTypeOf(txLaneDelayed)))
   }
 
   // TX lanes. Every lane is the same: a bit shuffle, then a serializer.
@@ -509,7 +580,7 @@ class Phy(
     txShuffler.io.din := Mux(
       io.regs.txctl(lane).sample_negedge,
       txLaneDinNeg(lane),
-      txLaneDin(lane)
+      txLaneDelayed(lane)
     )
     txShuffler.io.permutation := io.regs.txctl(lane).shuffler
 
@@ -543,7 +614,7 @@ class Phy(
   val rxLaneDout = Wire(
     Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
   )
-  withClockAndReset(io.clkRst.phyTestClk, io.clkRst.phyTestRst) {
+  withClockAndReset(io.clkRst.phyTestClk, io.clkRst.phyTestRst.asAsyncReset) {
     // Set up clocking
     val rxClkP = Module(new RxClkLane)
     val rxClkPAfeCtl =
@@ -606,7 +677,7 @@ class Phy(
   // reads a register in its own domain. Same one word period of added latency.
   val rxLaneDoutNeg = withClockAndReset(
     (!io.clkRst.rxDivClk.asBool).asClock,
-    io.clkRst.rxDatapathRstSync
+    io.clkRst.rxDatapathRstSync.asAsyncReset
   ) {
     RegNext(rxLaneDout, 0.U.asTypeOf(chiselTypeOf(rxLaneDout)))
   }
@@ -620,11 +691,24 @@ class Phy(
     )
   )
 
-  for (lane <- 0 until numLanes) {
-    io.rx.data(lane) := rxLaneWord(lane)
+  // The words the RX queues take on each `rxDivClk` edge, so the delay counts
+  // UI as they came off the shufflers.
+  val rxLaneDelayed = withClockAndReset(
+    io.clkRst.rxDivClk,
+    io.clkRst.rxDatapathRstSync.asAsyncReset
+  ) {
+    VecInit(
+      (0 until Phy.numRxDataLanes(numLanes)).map(lane =>
+        Phy.delayUi(rxLaneWord(lane), io.regs.rxUiDelay(lane))
+      )
+    )
   }
-  io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
-  io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
+
+  for (lane <- 0 until numLanes) {
+    io.rx.data(lane) := rxLaneDelayed(lane)
+  }
+  io.rx.valid := rxLaneDelayed(Phy.validLane(numLanes))
+  io.rx.track := rxLaneDelayed(Phy.trackLane(numLanes))
   io.debug.rxData := rxLaneDout
 
 }

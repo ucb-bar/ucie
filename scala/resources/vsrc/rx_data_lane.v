@@ -132,7 +132,12 @@ module rx_data_lane (
       if (ctr == 3'b0) begin
         divClock <= ~divClock;
       end
-      if (ctr == 3'b0 && divClock == 1'b0 && awake) begin
+      // The word goes out on the falling edge of `divClock`: the divider
+      // leaves reset like the global one (`ucie_clk_div4`) and rises on the
+      // first edge of `clk`, so a tile reset with the global divider updates
+      // `dout` as its `clkout_3` falls. `Phy` enqueues on `clkout_3` rising,
+      // half a word period from the update.
+      if (ctr == 3'b0 && divClock == 1'b1 && awake) begin
         outputReg <= shiftReg;
       end
     end

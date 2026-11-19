@@ -238,10 +238,12 @@ module training_tb;
         logic [WORD-1:0] second;
         phase_sel = phase_taps(phase);
         rxdata_intf.vref_sel = vref[`RDAC_SEL_BITS-1:0];
-        repeat (SETTLE_WORDS) @(posedge rxdata_intf.divclk);
-        @(negedge rxdata_intf.divclk);
+        // Read on the rising edge, as `Phy` does: the tile updates `dout` on
+        // the falling one, so the word read there ended half a word period
+        // earlier. The extra edge keeps the settle what it was.
+        repeat (SETTLE_WORDS + 1) @(posedge rxdata_intf.divclk);
         first = shuffle(rxdata_intf.dout);
-        @(negedge rxdata_intf.divclk);
+        @(posedge rxdata_intf.divclk);
         second = shuffle(rxdata_intf.dout);
         rot = (first === second) ? rotation_of(first) : -1;
     endtask

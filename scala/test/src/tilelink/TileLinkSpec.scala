@@ -59,6 +59,19 @@ abstract class SVTestDriver extends TestDriver {
     */
   def bypassHalfPeriodPs: Double = 62.5
 
+  /** Half period of the digital bypass clock, the PHY test clock out of reset,
+    * in ps: 800 MHz unless a driver says otherwise.
+    */
+  def digitalBypassHalfPeriodPs: Double = 625.0
+
+  /** Chip clock cycles before the run is called hung. */
+  def timeoutCycles: Int = 100000
+
+  /** Whether to dump waveforms outside FSDB builds. A long run at 8 GHz makes a
+    * dump of everything far too large to be worth writing.
+    */
+  def dumpWaves: Boolean = true
+
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
 
@@ -275,14 +288,14 @@ ${Codegen.indent(moduleItems)}
   initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #${bypassHalfPeriodPs} ucieBypassClock = ~ucieBypassClock;
-  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  always #${digitalBypassHalfPeriodPs} ucieDigitalBypassClock = ~ucieDigitalBypassClock;
   // 800 MHz sideband bypass.
   always #625 ucieSidebandBypassClock = ~ucieSidebandBypassClock;
   // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
   always #5000 ucieRefClock = ~ucieRefClock;
 
   initial begin
-    repeat(100000) @(posedge digitalClock);
+    repeat(${timeoutCycles}) @(posedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
@@ -294,9 +307,10 @@ ${Codegen.indent(moduleItems)}
       $$fsdbDumpfile(fsdbfile);
       $$fsdbDumpvars(0, SimTop, "+all");
     end
-`else
-    $$dumpfile("trace.vcd");
-    $$dumpvars(0);
+`else${
+          if (dumpWaves) "\n    $dumpfile(\"trace.vcd\");\n    $dumpvars(0);"
+          else ""
+        }
 `endif
     reset = 1'b1;
     repeat(5) @(posedge digitalClock);
@@ -1706,12 +1720,755 @@ manual_loopback();
   )
 }
 
-class TlSimpleTestDriver extends SVTestDriver {
+/** Where a PhyTest word spends its time between the TX FSM and the RX FSM, how
+  * much forwarded clock the receiver needs after the last data UI, and what the
+  * clock meters read. `PhyTestQueueCapTestDriver` covers the TX queue's cap,
+  * which takes far longer runs than these.
+  *
+  * Stages are timestamped hierarchically on the first data word of a run (a
+  * word whose valid word is nonzero): at each queue's ports, and at the TX
+  * valid bump, which the harness loops straight back to the RX valid bump. A
+  * port is sampled on its clock's edge, so a word shows at the edge that takes
+  * it.
+  *
+  * The postamble a single gated burst needs depends on where its last data UI
+  * falls in the RX's word, and that moves with every partial postamble the RX
+  * has seen. So every point starts from realigned dividers, puts the RX word
+  * boundary `offset` UI along with a shifting run whose own postamble is
+  * `offset` UI, and only then measures, at every even offset. Done with the RX
+  * lanes on their default handoff edge and on the backup (`sample_negedge`)
+  * one, and in manual mode at the worst offset.
+  */
+class PhyTestLatencyTestDriver extends SVTestDriver {
+  override def timeoutCycles = 4000000
+  override def dumpWaves = false
+
   setStimulus(
-    "TlSimpleTestDriver",
+    "PhyTestLatencyTestDriver",
     """
+begin : phytest_latency
+  reg [63:0] received, bad, flag;
+  int worst [2], best [2], worst_offset, min_units;
+  realtime first, last, lat_lo, lat_hi;
+  setup_ucie();
+  seed_lfsrs();
+  // The forwarded clock centred on the data, as training leaves it, with the
+  // dividers realigned behind it. Every gated burst below then starts the
+  // UCIe way, with no preamble: the clock's first edge has to sample the
+  // first data UI, which at the reset delay (64 taps, just over a UI late) it
+  // does not.
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  // The manual pattern, one row per packet of a run.
+  for (int row = 0; row < N_PKTS; row++) begin
+    for (int g = 0; g < 4; g++)
+      write_tx_data_chunk(g, row, pattern_word(row, 4 * g), pattern_word(row, 4 * g + 1),
+                          pattern_word(row, 4 * g + 2), pattern_word(row, 4 * g + 3));
+    write_tx_data_chunk(4, row, `DEFAULT_VALID, pattern_word(row, `TRACK_LANE), 0, 0);
+  end
+  `WRITE_UCIE(regDrv, `TX_MANUAL_REPEAT_PERIOD, N_PKTS);
+
+  // 1. Latency, from the TX queue's dequeue to the RX queue's enqueue, at
+  // every RX word alignment: once with every lane on its default handoff
+  // edge, once with the TX lanes on their backup one, and once with the RX
+  // lanes on theirs.
+  for (int handoff = 0; handoff < 3; handoff++) begin
+    set_handoff(handoff == 1, handoff == 2);
+    lat_lo = 1e9; lat_hi = 0;
+    for (int offset = 0; offset < 32; offset += `CLK_POSTAMBLE_UI) begin
+      // Move the RX word boundary `offset` UI against the TX's, then time an
+      // ungated run that leaves it there.
+      run_once(1'b0, 1'b1, offset / `CLK_POSTAMBLE_UI, 1'b0, 1'b1, received);
+      run_once(1'b0, 1'b0, 0, 1'b1, 1'b0, received);
+      if (received != N_PKTS) $fatal(1, "a timed run lost packets");
+      report_latency(handoff, offset, first, last);
+      if (first < lat_lo) lat_lo = first;
+      if (last > lat_hi) lat_hi = last;
+    end
+    $display("== %s: TX queue dequeue to RX queue enqueue, %0.1f UI (first UI, best alignment) to %0.1f UI (last UI, worst)",
+      HANDOFFS[handoff], lat_lo, lat_hi);
+  end
+  set_handoff(1'b0, 1'b0);
+
+  // 2. The postamble at every RX word alignment.
+  for (int negedge_rx = 0; negedge_rx < 2; negedge_rx++) begin
+    for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+      write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, negedge_rx);
+    worst[negedge_rx] = -1;
+    best[negedge_rx] = MAX_UNITS + 1;
+    for (int offset = 0; offset < 32; offset += `CLK_POSTAMBLE_UI) begin
+      min_postamble_task(1'b0, offset, min_units);
+      $display("RX %s handoff, RX word boundary moved %2d UI: minimum postamble %0d UI",
+        negedge_rx ? "backup " : "default", offset, min_units * `CLK_POSTAMBLE_UI);
+      if (min_units > worst[negedge_rx]) begin
+        worst[negedge_rx] = min_units;
+        if (!negedge_rx) worst_offset = offset;
+      end
+      if (min_units < best[negedge_rx]) best[negedge_rx] = min_units;
+    end
+    $display("== RX %s handoff: minimum postamble %0d to %0d UI over every alignment",
+      negedge_rx ? "backup" : "default", best[negedge_rx] * `CLK_POSTAMBLE_UI,
+      worst[negedge_rx] * `CLK_POSTAMBLE_UI);
+  end
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+    write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, 0);
+  min_postamble_task(1'b1, worst_offset, min_units);
+  $display("== manual mode at the worst alignment: minimum postamble %0d UI",
+    min_units * `CLK_POSTAMBLE_UI);
+  if (min_units != worst[0])
+    $fatal(1, "manual mode needs a different postamble from LFSR mode");
+  // What the docs recommend untrained: two whole packets, which covers every
+  // alignment and keeps the RX word boundary where it was.
+  if (worst[0] * `CLK_POSTAMBLE_UI > 2 * 32 || worst[1] * `CLK_POSTAMBLE_UI > 2 * 32)
+    $fatal(1, "two packets of postamble no longer cover every alignment");
+
+  // The forwarded clock running again, which the last gated run parked.
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+
+  // 3. The clock meters against the harness's clocks: the PHY test and
+  // sideband bypass pins at 800 MHz, and 16 GT/s packet clocks at 500 MHz,
+  // over 1024 cycles of the 500 MHz chip clock.
+  check_meter("PHY test", `CLK_METER_PHY_TEST, 1638);
+  check_meter("sideband", `CLK_METER_SB, 1638);
+  check_meter("TX divided", `CLK_METER_TX_DIV, 1024);
+  check_meter("RX divided", `CLK_METER_RX_DIV, 1024);
+  `EXPECT_UCIE(regDrv, `CONTROLLER_RX_FIFO_OVERFLOW, 64'h0);
+end
+""".trim,
+    """
+`define LAT_UCIE SimTop.harness.ucieTL
+localparam int N_PKTS = 4;
+localparam int MAX_UNITS = 48;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 29;
+localparam string HANDOFFS [3] = '{"default handoff", "TX backup handoff", "RX backup handoff"};
+
+// Every TX lane, the clock lanes included, and every RX lane on its default
+// or its backup (`sample_negedge`) handoff edge.
+task automatic set_handoff(input bit tx_backup, input bit rx_backup);
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 4; lane++)
+    write_txctl(lane, `TXCTL_SAMPLE_NEGEDGE_OFS, tx_backup);
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+    write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, rx_backup);
+endtask
+// One UI at the 8 GHz bypass clock, undivided.
+localparam realtime UI_PS = 62.5;
+
+function automatic [31:0] pattern_word(input int row, input int lane);
+  return 32'h9e3779b9 * (row + 1) + 7 * lane;
+endfunction
+
+// When each stage first handled a data word since `lat_arm`.
+bit lat_armed = 1'b0;
+realtime t_tx_enq, t_tx_deq, t_tx_bump, t_rx_enq, t_rx_deq;
+
+task automatic lat_arm();
+  t_tx_enq = 0; t_tx_deq = 0; t_tx_bump = 0; t_rx_enq = 0; t_rx_deq = 0;
+  lat_armed = 1'b1;
+endtask
+
+always @(posedge `LAT_UCIE.txTestFifo.io_enq_clock)
+  if (lat_armed && t_tx_enq == 0 && `LAT_UCIE.txTestFifo.io_enq_valid &&
+      `LAT_UCIE.txTestFifo.io_enq_ready && `LAT_UCIE.txTestFifo.io_enq_bits_word_valid != 0)
+    t_tx_enq = $realtime;
+// The dequeue that hands the word to `TxClkGater`, which may hold it for a
+// precondition or a preamble first.
+always @(posedge `LAT_UCIE.txTestFifo.io_deq_clock)
+  if (lat_armed && t_tx_deq == 0 && `LAT_UCIE.txTestFifo.io_deq_valid &&
+      `LAT_UCIE.txTestFifo.io_deq_ready && `LAT_UCIE.txTestFifo.io_deq_bits_word_valid != 0)
+    t_tx_deq = $realtime;
+always @(posedge `LAT_UCIE.io_phy_txValid)
+  if (lat_armed && t_tx_bump == 0) t_tx_bump = $realtime;
+reg [31:0] rx_first_valid;
+always @(posedge `LAT_UCIE.rxTestFifo.io_enq_clock)
+  if (lat_armed && t_rx_enq == 0 && `LAT_UCIE.rxTestFifo.io_enq_bits_valid != 0) begin
+    t_rx_enq = $realtime;
+    rx_first_valid = `LAT_UCIE.rxTestFifo.io_enq_bits_valid;
+  end
+always @(posedge `LAT_UCIE.rxTestFifo.io_deq_clock)
+  if (lat_armed && t_rx_deq == 0 && `LAT_UCIE.rxTestFifo.io_deq_valid &&
+      `LAT_UCIE.rxTestFifo.io_deq_bits_valid != 0)
+    t_rx_deq = $realtime;
+
+// The latency of the first data word, from the edge the TX queue dequeues it
+// on to the edge the RX queue enqueues the RX word holding its first UI, and
+// the one holding its last. The packet's first UI lands at bit `k` of the RX
+// word -- its lowest set valid bit, with nothing but idle before it -- so the
+// packet ends in that same RX word if `k` is 0, and in the next one, a word
+// later, otherwise.
+task automatic report_latency(input int handoff, input int offset,
+                              output realtime first, output realtime last);
+  int k;
+  if (t_tx_deq == 0 || t_tx_bump == 0 || t_rx_enq == 0)
+    $fatal(1, "a stage never saw the first data word");
+  k = 0;
+  while (!rx_first_valid[k]) k++;
+  first = (t_rx_enq - t_tx_deq) / UI_PS;
+  last = first + (k == 0 ? 0 : 32);
+  $display("%s, RX word boundary moved %2d UI: dequeue -> first UI out %5.1f UI, -> RX enqueue %5.1f UI (first UI), %5.1f UI (last UI)",
+    HANDOFFS[handoff], offset, (t_tx_bump - t_tx_deq) / UI_PS, first, last);
+endtask
+
+// One run of `N_PKTS` packets, with the forwarded clock gated around it when
+// `gate` is set, from reset FSMs -- and from realigned dividers if `realign`
+// is set; otherwise the RX word boundary stays wherever the last run left it.
+task automatic run_once(input bit manual, input bit gate, input int post_units,
+                        input bit time_it, input bit realign, output reg [63:0] received);
+  reg [63:0] st, w0, w;
+  begin
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    if (realign) begin
+      set_clk_en(64'h0);
+      set_rx_clk_en(64'h0);
+      reset_dividers();
+      set_clk_en(64'h1);
+      set_rx_clk_en(64'h1);
+    end
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, manual ? `TX_TEST_MODE_MANUAL : `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, N_PKTS);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, N_PKTS);
+    // On a running clock: the RX datapath reset needs edges to release.
+    reset_fsms();
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+    `WRITE_UCIE(regDrv, `TX_CLK_PREAMBLE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, post_units);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, gate);
+    repeat (64) @(posedge digitalClock);
+    if (time_it) lat_arm();
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    // Far longer than the TX queue and the RX pipeline take to drain.
+    repeat (500) @(posedge digitalClock);
+    lat_armed = 1'b0;
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+  end
+endtask
+
+// LFSR: the nominal bit errors on every mainband lane. Manual: capture SRAM
+// entries on lane 0 that do not match the pattern.
+task automatic score(input bit manual, output reg [63:0] bad);
+  reg [63:0] e;
+  begin
+    bad = 0;
+    if (!manual) begin
+      for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+        `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+        bad = bad + e;
+      end
+    end else begin
+      for (int p = 0; p < N_PKTS; p++) begin
+        `WRITE_UCIE(regDrv, `RX_DATA_LANE, 64'h0);
+        `WRITE_UCIE(regDrv, `RX_DATA_OFFSET, p);
+        `READ_UCIE(regDrv, `RX_DATA_CHUNK, e);
+        if (e[31:0] != pattern_word(p, 0)) bad = bad + 1;
+      end
+    end
+  end
+endtask
+
+// The fewest postamble units with which a single gated burst arrives whole,
+// with the RX word boundary `offset` UI along from where realigned dividers
+// put it.
+task automatic min_postamble_task(input bit manual, input int offset, output int min_units);
+  reg [63:0] received, bad;
+  begin
+    min_units = -1;
+    for (int u = 0; u <= MAX_UNITS && min_units < 0; u++) begin
+      // The shifting run: its own postamble moves the RX divider `offset`
+      // UI against the TX one, whatever it delivers.
+      run_once(1'b0, 1'b1, offset / `CLK_POSTAMBLE_UI, 1'b0, 1'b1, received);
+      run_once(manual, 1'b1, u, 1'b0, 1'b0, received);
+      score(manual, bad);
+      if (received == N_PKTS && bad == 0) min_units = u;
+    end
+    if (min_units < 0)
+      $fatal(1, "no postamble up to %0d UI delivered every packet", MAX_UNITS * `CLK_POSTAMBLE_UI);
+  end
+endtask
+
+task automatic check_meter(input string what, input [63:0] addr, input int expected);
+  reg [63:0] count;
+  begin
+    // Two windows, so the reading covers one whole one.
+    repeat (2 * `CLK_METER_WINDOW_CYCLES) @(posedge digitalClock);
+    `READ_UCIE(regDrv, addr, count);
+    $display("clock meter, %s: %0d per %0d chip cycles (expected %0d)",
+      what, count, `CLK_METER_WINDOW_CYCLES, expected);
+    if (count < expected - 4 || count > expected + 4)
+      $fatal(1, "the %s clock meter is off", what);
+  end
+endtask
+""".trim
+  )
+}
+
+/** Gated bursts with a packet of postamble, on the silicon handoff timing,
+  * parked low and parking high and low in turn.
+  *
+  * A packet is enough only for a burst that ends 17 UI or more into an RX word:
+  * the RX needs 17 edges after the one that samples the last data UI, plus
+  * whatever it takes to finish that word. Dividers realigned behind a parked
+  * clock start every burst 16 UI into an RX word, so it ends 15 UI into one and
+  * needs 33. One gap of 40 UI moves that to 23, which needs 25. This checks
+  * both: without that gap the last packet never arrives, and with it every
+  * burst arrives whole and clean.
+  */
+/** PhyTest's TX queue cap over long runs, where a cap too small for the queue's
+  * synchronizer lag runs it dry. `holds` is the smallest cap that has to, and
+  * `failsAt` one that has to run it dry, so that this measures the lag rather
+  * than passing anything.
+  */
+object PhyTestQueueCapTestDriver {
+  val stimulus = """
+begin : queue_cap
+  reg [63:0] st, received, bad, e, flag;
+  setup_ucie();
+  seed_lfsrs();
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  foreach (CAPS[i]) begin
+    `WRITE_UCIE(regDrv, `TX_QUEUE_LIMIT, CAPS[i]);
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, N_PKTS);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, N_PKTS);
+    // Also clears the underflow flag and empties the queue.
+    reset_fsms();
+    repeat (64) @(posedge digitalClock);
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int j = 0; j < 4096; j++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    repeat (500) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `READ_UCIE(regDrv, `TX_TEST_FIFO_UNDERFLOW, flag);
+    $display("== %s, txQueueLimit %0d%s: %0d of %0d packets, %0d bit errors, underflow %0d",
+      CLOCKS, CAPS[i], CAPS[i] == 16 ? " (the reset value)" : CAPS[i] == 0 ? " (uncapped)" : "",
+      received, N_PKTS, bad, flag);
+    if ((CAPS[i] == 0 || CAPS[i] >= HOLDS) && (received != N_PKTS || bad != 0 || flag != 0))
+      $fatal(1, "the TX queue ran dry with a cap that should hold");
+    if (CAPS[i] == FAILS_AT && flag == 0)
+      $fatal(1, "a cap that should run the queue dry held, so this is not measuring the lag");
+  end
+  `WRITE_UCIE(regDrv, `TX_QUEUE_LIMIT, 16);
+end
+""".trim
+
+  def moduleItems(clocks: String, holds: Int, failsAt: Int) = s"""
+localparam string CLOCKS = "$clocks";
+localparam int HOLDS = $holds;
+localparam int FAILS_AT = $failsAt;
+localparam int N_PKTS = 4096;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 29;
+localparam int CAPS [9] = '{0, 24, 16, 14, 12, 10, 8, 6, 4};
+""".trim
+}
+
+/** At this harness's clocks: an 800 MHz PHY test clock against 500 MHz packets.
+  */
+class PhyTestQueueCapTestDriver extends SVTestDriver {
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestQueueCapTestDriver",
+    PhyTestQueueCapTestDriver.stimulus,
+    PhyTestQueueCapTestDriver.moduleItems("800 MHz PHY test clock", 8, 4)
+  )
+}
+
+/** With the PHY test clock at the packet clock, 500 MHz each at 16 GT/s, as on
+  * the Iris harness and on silicon with a 1 GHz PHY test clock at 32 GT/s.
+  * PhyTest can then never get ahead of the PHY to make up a cycle the cap held
+  * it off, so this is where a cap needs the most room: 10 is the least that
+  * holds over a long run, 8 runs the queue dry, and the reset value of 16 has
+  * to hold with room to spare.
+  */
+class PhyTestQueueCapEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestQueueCapEqualRateTestDriver",
+    PhyTestQueueCapTestDriver.stimulus,
+    PhyTestQueueCapTestDriver.moduleItems("equal rates", 12, 8)
+  )
+}
+
+object PhyTestGatedTrainingTestDriver {
+  val stimulus = """
+begin : phytest_gated_training
+  reg [63:0] received, bad;
+  setup_ucie();
+  seed_lfsrs();
+  // The forwarded clock centred on the data, as training leaves it: with no
+  // preamble the clock's first edge has to sample the first data UI.
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  for (int alternate = 0; alternate < 2; alternate++) begin
+    `WRITE_UCIE(regDrv, `TX_CLK_PARK_ALTERNATE, alternate);
+    for (int train = 0; train < 2; train++) begin
+      gated_bursts(train, received, bad);
+      $display("%s, %s: %0d of %0d packets, %0d bit errors",
+        alternate ? "parking high and low in turn" : "parked low",
+        train ? "after one 40 UI gap" : "untrained", received, N_PKTS, bad);
+      if (train && (received != N_PKTS || bad != 0))
+        $fatal(1, "a packet of postamble did not deliver every burst after training");
+      if (!train && received == N_PKTS)
+        $fatal(1, "a packet of postamble delivered every burst untrained");
+    end
+  end
+end
+""".trim
+
+  val moduleItems = """
+localparam int N_PKTS = 8;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 29;
+
+task automatic wait_idle_words();
+  reg [63:0] w0, w;
+  begin
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+  end
+endtask
+
+task automatic run_and_drain(input int packets);
+  reg [63:0] st;
+  begin
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, packets);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, packets);
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    // Far longer than the TX queue and the RX pipeline take to drain.
+    repeat (500) @(posedge digitalClock);
+  end
+endtask
+
+// The FSMs reset on a running clock, which the RX datapath reset needs to
+// release. A clock that runs or parks for whole packets moves no word
+// boundary, so this leaves the RX's where it was.
+task automatic restart_fsms();
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+  reset_fsms();
+  wait_idle_words();
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+  repeat (64) @(posedge digitalClock);
+endtask
+
+task automatic gated_bursts(input bit train, output reg [63:0] received, output reg [63:0] bad);
+  reg [63:0] e;
+  begin
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_BURST_MODE, 64'h1);
+    `WRITE_UCIE(regDrv, `TX_CLK_PREAMBLE, 64'h0);
+    restart_fsms();
+    // Realigned behind the parked clock: the next burst's first edge samples
+    // its first data UI, 16 UI into an RX word.
+    set_clk_en(64'h0);
+    set_rx_clk_en(64'h0);
+    reset_dividers();
+    set_clk_en(64'h1);
+    set_rx_clk_en(64'h1);
+    if (train) begin
+      `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+      `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+      `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 40 / `CLK_POSTAMBLE_UI);
+      run_and_drain(1);
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, e);
+      if (e != 1) $fatal(1, "the 40 UI gap lost its packet");
+      restart_fsms();
+    end
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 32 / `CLK_POSTAMBLE_UI);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'd2);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'd4);
+    run_and_drain(N_PKTS);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+  end
+endtask
+""".trim
+}
+
+class PhyTestGatedTrainingTestDriver extends SVTestDriver {
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+
+  setStimulus(
+    "PhyTestGatedTrainingTestDriver",
+    PhyTestGatedTrainingTestDriver.stimulus,
+    PhyTestGatedTrainingTestDriver.moduleItems
+  )
+}
+
+/** The same with the PHY test clock at the packet clock, 500 MHz each, as on
+  * the Iris harness.
+  */
+class PhyTestGatedTrainingEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+
+  setStimulus(
+    "PhyTestGatedTrainingEqualRateTestDriver",
+    PhyTestGatedTrainingTestDriver.stimulus,
+    PhyTestGatedTrainingTestDriver.moduleItems
+  )
+}
+
+/** `test_gated_bursts` from Iris's `software/phytest-loopback.c`, step for
+  * step: the same burst shape, the same order of writes and the same waits,
+  * from the forwarded clock delay `setup_ucie` leaves, which is uncentred.
+  */
+object PhyTestGatedBurstsProgramTestDriver {
+  def stimulus = """
+begin : gated_bursts_program
+  reg [63:0] w0, w, e, bad, flag, received, phase;
+  setup_ucie();
+  seed_lfsrs();
+  `READ_UCIE(regDrv, `CLK_PHASE_SEL, phase);
+  `WRITE_UCIE(regDrv, `RX_BURST_MODE, 64'h1);
+  for (int alternate = 1; alternate >= 0; alternate--) begin
+    `WRITE_UCIE(regDrv, `TX_CLK_PARK_ALTERNATE, alternate);
+    arm(1);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+    repeat (256) @(posedge digitalClock);
+    set_clk_en(64'h0);
+    set_rx_clk_en(64'h0);
+    set_global_delay(CENTRED_TAPS);
+    reset_dividers();
+    set_clk_en(64'h1);
+    set_rx_clk_en(64'h1);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 40 / `CLK_POSTAMBLE_UI);
+    go(1, received);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 32 / `CLK_POSTAMBLE_UI);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'd6);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'd10);
+    arm(N_PKTS);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+    repeat (256) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    repeat (1024) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+    go(N_PKTS, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `READ_UCIE(regDrv, `TX_TEST_FIFO_UNDERFLOW, flag);
+    $display("== program's gated bursts, %s: %0d of %0d packets, %0d bit errors, underflow %0d, idle words while parked %0d",
+      alternate ? "parking high and low" : "parked low", received, N_PKTS, bad, flag, w - w0);
+    if (received != N_PKTS || bad != 0 || flag != 0 || w != w0)
+      $fatal(1, "the bring-up program's gated bursts did not come through clean");
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+  end
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  `WRITE_UCIE(regDrv, `CLK_PHASE_SEL, phase);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+end
+""".trim
+
+  def moduleItems = """
+localparam int N_PKTS = 24;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s,
+// `PT_CENTRED_DELAY_TAPS` in the program.
+localparam int CENTRED_TAPS = 29;
+
+task automatic arm(input int n);
+  reg [63:0] w0, w;
+  begin
+    `WRITE_UCIE(regDrv, `TEST_TARGET, `TEST_TARGET_MAINBAND);
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, n);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, n);
+    reset_fsms();
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+  end
+endtask
+
+task automatic go(input int n, output reg [63:0] received);
+  reg [63:0] st;
+  begin
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 4096; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    for (int i = 0; i < 4096; i++) begin
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+      if (received >= n) break;
+    end
+  end
+endtask
+""".trim
+}
+
+/** At the Iris harness's clocks: the PHY test clock at the packet clock. */
+class PhyTestGatedBurstsProgramEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 4000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestGatedBurstsProgramEqualRateTestDriver",
+    PhyTestGatedBurstsProgramTestDriver.stimulus,
+    PhyTestGatedBurstsProgramTestDriver.moduleItems
+  )
+}
+
+object TlSimpleTestDriver {
+
+  /** `gate` parks the forwarded clock between frames once the link is up, with
+    * two packets of postamble so that a frame's last word reaches the far RX
+    * whatever its word alignment. The clock is centred on the data first, as
+    * training leaves it: with no preamble the first edge after a park has to
+    * sample a frame's first UI, which at the global delay's reset value it does
+    * not.
+    */
+  def stimulus(gate: Boolean) = s"""
 tl_simple();
-          """.trim
+${if (gate) s"""set_clk_en(64'h0);
+set_rx_clk_en(64'h0);
+set_global_delay(${Codegen.digitalGlobalDelayTaps});
+reset_dividers();
+set_clk_en(64'h1);
+set_rx_clk_en(64'h1);
+`WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 64 / `CLK_POSTAMBLE_UI);
+`WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+repeat (64) @(posedge digitalClock);""" else ""}
+begin : round_trip
+  reg [63:0] result;
+  realtime start;
+  // A read's round trip over the mainband loopback with nothing else in
+  // flight, in bus clock cycles (`digitalClock`, 2 ns).
+  for (int i = 0; i < 4; i++) begin
+    `WRITE(mbDrv, 64'h8 * i, 64'h1234_5678_0000_0000 + i);
+    start = $$realtime;
+    `READ(mbDrv, 64'h8 * i, result);
+    $$display("== TL read round trip over the mainband: %0.1f bus clock cycles",
+      ($$realtime - start) / 2000.0);
+    if (result != 64'h1234_5678_0000_0000 + i)
+      $$fatal(1, "read back %x from %0d", result, i);
+  end
+end
+""".trim
+}
+
+class TlSimpleTestDriver extends SVTestDriver {
+  setStimulus("TlSimpleTestDriver", TlSimpleTestDriver.stimulus(gate = false))
+}
+
+/** The same with the forwarded clock gated between frames. */
+class TlSimpleGatedTestDriver extends SVTestDriver {
+  setStimulus(
+    "TlSimpleGatedTestDriver",
+    TlSimpleTestDriver.stimulus(gate = true)
+  )
+}
+
+/** The same at 8 GT/s, where the bus clock outruns the packet clock two to one,
+  * as it does on silicon at any rate below 16 GT/s.
+  */
+class TlSimpleSlowLinkTestDriver extends SVTestDriver {
+  override def bypassHalfPeriodPs: Double = 125.0
+  setStimulus(
+    "TlSimpleSlowLinkTestDriver",
+    TlSimpleTestDriver.stimulus(gate = false)
+  )
+}
+
+/** `align_rx_words` puts the RX's words on the TX's boundary, so a run then
+  * frames at UI 0. The UI delays then move whole lanes on either side of the
+  * link: with data lane 0 held back `d` UI at the RX and every other lane,
+  * valid and track included, `d` UI at the TX, every lane arrives together,
+  * reads clean, and frames `d` UI into the word. Odd, and past a word, so every
+  * stage of both shifters moves something.
+  */
+class UiDelayTestDriver extends SVTestDriver {
+  val rxLanes =
+    edu.berkeley.cs.uciedigital.phy.Phy.numRxDataLanes(UcieTLParams().numLanes)
+  setStimulus(
+    "UiDelayTestDriver",
+    s"""
+begin : ui_delay
+  reg [63:0] base, offset, received, errored;
+  int d;
+  setup_ucie();
+  align_rx_words();
+  `READ_UCIE(regDrv, `RX_UI_DELAY, base);
+  $$display("align_rx_words set every rxUiDelay to %0d", base);
+  for (int k = 0; k < 3; k++) begin
+    d = k == 0 ? 0 : k == 1 ? 1 : 33;
+    for (int l = 0; l < $rxLanes; l++) begin
+      `WRITE_UCIE(regDrv, `TX_UI_DELAY + l * `TX_UI_DELAY_WIDTH, l == 0 ? 0 : d);
+      `WRITE_UCIE(regDrv, `RX_UI_DELAY + l * `RX_UI_DELAY_WIDTH, l == 0 ? base + d : base);
+    end
+    run_lfsr(16);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    `READ_UCIE(regDrv, `RX_FRAME_OFFSET, offset);
+    `READ_UCIE(regDrv, `RX_LANE_ERRORED, errored);
+    $$display("lanes %0d UI late: %0d packets, framed at UI %0d, lanes errored %0h",
+      d, received, offset, errored);
+    if (received != 16 || offset != d % 32 || errored != 0)
+      $$fatal(1, "the lanes did not arrive together, framed %0d UI in", d % 32);
+  end
+end
+""".trim
   )
 }
 
@@ -3023,12 +3780,103 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
+    it("should time PhyTest's path and its minimum postamble using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestLatencyTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_time_PhyTest_path_and_minimum_postamble_using_Verilator"
+      )
+    }
+
+    it("should hold a capped TX queue over a long run using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestQueueCapTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_hold_a_capped_TX_queue_over_a_long_run_using_Verilator"
+      )
+    }
+
+    it(
+      "should hold a capped TX queue with the PHY test clock at the packet clock using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestQueueCapEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_hold_a_capped_TX_queue_at_equal_rates_using_Verilator"
+      )
+    }
+
+    it(
+      "should keep gated bursts whole with a packet of postamble using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedTrainingTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_keep_gated_bursts_whole_with_a_packet_of_postamble_using_Verilator"
+      )
+    }
+
+    it(
+      "should run the bring-up program's gated bursts at equal rates using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedBurstsProgramEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_run_the_bring_up_programs_gated_bursts_at_equal_rates_using_Verilator"
+      )
+    }
+
+    it(
+      "should keep gated bursts whole with the PHY test clock at the packet clock using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedTrainingEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_keep_gated_bursts_whole_at_equal_rates_using_Verilator"
+      )
+    }
+
     it("should support simple TL test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple TL test with the clock gated using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleGatedTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_with_the_clock_gated_using_Verilator"
+      )
+    }
+
+    it(
+      "should support simple TL test with the link slower than the bus using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleSlowLinkTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_with_the_link_slower_than_the_bus_using_Verilator"
+      )
+    }
+
+    it("should align RX words and move whole lanes by UI using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new UiDelayTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_align_RX_words_and_move_whole_lanes_by_UI_using_Verilator"
       )
     }
 

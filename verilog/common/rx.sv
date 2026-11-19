@@ -427,11 +427,30 @@ generate
 endgenerate
 assign intf.divclk = desclk[`SERDES_STAGES-1];
 
+logic [2**`SERDES_STAGES-1:0] dout_tree;
 tree_des des(
     .din(dout_delayed),
     .clk(desclk),
-    .dout(intf.dout)
+    .dout(dout_tree)
 );
+
+// The tile puts its word out on the falling edge of its divided clock. The
+// tree's last stage is latches that are transparent while that clock is high,
+// so its word is only whole while the clock is low; these flops take it as the
+// clock falls and hold it for a whole word period. `Phy` enqueues on the rising
+// edge, half a word period after the update.
+logic divclkb;
+assign divclkb = ~desclk[`SERDES_STAGES-1];
+generate
+    for (genvar j = 0; j < 2**`SERDES_STAGES; j++) begin : out
+        pos_dff ff (
+            .clk(divclkb),
+            .d(dout_tree[j]),
+            .rstb(intf.rstb),
+            .q(intf.dout[j])
+        );
+    end
+endgenerate
 
 endmodule
 

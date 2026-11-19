@@ -345,6 +345,12 @@ class LogicalPhy(
   patternReader.io.rxLfsrCtrl.pattern := descrambler.io.lfsrOutput
 
   val isActive = ltsm.io.ltState === LTState.sACTIVE
+
+  // MBINIT.PARAM's clock mode: 0 strobe, 1 continuous. Strobe gates the
+  // forwarded clock between data, in ACTIVE only for now.
+  io.analog.ctrl.mbTxClkGate := isActive &&
+    ltsm.io.negotiatedPhyParamSettings.valid &&
+    ltsm.io.negotiatedPhyParamSettings.bits.clockMode === 0.U
   val txTrainingLfsrActive = patternWriter.io.txLfsrCtrl.valid
   val txRuntimeIncrement =
     mainbandLaneController.io.mbLanes.tx.valid &&
@@ -524,13 +530,11 @@ class LogicalPhy(
   idleTxBits.trk := fwClkPBits
 
   when(isActive) {
-    // Keep the lanes up between beats
-    selectedTxBits := Mux(
-      mainbandLaneController.io.mbLanes.tx.valid,
-      scrambledTxBits,
-      idleTxBits
-    )
-    io.analog.mainband.tx.valid := true.B
+    // Beats only. Between them the PHY keeps the lanes going itself, idle
+    // with the clock running or gated (`mbTxClkGate`), so a beat never waits
+    // behind idle words in the PHY's queue.
+    selectedTxBits := scrambledTxBits
+    io.analog.mainband.tx.valid := mainbandLaneController.io.mbLanes.tx.valid
   }.elsewhen(rxClkCalOverride) {
     // A constant pattern, so it needs no flow control: a cycle the PHY does
     // not take it is a cycle it goes out again unchanged. That matters when

@@ -22,6 +22,11 @@ class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   // value wins, so a bare reset leaves them at their elaboration-time state.
   val fsmRst = Input(Bool())
   val execute = Input(Bool())
+  val validStartThreshold = Input(UInt(log2Ceil(Phy.SerdesRatio + 1).W))
+  // While valid, the RX gets this on valid and zeros on every other lane, in
+  // place of whatever the TX sends: an idle link, glitching if it is nonzero.
+  val inject = Input(Valid(UInt(Phy.SerdesRatio.W)))
+  val frameOffset = Output(UInt(log2Ceil(Phy.SerdesRatio).W))
   val bitErrors =
     Output(
       Vec(
@@ -38,12 +43,17 @@ class PhyTestLfsrLoopbackIO(numLanes: Int) extends Bundle {
   * lane, so the RX latches onto the valid edge one UI before the pattern
   * actually starts. Skewing the framing the other way needs no harness support:
   * a valid pattern whose lowest set bit is 1 makes the RX align one UI late.
+  *
+  * `linkDelay` puts every lane, valid included, that many UI late, as a link
+  * whose RX word boundary is that far from the TX's.
   */
 class PhyTestLfsrLoopback(
     numLanes: Int = 4,
     dataDelay: Boolean = false,
-    validLaneSel: Int = -1
+    validLaneSel: Int = -1,
+    linkDelay: Int = 0
 ) extends Module {
+  require(linkDelay >= 0 && linkDelay < Phy.SerdesRatio)
   // Which lane carries the framing waveform; negative means leave it on the
   // dedicated valid lane.
   val validSel =
@@ -52,7 +62,10 @@ class PhyTestLfsrLoopback(
 
   // The tester carries analog macros (the observation bump drivers, the TX data
   // debug lane, and the loopback pair), so this needs their behavioral models.
-  val dut = Module(new PhyTest(numLanes = numLanes)(true))
+  // PhyTest resets asynchronously, as it does in the full block.
+  val dut = withReset(reset.asAsyncReset) {
+    Module(new PhyTest(numLanes = numLanes)(true))
+  }
   dut.io.regs := DontCare
   // In the full block the divider resets come from the clock register
   // block; the harness reset stands in for it here.
@@ -69,6 +82,8 @@ class PhyTestLfsrLoopback(
   dut.io.regs.txValidLaneSel := validSel.U
   dut.io.regs.rxValidLaneSel := validSel.U
   dut.io.regs.rxLfsrValid := io.validPattern
+  dut.io.regs.rxValidStartThreshold := io.validStartThreshold
+  dut.io.regs.rxUiDelay.foreach(_ := 0.U)
   dut.io.regs.txClkP := 0.U
   dut.io.regs.txClkN := 0.U
   dut.io.regs.txExecute := io.execute
@@ -118,7 +133,18 @@ class PhyTestLfsrLoopback(
     )
 
   dut.io.tx.ready := true.B
-  dut.io.rx.valid := dut.io.tx.valid
+  dut.io.rx.valid := dut.io.tx.valid || io.inject.valid
+  // Only the TX's words go in, so the UI pulled in ahead of the first are
+  // zeros.
+  def linkDelayed(word: UInt): UInt =
+    if (linkDelay == 0) word
+    else {
+      val prev = RegEnable(word, 0.U, dut.io.tx.valid)
+      (Cat(word, prev) >> (Phy.SerdesRatio - linkDelay))(
+        Phy.SerdesRatio - 1,
+        0
+      )
+    }
   // Bit 0 is the oldest UI, so delaying by one UI shifts each word up a bit
   // and pulls in the previous word's newest bit.
   def delayed(word: UInt): UInt =
@@ -130,16 +156,23 @@ class PhyTestLfsrLoopback(
 
   // Valid frames the capture, so it is never delayed. Every other pattern lane
   // -- the data lanes and track -- is.
-  dut.io.rx.bits.valid := dut.io.tx.bits.valid
-  dut.io.rx.bits.track := delayed(dut.io.tx.bits.track)
+  dut.io.rx.bits.valid :=
+    Mux(io.inject.valid, io.inject.bits, linkDelayed(dut.io.tx.bits.valid))
+  dut.io.rx.bits.track :=
+    Mux(io.inject.valid, 0.U, delayed(linkDelayed(dut.io.tx.bits.track)))
   for (lane <- 0 until numLanes) {
-    dut.io.rx.bits.data(lane) := delayed(dut.io.tx.bits.data(lane))
+    dut.io.rx.bits.data(lane) := Mux(
+      io.inject.valid,
+      0.U,
+      delayed(linkDelayed(dut.io.tx.bits.data(lane)))
+    )
   }
 
   io.bitErrors(PhyTest.NominalFraming) := dut.io.regs.rxBitErrors
   io.bitErrors(PhyTest.EarlyFraming) := dut.io.regs.rxBitErrorsEarly
   io.bitErrors(PhyTest.LateFraming) := dut.io.regs.rxBitErrorsLate
   io.packetsReceived := dut.io.regs.rxPacketsReceived
+  io.frameOffset := dut.io.regs.rxFrameOffset
 }
 
 class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
@@ -160,20 +193,35 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
   // The same waveform one UI later, so the RX aligns one UI late.
   val lateValid = alignedValid << 1
 
-  // Runs the loopback for `packets` packets and returns the error counts, indexed
-  // by framing then by lane.
-  def counts(
+  // Error counts indexed by framing then by lane, packets received, and the
+  // RX's frame offset.
+  case class Run(
+      errors: Seq[Seq[BigInt]],
+      received: BigInt,
+      frameOffset: Int
+  )
+
+  // Runs the loopback for `packets` packets, after `glitch` on valid for a
+  // word and then an idle word if it is nonzero.
+  def run(
       dataDelay: Boolean,
       validPattern: BigInt,
-      validLaneSel: Int = -1
-  ): (Seq[Seq[BigInt]], BigInt) = {
-    var result: Seq[Seq[BigInt]] = Seq.empty
-    var received = BigInt(0)
-    simulate(new PhyTestLfsrLoopback(numLanes, dataDelay, validLaneSel)) { c =>
+      validLaneSel: Int = -1,
+      linkDelay: Int = 0,
+      threshold: Int = PhyTest.rxValidStartThresholdReset,
+      glitch: BigInt = 0
+  ): Run = {
+    var result: Run = null
+    simulate(
+      new PhyTestLfsrLoopback(numLanes, dataDelay, validLaneSel, linkDelay)
+    ) { c =>
       for (lane <- 0 until PhyTest.numTestLanes(numLanes)) {
         c.io.lfsrSeed(lane).poke(seed(lane).U)
       }
       c.io.validPattern.poke(validPattern.U)
+      c.io.validStartThreshold.poke(threshold.U)
+      c.io.inject.valid.poke(false.B)
+      c.io.inject.bits.poke(0.U)
       c.io.execute.poke(false.B)
       c.io.fsmRst.poke(false.B)
       c.clock.step(4)
@@ -182,18 +230,39 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
       c.clock.step()
       c.io.fsmRst.poke(false.B)
       c.clock.step(2)
+      if (glitch != 0) {
+        c.io.inject.valid.poke(true.B)
+        c.io.inject.bits.poke(glitch.U)
+        c.clock.step()
+        c.io.inject.bits.poke(0.U)
+        c.clock.step()
+        c.io.inject.valid.poke(false.B)
+        c.clock.step()
+      }
       c.io.execute.poke(true.B)
       c.clock.step()
       c.io.execute.poke(false.B)
       c.clock.step(packets + 4)
-      result = (0 until PhyTest.NumFramings).map(f =>
-        (0 until PhyTest.numTestLanes(numLanes)).map(lane =>
-          c.io.bitErrors(f)(lane).peek().litValue
-        )
+      result = Run(
+        (0 until PhyTest.NumFramings).map(f =>
+          (0 until PhyTest.numTestLanes(numLanes)).map(lane =>
+            c.io.bitErrors(f)(lane).peek().litValue
+          )
+        ),
+        c.io.packetsReceived.peek().litValue,
+        c.io.frameOffset.peek().litValue.toInt
       )
-      received = c.io.packetsReceived.peek().litValue
     }
-    (result, received)
+    result
+  }
+
+  def counts(
+      dataDelay: Boolean,
+      validPattern: BigInt,
+      validLaneSel: Int = -1
+  ): (Seq[Seq[BigInt]], BigInt) = {
+    val r = run(dataDelay, validPattern, validLaneSel)
+    (r.errors, r.received)
   }
 
   // Every lane this harness loops back: the data lanes, valid, and track. The
@@ -274,6 +343,57 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
           // not happen to match.
           assert(errors(PhyTest.LateFraming)(lane) <= 1)
           assert(errors(PhyTest.NominalFraming)(lane) > 1)
+        }
+      }
+    }
+  }
+
+  describe("PhyTest valid start threshold") {
+    def assertClean(r: Run): Unit = {
+      assert(r.received >= packets / 2, s"only ${r.received} packets received")
+      for (lane <- scoredLanes) {
+        withClue(s"lane $lane: ") {
+          assert(r.errors(PhyTest.NominalFraming)(lane) == 0)
+        }
+      }
+    }
+
+    it("should frame on a run of valid that straddles two words") {
+      // The valid waveform's first run of four lands on UI 30 and 31 of one
+      // word and UI 0 and 1 of the next, so only the two words together show
+      // four in a row.
+      for (linkDelay <- Seq(29, 30, 31)) {
+        withClue(s"$linkDelay UI late: ") {
+          val r = run(dataDelay = false, alignedValid, linkDelay = linkDelay)
+          assert(r.frameOffset == linkDelay)
+          assertClean(r)
+        }
+      }
+    }
+
+    it("should frame past a glitch on valid shorter than the threshold") {
+      // A lone bit on an idle valid lane, and a pair ending its word, which
+      // the start search must not join onto the idle word after it.
+      for (glitch <- Seq(BigInt(1) << 8, BigInt(3) << 30)) {
+        withClue(f"glitch $glitch%08x: ") {
+          val r = run(dataDelay = false, alignedValid, glitch = glitch)
+          assert(r.frameOffset == 0)
+          assertClean(r)
+        }
+      }
+    }
+
+    it("should frame on the first set bit at a threshold of 1 or 0") {
+      for (threshold <- Seq(0, 1)) {
+        withClue(s"threshold $threshold: ") {
+          val r = run(
+            dataDelay = false,
+            alignedValid,
+            threshold = threshold,
+            glitch = BigInt(1) << 8
+          )
+          assert(r.frameOffset == 8)
+          assert(r.errors(PhyTest.NominalFraming)(0) > 0)
         }
       }
     }
