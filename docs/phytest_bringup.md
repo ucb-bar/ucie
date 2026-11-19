@@ -17,10 +17,13 @@ Iris repository.
 
 **Figures** (in `docs/figures/`)
 - `top_level_clocking_doc.png`: every clock domain, its async FIFOs, and the sideband controllers.
-- `clk_manager_doc.png`: the clocking tile, showing which fields are applied and which take effect
-  immediately.
+- `clk_manager_doc.png`: the clocking tile's six macros, showing which fields are applied and which
+  take effect immediately.
 - `clk_dividers_doc_chains.png`: the PHY test and TX sideband divider chains.
-- `clk_dividers_doc_tx.png`: the TX divider and phase shifter.
+- `clk_dividers_doc_tx.png`: the TX clock generator and the TX gate.
+- `clk_dividers_doc_blocks.png`: the divider stages at the flip-flop level.
+- `clk_dividers_doc_disable.png`: the TX gate and the PHY test and sideband gates at the gate level.
+- The source for all of these is `ucie_claude.svg`, one Inkscape page per PNG.
 - `lane_clock_distribution.png`: the lane clock trees, the delay lines, and the RX clock select.
 
 ---
@@ -55,13 +58,13 @@ Two properties hold by construction:
 
 ![Clocking tile](figures/clk_manager_doc.png)
 
-The figure shows the tile as it was, a single macro. It is now six, each a black box under its
-cell's name, wired up behind the old interface by `ClockingTile` (`scala/src/phy/macros/clocking/Common.scala`).
+The tile is six macros, each a black box under its cell's name, wired up behind the old single
+macro's interface by `ClockingTile` (`scala/src/phy/macros/clocking/Common.scala`).
 Each UCIe port has its own six, PLLs included.
 
 | Macro | What it does | Model |
 |---|---|---|
-| `pll8g_top`, `pll12g_top` (cells `8gpll_top`, `12gpll_top`) | ×80 and ×120 off `refClk`. Enabled by `reset` low. | `pll8g_top.v`, `pll12g_top.v` |
+| `pll8g_top`, `pll12g_top` (cells `8gpll_top`, `12gpll_top`) | ×80 and ×120 off `refClk`. Off with the RDAC (`Dbias`) at 0; `reset` holds only the digital loop. `pll8En`/`pll12En` drives both. | `pll8g_top.v`, `pll12g_top.v` |
 | `main_clk_sel_core` | The X2 doubler (always on with PLL8), the main clock mux, and a ÷2 and a ÷4 each for `TxClk` and `TxClkQ`, the quadrature ones with rotate and half-cycle selects | `main_clk_sel_core.v` |
 | `global_delayline_gate` | The global delay line on `TxClkQ`, then the TX gate on both clocks | `global_delayline_gate.v` |
 | `phytest_div_core` | Source mux, ÷6/÷8/÷12/÷15, bypass mux, gate | `phytest_div_core.v` |
@@ -71,8 +74,9 @@ Pins the cells don't have yet, all marked in `Common.scala`: the PLLs' `clk_out`
 `main_clk_sel_core`'s divider `reset`, the divider cores' source muxes, and the gate's `enable` and
 data clock pins. The PLL cell names start with a digit, which firtool won't emit, so the RTL uses
 `pll8g_top` and `pll12g_top`. The PLLs' loop settings (`kp`, `ki`, `code_init`, `code_byp`,
-`Dbias`, `Dcoarse`, `auto_en`) have no registers; `ClockingTile.pll8Settings` and `pll12Settings` tie
-them off, and are placeholders.
+`Dcoarse`, `auto_en`) and the RDAC code an enabled PLL runs on (`Dbias`) have no registers;
+`ClockingTile.pll8Settings` and `pll12Settings` set them, and are placeholders: zero, but `Dbias` at
+mid-scale.
 
 **Gates.**
 - **TX gate (`clkEn`).** Two latches after the global delay line. The data clock's latches `clkEn`
@@ -404,6 +408,99 @@ the domain out of reset, so `ucieRst` still has to be 0.
 ---
 
 ## 4. Bring-up plan: power-on to a trained UCIe link
+
+### 4.0 The registers the plan uses
+
+Offsets are from the UCIe block's base (`UcieTLParams.address`; in Iris, `0x200000` for `c2c_ucie0`
+and `0x208000` for `c2c_ucie1`), as `software/ucie.h` names them. Per-lane registers sit at the
+offset plus lane × the register's `_WIDTH`. **Reset** is the value out of chip reset. "Strobe" means
+write 1 for a one-cycle pulse; "RO" means read-only. Section 6 has every mode in more detail.
+
+**Clock and reset registers** (`UcieClkRegs`, on the chip clock). These always answer.
+"Applied" fields reach the clocking tile only through an apply (section 1.4).
+
+| Register | Offset | Reset | What it does | Step |
+|---|---|---|---|---|
+| `UCIE_MAIN_CLK_SEL` | `0x10000` | 3 | Applied. UCIe main clock: 0 PLL8, 1 PLL12, 2 X2, 3 the `bypassClk` pin. | 1, 5 |
+| `UCIE_PLL8_EN`, `UCIE_PLL12_EN`, `UCIE_X2_EN` | `0x10008`, `0x10010`, `0x10018` | 0 | Applied. PLL enables: off drives the PLL's RDAC to 0 and holds its loop in reset. A PLL a divider takes stays on regardless. `x2En` drives nothing: the doubler runs whenever PLL8 does. | 2 |
+| `UCIE_TX_CLK_DIV` | `0x10020` | 0 | Applied. TX division: 0 ÷1, 1 ÷2, 2 ÷4. | 5 |
+| `UCIE_TX_CLK_PHASE` | `0x10028` | 0 | Applied by its own write. The TX quadrature clock's lead in main-clock half cycles (`set_tx_phase`). | 5, 9 |
+| `UCIE_PHY_TEST_CLK_DIV` | `0x10030` | 4 (÷8) | Applied. 3 ÷6, 4 ÷8, 5 ÷12, 6 ÷15; 0–2 select ÷8. | 2 |
+| `UCIE_PHY_TEST_CLK_BYPASS_EN` | `0x10038` | 1 | Applied. 1 takes the PHY test clock from `digitalBypassClk`. | 2 |
+| `UCIE_CLK_PHASE_SEL` | `0x10040` | all 64 taps | Applied by its own write. The global delay line, thermometer coded (`set_global_delay`). | 5, 9 |
+| `UCIE_CLK_EN` | `0x10048` | 0 | The TX clock gate (`set_clk_en`). | 5, 6, 7 |
+| `UCIE_RX_CLK_EN` | `0x10050` | 0 | The RX forwarded clock's gate, at the RX clock lanes (`set_rx_clk_en`). | 7 |
+| `UCIE_FREQ_SEL_AUTO_EN` | `0x10058` | 0 | 1 hands the TX clocking to the rate table (`UCIE_RATE_CFG`), applied on its own whenever link training negotiates a new rate. Leave 0 under PhyTest. | — |
+| `UCIE_SB_CLK_DIV` | `0x10068` | 2 (÷10) | Applied. 1 ÷5, 2 ÷10, 3 ÷15; 0 selects ÷10. | 2 |
+| `UCIE_SB_CLK_BYPASS_EN` | `0x10070` | 1 | Applied. 1 takes the sideband clock from `sidebandBypassClk`. | 2 |
+| `UCIE_RX_CLK_FROM_TX_Q` | `0x10078` | 0 | 1 clocks the RX lanes from this die's `TxClkQ`, not the forwarded clock. | 7 |
+| `UCIE_CLK_CFG_APPLY` | `0x10080` | 0 | Write 1 to apply the applied fields (`apply_clk_cfg`). | 2, 5 |
+| `UCIE_CLK_CFG_BUSY` | `0x10088` | RO | 1 while an apply, or a phase write's own apply, is under way. | 1, 2, 5, 7 |
+| `UCIE_CLK_CFG_UNGATE_SRC`, `_DELAY` | `0x10090`, `0x10098` | 0, 1024 | What ends an apply's wait: 0 PLL lock, 1 software, 2 `_DELAY` chip cycles (`set_ungate_src`). | 1, 2 |
+| `UCIE_CLK_CFG_UNGATE_REQ` | `0x100A0` | 0 | Write 1 to end an apply's wait at once (`release_clk_gate`). | 2 |
+| `UCIE_PLL_LOCK_OBSERVED` | `0x100A8` | RO | PLL lock, PLL8 in bit 0 and PLL12 in bit 1. | 1, 2 |
+| `UCIE_UCIE_RST` | `0x100B0` | 1 | Holds every UCIe clock domain in reset. Nothing below answers until it's 0 (section 3). | 1, 3 |
+| `UCIE_PHY_TEST_CLK_SRC_SEL`, `UCIE_SB_CLK_SRC_SEL` | `0x100B8`, `0x100C0` | 0, 0 | Applied. What each divider divides: 0 PLL8, 1 PLL12, 2 the `bypassClk` pin. | 2 |
+| `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | `0x100C8`, `0x100D0` | 0, 0 | Hold that direction's dividers. Release only with its clock gated (`reset_dividers`). | 6, 7, 12 |
+| `UCIE_PHY_TEST_CLK_EN`, `UCIE_SB_CLK_EN` | `0x100D8`, `0x100E0` | 1, 1 | The PHY test and sideband clocks' gates. | — |
+| `UCIE_CLK_CFG_GATE_PHY_TEST`, `_GATE_SB` | `0x100E8`, `0x100F0` | 1, 1 | Whether an apply gates that clock across a change of its source. | — |
+| `UCIE_CLK_MANUAL_EN` | `0x100F8` | 0 | Manual mode: every output its own register, with no sequencing. | — |
+| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | `0x10118`–`0x10130` | RO | Each clock's cycles per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles. Zero means stopped. | 2, 3, 5 |
+| `UCIE_PLL_LOCK_LOST` | `0x10138` | 0 | Sticky per PLL: lost lock while enabled. Write 0 to clear. | 9 |
+| `UCIE_RATE_CFG` | `0x10180` + 8 × rate | 0 | The rate table `UCIE_FREQ_SEL_AUTO_EN` uses (`set_rate_cfg`). | — |
+
+**PhyTest, lane and debug registers** (`UcieTLRegs`, on the PHY test clock). These answer only with
+`UCIE_UCIE_RST` = 0 and the PHY test clock running.
+
+| Register | Offset | Reset | What it does | Step |
+|---|---|---|---|---|
+| `UCIE_TEST_TARGET` | `0x0` | 0 | 0 the mainband, 1 the on-chip loopback lane. | 6 |
+| `UCIE_TX_TEST_MODE` | `0x8` | 0 | 0 manual (pattern SRAM), 1 LFSR. | 6, 7 |
+| `UCIE_TX_DATA_MODE`, `UCIE_RX_DATA_MODE` | `0x10`, `0x130` | 0, 1 | 0 finite, 1 infinite. | 6, 7, 9, 12 |
+| `UCIE_TX_LFSR_SEED`, `UCIE_RX_LFSR_SEED` | `0x18`, `0x138`, per lane | `0x0123456789abcdef` + lane × `0x1111` | Per-lane LFSR seeds (`seed_lfsrs`). | 7 |
+| `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | `0xB0`, `0x398` | Strobe | Reset the divided-clock datapaths (`reset_datapath`). | 6, 7, 12 |
+| `UCIE_TX_FSM_RST`, `UCIE_RX_FSM_RST` | `0xB8`, `0x3A0` | Strobe | Reset the TX or RX test FSM (`reset_fsms`). | 4, 6, 7, 12 |
+| `UCIE_TX_EXECUTE` | `0xC0` | Strobe | Start the TX run. | 6, 7, 11 |
+| `UCIE_TX_PACKETS_SENT`, `UCIE_RX_PACKETS_RECEIVED` | `0xD0`, `0x3B8` | RO | Packets sent and received this run. | 6, 7, 12 |
+| `UCIE_TX_PACKETS_TO_SEND`, `UCIE_RX_PACKETS_TO_RECEIVE` | `0xE0`, `0x3A8` | 0, 0 | Run length in finite mode. | 6, 7, 12 |
+| `UCIE_TX_TEST_STATE` | `0x128` | RO | TX FSM state; `UCIE_TX_TEST_STATE_IDLE` before a run. | 3, 6, 7 |
+| `UCIE_RX_BIT_ERRORS` | `0x1D0`, per lane | RO | Errors per lane (and `_EARLY`/`_LATE`, the same capture framed ±1 UI). | 6, 7 |
+| `UCIE_RX_PAUSE_COUNTERS` | `0x3B0` | 0 | 1 freezes the counters for a consistent read. | 6, 7, 9 |
+| `UCIE_RX_IDLE_WORDS_OBSERVED` | `0x3C8` | RO | RX words seen while no run is on: proof a clock and words arrive. | 7, 11 |
+| `UCIE_TXCTL` | `0x3E8`, per lane | Drivers off | Each TX lane's tile word (driver segments, EQ, `Dctrl`), shufflers and `sampleNegedge` (`write_txctl`, `set_tx_delay`). | 4, 9 |
+| `UCIE_RXCTL` | `0x1A38`, per lane | Unterminated, vref 63 | Each RX lane's termination, vref, `Dctrl` and AFE timing (`set_rx_vref`, `set_rx_delay`). | 3, 4, 9 |
+| `UCIE_DEBUG_DRIVERCTL` | `0x35D8`, per pad | Off | The observation pad drivers (`enable_debug_drivers`). | 4 |
+| `UCIE_DEBUG_CLK_MUX_SEL` | `0x3710` | 0 | The clock on the observation clock pad: 0 `sbTxClk`, 1 `txDivClk`. | 4, 10 |
+| `UCIE_CONTROLLER_SEL` | `0x3738` | 0 | 0 PhyTest owns both bands, 1 the UCIe controller. | 3, 12 |
+| `UCIE_SIDEBAND_MODE` | `0x3748` | 0 | Under PhyTest: 0 manual (the sideband tester), 1 TileLink. | 10 |
+| `UCIE_SB_TX_PACKET`, `_SEND`, `_BUSY` | `0x3770`, `0x3778`, `0x3780` | 0, strobe, RO | The sideband tester's transmitter. | 10 |
+| `UCIE_SB_RX_PACKET`, `_VALID`, `_POP`, `_OVERFLOW`, `_RST` | `0x3788`–`0x37A8` | RO, RO, strobe, RO, strobe | The sideband tester's receiver. | 10 |
+| `UCIE_RX_START_MODE` | `0x37B8` | 0 | 0 start on valid, 1 on the first word. | 7 |
+| `UCIE_RX_BURST_MODE` | `0x37C0` | 0 | 1 skips idle packets between bursts. | 11 |
+| `UCIE_RX_SELF_SYNC` | `0x37C8` | 0 | 1 scores each LFSR lane against its own history, with no seed or framing. | 6 |
+| `UCIE_RX_CAPTURE_MODE` | `0x37D8` | 0 | Capture SRAM trigger: 0 the first packet, 1 the first error. | 9 |
+| `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | `0x3800`, `0x3808` | 0, 0 | The shape of gated-clock bursts. | 11 |
+| `UCIE_TX_CLK_GATE` | `0x3810` | 0 | 1 parks the forwarded clock between bursts. | 11 |
+| `UCIE_TX_CLK_POSTAMBLE` | `0x3820` | 16 | Postamble, in `UCIE_CLK_POSTAMBLE_UI` units. | 11, 12 |
+| `UCIE_TX_TRACK_CLK`, `UCIE_TX_TRACK_WORD` | `0x3828`, `0x3880` | 0, `0x55555555` | 1 puts the word on the track lane in every packet. | 9 |
+| `UCIE_TX_INJECT_ERROR`, `UCIE_TX_INJECT_LANE` | `0x3830`, `0x3838` | Strobe, 0 | Flip bit 0 of the next packet on one lane. | 7 |
+| `UCIE_TRACK_ONES`, `_ZEROS`, `_ONES_EVEN`, `_CNT_RST`, `_CNT_HOLD` | `0x3840`, `0x3848`, `0x38A0`, `0x3850`, `0x3858` | RO, RO, RO, strobe, 0 | Ones and zeros on the track lane, and the even-UI ones. | 7, 9 |
+| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW` | `0x3868`, `0x3870` | 0, 0 | Sticky clock-crossing flags: the PHY test clock too slow for the link. | 7 |
+| `UCIE_LOOPBACK_RX_FIFO_OVERFLOW`, `UCIE_LOOPBACK_TX_FIFO_UNDERFLOW` | `0x3878`, `0x3890` | 0, 0 | The loopback lane's crossing flags. | 6 |
+| `UCIE_RX_LANE_ERRORED` | `0x38E0` | RO | Sticky, a bit per lane at its first error. | 9 |
+| `UCIE_RX_ERR_CLASS_LANE` | `0x38F8` | 0 | Which lane the error-class counters watch. | 9 |
+| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | `0x3920` | 0 | The UCIe controller's RX crossing flag. | 12 |
+| `UCIE_TX_CLK_PARK_ALTERNATE` | `0x3930` | 1 | Park a gated clock high and low in turn; 0 parks low every time. | 11, 12 |
+| `UCIE_RX_FRAME_OFFSET` | `0x3938` | RO | The UI of the RX word the run's first packet started on (`align_rx_words`). | 12 |
+
+**UCIe controller registers** (`UcieController`, on the TX sideband clock). These answer only with
+`UCIE_UCIE_RST` = 0 and the sideband clock running.
+
+| Register | Offset | Reset | What it does | Step |
+|---|---|---|---|---|
+| `UCIE_UCIE_CONTROLLER_RST` | `0x3C18` | 1 | Holds the UCIe controller in reset. | 3, 12 |
+| `UCIE_RAW_FORMAT_ENABLE`, `UCIE_RAW_FORMAT_ENABLED` | `0x4010`, `0x4014` | Per the UCIe spec, RO | UCIe link control and status (`setup_ucie_digital`). | 11, 12 |
+| `UCIE_ERR_LOG0_STATE_NM0`, `UCIE_ERR_LOG1_STATE_NM3_M0` | `0x6080`, `0x6090` | RO | The link-training state log, for a link that won't come up. | 12 |
 
 Steps 0 to 9 take the mainband from power-on to a clean, margined LFSR run under PhyTest. Steps 10
 and 11 then check what the UCIe controller relies on and PhyTest's runs don't exercise, the

@@ -76,7 +76,8 @@ object ClockingTile {
 
   /** What the tile ties one PLL's loop settings to. They have no registers, so
     * these are what the part runs with. `Dcoarseb` is tied to the complement
-    * of `dcoarse`.
+    * of `dcoarse`. `dbias` is the RDAC code the PLL runs on while enabled; the
+    * tile drives zero there to turn the PLL off, so it has to be nonzero.
     */
   case class PllSettings(
       autoEn: Boolean,
@@ -88,11 +89,12 @@ object ClockingTile {
       dcoarse: Int
   )
 
-  /** Placeholders, every setting zero, until the PLL designer supplies the
-    * nominal ones. The behavioral PLL models ignore them.
+  /** Placeholders until the PLL designer supplies the nominal settings: every
+    * setting zero but the RDAC, at mid-scale so that an enabled PLL runs. The
+    * behavioral PLL models only look at whether the RDAC is zero.
     */
-  val pll8Settings = PllSettings(false, 0, 0, 0, 0, 0, 0)
-  val pll12Settings = PllSettings(false, 0, 0, 0, 0, 0, 0)
+  val pll8Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
+  val pll12Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
 }
 
 /** The clocking tile's controls and clocks.
@@ -118,8 +120,9 @@ class ClockingTileIO extends Bundle {
   val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
 
   /** Per-PLL enables, so an unselected one can be powered down. Either PLL can
-    * also feed the PHY test and TX sideband dividers. Each drives its PLL's
-    * `reset`, inverted.
+    * also feed the PHY test and TX sideband dividers. Low drives the PLL's RDAC
+    * (`Dbias`) to zero, which is what turns it off, and holds its digital loop
+    * in `reset`, which on its own only stops the loop.
     */
   val Pll8En = Input(Bool())
   val Pll12En = Input(Bool())
@@ -254,27 +257,29 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
   // enable has one to take.
   dontTouch(io.X2En)
 
-  def tieOff(pll: PllIO, s: ClockingTile.PllSettings): Unit = {
+  // A PLL is off with its RDAC at zero, and `reset` holds only its digital
+  // loop, so the enable drives both.
+  def enable(pll: PllIO, en: Bool, s: ClockingTile.PllSettings): Unit = {
+    require(s.dbias != 0, "an RDAC code of zero leaves the PLL off")
+    pll.reset := !en
+    pll.Dbias := Mux(en, s.dbias.U, 0.U)
     pll.auto_en := s.autoEn.B
     pll.kp := s.kp.U
     pll.ki := s.ki.U
     pll.code_init := s.codeInit.U
     pll.code_byp := s.codeByp.U
-    pll.Dbias := s.dbias.U
   }
 
   val pll8 = Module(new Pll8g)
   pll8.io.clk_ref := io.RefClk
-  pll8.io.reset := !io.Pll8En
-  tieOff(pll8.io, ClockingTile.pll8Settings)
+  enable(pll8.io, io.Pll8En, ClockingTile.pll8Settings)
   pll8.io.Dcoarse := ClockingTile.pll8Settings.dcoarse.U
   pll8.io.Dcoarseb := ~ClockingTile.pll8Settings.dcoarse.U(6.W)
   io.Pll8Lock := pll8.io.lock
 
   val pll12 = Module(new Pll12g)
   pll12.io.clk_ref := io.RefClk
-  pll12.io.reset := !io.Pll12En
-  tieOff(pll12.io, ClockingTile.pll12Settings)
+  enable(pll12.io, io.Pll12En, ClockingTile.pll12Settings)
   io.Pll12Lock := pll12.io.lock
 
   // TX clock generator. The cell's main clock codes run PLL12, PLL8, X2,
@@ -354,8 +359,9 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
 // that name, before the emitted Verilog will connect to it.
 
 /** The pins `8gpll_top` and `12gpll_top` have in common: the ref clock, the
-  * reset that is also the enable, and the digital loop's settings, all tied off
-  * by `ClockingTile`.
+  * digital loop's reset and settings, and the RDAC, whose code powers the PLL:
+  * zero is off. `ClockingTile` drives the reset and the RDAC from the enable
+  * and ties the rest off.
   */
 class PllIO extends Bundle {
   val clk_ref = Input(Clock())
