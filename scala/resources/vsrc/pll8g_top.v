@@ -1,10 +1,12 @@
 // Behavioral model of the 8 GHz PLL, `8gpll_top` in the IP library, under the
 // name the RTL instantiates it by: Verilog cannot use `8gpll_top` unescaped.
 //
-// Multiplies the ref clock by 80 whenever `reset` is low -- `reset` is the
-// PLL's enable, inverted -- and reports lock `PLL_LOCK_PS` after it falls.
-// The digital loop is not modelled: its settings are ignored and the codes it
-// reports read zero. `clk_out` and `lock` are not on the cell yet.
+// Multiplies the ref clock by 80 whenever its RDAC, `Dbias`, is nonzero:
+// zero powers it off. `reset` holds only the digital loop, so lock comes
+// `PLL_LOCK_PS` after the PLL is both running and out of reset, and drops
+// the instant either stops. The loop's settings are otherwise ignored, and
+// the codes it reports read zero. `clk_out` and `lock` are not on the cell
+// yet.
 module pll8g_top(
   input clk_ref,
   input reset,
@@ -41,22 +43,27 @@ module pll8g_top(
     ref_last = $realtime;
   end
 
+  // Running: the RDAC on. An X on it counts as off.
+  wire running = (|Dbias) === 1'b1;
+
   reg clk = 1'b0;
   always begin
-    if (reset !== 1'b0) @(reset);
+    if (!running) @(running);
     else #(ref_period / 160.0) clk = ~clk;   // x80
   end
 
-  // Lock `PLL_LOCK_PS` after leaving reset, and dropped the instant reset
-  // returns. Losing lock while running is not modelled; what this is for is
-  // the wake-up wait, which is the one an apply has to hold the clock gate
-  // across. The blocking delay also holds off a re-trigger, so a reset that
-  // returns mid wake-up resolves to whatever `reset` reads by then.
+  // Lock `PLL_LOCK_PS` after the PLL is running with its loop out of reset,
+  // and dropped the instant either stops. Losing lock while running is not
+  // modelled; what this is for is the wake-up wait, which is the one an apply
+  // has to hold the clock gate across. The blocking delay also holds off a
+  // re-trigger, so a PLL turned off mid wake-up resolves to whatever it reads
+  // by then.
+  wire settling = running && (reset === 1'b0);
   reg locked = 1'b0;
-  always @(negedge reset) begin
-    #(PLL_LOCK_PS) locked = (reset === 1'b0);
+  always @(posedge settling) begin
+    #(PLL_LOCK_PS) locked = settling;
   end
-  always @(posedge reset) locked = 1'b0;
+  always @(negedge settling) locked = 1'b0;
 
   assign clk_out = clk;
   assign lock = locked;
