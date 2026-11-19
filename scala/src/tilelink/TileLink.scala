@@ -322,6 +322,8 @@ class UcieClkRegs(
       // Divider resets, one per direction. See `txDividerRst`.
       val txDividerRstb = Output(AsyncReset())
       val rxDividerRstb = Output(AsyncReset())
+      // The TX clock generator's two dividers alone. See `cfgTxClkGenRst`.
+      val txClkGenRstb = Output(AsyncReset())
       // The rate link training has negotiated, from the UCIe controller. It is
       // produced on the TX sideband clock, which this block does not run on.
       val freqSel = Input(UInt(4.W))
@@ -570,6 +572,11 @@ class UcieClkRegs(
     val livePhyTestBypass = RegInit(true.B)
     val liveSbSrc = RegInit(0.U(ClockingTile.sbClkSrcSelWidth.W))
     val livePhyTestSrc = RegInit(0.U(ClockingTile.phyTestClkSrcSelWidth.W))
+    // So do the TX quadrature clock's coarse phase and the global delay line,
+    // which are training results rather than properties of a rate.
+    val liveTxClkPhase = RegInit(0.U(ClockingTile.txClkPhaseWidth.W))
+    val liveClkPhaseSel =
+      RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W))
 
     val pending = Wire(new ClkRateCfgIO)
     pending.mainClkSel := Mux(freqSelAutoEn, selected.mainClkSel, mainClkSel)
@@ -662,18 +669,49 @@ class UcieClkRegs(
       RegNext(!(ucieRstToDividers || rxDividerRst), false.B).asAsyncReset
 
     // Applying a configuration: gate, switch under the gate, let the clocks
-    // back out. Changing a mux or a divider under a running clock hands the
-    // domains behind it a glitch. The UCIe main clock's gate sits straight
-    // after its mux, so it covers the TX data and TX quadrature clocks, and it
-    // is shut for every apply. The PHY test and TX sideband clocks divide a PLL
-    // behind gates of their own, which an apply only shuts when it changes
-    // something under them; see `gatePhyTestOnApply`.
+    // back out. Changing a mux, a divider or a delay code under a running
+    // clock hands the domains behind it a glitch. The TX clock gate sits after
+    // the global delay line, behind every TX mux and divider, so it covers the
+    // TX data and TX quadrature clocks, and it is shut for every apply. The
+    // PHY test and TX sideband clocks divide a PLL behind gates of their own,
+    // which an apply only shuts when it changes something under them; see
+    // `gatePhyTestOnApply`.
+    //
+    // The TX quadrature clock's coarse phase and the global delay line are
+    // applied fields too, but nothing has to ask for their apply: in FSM mode,
+    // writing either one with something other than what the tile runs starts
+    // an apply of its own. That one shuts only the TX gate, moves only those
+    // two, and skips the ungate wait, since no PLL has changed. In manual mode
+    // each drives its pin directly, like every other field.
     val applyReq = RegInit(false.B)
     val applyBusy = RegInit(false.B)
+    // Whether the apply under way is a whole one, as opposed to a phase alone.
+    val applyFull = RegInit(false.B)
     val applyCount = RegInit(0.U(UcieClkRegs.ungateDelayWidth.W))
     val cfgGate = RegInit(false.B)
     val cfgGatePhyTest = RegInit(false.B)
     val cfgGateSb = RegInit(false.B)
+
+    // Holds the TX data and quadrature dividers, the two that make the TX
+    // clocks from the main clock, across the switch. They sit ahead of the TX
+    // gate and run whenever the main clock does, so a new source or a new
+    // coarse phase can hand them a runt edge -- the phase is picked partly by
+    // which edge of the main clock the quadrature divider counts -- and leave
+    // the two a cycle apart. Released before the gate opens, they restart
+    // together, at the phase asked for. Nothing past the gate is reset: the
+    // lane dividers keep their count across an apply, as they always have.
+    //
+    // This output takes `txDividerRstb`'s resets as well, so software's
+    // divider reset and the UCIe reset restart these two with the rest.
+    val cfgTxClkGenRst = RegInit(false.B)
+    io.txClkGenRstb := RegNext(
+      !(ucieRstToDividers || txDividerRst || cfgTxClkGenRst),
+      false.B
+    ).asAsyncReset
+
+    // A coarse phase or delay code written that the tile does not run yet.
+    val phaseChanges = txClkPhase =/= liveTxClkPhase ||
+      clkPhaseSel =/= liveClkPhaseSel
 
     // What an apply changes under the PHY test and TX sideband clocks: the
     // bypass select, or the PLL select or the ratio while the clock stays on
@@ -735,20 +773,29 @@ class UcieClkRegs(
     when(manualReq || manual) {
       applyPhase := ClkApplyPhase.idle
       applyBusy := false.B
+      applyFull := false.B
       applyReq := false.B
       ungateReq := false.B
       cfgGate := false.B
       cfgGatePhyTest := false.B
       cfgGateSb := false.B
+      cfgTxClkGenRst := false.B
       applyCount := 0.U
     }.otherwise {
       switch(applyPhase) {
         is(ClkApplyPhase.idle) {
           when(applyReq || autoApply) {
             applyBusy := true.B
+            applyFull := true.B
             cfgGate := true.B
             cfgGatePhyTest := gatePhyTestOnApply && phyTestChanges
             cfgGateSb := gateSbOnApply && sbChanges
+            applyCount := 0.U
+            applyPhase := ClkApplyPhase.gateIn
+          }.elsewhen(phaseChanges) {
+            applyBusy := true.B
+            applyFull := false.B
+            cfgGate := true.B
             applyCount := 0.U
             applyPhase := ClkApplyPhase.gateIn
           }
@@ -758,21 +805,42 @@ class UcieClkRegs(
           // tile can produce before anything moves.
           applyCount := applyCount + 1.U
           when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
-            live := pending
-            livePhyTestDiv := phyTestClkDiv
-            liveSbDiv := sbClkDiv
-            liveSbBypass := sbClkBypassEn
-            livePhyTestBypass := phyTestClkBypassEn
-            liveSbSrc := sbClkSrcSel
-            livePhyTestSrc := phyTestClkSrcSel
+            liveTxClkPhase := txClkPhase
+            liveClkPhaseSel := clkPhaseSel
+            when(applyFull) {
+              live := pending
+              livePhyTestDiv := phyTestClkDiv
+              liveSbDiv := sbClkDiv
+              liveSbBypass := sbClkBypassEn
+              livePhyTestBypass := phyTestClkBypassEn
+              liveSbSrc := sbClkSrcSel
+              livePhyTestSrc := phyTestClkSrcSel
+            }
+            // Whenever this apply can have upset the TX dividers: a new
+            // source or ratio, or a new coarse phase. A delay code alone is
+            // past them.
+            cfgTxClkGenRst := applyFull || txClkPhase =/= liveTxClkPhase
             applyCount := 0.U
             applyPhase := ClkApplyPhase.ungateWait
           }
         }
         is(ClkApplyPhase.ungateWait) {
+          // A phase alone has no new source to wait out.
           applyCount := applyCount + 1.U
-          when(ungateOk) {
-            ungateReq := false.B
+          when(!applyFull || ungateOk) {
+            when(applyFull) {
+              ungateReq := false.B
+            }
+            cfgTxClkGenRst := false.B
+            applyCount := 0.U
+            applyPhase := ClkApplyPhase.rstOut
+          }
+        }
+        is(ClkApplyPhase.rstOut) {
+          // The TX dividers out of reset and running before the gate opens
+          // on them.
+          applyCount := applyCount + 1.U
+          when(applyCount === (UcieClkRegs.clkGenRstDwell - 1).U) {
             cfgGate := false.B
             cfgGatePhyTest := false.B
             cfgGateSb := false.B
@@ -786,12 +854,19 @@ class UcieClkRegs(
           applyCount := applyCount + 1.U
           when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
             applyBusy := false.B
-            applyReq := false.B
+            // A request written during a phase's apply is still to do.
+            when(applyFull) {
+              applyReq := false.B
+            }
             applyPhase := ClkApplyPhase.idle
           }
         }
       }
     }
+
+    // What `clkCfgBusy` reads: an apply under way, or a phase written that one
+    // is about to carry, so a read straight after the write already sees it.
+    val busyObserved = applyBusy || (!manual && phaseChanges)
 
     // What the UCIe controller is told in place of a PHY's PLL lock: the call
     // an apply makes when it lets the clocks back out, on whichever source
@@ -806,15 +881,20 @@ class UcieClkRegs(
     // long as its apply takes. The rate the answer is about goes out with it,
     // for the controller to tell an answer to its request from one about the
     // rate before.
-    val clksStable = !applyBusy &&
+    //
+    // An apply of a phase alone leaves the answer standing: the rate and the
+    // lock do not change, and the TX gate shuts for a moment, as it does when
+    // software drops `clkEn`. Ungated says so.
+    val clksStable = !(applyBusy && applyFull) &&
       (ungateSrc =/= ClkUngateSrc.pllLock || mainClkLocked)
     val rateLive = !freqSelAutoEn || liveIsSelected
     val (fsmClksReady, fsmClksReadyFreqSel, fsmClksUngated) =
       (
         RegNext(clksStable && rateLive, false.B),
         RegNext(freqSelSync, 0.U),
-        // Ungated is the same, less the rate, and with software's `clkEn` on.
-        RegNext(clksStable && clkEn, false.B)
+        // Ungated is the same, less the rate, with no apply of any kind under
+        // way and with software's `clkEn` on.
+        RegNext(clksStable && !applyBusy && clkEn, false.B)
       )
 
     // What each output is in FSM mode. Either PLL can also feed the PHY test
@@ -839,6 +919,8 @@ class UcieClkRegs(
     when(enteringManual) {
       mainClkSel := live.mainClkSel
       txClkDiv := live.txClkDiv
+      txClkPhase := liveTxClkPhase
+      clkPhaseSel := liveClkPhaseSel
       x2En := live.x2En
       pll8En := fsmPll8En
       pll12En := fsmPll12En
@@ -862,6 +944,8 @@ class UcieClkRegs(
     when(manual) {
       live.mainClkSel := mainClkSel
       live.txClkDiv := txClkDiv
+      liveTxClkPhase := txClkPhase
+      liveClkPhaseSel := clkPhaseSel
       live.x2En := x2En
       live.pll8En := pll8En
       live.pll12En := pll12En
@@ -878,7 +962,7 @@ class UcieClkRegs(
     io.pll12En := Mux(manual, pll12En, fsmPll12En)
     io.x2En := Mux(manual, x2En, live.x2En)
     io.txClkDiv := Mux(manual, txClkDiv, live.txClkDiv)
-    io.txClkPhase := txClkPhase
+    io.txClkPhase := Mux(manual, txClkPhase, liveTxClkPhase)
     io.phyTestClkDiv := Mux(manual, phyTestClkDiv, livePhyTestDiv)
     io.phyTestClkSrcSel := Mux(manual, phyTestClkSrcSel, livePhyTestSrc)
     io.phyTestClkBypassEn := Mux(manual, phyTestClkBypassEn, livePhyTestBypass)
@@ -886,7 +970,7 @@ class UcieClkRegs(
     io.sbClkSrcSel := Mux(manual, sbClkSrcSel, liveSbSrc)
     io.sbClkBypassEn := Mux(manual, sbClkBypassEn, liveSbBypass)
     io.rxClkFromTxQ := rxClkFromTxQ
-    io.clkPhaseSel := clkPhaseSel
+    io.clkPhaseSel := Mux(manual, clkPhaseSel, liveClkPhaseSel)
     io.clkEn := Mux(manual, clkEn, fsmClkEn)
     io.rxClkEn := rxClkEn
     io.phyTestClkEn := Mux(manual, phyTestClkEn, fsmPhyTestClkEn)
@@ -918,7 +1002,7 @@ class UcieClkRegs(
         toRegFieldRw(sbClkBypassEn, "sbClkBypassEn"),
         toRegFieldRw(rxClkFromTxQ, "rxClkFromTxQ"),
         toRegFieldRw(applyReq, "clkCfgApply"),
-        toRegFieldR(applyBusy, "clkCfgBusy"),
+        toRegFieldR(busyObserved, "clkCfgBusy"),
         toRegFieldRw(ungateSrc, "clkCfgUngateSrc"),
         toRegFieldRw(ungateDelay, "clkCfgUngateDelay"),
         toRegFieldRw(ungateReq, "clkCfgUngateReq"),
@@ -966,10 +1050,11 @@ class UcieClkRegs(
 }
 
 /** Phases of a clock configuration apply: shut the gate, switch under it, wait
-  * out the new source's wake-up, then let the clocks back out.
+  * out the new source's wake-up, let the TX dividers back out of reset, then
+  * let the clocks back out.
   */
 object ClkApplyPhase extends ChiselEnum {
-  val idle, gateIn, ungateWait, gateOut = Value
+  val idle, gateIn, ungateWait, rstOut, gateOut = Value
 }
 
 /** What ends the clock gate at the end of an apply.
@@ -1032,10 +1117,20 @@ object UcieClkRegs {
   val rateCfgs = 8
 
   /** Cycles the gate is held before the configuration moves, and again after it
-    * is let back out. Covers the gate reaching the slowest clock the tile can
-    * produce; it has nothing to do with a PLL waking up.
+    * is let back out. Covers each gate taking a new enable on the slowest clock
+    * it can be on. The PHY test and TX sideband gates take theirs through three
+    * flops on the falling edge of the clock they gate, so they need up to four
+    * of its periods: 7.5 ns at /15 of PLL8. 32 cycles of a 500 MHz chip clock,
+    * 64 ns, covers a gated clock down to about 60 MHz. It has nothing to do
+    * with a PLL waking up.
     */
-  val gateDwell = 4
+  val gateDwell = 32
+
+  /** Cycles between the TX dividers' release and the TX gate opening on them:
+    * the release crossing its flop here, then the dividers' own synchronizer
+    * on the main clock, with room to spare.
+    */
+  val clkGenRstDwell = 4
 
   /** Cycles `freqSel` has to hold still, after its synchronizer, before a
     * change in it starts an apply. Covers bits of one change arriving a cycle
@@ -2077,6 +2172,7 @@ class UcieTL(
     // The divider resets come from the clock register block, on the chip
     // clock, to the PHY's dividers and PhyTest's lanes alike.
     phy.io.clkRst.txDividerRstb := clkRegs.module.io.txDividerRstb
+    phy.io.clkRst.txClkGenRstb := clkRegs.module.io.txClkGenRstb
     phy.io.clkRst.rxDividerRstb := clkRegs.module.io.rxDividerRstb
     test.io.txDividerRstb := clkRegs.module.io.txDividerRstb
     test.io.rxDividerRstb := clkRegs.module.io.rxDividerRstb

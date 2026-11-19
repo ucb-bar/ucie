@@ -211,6 +211,12 @@ class PhyClkRstIO extends Bundle {
   // comes back.
   val txDividerRstb = Input(AsyncReset())
   val rxDividerRstb = Input(AsyncReset())
+  // The TX data and quadrature dividers in the clocking tile alone, which make
+  // the TX data and TX quadrature clocks from the main clock. These sit ahead
+  // of the TX clock gate, so this reaches no lane: it is how an apply restarts
+  // the two together under the gate, after a change that may have upset their
+  // phase against each other. It carries `txDividerRstb` too.
+  val txClkGenRstb = Input(AsyncReset())
   // Per-direction restarts. These do not touch a divider: they reset the logic
   // on the TX or RX divided clock -- the serdes handoff registers and the PHY
   // side of the async queues -- while that clock keeps running, so the reset
@@ -248,10 +254,10 @@ class PhyClkRstIO extends Bundle {
   val rxClkFromTxQ = Input(Bool())
   // The global delay line on the TX quadrature clock.
   val clkPhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
-  // Enables the UCIe main clock, straight after its mux. Low stops it, and with
-  // it the TX data and TX quadrature clocks divided from it, so a source, a
-  // ratio, a phase, or a delay code can be changed with no edge in flight. The
-  // PHY test and TX sideband clocks divide a PLL instead and keep running.
+  // Enables the TX data and TX quadrature clocks, at the TX clock gate after
+  // the global delay line. Low stops both, so a source, a ratio, a phase, or a
+  // delay code can be changed with no edge reaching a lane. The PHY test and
+  // TX sideband clocks divide a PLL instead and keep running.
   val clkEn = Input(Bool())
   // Enables the recovered RX forwarded clock at the RX clock lanes. Low stops
   // it there, which keeps the whole RX clock tree quiet rather than clocking
@@ -423,6 +429,7 @@ class Phy(
   clkTile.io.PhyTestClkSrcSel := io.clkRst.phyTestClkSrcSel
   // The tile pin keeps the IP's name; `clkEn` is the same enable.
   clkTile.io.ClkGateEn := io.clkRst.clkEn
+  clkTile.io.TxClkGenRstb := io.clkRst.txClkGenRstb
   clkTile.io.PhyTestClkBypassEn := io.clkRst.phyTestClkBypassEn
   clkTile.io.PhyTestClkEn := io.clkRst.phyTestClkEn
   clkTile.io.SbClkDiv := io.clkRst.sbClkDiv

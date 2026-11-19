@@ -1210,6 +1210,19 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
   def formatApplyClkCfgFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("clkCfgApply", f.formatLong(1)))
+    body.append(
+      formatWaitClkCfg(
+        "apply_clk_cfg: the apply never finished; a PLL it waits on may " +
+          "not be locking (see clkMeter* and pllLockObserved)"
+      )
+    )
+    f.formatFn("apply_clk_cfg", body.toString)
+  }
+
+  /** Polls `clkCfgBusy` until the apply under way finishes, printing `stuck`
+    * if it never does.
+    */
+  private def formatWaitClkCfg(stuck: String): String = {
     val wait = new StringBuilder
     wait.append(f.formatDeclare("busy"))
     wait.append(f.formatAssign("busy", f.formatLong(1)))
@@ -1224,17 +1237,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
     pollBody.append(f.formatIfStmt("busy == 0", f.breakStmt()))
     wait.append(f.formatForLoop("w", Codegen.applyPollTries, pollBody.toString))
-    wait.append(
-      f.formatIfStmt(
-        "busy != 0",
-        f.formatPrintStmt(
-          "apply_clk_cfg: the apply never finished; a PLL it waits on may " +
-            "not be locking (see clkMeter* and pllLockObserved)"
-        )
-      )
-    )
-    body.append(f.formatBlock(wait.toString))
-    f.formatFn("apply_clk_cfg", body.toString)
+    wait.append(f.formatIfStmt("busy != 0", f.formatPrintStmt(stuck)))
+    f.formatBlock(wait.toString)
   }
 
   /** Picks what releases the clock gate at the end of an apply.
@@ -1317,12 +1321,18 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * line alone cannot, which is what the shifter is for. That holds only while
     * the main clock is fast -- below about 7.2 GHz a step outruns the line --
     * so a low rate comes from a larger division, not a slower main clock.
+    *
+    * The write starts an apply of its own, which shuts the TX clock gate,
+    * moves the phase and restarts the TX dividers on it, and lets the clocks
+    * back out; this waits for it. In manual mode the phase lands at once, and
+    * shutting the gate around it is up to the caller.
     */
   def formatSetTxPhaseFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("clkEn", f.formatLong(0)))
     body.append(formatWriteNamedReg("txClkPhase", "half_cycles"))
-    body.append(formatWriteNamedReg("clkEn", f.formatLong(1)))
+    body.append(
+      formatWaitClkCfg("set_tx_phase: the apply of the phase never finished")
+    )
     f.formatFn(
       "set_tx_phase",
       body.toString,
@@ -1383,6 +1393,9 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * one the forwarded clock lanes carry, so it moves where in the UI the far
     * side samples every lane. A lane's own line only trims around whatever this
     * picks.
+    *
+    * The write starts an apply of its own, as `set_tx_phase`'s does, under the
+    * TX clock gate; this waits for it.
     */
   def formatSetGlobalDelayFn(): String = {
     val body = new StringBuilder
@@ -1393,6 +1406,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         "clkPhaseSel",
         s"((taps >= 64) ? ~${f.formatLong(0)} : " +
           s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)}))"
+      )
+    )
+    body.append(
+      formatWaitClkCfg(
+        "set_global_delay: the apply of the delay never finished"
       )
     )
     f.formatFn(
