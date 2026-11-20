@@ -103,6 +103,12 @@ class TxLaneCtlSpec extends AnyFunSpec {
           TxLane.DelayTaps,
           b => TxLaneCtlIO.raw(0, 0, 0, 0, BigInt(1) << b),
           _.Dctrl.litValue
+        ),
+        (
+          "Edge_Sel",
+          1,
+          _ => TxLaneCtlIO.raw(0, 0, 0, 0, 0, edgeSel = true),
+          _.Edge_Sel.litValue
         )
       )
       val seen = scala.collection.mutable.Set[BigInt]()
@@ -115,6 +121,18 @@ class TxLaneCtlSpec extends AnyFunSpec {
           assert(seen.add(word), "two rails share a bit of the packed word")
         }
       }
+    }
+
+    it("should keep Edge_Sel off and out of the way of the other rails") {
+      // Out of reset and at full strength alike, so a lane synchronizes its
+      // divider reset on the same edge it always has unless software asks.
+      assert(TxLaneCtlIO.off.Edge_Sel.litValue == 0)
+      assert(TxLaneCtlIO.full.Edge_Sel.litValue == 0)
+      // The packed word's top bit: every rail below it keeps the position
+      // software already uses.
+      val width = (new TxLaneCtlIO).getWidth
+      val edge = TxLaneCtlIO.raw(0, 0, 0, 0, 0, edgeSel = true).litValue
+      assert(edge == (BigInt(1) << (width - 1)))
     }
   }
 }

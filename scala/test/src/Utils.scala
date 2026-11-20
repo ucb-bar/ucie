@@ -268,7 +268,7 @@ ${
             "clocking_tile.v",
             "clock_receiver.v",
             "IO_ESD.v",
-            "ucie_esd_routable.v",
+            "D2D_ESD.v",
             "ucie_rst_sync.v"
           )
           // These are filenames, so a rename elsewhere leaves a dangling entry

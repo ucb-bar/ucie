@@ -438,8 +438,8 @@ class Phy(
   sbTxData.io.ctl := PadDriverCtlIO.full
   val esdSbRxClk = Module(new EsdRoutable)
   val esdSbRxData = Module(new EsdRoutable)
-  esdSbRxClk.io.term := io.top.sbRxClk.asBool
-  esdSbRxData.io.term := io.top.sbRxData.asBool
+  esdSbRxClk.io.D2D_signal := io.top.sbRxClk.asBool
+  esdSbRxData.io.D2D_signal := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
   // The forwarded sideband clock as actually transmitted, i.e. after the bump

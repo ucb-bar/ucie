@@ -5,9 +5,13 @@
 // shape the analog waveform, so they have no effect here; see
 // `verilog/tx.vams` for the model that does resolve them.
 //
+// `Edge_Sel` only picks the clock edge the tile synchronizes `RST_async` on,
+// which this model, resetting asynchronously, does not resolve.
+//
 // VDDQ, VDD, and VSS are pins on the tile but are omitted here; they are
-// connected by the physical flow.
-module tx_lane (
+// connected by the physical flow. So are the internal nodes the tile's netlist
+// brings out as outputs, which nothing reads.
+module TX (
   input [31:0] DataIN,
   input CK,
   input [31:0] Dctrl,
@@ -16,6 +20,7 @@ module tx_lane (
   input [3:0] ENP_EQ,
   input [3:0] ENN_EQ,
   input RST_async,
+  input Edge_Sel,
   output D2D_TX
 );
   // The tile needs the clock running for WAKE_CYCLES cycles after reset before

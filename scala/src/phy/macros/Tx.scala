@@ -60,6 +60,17 @@ object TxLane {
   */
 class TxLaneCtlIO extends Bundle {
 
+  /** Which edge of the tile's clock synchronizes `RST_async` into the reset of
+    * its clock dividers: the select of the tile's `MUX_for_FF_Reset`, which
+    * clocks the two-flop synchronizer from one phase of the duty-cycle
+    * corrected clock or its complement. Either makes a clean reset; this picks
+    * the half cycle the dividers come out of it on.
+    *
+    * First in the bundle, so it is the packed word's top bit and every rail
+    * below keeps the position it had before the tile had this pin.
+    */
+  val Edge_Sel = Bool()
+
   /** Pull-up driver impedance. A one turns its segment on. */
   val ENP = UInt(TxLane.DriverSegments.W)
 
@@ -105,16 +116,19 @@ object TxLaneCtlIO {
     )
 
   /** Control with each rail given as its pins carry it, for what [[codes]] does
-    * not build: unequal stacks, or segments other than the low ones.
+    * not build: unequal stacks, or segments other than the low ones. `edgeSel`
+    * is `Edge_Sel`, low unless given.
     */
   def raw(
       enp: BigInt,
       enn: BigInt,
       enpEq: BigInt,
       ennEq: BigInt,
-      dctrl: BigInt
+      dctrl: BigInt,
+      edgeSel: Boolean = false
   ): TxLaneCtlIO =
     (new TxLaneCtlIO).Lit(
+      _.Edge_Sel -> edgeSel.B,
       _.ENP -> enp.U(TxLane.DriverSegments.W),
       _.ENN -> enn.U(TxLane.DriverSegments.W),
       _.ENP_EQ -> enpEq.U(TxLane.EqSegments.W),
@@ -160,11 +174,18 @@ class TxLane(implicit includeDefaultModels: Boolean = false) extends RawModule {
   verilogBlackBox.io.ENP_EQ := io.ctl.ENP_EQ
   verilogBlackBox.io.ENN_EQ := io.ctl.ENN_EQ
   verilogBlackBox.io.Dctrl := io.ctl.Dctrl
+  verilogBlackBox.io.Edge_Sel := io.ctl.Edge_Sel
 }
 
-/** Port names match the tile's pins verbatim. VDDQ (output driver), VDD
-  * (pre-driver and digital logic), and VSS are pins on the tile but are omitted
-  * here; they are connected by the physical flow.
+/** The delivered TX tile, `TX`. Port names match its pins verbatim.
+  *
+  * The tile's netlist has more pins than these: VDDQ (output driver), VDD
+  * (pre-driver and digital logic) and VSS, which the physical flow connects,
+  * and some thirty internal nodes brought out as outputs -- the divided clocks,
+  * the duty-cycle corrector's taps, the serializer's intermediate stages, and
+  * `rst`, the divider reset the tile synchronizes from `RST_async`. Nothing
+  * outside the tile reads those, so they are left off here and unconnected.
+  * `rst` in particular is the tile's own output, not a second reset input.
   */
 class VerilogTxLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
@@ -178,12 +199,13 @@ class VerilogTxLane(implicit includeDefaultModels: Boolean = false)
     val ENP_EQ = Input(Bits(TxLane.EqSegments.W))
     val ENN_EQ = Input(Bits(TxLane.EqSegments.W))
     val RST_async = Input(AsyncReset())
+    val Edge_Sel = Input(Bool())
     val D2D_TX = Output(Bool())
   })
 
-  override val desiredName = "tx_lane"
+  override val desiredName = "TX"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/tx_lane.v")
+    addResource("/vsrc/TX.v")
   }
 }
