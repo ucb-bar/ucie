@@ -3049,6 +3049,9 @@ end
   * in through an apply of its own, which restarts the TX dividers under the
   * gate, so this also checks that the restart lands the quadrature clock at
   * the phase asked for rather than a main clock period out.
+  *
+  * `clkGateEdgeSel` is written first. It starts no apply of its own; the first
+  * phase's apply has to carry it to the tile.
   */
 class TxPhaseTestDriver extends SVTestDriver {
   setStimulus(
@@ -3062,6 +3065,13 @@ begin : tx_phase
 
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
   set_main_clk(3, 1);
+  `WRITE_UCIE(regDrv, `CLK_GATE_EDGE_SEL, 64'h1);
+  #20000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.ClkGateEdgeSel !== 1'b0) begin
+    $display("FAIL: clkGateEdgeSel reached the tile without an apply");
+    fails = fails + 1;
+  end
   for (int c = 0; c < 4; c++) begin
     set_tx_phase(c);
     #20000;
@@ -3076,6 +3086,10 @@ begin : tx_phase
       $display("FAIL: phase %0d moved TXCLKQ %0.1f ps, not 62.5", c, step);
       fails = fails + 1;
     end
+  end
+  if (`CLOCKING_TILE.ClkGateEdgeSel !== 1'b1) begin
+    $display("FAIL: the phase's apply did not carry clkGateEdgeSel");
+    fails = fails + 1;
   end
   if (fails != 0) $fatal(1, "%0d TX phase checks failed", fails);
 end
@@ -3161,6 +3175,8 @@ begin : clk_manual
   want = clk_outs(); want.rxClkFromTxQ = 1'b1;
   step(`RX_CLK_FROM_TX_Q, 1, want, "rxClkFromTxQ", fails);
   want = clk_outs(); want.clkPhaseSel = 64'h0; step(`CLK_PHASE_SEL, 0, want, "clkPhaseSel", fails);
+  want = clk_outs(); want.clkGateEdgeSel = 1'b1;
+  step(`CLK_GATE_EDGE_SEL, 1, want, "clkGateEdgeSel", fails);
   // The UCIe reset alone, without the dividers; then each divider reset alone.
   want = clk_outs(); want.ucieRst = 1'b1; step(`UCIE_RST, 1, want, "ucieRst", fails);
   want = clk_outs(); want.txDividerRstb = 1'b0;
@@ -3245,6 +3261,7 @@ typedef struct packed {
   logic rxClkFromTxQ;
   logic [63:0] clkPhaseSel;
   logic clkEn;
+  logic clkGateEdgeSel;
   logic rxClkEn;
   logic phyTestClkEn;
   logic sbClkEn;
@@ -3273,6 +3290,7 @@ function automatic clk_outs_t clk_outs();
   o.rxClkFromTxQ = `UCIE_CLK_REGS.io_rxClkFromTxQ;
   o.clkPhaseSel = `UCIE_CLK_REGS.io_clkPhaseSel;
   o.clkEn = `UCIE_CLK_REGS.io_clkEn;
+  o.clkGateEdgeSel = `UCIE_CLK_REGS.io_clkGateEdgeSel;
   o.rxClkEn = `UCIE_CLK_REGS.io_rxClkEn;
   o.phyTestClkEn = `UCIE_CLK_REGS.io_phyTestClkEn;
   o.sbClkEn = `UCIE_CLK_REGS.io_sbClkEn;

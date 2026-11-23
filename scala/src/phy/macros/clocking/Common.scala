@@ -206,17 +206,30 @@ class ClockingTileIO extends Bundle {
   val SbClkEn = Input(Bool())
 
   /** Active-high enable for the TX clock gate; the register that drives it is
-    * `clkEn`. The gate is two, after the global delay line: the TX data clock's
-    * latches this while that clock is low, and the TX quadrature clock's
-    * latches what the first latched while the delayed quadrature clock is low,
-    * so the quadrature clock stops and starts after the data clock. Low stops
-    * both between pulses. The TX dividers in front keep running, so a source,
+    * `clkEn`. The gate is after the global delay line. This crosses to the TX
+    * data clock through three flops in the gate; a latch open while that clock
+    * is low gates it, and a latch open while it is high hands the decision to
+    * the TX quadrature clock's latch, open while the delayed quadrature clock
+    * is low, so the quadrature clock stops and starts on its first pulse after
+    * the data clock's at any lag. Low stops both between pulses, 3 to 4 data
+    * clock periods later. The TX dividers in front keep running, so a source,
     * a ratio, a phase, or a delay code can change behind it with no edge
     * reaching a lane. The PHY test and TX sideband clocks do not come from the
     * main clock and keep running, which is how the PHY test clock domain keeps
     * servicing the RX AFEs with the gate shut.
     */
   val ClkGateEn = Input(Bool())
+
+  /** Which edge of the TX data clock hands the TX clock gate's decision to the
+    * TX quadrature clock's latch; the register that drives it is
+    * `clkGateEdgeSel`. Low takes the rising edge, through the latch open while
+    * the data clock is high. High holds that latch open, so the decision goes
+    * straight across on the falling edge. The rising edge races a quadrature
+    * clock lagging the data clock by near zero, and the falling edge one
+    * lagging by near half a period, so software sets this for lags under a
+    * quarter period. With the gate steadily open or shut it moves nothing.
+    */
+  val ClkGateEdgeSel = Input(Bool())
 
   /** Shared reset of the TX data and quadrature dividers, the ones that make
     * the TX data and TX quadrature clocks from the main clock. Held, both stop;
@@ -318,6 +331,7 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
   txClkGate.io.Vin := txClkGen.io.TxClkQ
   txClkGate.io.VinData := txClkGen.io.TxClk
   txClkGate.io.enable := io.ClkGateEn
+  txClkGate.io.edgeSel := io.ClkGateEdgeSel
   io.TxClkQ := txClkGate.io.Vout
   io.TxClk := txClkGate.io.VoutData
 
@@ -445,9 +459,10 @@ class GlobalDelaylineGateIO extends Bundle {
   val Dctrl = Input(UInt(ClockingTile.phaseSelWidth.W))
   val Vin = Input(Clock())
   val Vout = Output(Clock())
-  // Not on the delay line: the TX clock gate's enable, and the TX data clock
-  // the gate's first half stops.
+  // Not on the delay line: the TX clock gate's enable and edge select, and the
+  // TX data clock the gate's first half stops.
   val enable = Input(Bool())
+  val edgeSel = Input(Bool())
   val VinData = Input(Clock())
   val VoutData = Output(Clock())
 }

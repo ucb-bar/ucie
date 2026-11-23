@@ -1,26 +1,46 @@
 // Behavioral model of the global delay line on the TX quadrature clock and the
 // TX clock gate after it, `global_delayline_gate`. The name is a placeholder
 // for the macro: the delay line's pins -- `Dctrl`, `Vin`, `Vout` -- with the
-// gate's `enable`, and the TX data clock's `VinData` and `VoutData`, added.
+// gate's `enable` and `edgeSel`, and the TX data clock's `VinData` and
+// `VoutData`, added.
 //
 // The line delays `Vin` by one tap for each bit of `Dctrl` set.
 //
-// The gate is two latches. The TX data clock's takes `enable` while that clock
-// is low; the TX quadrature clock's takes what the first one holds while the
-// delayed quadrature clock is low. So each clock only stops or starts between
-// its own pulses, and the quadrature clock follows the data clock: shut, it
-// stops at its first low phase after the data clock has, and open, it starts
-// at its first low phase after the data clock has.
+// `enable` comes from the chip clock's register block, so it is asynchronous
+// to both TX clocks. Three flops on the data clock's rising edge bring it
+// over; nothing else in the gate samples it.
 //
-// With the quadrature clock lagging the data clock by up to half a period, the
-// two pass the same pulses. Lagging by more, the quadrature latch is open
-// while the data latch is, and can catch it mid-change: the quadrature clock
-// can then pass one pulse more or fewer than the data clock.
+// The data clock's gate is an ordinary clock gate latch: it takes the
+// synchronized enable while the data clock is low, so the data clock only
+// stops or starts between its pulses.
+//
+// The quadrature clock's gate follows the data clock's. Its latch takes the
+// data clock's decision while the delayed quadrature clock is low, but only
+// once the data clock's first pulse under that decision has begun: a second
+// latch, open while the data clock is high, holds the decision back until
+// then. Each quadrature pulse therefore passes exactly when the data pulse
+// before it did, at any lag. Taken straight from the data clock's latch, which
+// changes half a period earlier, a quadrature clock lagging by more than half
+// a period would still be low at the change and pass it to the pulse before.
+//
+// The retiming latch's output changes just after the data clock rises. A
+// quadrature clock rising within that delay and its own latch's setup of the
+// data clock -- a lag near zero, or near a whole period -- closes its latch
+// on the change. `edgeSel` high holds the retiming latch open, so the
+// quadrature clock's latch takes the decision straight from the data clock's,
+// which changes on the data clock's falling edge: right for any lag under half
+// a period, and clear of a lag near zero, but racing one near half a period.
+// Software sets it for lags under a quarter period and clears it otherwise,
+// which keeps the edge taken a quarter period from the one it races. With the
+// gate steadily open or shut both latches hold the same value, so `edgeSel`
+// moves nothing when it changes then. This model has no delays and cannot show
+// either race.
 module global_delayline_gate(
   input [63:0] Dctrl,
   input Vin,
   output Vout,
   input enable,
+  input edgeSel,
   input VinData,
   output VoutData
 );
@@ -47,15 +67,23 @@ module global_delayline_gate(
   always @(Vin) q_delayed <= #(delay) Vin;
 
   // ---- TX clock gate ----
+  reg [2:0] en_sync = 3'b0;
+  always @(posedge VinData) en_sync <= {en_sync[1:0], enable};
+
   reg en_data = 1'b0;
   always @(*) begin
-    if (!VinData) en_data = enable;
+    if (!VinData) en_data = en_sync[2];
   end
   assign VoutData = VinData & en_data;
 
+  reg en_retimed = 1'b0;
+  always @(*) begin
+    if (VinData || edgeSel) en_retimed = en_data;
+  end
+
   reg en_q = 1'b0;
   always @(*) begin
-    if (!q_delayed) en_q = en_data;
+    if (!q_delayed) en_q = en_retimed;
   end
   assign Vout = q_delayed & en_q;
 endmodule

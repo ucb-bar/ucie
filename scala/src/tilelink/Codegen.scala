@@ -1734,8 +1734,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     body.append(f.formatFnCall("enable_debug_drivers", Seq(f.formatLong(0))))
     // Put every divider -- the global ones and the one in each tile -- into a
     // known phase with each other, once. After this the clock gate alone is
-    // enough: it is latched on the UCIe main clock's low phase, so gating and
-    // ungating loses no edge and the dividers pick up exactly where they left
+    // enough: it only switches between pulses of the clock it gates, so gating
+    // and ungating loses no edge and the dividers pick up exactly where they left
     // off. A delay code only needs the clock quiet while the line length moves,
     // not the dividers restarted. Both directions' clocks are off across the
     // restart, so no divider comes out of reset against a live edge.

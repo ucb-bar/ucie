@@ -316,6 +316,7 @@ class UcieClkRegs(
       val rxClkFromTxQ = Output(Bool())
       val clkPhaseSel = Output(UInt(ClockingTile.phaseSelWidth.W))
       val clkEn = Output(Bool())
+      val clkGateEdgeSel = Output(Bool())
       val rxClkEn = Output(Bool())
       val phyTestClkEn = Output(Bool())
       val sbClkEn = Output(Bool())
@@ -503,6 +504,15 @@ class UcieClkRegs(
         RegInit(0.U(ClockingTile.sbClkSrcSelWidth.W))
       )
 
+    // Which TX data clock edge hands the TX clock gate's decision to the TX
+    // quadrature clock's latch; see the tile's `ClkGateEdgeSel`. The right one
+    // depends on the lag the delay code and coarse phase set, so it is applied
+    // with them: every apply carries it, a phase's own included, but writing
+    // it starts none. Written before the delay code or phase, it moves in the
+    // same apply, so the gate never shuts or opens on one edge at a lag meant
+    // for the other. Low out of reset, the rising edge.
+    val clkGateEdgeSel = RegInit(false.B)
+
     // Software's enables for the PHY test and TX sideband clocks, at the gate
     // after each one's bypass mux. On out of reset: these are the clocks the
     // register blocks behind the UCIe reset run on, so they have to be running
@@ -573,10 +583,12 @@ class UcieClkRegs(
     val liveSbSrc = RegInit(0.U(ClockingTile.sbClkSrcSelWidth.W))
     val livePhyTestSrc = RegInit(0.U(ClockingTile.phyTestClkSrcSelWidth.W))
     // So do the TX quadrature clock's coarse phase and the global delay line,
-    // which are training results rather than properties of a rate.
+    // which are training results rather than properties of a rate, and the TX
+    // gate's edge select that goes with them.
     val liveTxClkPhase = RegInit(0.U(ClockingTile.txClkPhaseWidth.W))
     val liveClkPhaseSel =
       RegInit(UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W))
+    val liveClkGateEdgeSel = RegInit(false.B)
 
     val pending = Wire(new ClkRateCfgIO)
     pending.mainClkSel := Mux(freqSelAutoEn, selected.mainClkSel, mainClkSel)
@@ -681,8 +693,9 @@ class UcieClkRegs(
     // applied fields too, but nothing has to ask for their apply: in FSM mode,
     // writing either one with something other than what the tile runs starts
     // an apply of its own. That one shuts only the TX gate, moves only those
-    // two, and skips the ungate wait, since no PLL has changed. In manual mode
-    // each drives its pin directly, like every other field.
+    // two and `clkGateEdgeSel`, and skips the ungate wait, since no PLL has
+    // changed. In manual mode each drives its pin directly, like every other
+    // field.
     val applyReq = RegInit(false.B)
     val applyBusy = RegInit(false.B)
     // Whether the apply under way is a whole one, as opposed to a phase alone.
@@ -807,6 +820,7 @@ class UcieClkRegs(
           when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
             liveTxClkPhase := txClkPhase
             liveClkPhaseSel := clkPhaseSel
+            liveClkGateEdgeSel := clkGateEdgeSel
             when(applyFull) {
               live := pending
               livePhyTestDiv := phyTestClkDiv
@@ -921,6 +935,7 @@ class UcieClkRegs(
       txClkDiv := live.txClkDiv
       txClkPhase := liveTxClkPhase
       clkPhaseSel := liveClkPhaseSel
+      clkGateEdgeSel := liveClkGateEdgeSel
       x2En := live.x2En
       pll8En := fsmPll8En
       pll12En := fsmPll12En
@@ -946,6 +961,7 @@ class UcieClkRegs(
       live.txClkDiv := txClkDiv
       liveTxClkPhase := txClkPhase
       liveClkPhaseSel := clkPhaseSel
+      liveClkGateEdgeSel := clkGateEdgeSel
       live.x2En := x2En
       live.pll8En := pll8En
       live.pll12En := pll12En
@@ -972,6 +988,7 @@ class UcieClkRegs(
     io.rxClkFromTxQ := rxClkFromTxQ
     io.clkPhaseSel := Mux(manual, clkPhaseSel, liveClkPhaseSel)
     io.clkEn := Mux(manual, clkEn, fsmClkEn)
+    io.clkGateEdgeSel := Mux(manual, clkGateEdgeSel, liveClkGateEdgeSel)
     io.rxClkEn := rxClkEn
     io.phyTestClkEn := Mux(manual, phyTestClkEn, fsmPhyTestClkEn)
     io.sbClkEn := Mux(manual, sbClkEn, fsmSbClkEn)
@@ -1024,7 +1041,8 @@ class UcieClkRegs(
       ) ++ UcieClkRegs.meteredClocks.zip(clkMeters).map { case (name, rate) =>
         toRegFieldR(rate, s"clkMeter$name")
       } ++ Seq(
-        toRegFieldRw(pllLockLost, "pllLockLost")
+        toRegFieldRw(pllLockLost, "pllLockLost"),
+        toRegFieldRw(clkGateEdgeSel, "clkGateEdgeSel")
       )
       // The table sits at a fixed slot so that adding a scalar does not move
       // every entry -- which means adding one too many silently lands on top
@@ -2197,6 +2215,7 @@ class UcieTL(
     phy.io.clkRst.rxClkFromTxQ := clkRegs.module.io.rxClkFromTxQ
     phy.io.clkRst.clkPhaseSel := clkRegs.module.io.clkPhaseSel
     phy.io.clkRst.clkEn := clkRegs.module.io.clkEn
+    phy.io.clkRst.clkGateEdgeSel := clkRegs.module.io.clkGateEdgeSel
     phy.io.clkRst.rxClkEn := clkRegs.module.io.rxClkEn
     phy.io.clkRst.phyTestClkEn := clkRegs.module.io.phyTestClkEn
     phy.io.clkRst.sbClkEn := clkRegs.module.io.sbClkEn
