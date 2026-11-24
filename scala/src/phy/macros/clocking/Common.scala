@@ -235,17 +235,19 @@ class Esd(implicit includeDefaultModels: Boolean = false)
   }
 }
 
+// Die-to-die bump ESD clamp, the delivered `D2D_ESD`. Only the protected net
+// is connected here; the physical flow connects the supplies.
 class EsdRoutable(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
-    val term = Input(Bool())
+    val D2D_signal = Input(Bool())
   })
 
-  override val desiredName = "ucie_esd_routable"
+  override val desiredName = "D2D_ESD"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/ucie_esd_routable.v")
+    addResource("/vsrc/D2D_ESD.v")
   }
 }
 

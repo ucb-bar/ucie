@@ -121,7 +121,7 @@ their bumps as pins, and everything else on those tiles stays in the interface.
 A bench wires two tiles together by handing the same `wire` to both, rather than
 by assigning one interface member to another.
 
-The blackbox shims (`tx_lane`, `rx_data_lane`, `rx_clock_lane`, `sb_driver`) are
+The blackbox shims (`TX`, `rx_data_lane`, `rx_clock_lane`, `sb_driver`) are
 the exception and cannot be fixed: their ports are `Bool()` on the Chisel side,
 so a design emitted from Chisel digitizes its bumps at the tile boundary no
 matter what. A full-stack AMS simulation therefore has an eye whose edge rate

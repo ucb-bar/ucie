@@ -361,12 +361,17 @@ class Phy(
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
-  // Analog bypass clock pad: ESD clamp, then the clock receiver that restores
-  // the single-ended pad signal to a full-swing clock.
-  val bypassClkEsd = Module(new Esd)
-  bypassClkEsd.io.IO_signal := io.top.bypassClk.asBool
-  val bypassClkRx = Module(new ClkRx)
+  // Single-ended clock bumps, each into a delivered clock receiver (ESD clamp
+  // and receiver in one macro, inverting). The analog bypass clock gets the
+  // high-speed one; the other three run at 1 GHz or less.
+  val bypassClkRx = Module(new ClkRx(ClkRxKind.HighSpeed))
   bypassClkRx.io.Vin := io.top.bypassClk
+  val digitalBypassClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  digitalBypassClkRx.io.Vin := io.top.digitalBypassClk
+  val sidebandBypassClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  sidebandBypassClkRx.io.Vin := io.top.sidebandBypassClk
+  val refClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  refClkRx.io.Vin := io.top.refClk
 
   // Clocking tile: sources the PHY test, TX sideband, TX data, and TX
   // quadrature clocks.
@@ -388,8 +393,8 @@ class Phy(
   clkTile.io.SbClkSrcSel := io.clkRst.sbClkSrcSel
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbClkEn := io.clkRst.sbClkEn
-  clkTile.io.SbBypassClk := io.top.sidebandBypassClk
-  clkTile.io.RefClk := io.top.refClk
+  clkTile.io.SbBypassClk := sidebandBypassClkRx.io.Vout
+  clkTile.io.RefClk := refClkRx.io.Vout
 
   io.clkRst.pll8Lock := clkTile.io.Pll8Lock
   io.clkRst.pll12Lock := clkTile.io.Pll12Lock
@@ -415,7 +420,7 @@ class Phy(
   // clocks into the clocking tile.
   val clkDist = Module(new ClkDistNetwork(clkDistLayout))
   clkDist.io.bypassClk := bypassClkRx.io.Vout
-  clkDist.io.digitalBypassClk := io.top.digitalBypassClk
+  clkDist.io.digitalBypassClk := digitalBypassClkRx.io.Vout
   clkTile.io.BypassClk := clkDist.io.tileBypassClk
   clkTile.io.DigBypassClk := clkDist.io.tileDigitalBypassClk
   clkDist.io.txClk := clkTile.io.TxClk
@@ -438,8 +443,8 @@ class Phy(
   sbTxData.io.ctl := PadDriverCtlIO.full
   val esdSbRxClk = Module(new EsdRoutable)
   val esdSbRxData = Module(new EsdRoutable)
-  esdSbRxClk.io.term := io.top.sbRxClk.asBool
-  esdSbRxData.io.term := io.top.sbRxData.asBool
+  esdSbRxClk.io.D2D_signal := io.top.sbRxClk.asBool
+  esdSbRxData.io.D2D_signal := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
   // The forwarded sideband clock as actually transmitted, i.e. after the bump
