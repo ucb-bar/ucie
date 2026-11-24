@@ -259,9 +259,9 @@ class PhyClkRstIO extends Bundle {
   // delay code can be changed with no edge reaching a lane. The PHY test and
   // TX sideband clocks divide a PLL instead and keep running.
   val clkEn = Input(Bool())
-  // Which TX data clock edge hands that gate's decision to the TX quadrature
-  // clock: low the rising edge, high the falling one. See the tile's
-  // `ClkGateEdgeSel`.
+  // Which tap of that gate's TX data clock chain the TX quadrature clock takes
+  // its decision from: low the one that changes as the data clock rises, high
+  // half a period earlier. See the tile's `ClkGateEdgeSel`.
   val clkGateEdgeSel = Input(Bool())
   // Enables the recovered RX forwarded clock at the RX clock lanes. Low stops
   // it there, which keeps the whole RX clock tree quiet rather than clocking

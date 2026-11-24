@@ -9,20 +9,16 @@ import edu.berkeley.cs.uciedigital.Utils
 // Drives `global_delayline_gate` with the two TX clocks at every lag across a
 // period, and with and without the delay line, toggling the enable at random
 // times that bear no relation to either clock, as the chip clock's register
-// block does. Each quadrature pulse has to pass exactly when the data pulse
-// before it did, and neither clock may come out with a pulse cut short.
+// block does. Neither clock may come out with a pulse cut short, with either
+// `edgeSel`. Each quadrature pulse has to pass exactly when the data pulse
+// before it did, except with `edgeSel` high at a lag over half a period, where
+// it has to do what the data pulse after it does.
 //
-// Each lag runs twice: with `edgeSel` as software sets it, high for a lag
-// under a quarter period, and the other way. The model has no delays, so the
-// race each edge runs against the quadrature clock's latch is checked on its
-// own: that latch must not close within `WINDOW` after its input changes. Set
-// as software sets it, nothing may come that close. The other way has to,
-// somewhere in the sweep, or the check is seeing nothing. Only the setting
-// software uses has to keep the pulses in step.
-//
-// Without the latch that holds the data clock's decision back until its pulse
-// begins, the quadrature clock goes a pulse early at every lag past half a
-// period, which this catches.
+// The model has no delays, so the race between the tap `edgeSel` picks and the
+// quadrature clock's flops is checked on its own: with `edgeSel` as software
+// sets it, high within a quarter period of a lag of zero, the tap must not
+// change within `WINDOW` of the delayed quadrature clock rising. The other way
+// has to, somewhere in the sweep, or the check is seeing nothing.
 class GlobalDelaylineGateLagSweep extends ExtModule {
   val Dctrl = IO(Output(UInt(ClockingTile.phaseSelWidth.W)))
   val Vin = IO(Output(Clock()))
@@ -56,28 +52,35 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
 
         // Line settings: none, and enough taps to move the lag a third of a period.
         localparam int SWEEP_TAPS[2] = '{0, 37};
-        // Stands in for the retiming latch's clock-to-output delay plus the
-        // quadrature clock latch's setup until the cell has numbers. Anything
-        // under a quarter period passes with the edge software picks.
+        // Stands in for the quadrature flops' setup and hold until the cell has
+        // numbers. Anything under a quarter period passes with the tap
+        // software picks.
         localparam real WINDOW = 10.0;
         real line_delay = 0.0;
         bit running = 0;
         integer wrong, runts, passed, blocked, near;
         integer total_wrong = 0, total_runts = 0, total_near = 0, other_near = 0;
 
-        // Whether the last data pulse got through.
-        reg data_passed = 1'b0;
-        always @(posedge VinData) #0.1 data_passed = VoutData;
+        // Each data pulse, by index, and whether it got through.
+        int dn = 0;
+        bit dpass [int];
+        always @(posedge VinData) if (running) begin
+          automatic int n = dn;
+          dn++;
+          #(T / 4) dpass[n] = VoutData;
+        end
 
-        // Each quadrature pulse, out of the line, has to do what the data pulse
-        // before it did.
-        always @(posedge Vin) if (running) fork
-          begin
-            #(line_delay + 0.1);
-            if (Vout) passed++; else blocked++;
-            if (Vout !== data_passed) wrong++;
-          end
-        join_none
+        // Each quadrature pulse, at the gate: the data pulse before it, and
+        // whether it got through.
+        int qn = 0;
+        bit qpass [int];
+        int qafter [int];
+        always @(posedge GlobalDelaylineGateHarness.gate.q_delayed) if (running) begin
+          automatic int n = qn;
+          qn++;
+          qafter[n] = dn - 1;
+          #(T / 4) qpass[n] = Vout;
+        end
 
         // Neither clock may come out with a pulse cut short.
         // Each falls only after rising, so the edge from X at time zero is not one.
@@ -89,18 +92,22 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
         always @(negedge Vout)
           if (q_rise >= 0 && $realtime - q_rise < T / 2 - 0.01) runts++;
 
-        // The quadrature clock's latch closes as the delayed quadrature clock
-        // rises. Closing within `WINDOW` after its input changes is the race;
-        // just before is safe, since the retiming latch's clock-to-output
-        // delay covers the hold.
-        realtime q_latch_in = -1;
-        always @(GlobalDelaylineGateHarness.gate.en_retimed) q_latch_in = $realtime;
-        always @(posedge GlobalDelaylineGateHarness.gate.q_delayed)
-          if (running && q_latch_in >= 0 && $realtime - q_latch_in < WINDOW) near++;
+        // The quadrature flops sample the tap as the delayed quadrature clock
+        // rises. The tap changing within `WINDOW` of that, either side, is
+        // the race.
+        realtime tap_change = -1, q_sample = -1;
+        always @(GlobalDelaylineGateHarness.gate.en_tap) begin
+          tap_change = $realtime;
+          if (running && q_sample >= 0 && tap_change - q_sample < WINDOW) near++;
+        end
+        always @(posedge GlobalDelaylineGateHarness.gate.q_delayed) begin
+          q_sample = $realtime;
+          if (running && tap_change >= 0 && q_sample - tap_change < WINDOW) near++;
+        end
 
         real lag, phase;
         bit rule_sel;
-        integer t, k, s;
+        integer t, k, s, j, shift;
         initial begin
           Dctrl = '0; Vin = 0; VinData = 0; enable = 0; edgeSel = 0;
           for (t = 0; t < 2; t = t + 1) begin
@@ -111,11 +118,12 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
               // The whole lag of the delayed quadrature clock, within a period.
               phase = lag + line_delay;
               while (phase >= T) phase = phase - T;
-              rule_sel = phase < T / 4;
+              rule_sel = phase < T / 4 || phase >= 3 * T / 4;
               for (s = 0; s < 2; s = s + 1) begin
                 // Changed with the gate shut and settled, which moves nothing.
                 edgeSel = (s == 0) ? rule_sel : !rule_sel;
                 wrong = 0; runts = 0; passed = 0; blocked = 0; near = 0;
+                dn = 0; qn = 0; dpass.delete(); qpass.delete(); qafter.delete();
                 running = 1;
                 fork
                   while (running) begin #(T / 2) VinData = 1; #(T / 2) VinData = 0; end
@@ -132,19 +140,24 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
                     running = 0;
                   end
                 join
-                #(T + line_delay);
+                #(2 * T + line_delay);
+                // Past half a period the latch's tap carries the decision of
+                // the data pulse after.
+                shift = (edgeSel && phase > T / 2) ? 1 : 0;
+                for (j = 0; j < qn; j = j + 1)
+                  if (qafter[j] + shift >= 1 && qafter[j] + shift < dn - 1) begin
+                    if (qpass[j]) passed++; else blocked++;
+                    if (qpass[j] !== dpass[qafter[j] + shift]) wrong++;
+                  end
                 $display("%2d taps, lag %6.2f ps, edgeSel %0d (%s): %0d of %0d quadrature pulses wrong, %0d runts, %0d close calls",
                          SWEEP_TAPS[t], lag, edgeSel, (s == 0) ? "software's" : "the other",
                          wrong, passed + blocked, runts, near);
                 if (passed == 0 || blocked == 0)
                   $fatal(1, "the enable never both opened and shut the gate");
-                if (s == 0) begin
-                  total_wrong += wrong;
-                  total_runts += runts;
-                  total_near += near;
-                end else begin
-                  other_near += near;
-                end
+                total_wrong += wrong;
+                total_runts += runts;
+                if (s == 0) total_near += near;
+                else other_near += near;
               end
             end
           end
@@ -152,10 +165,10 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
             $fatal(1, "%0d quadrature pulses out of step with the data clock, %0d runts",
                    total_wrong, total_runts);
           if (total_near != 0)
-            $fatal(1, "%0d quadrature latch closings within %0.1f ps of its input changing",
+            $fatal(1, "%0d samples of the tap within %0.1f ps of it changing",
                    total_near, WINDOW);
           if (other_near == 0)
-            $fatal(1, "the wrong edge never came near the quadrature latch's closing");
+            $fatal(1, "the other tap never came near the quadrature flops' sampling");
           $display("TEST PASSED");
           $finish;
         end

@@ -36,10 +36,10 @@ Iris repository.
 
 | Clock | Source and range | Selected by | Clocks | Code |
 |---|---|---|---|---|
-| **Chip clock** | The SoC clock on `UcieTL.digitalClockNode`. | Fixed | `UcieClkRegs`, the register port (crossbar, FIFO fixer, source shrinker, the bus side of both register crossings), the TL path (framing, credits, A/D buffers), the sideband TL link's body, the enqueue end of `txTlFifo`/`txAQ`, the dequeue end of `rxTlFifo`/`rxAQ`. | `scala/src/tilelink/TileLink.scala:2049-2056,2114-2146,2493-2916` |
-| **PHY test clock** `PhyTestClk` | The `digitalBypassClk` pin (reset default; the figure gives ≤ 1.1 GHz), or PLL8, PLL12 or the analog bypass pin divided by 6, 8, 12 or 15. Nominally ~1 GHz. | `phyTestClkBypassEn`, `phyTestClkSrcSel`, `phyTestClkDiv` (applied); gate `phyTestClkEn` (immediate; lands 3–4 of its periods later) | `UcieTLRegs` (every PhyTest, lane-control and debug register), `PhyTest` (FSMs, SRAMs, LFSRs, counters), every RX AFE controller (`RxAfeCtl`, clock lanes included), the PhyTest ends of the mainband test queues and of PhyTest's own lane queues, the sideband tester's register side. | `scala/src/phy/Phy.scala:278-287,450,623-628`; `TileLink.scala:2115,2175-2187` |
-| **TX sideband clock** `SbClk` | The `sidebandBypassClk` pin (reset default, 800 MHz), or PLL8, PLL12 or the analog bypass pin divided by 5, 10 or 15 (800 MHz is PLL8/10 or PLL12/15). | `sbClkBypassEn`, `sbClkSrcSel`, `sbClkDiv` (applied); gate `sbClkEn` (immediate; lands 3–4 of its periods later) | `UcieController` (the UCIe digital stack and its spec registers), every sideband serializer (PhyTest's tester, the SB TL link, the controller), the controller's mainband queue ends. | `Phy.scala:289-292,451-458`; `TileLink.scala:2116,2300-2306,2332-2339,2451-2485` |
-| **UCIe main clock** | PLL8 (8 GHz), PLL12 (12 GHz), the PLL8 X2 clock (16 GHz), or the analog bypass pin `bypassClk` (≤ 16 GHz; reset default). | `mainClkSel` (applied) | The TX data and quadrature dividers only. There's no gate on it: the TX gate (`clkEn`) is after the global delay line. | `scala/src/phy/macros/clocking/Common.scala:113-118,208-221` |
+| **Chip clock** | The SoC clock on `UcieTL.digitalClockNode`. | Fixed | `UcieClkRegs`, the register port (crossbar, FIFO fixer, source shrinker, the bus side of both register crossings), the TL path (framing, credits, A/D buffers), the sideband TL link's body, the enqueue end of `txTlFifo`/`txAQ`, the dequeue end of `rxTlFifo`/`rxAQ`. | `scala/src/tilelink/TileLink.scala:2051-2058,2116-2148,2495-2918` |
+| **PHY test clock** `PhyTestClk` | The `digitalBypassClk` pin (reset default; the figure gives ≤ 1.1 GHz), or PLL8, PLL12 or the analog bypass pin divided by 6, 8, 12 or 15. Nominally ~1 GHz. | `phyTestClkBypassEn`, `phyTestClkSrcSel`, `phyTestClkDiv` (applied); gate `phyTestClkEn` (immediate; lands 3–4 of its periods later) | `UcieTLRegs` (every PhyTest, lane-control and debug register), `PhyTest` (FSMs, SRAMs, LFSRs, counters), every RX AFE controller (`RxAfeCtl`, clock lanes included), the PhyTest ends of the mainband test queues and of PhyTest's own lane queues, the sideband tester's register side. | `scala/src/phy/Phy.scala:278-287,450,623-628`; `TileLink.scala:2117,2177-2189` |
+| **TX sideband clock** `SbClk` | The `sidebandBypassClk` pin (reset default, 800 MHz), or PLL8, PLL12 or the analog bypass pin divided by 5, 10 or 15 (800 MHz is PLL8/10 or PLL12/15). | `sbClkBypassEn`, `sbClkSrcSel`, `sbClkDiv` (applied); gate `sbClkEn` (immediate; lands 3–4 of its periods later) | `UcieController` (the UCIe digital stack and its spec registers), every sideband serializer (PhyTest's tester, the SB TL link, the controller), the controller's mainband queue ends. | `Phy.scala:289-292,451-458`; `TileLink.scala:2118,2302-2308,2334-2341,2453-2487` |
+| **UCIe main clock** | PLL8 (8 GHz), PLL12 (12 GHz), the PLL8 X2 clock (16 GHz), or the analog bypass pin `bypassClk` (≤ 16 GHz; reset default). | `mainClkSel` (applied) | The TX data and quadrature dividers only. There's no gate on it: the TX gate (`clkEn`) is after the global delay line. | `scala/src/phy/macros/clocking/Common.scala:113-118,208-222` |
 | **TX data clock** `TxClk` | Main clock ÷ 1, 2 or 4, then the TX gate. | `txClkDiv` (applied); gate `clkEn` (immediate) | Data, valid and track TX lanes; PhyTest's TX debug lane, loopback TX lane and loopback RX lane; the global TX ÷16. | `ucie_clk_dist_network.sv`; `figures/lane_clock_distribution.png` |
 | **TX quadrature clock** `TxClkQ` | `TxClk`, advanced by `txClkPhase` half-cycles of the main clock, then through the global delay line (64 thermometer taps, ~1.086 ps each in the model), then the TX gate. | `txClkPhase`, `clkPhaseSel` (both applied, each write by an apply of its own); gate `clkEn` (immediate), with `clkGateEdgeSel` (applied with them) | The two forwarded-clock TX lanes; optionally the RX clock tree (`rxClkFromTxQ`). | `Common.scala:108-111,145-153`; `resources/vsrc/global_delayline_gate.v` (`TAP_PS`) |
 | **TX divided clock** `txDivClk` | `TxClk` ÷ 16, inverted (`ucie_clk_div4`, a ripple ÷16). The TX tiles load on the rising edge of their own ÷16, in step with the global one, so the queue presents each word half a word ahead of the load. | Follows `TxClk` | Hand-off of each TX word to the tiles; the PHY end of every TX queue; the TX underflow flags. | `Phy.scala:502-539` |
@@ -80,35 +80,50 @@ mid-scale.
 
 **Gates.**
 - **TX gate (`clkEn`).** After the global delay line. `clkEn` is asynchronous to the TX clocks, so
-  it crosses to the data clock through three flops on that clock's rising edge. A latch open while
-  the data clock is low then gates the data clock, so its AND never clips a pulse. A second latch,
-  open while the data clock is high, holds that decision back until the first data pulse under it
-  begins, and hands it to the quadrature clock's latch, open while the delayed quadrature clock is
-  low. So the quadrature clock stops and starts on its first pulse after the data clock's, at any
-  lag between them. A change lands 3–4 data clock periods later, and only while that clock runs.
-  The TX dividers in front keep running, so every TX mux, divider and delay code is behind the gate.
-  Without the second latch, a quadrature clock lagging by more than half a period would take the
-  change one pulse early; `GlobalDelaylineGateSpec` sweeps the lag across a whole period to hold
-  that.
-- **TX gate edge select (`clkGateEdgeSel`).** The handover to the quadrature clock's latch races one
-  lag. With `clkGateEdgeSel` = 0, the decision crosses on the data clock's rising edge, through the
-  second latch, and a quadrature clock rising within that latch's delay plus the third's setup
-  (a lag just above zero) closes its latch as the decision changes. That can cut a quadrature pulse
-  short, or move the switch a pulse, when the gate opens or shuts. With `clkGateEdgeSel` = 1 the
-  second latch is held open, so the decision crosses on the falling edge, straight from the first
-  latch. That is right for any lag under half a period, and races a lag just above half a period.
-  - Set it to 1 when `TxClkQ` lags `TxClk` by less than a quarter of the TX clock period, and 0
-    otherwise. Either edge is then a quarter period from its race (31 ps at 8 GHz).
+  it crosses to the data clock through three flops on that clock's rising edge, and three more hold
+  it back while the quadrature clock's side catches up. Each clock is gated by a clock gate cell (a
+  latch open while the clock is low, then an AND) fed from a flop on that clock, so neither AND
+  clips a pulse. The quadrature clock's gate takes the decision through three flops on the delayed
+  quadrature clock, from a tap of the data clock's chain that `clkGateEdgeSel` picks. So the
+  quadrature clock stops and starts on the pulse that goes with the data clock's, at any lag. Every
+  path has a whole period, or ends in flops that expect a crossing; none has to fit in half a
+  period, which at 16 GHz (31 ps) a standard-cell latch may not. A change lands 6–7
+  data clock periods later, and only while that clock runs. The TX dividers in front keep running,
+  so every TX mux, divider and delay code is behind the gate.
+  - The gate before this one was a chain of latches, each with half a period. A latch slower than
+    that misses its hop, and the gate clips the data clock.
+  - `GlobalDelaylineGateSpec` sweeps the lag across a whole period on the model. No pulse is cut,
+    at any lag, with either `clkGateEdgeSel`. The model has no delays.
+  - What the gate needs of the real cells: a flop's clock-to-output plus the clock gate cell's
+    setup within one period at the slowest corner, which no arrangement of the gate avoids. The
+    cell designer's timing on the real cells signs it off.
+- **TX gate edge select (`clkGateEdgeSel`).** Picks the tap the quadrature clock's flops sample: 0
+  the fourth data clock flop, which changes as the data clock rises; 1 the third through a latch
+  open while the data clock is low, which carries the same decision from half a period earlier.
+  Neither setting can cut a pulse. Each tap races the quadrature flops at one lag. A gate change
+  there may land on either of two quadrature pulses, so the RX could see its clock burst move by
+  one pulse against the data from one reopen to the next.
+  - 0 races a lag of the fourth flop's clock-to-output plus the select's delay, at the middle of
+    the flops' setup and hold: 0 in the model; on the chip it comes from the cell's timing. 1
+    races half a period before that, while the latch's clock-to-output is near the flop's. Each
+    race is the flops' setup plus hold wide.
+  - Set it to 1 when the lag is within a quarter period of 0's race, and 0 otherwise. Either race
+    is then a quarter period away, less half its width.
+  - With that rule a change lands on the same pair of pulses at every lag but one, a quarter period
+    before 0's race, where the quadrature clock's start moves by one pulse. In the model each quadrature
+    pulse goes with the data pulse before it, until it leads the next one by a quarter period or
+    less, when it goes with that one.
   - The lag is the delay line's taps × ~1.086 ps, less `txClkPhase` half periods of the main
     clock, plus whatever the cell's two paths differ by, all modulo the TX clock period. At ÷1 the
-    delay line alone moves it from about 0 to 70 ps, across both races at 8 GHz.
+    delay line alone moves it from about 0 to 70 ps, across at least one race at 8 GHz and both at
+    16 GHz.
   - It is applied with the delay code and phase: write it first, and the apply that
     `set_global_delay` or `set_tx_phase` starts carries both (section 1.4).
-  - Reset is 0, the rising edge, as before the select existed. No program sets it yet.
-  - With the gate steadily open or shut both latches hold the same decision, so the select moves
-    nothing then. The model has no delays, so `GlobalDelaylineGateSpec` checks the race directly:
-    with the select set by the rule above, the quadrature latch never closes within 10 ps after
-    its input changes, at any lag.
+  - Reset is 0. No program sets it yet. The race lags come from the cell, which hasn't been built.
+  - With the gate steadily open or shut both taps carry the same decision, so the select moves
+    nothing then. The model has no delays, so `GlobalDelaylineGateSpec` checks its race directly:
+    with the select set by the rule, the tap never changes within 10 ps of the quadrature flops
+    sampling it, at any lag.
 - **PHY test and sideband gates (`phyTestClkEn`, `sbClkEn`).** Three flops on the falling edge of
   the clock being gated, then an AND, then the cell's output inverter. A change lands 3–4 periods
   later, and only while that clock runs. Shut, the clock sits **high**.
@@ -162,7 +177,7 @@ partner's, which arrives as this die's `rxDivClk`.
   and bursts it queues nothing.
 - The PHY end puts a word on the lanes every divided-clock cycle: the next queued one, or between
   them one of `TxClkGater`'s own (section 8.1). Its RX queue takes a word every cycle and can't be
-  held off (`TileLink.scala:2249-2252,2300-2316`).
+  held off (`TileLink.scala:2251-2254,2302-2318`).
 
 If the PHY test clock is slower, words drop silently and read as bit errors. Two sticky flags record
 it:
@@ -170,10 +185,10 @@ it:
   said more of the run followed.
 - `UCIE_RX_TEST_FIFO_OVERFLOW`: the RX queue overflowed.
 
-Both are cleared by the datapath reset (`TileLink.scala:205-211,2318-2330`).
+Both are cleared by the datapath reset (`TileLink.scala:205-211,2320-2332`).
 
 A slow PHY test clock starves this die's TX and overflows its RX. Where the next data word isn't
-queued in time, `TxClkGater` sends an idle word instead (`TileLink.scala:2812-2877`;
+queued in time, `TxClkGater` sends an idle word instead (`TileLink.scala:2814-2879`;
 `scala/src/phytest/TxClkGater.scala`): with the clock running that is an extra idle word in the
 middle of the run, and with it gated the burst splits in two, each with its postamble. With the
 clock running the RX still takes a word every packet clock, more than a slow PHY test clock
@@ -202,7 +217,7 @@ domain's nominal is ~1 GHz (`Phy.scala:278`).
 PHY clock is stopped (`TileLink.scala:246-263`).
 
 **Applied fields.** These are shadow registers. Nothing reaches the tile until
-`UCIE_CLK_CFG_APPLY` (`TileLink.scala:560-584,699-879`):
+`UCIE_CLK_CFG_APPLY` (`TileLink.scala:561-585,700-880`):
 - `mainClkSel`, `txClkDiv`
 - `pll8En`, `pll12En`, `x2En`
 - `phyTestClkSrcSel`, `phyTestClkDiv`, `phyTestClkBypassEn`
@@ -213,7 +228,8 @@ PHY clock is stopped (`TileLink.scala:246-263`).
 An apply runs these steps:
 1. Shut the TX gate always. Shut the PHY test or sideband gate only when this apply changes
    something under it and `clkCfgGatePhyTest`/`clkCfgGateSb` allows it (both reset to 1).
-2. Wait `gateDwell` = 32 chip cycles, long enough for the three-flop gates at ~60 MHz.
+2. Wait `gateDwell` = 32 chip cycles, long enough for the three-flop gates at ~60 MHz and the TX gate
+   at a TX clock of ~125 MHz (a change takes up to 8 of its periods).
 3. Copy the shadows into the live registers, and hold the TX data and quadrature dividers in reset.
 4. Wait for the ungate condition.
 5. Release the TX dividers, and wait 4 cycles.
@@ -228,7 +244,7 @@ alone, write `UCIE_CLK_CFG_APPLY`. `UCIE_CLK_CFG_BUSY` reads 1 from the write un
 finishes, and `set_tx_phase` and `set_global_delay` wait for it. A pending `UCIE_CLK_CFG_APPLY` is
 left for after it, and the controller's clocks-ready answer stays up through it.
 
-**Ungate condition** (`UCIE_CLK_CFG_UNGATE_SRC`, `TileLink.scala:1078-1101`):
+**Ungate condition** (`UCIE_CLK_CFG_UNGATE_SRC`, `TileLink.scala:1079-1102`):
 
 | Value | Condition |
 |---|---|
@@ -236,10 +252,10 @@ left for after it, and the controller's clocks-ready answer stays up through it.
 | 1, `mmio` | Wait for `UCIE_CLK_CFG_UNGATE_REQ`. |
 | 2, `delay` | `UCIE_CLK_CFG_UNGATE_DELAY` chip cycles; reset value 1024. |
 
-Writing `UCIE_CLK_CFG_UNGATE_REQ` ends any wait, whatever the source (`TileLink.scala:626-630`).
+Writing `UCIE_CLK_CFG_UNGATE_REQ` ends any wait, whatever the source (`TileLink.scala:627-631`).
 
 **PLL keep-alive.** A PLL stays on while the PHY test or sideband divider takes it, whatever its
-enable says (`TileLink.scala:914-926`).
+enable says (`TileLink.scala:915-927`).
 
 **Immediate fields.** These take effect when written: `clkEn`, `rxClkEn`, `phyTestClkEn`, `sbClkEn`,
 `rxClkFromTxQ`, `txDividerRst`, `rxDividerRst` and `ucieRst`.
@@ -249,28 +265,28 @@ enable says (`TileLink.scala:914-926`).
 **Manual mode.** `UCIE_CLK_MANUAL_EN` = 1 hands every output to its own register, with no apply,
 no keep-alive and no `ucieRst` on the dividers. Use it to re-sequence by hand. `txClkPhase` and
 `clkPhaseSel` then move as written, under a running clock unless `clkEn` = 0. Entry and exit move
-no output (`TileLink.scala:530-556,931-974`).
+no output (`TileLink.scala:531-557,932-975`).
 
 **Rate table.** `UCIE_RATE_CFG` + 8·rate, with `freqSelAutoEn`, is for the UCIe digital stack's
-training (`TileLink.scala:388-403,760-782`). PhyTest doesn't use it. Leave `freqSelAutoEn` = 0. An
+training (`TileLink.scala:388-403,761-783`). PhyTest doesn't use it. Leave `freqSelAutoEn` = 0. An
 all-zero entry selects PLL8 with no PLL on.
 
 ### 1.5 Clock domain crossings
 
 | Crossing | Mechanism | Notes | Code |
 |---|---|---|---|
-| Bus → `UcieTLRegs` (PHY test clock) and bus → `UcieController` (sideband clock) | One-entry `AsyncQueue` TL crossing, `safe` | The request isn't accepted until the destination domain is clocked and out of reset. See section 3. | `TileLink.scala:2132-2140` |
-| `UcieTLRegs` → `PhyTest` | **None: same clock.** | Strobes such as `txExecute`, `txFsmRst`, `rxFsmRst`, `txInjectError` and `trackCntRst` are one-cycle pulses made in the PHY test domain and consumed there. The FSM and datapath resets are stretched to 8 cycles. | `TileLink.scala:1490-1623` |
-| PHY test clock ↔ `txDivClk`/`rxDivClk`, mainband data | `AsyncQueue`, depth 32 | One queue per controller per direction; only the selected controller's TX words reach the lanes. | `TileLink.scala:2235-2316` |
-| PHY test clock → divided clocks, datapath resets | Reset synchronizer: asynchronous assert, release after 3 divided-clock edges (`ucie_rst_sync.v`) | Release needs the divided clock to be running. The strobe leaves `UcieTLRegs` from a flop (`TileLink.scala:1497-1510,1535-1539,1550-1551`), so no glitch out of the write decode or the stretch counter reaches the asynchronous clear. The PHY, and PhyTest for its own lanes, register it once more on the PHY test clock, held while that domain is in reset, so the clear sees one flop rather than an OR of that strobe and the UCIe reset. | `Phy.scala:517-548`; `PhyTest.scala:813-817,899-901,1060-1062` |
-| Divided clocks → PHY test clock, sticky flags | Two flops | Levels, so nothing is lost. | `TileLink.scala:1448-1455`; `PhyTest.scala:934,1098-1099` |
-| `UcieClkRegs` → clocking tile | Registered levels; source changes only under a shut gate (section 1.4) | | `TileLink.scala:976-1001` |
-| `UcieClkRegs` → the clock gates (`clkEn`, `phyTestClkEn`, `sbClkEn`) | Three flops on the gated clock, inside each cell | Can change at any time; lands 3–4 periods of the gated clock later, and only while that clock runs. | `resources/vsrc/global_delayline_gate.v`, `phytest_div_core.v`, `sb_div_core.v` |
-| `UcieClkRegs` → dividers | Asynchronous reset off a flop | Release only with that direction's clock stopped. | `TileLink.scala:657-681` |
-| `UcieClkRegs` → TX data and quadrature dividers (`txClkGenRstb`) | Asynchronous reset off a flop | Releases with the main clock running, behind the shut TX gate; `main_clk_sel_core` has to synchronize the release to the main clock, as its model does. | `TileLink.scala:708-723` |
-| `UcieClkRegs` → every UCIe domain | `ucieRst` into a reset synchronizer per domain | | `Phy.scala:455-462,535-548`; `TileLink.scala:2162-2171` |
-| PLL lock → chip clock; `freqSel` → chip clock; clock status → sideband clock | Two flops; `freqSel` must also hold for 3 cycles; lock must hold for 4 | | `TileLink.scala:410-428,772-781,2390-2417` |
-| `UcieTLRegs` → lanes and divided-clock datapaths, quasi-static controls | **Not synchronized** | Covers `txctl`/`rxctl` (tile codes, shufflers, `sampleNegedge`, vref, termination, `Dctrl`), `controllerSel`/`mainbandMode`/`sidebandMode`, `txClkDirect` with `txClkP`/`txClkN`, `txUiDelay_*`/`rxUiDelay_*`, `rxValidStartThreshold`, the gating settings `TxClkGater` reads (`txClkPreamble`, `txClkPostamble`, `txIdlePackets`, `txClkParkAlternate`), and the debug muxes. Change them with the lanes quiet, then reset the datapath. Change delay codes only with `clkEn` = 0. The gate itself (`txClkGate`, or the controller's `mbTxClkGate`) crosses through a two-flop synchronizer and can change at any time. | `TileLink.scala:1561-1592,2226-2245,2812-2884`; `Phy.scala:584-619,657-721` |
+| Bus → `UcieTLRegs` (PHY test clock) and bus → `UcieController` (sideband clock) | One-entry `AsyncQueue` TL crossing, `safe` | The request isn't accepted until the destination domain is clocked and out of reset. See section 3. | `TileLink.scala:2134-2142` |
+| `UcieTLRegs` → `PhyTest` | **None: same clock.** | Strobes such as `txExecute`, `txFsmRst`, `rxFsmRst`, `txInjectError` and `trackCntRst` are one-cycle pulses made in the PHY test domain and consumed there. The FSM and datapath resets are stretched to 8 cycles. | `TileLink.scala:1492-1625` |
+| PHY test clock ↔ `txDivClk`/`rxDivClk`, mainband data | `AsyncQueue`, depth 32 | One queue per controller per direction; only the selected controller's TX words reach the lanes. | `TileLink.scala:2237-2318` |
+| PHY test clock → divided clocks, datapath resets | Reset synchronizer: asynchronous assert, release after 3 divided-clock edges (`ucie_rst_sync.v`) | Release needs the divided clock to be running. The strobe leaves `UcieTLRegs` from a flop (`TileLink.scala:1499-1512,1537-1541,1552-1553`), so no glitch out of the write decode or the stretch counter reaches the asynchronous clear. The PHY, and PhyTest for its own lanes, register it once more on the PHY test clock, held while that domain is in reset, so the clear sees one flop rather than an OR of that strobe and the UCIe reset. | `Phy.scala:517-548`; `PhyTest.scala:813-817,899-901,1060-1062` |
+| Divided clocks → PHY test clock, sticky flags | Two flops | Levels, so nothing is lost. | `TileLink.scala:1450-1457`; `PhyTest.scala:934,1098-1099` |
+| `UcieClkRegs` → clocking tile | Registered levels; source changes only under a shut gate (section 1.4) | | `TileLink.scala:977-1002` |
+| `UcieClkRegs` → the clock gates (`clkEn`, `phyTestClkEn`, `sbClkEn`) | Three flops on the gated clock, inside each cell | Can change at any time; lands 3–4 periods of the gated clock later (the TX gate: 6–7 data clock periods), and only while that clock runs. | `resources/vsrc/global_delayline_gate.v`, `phytest_div_core.v`, `sb_div_core.v` |
+| `UcieClkRegs` → dividers | Asynchronous reset off a flop | Release only with that direction's clock stopped. | `TileLink.scala:658-682` |
+| `UcieClkRegs` → TX data and quadrature dividers (`txClkGenRstb`) | Asynchronous reset off a flop | Releases with the main clock running, behind the shut TX gate; `main_clk_sel_core` has to synchronize the release to the main clock, as its model does. | `TileLink.scala:709-724` |
+| `UcieClkRegs` → every UCIe domain | `ucieRst` into a reset synchronizer per domain | | `Phy.scala:455-462,535-548`; `TileLink.scala:2164-2173` |
+| PLL lock → chip clock; `freqSel` → chip clock; clock status → sideband clock | Two flops; `freqSel` must also hold for 3 cycles; lock must hold for 4 | | `TileLink.scala:410-428,773-782,2392-2419` |
+| `UcieTLRegs` → lanes and divided-clock datapaths, quasi-static controls | **Not synchronized** | Covers `txctl`/`rxctl` (tile codes, shufflers, `sampleNegedge`, vref, termination, `Dctrl`), `controllerSel`/`mainbandMode`/`sidebandMode`, `txClkDirect` with `txClkP`/`txClkN`, `txUiDelay_*`/`rxUiDelay_*`, `rxValidStartThreshold`, the gating settings `TxClkGater` reads (`txClkPreamble`, `txClkPostamble`, `txIdlePackets`, `txClkParkAlternate`), and the debug muxes. Change them with the lanes quiet, then reset the datapath. Change delay codes only with `clkEn` = 0. The gate itself (`txClkGate`, or the controller's `mbTxClkGate`) crosses through a two-flop synchronizer and can change at any time. | `TileLink.scala:1563-1594,2228-2247,2814-2886`; `Phy.scala:584-619,657-721` |
 
 ---
 
@@ -280,12 +296,12 @@ all-zero entry selects PLL8 with no PLL on.
 
 | Reset | Asserted by | Released | Resets | Code |
 |---|---|---|---|---|
-| Chip reset | The SoC | The SoC | `UcieClkRegs` (with `ucieRst` = 1), **asynchronously**, so that the PLL and X2 enables, the clock gates, muxes and dividers, and `ucieRst` hold their reset values before the chip clock runs. Each clock meter's counter through a reset synchronizer on that meter's clock. The chip-clock logic and the bus side of the crossings. **It reaches nothing else in the block.** | `TileLink.scala:290-301,430-475,632-655,2162-2166` |
-| `UCIE_UCIE_RST` | Reset value **1**, set by the chip reset asynchronously (so the UCIe domains are held from power-on, before the chip clock runs), or software | Software writes 0 | Every UCIe domain through its own synchronizer: the PHY test domain (`UcieTLRegs`, PhyTest, AFE controllers), the sideband domain (controller and its registers), and both datapaths. In FSM mode it also holds both divider resets. | `TileLink.scala:654,677-681,2167`; `Phy.scala:455-462,535-548` |
-| PHY test and sideband domain resets | `ucieRst`, asynchronously | 3 edges of that domain's clock after `ucieRst` = 0 | As above. Everything PhyTest-side resets **asynchronously** on them, so it holds its reset values from the moment `ucieRst` asserts, whether or not its clock runs: `UcieTLRegs` (the lane, termination, AFE and pad controls), PhyTest, `RxAfeCtl`, the sideband tester, and the TX and RX datapaths with `TxClkGater`. PhyTest's software resets (`txFsmRst`, `rxFsmRst`, `txDebugFsmRst`, `trackCntRst`, and the modes that hold an FSM) stay synchronous clears on top, which win over every other write the cycle they're set. The UCIe controller's registers reset **synchronously**, so they only reset while the sideband clock runs. | `Phy.scala:455-462,629-647`; `PhyTest.scala:762-793,2109-2110`; `TileLink.scala:2169,2175-2188` |
-| `UCIE_UCIE_CONTROLLER_RST` | Reset value **1**, set by the sideband domain reset (so by every `ucieRst`), or software | Software writes 0: `setup_ucie_digital` does once the controller has the lanes | The UCIe controller itself: logical PHY, adapter, protocol layer. Not its registers, the crossing into them, or the queues to and from it. Without it the controller would run whenever `ucieRst` = 0, on the RX words and partner sideband it hears whichever controller has the lanes. | `TileLink.scala:1920-1928,1946-1948` |
-| `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | Software level (or `ucieRst`) | Software level | TX: the global TX ÷16, every TX tile, PhyTest's TX debug and loopback TX lanes. RX: the global RX ÷16, every RX data tile, PhyTest's loopback RX lane. | `TileLink.scala:657-681,2190-2196`; `Phy.scala:533,543,602,682`; `PhyTest.scala:891,1052` |
-| `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | Software strobe (8 PHY test cycles), registered once more on the PHY test clock, where it is also held while that domain is in reset; that one flop alone drives each datapath synchronizer, so the synchronizer's asynchronous input can't glitch | Synchronized to `txDivClk`/`rxDivClk` | The serdes hand-off registers, the PHY end of every queue in that direction (the `safe` queues also reset the far end's pointers), the underflow/overflow flags, and PhyTest's lane queues. **Not** a divider, **not** an FSM. | `TileLink.scala:224-228,1497-1510,1538-1539,1550-1551`; `Phy.scala:535-548` |
+| Chip reset | The SoC | The SoC | `UcieClkRegs` (with `ucieRst` = 1), **asynchronously**, so that the PLL and X2 enables, the clock gates, muxes and dividers, and `ucieRst` hold their reset values before the chip clock runs. Each clock meter's counter through a reset synchronizer on that meter's clock. The chip-clock logic and the bus side of the crossings. **It reaches nothing else in the block.** | `TileLink.scala:290-301,430-475,633-656,2164-2168` |
+| `UCIE_UCIE_RST` | Reset value **1**, set by the chip reset asynchronously (so the UCIe domains are held from power-on, before the chip clock runs), or software | Software writes 0 | Every UCIe domain through its own synchronizer: the PHY test domain (`UcieTLRegs`, PhyTest, AFE controllers), the sideband domain (controller and its registers), and both datapaths. In FSM mode it also holds both divider resets. | `TileLink.scala:655,678-682,2169`; `Phy.scala:455-462,535-548` |
+| PHY test and sideband domain resets | `ucieRst`, asynchronously | 3 edges of that domain's clock after `ucieRst` = 0 | As above. Everything PhyTest-side resets **asynchronously** on them, so it holds its reset values from the moment `ucieRst` asserts, whether or not its clock runs: `UcieTLRegs` (the lane, termination, AFE and pad controls), PhyTest, `RxAfeCtl`, the sideband tester, and the TX and RX datapaths with `TxClkGater`. PhyTest's software resets (`txFsmRst`, `rxFsmRst`, `txDebugFsmRst`, `trackCntRst`, and the modes that hold an FSM) stay synchronous clears on top, which win over every other write the cycle they're set. The UCIe controller's registers reset **synchronously**, so they only reset while the sideband clock runs. | `Phy.scala:455-462,629-647`; `PhyTest.scala:762-793,2109-2110`; `TileLink.scala:2171,2177-2190` |
+| `UCIE_UCIE_CONTROLLER_RST` | Reset value **1**, set by the sideband domain reset (so by every `ucieRst`), or software | Software writes 0: `setup_ucie_digital` does once the controller has the lanes | The UCIe controller itself: logical PHY, adapter, protocol layer. Not its registers, the crossing into them, or the queues to and from it. Without it the controller would run whenever `ucieRst` = 0, on the RX words and partner sideband it hears whichever controller has the lanes. | `TileLink.scala:1922-1930,1948-1950` |
+| `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | Software level (or `ucieRst`) | Software level | TX: the global TX ÷16, every TX tile, PhyTest's TX debug and loopback TX lanes. RX: the global RX ÷16, every RX data tile, PhyTest's loopback RX lane. | `TileLink.scala:658-682,2192-2198`; `Phy.scala:533,543,602,682`; `PhyTest.scala:891,1052` |
+| `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | Software strobe (8 PHY test cycles), registered once more on the PHY test clock, where it is also held while that domain is in reset; that one flop alone drives each datapath synchronizer, so the synchronizer's asynchronous input can't glitch | Synchronized to `txDivClk`/`rxDivClk` | The serdes hand-off registers, the PHY end of every queue in that direction (the `safe` queues also reset the far end's pointers), the underflow/overflow flags, and PhyTest's lane queues. **Not** a divider, **not** an FSM. | `TileLink.scala:224-228,1499-1512,1540-1541,1552-1553`; `Phy.scala:535-548` |
 | `UCIE_TX_FSM_RST` | Software strobe | Synchronous | TX FSM back to idle; `txPacketsSent` to 0; LFSRs reseeded from `txLfsrSeed`; error injection disarmed; and burst state. The clock gating is `TxClkGater`'s, at the PHY end, which the TX datapath reset resets to parked low (gated) or running; nothing else touches the level it last parked at, so a run starts where the last one parked. Also held while `mainbandMode` = `tl`. | `PhyTest.scala:1102-1122,1354-1361` |
 | `UCIE_RX_FSM_RST` | Software strobe | Synchronous | RX FSM, all RX counters and error counts, signature, framing, capture state, self-sync history; LFSRs reseeded from `rxLfsrSeed`. Also held while `mainbandMode` = `tl` unless `rxMonitor` = 1. | `PhyTest.scala:1130-1165,1195-1195,1625-1710,1768-1768,1816-1816` |
 | `UCIE_DEBUG_TX_FSM_RST`, `UCIE_TRACK_CNT_RST`, `UCIE_SB_RX_RST` | Software strobe | Synchronous | The TX debug lane FSM; the track counters; the sideband tester's receiver. | `PhyTest.scala:943-958,2087`; `scala/src/phytest/SidebandTest.scala` |
@@ -294,7 +310,7 @@ all-zero entry selects PLL8 with no PLL on.
 
 ### 2.2 Reset values that matter for bring-up
 
-`UcieClkRegs` (`TileLink.scala:361-385,492-528,622-676`):
+`UcieClkRegs` (`TileLink.scala:361-385,492-529,623-677`):
 
 | Register | Reset | Meaning |
 |---|---|---|
@@ -312,7 +328,7 @@ all-zero entry selects PLL8 with no PLL on.
 So with nothing written, the block needs three board clocks: `bypassClk`, `digitalBypassClk` and
 `sidebandBypassClk`. `refClk` is needed only if a PLL is used.
 
-`UcieTLRegs` (`TileLink.scala:1230-1473`):
+`UcieTLRegs` (`TileLink.scala:1232-1475`):
 
 | Register | Reset | Notes |
 |---|---|---|
@@ -366,7 +382,7 @@ Do it in this order. Section 3 explains why steps 1-3 must not touch base + 0x00
   drivers off, so its forwarded clock can end with a runt pulse into this die's running RX dividers.
   No generated helper does this today.
 - **After changing `controllerSel`, `mainbandMode` or `sidebandMode`,** run `reset_datapath`. The
-  queues' PHY ends don't synchronize the selects (`TileLink.scala:2235-2245`; `Codegen.scala:930-943`).
+  queues' PHY ends don't synchronize the selects (`TileLink.scala:2237-2247`; `Codegen.scala:930-943`).
 
 ### 2.5 What goes wrong out of order
 
@@ -386,7 +402,7 @@ Do it in this order. Section 3 explains why steps 1-3 must not touch base + 0x00
 
 This is the most important rule for bring-up.
 
-**The structure** (`TileLink.scala:2119-2140`):
+**The structure** (`TileLink.scala:2121-2142`):
 - The three register blocks share one register port: a crossbar behind a source shrinker and a
   `TLFIFOFixer`.
 - `UcieTLRegs` (base + 0x0000 to 0x3BFF) and `UcieController` (base + 0x3C00 to 0x7FFF) are each
@@ -398,7 +414,7 @@ This is the most important rule for bring-up.
   and a request accepted just before that domain's clock stops is never answered. In rocket-chip,
   `AsyncQueueSource` gives `enq.ready = ready_reg && sink_ready`.
 - The FIFO fixer then holds back every request to another block until that one completes
-  (`TileLink.scala:2125-2131`). That includes the `UcieClkRegs` write that would fix the clock.
+  (`TileLink.scala:2127-2133`). That includes the `UcieClkRegs` write that would fix the clock.
 - Upstream, a request that can't move blocks everything behind it on the bus.
 
 **The PhyTest block hangs:**
@@ -431,7 +447,7 @@ the domain out of reset, so `ucieRst` still has to be 0.
      `RegMapper.scala` requires `wimask = mask.andR`.)
    - A 32-bit read of a 64-bit counter returns half of it.
 6. Keep remote (manager-port) addresses out of tooling while PhyTest owns the mainband. The manager
-   port isn't ready with no TL path selected (`TileLink.scala:2664-2679`).
+   port isn't ready with no TL path selected (`TileLink.scala:2666-2681`).
 
 ---
 
@@ -475,7 +491,7 @@ write 1 for a one-cycle pulse; "RO" means read-only. Section 6 has every mode in
 | `UCIE_CLK_MANUAL_EN` | `0x100F8` | 0 | Manual mode: every output its own register, with no sequencing. | — |
 | `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | `0x10118`–`0x10130` | RO | Each clock's cycles per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles. Zero means stopped. | 2, 3, 5 |
 | `UCIE_PLL_LOCK_LOST` | `0x10138` | 0 | Sticky per PLL: lost lock while enabled. Write 0 to clear. | 9 |
-| `UCIE_CLK_GATE_EDGE_SEL` | `0x10140` | 0 | Applied by the next apply of any kind. Which `TxClk` edge hands the TX gate's decision to `TxClkQ`: 0 rising, 1 falling. 1 for a `TxClkQ` lag under a quarter period (section 1.2). | 5, 9 |
+| `UCIE_CLK_GATE_EDGE_SEL` | `0x10140` | 0 | Applied by the next apply of any kind. Which tap of the TX gate's `TxClk` chain `TxClkQ`'s flops take: 0 the one that changes as `TxClk` rises, 1 half a period earlier. 1 for a `TxClkQ` lag within a quarter period of 0's race (section 1.2). | 5, 9 |
 | `UCIE_RATE_CFG` | `0x10180` + 8 × rate | 0 | The rate table `UCIE_FREQ_SEL_AUTO_EN` uses (`set_rate_cfg`). | — |
 
 **PhyTest, lane and debug registers** (`UcieTLRegs`, on the PHY test clock). These answer only with
@@ -685,7 +701,7 @@ clock-tree/replica mismatch is accounted for. Find the real optimum by sweeping 
 | ÷1, 16 GT/s | 0 | 29 | 31.25 ps; `Codegen.digitalGlobalDelayTaps` |
 
 The reset delay (64 taps, ~69.5 ps) with phase 0 sits ~0.11 UI past a data edge at ÷1. That's a
-bad starting point (`Codegen.scala:315-324`; `TileLink.scala:1162-1165`).
+bad starting point (`Codegen.scala:315-324`; `TileLink.scala:1164-1167`).
 
 ### Step 6: first-day check on the on-chip loopback lane
 
@@ -991,7 +1007,7 @@ are `LTSMState` in `scala/src/uciedigital/logphy/utils/Types.scala`.
 
 | Indicator | Moves when | Use |
 |---|---|---|
-| `UCIE_PLL_LOCK_OBSERVED`, `UCIE_CLK_CFG_BUSY` | PLL lock; an apply in progress | PLL and apply state (`TileLink.scala:1004-1040`). |
+| `UCIE_PLL_LOCK_OBSERVED`, `UCIE_CLK_CFG_BUSY` | PLL lock; an apply in progress | PLL and apply state (`TileLink.scala:1005-1041`). |
 | `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | Cycles of each clock per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles | Whether each clock runs, and at what rate, from the block that always answers. `_RX_DIV` at zero means no forwarded clock is arriving; below `_TX_DIV` on a looped-back link, the TX queue is running dry. |
 | `UCIE_PLL_LOCK_LOST` | Sticky: a PLL lost lock while enabled | A PLL dropping out mid-run. Write 0 to clear. |
 | `UCIE_TX_PACKETS_SENT` | PhyTest enqueues a TX packet | Stuck at 0 in `run` means no `txDivClk`. In infinite mode, with the PHY test clock faster, its rate is the packet rate, which gives a frequency meter. It counts *enqueued* packets, and the queue holds 32. |
@@ -1018,7 +1034,7 @@ There are two numberings, so check which one a register uses.
 
 | Numbering | Data | Valid | Track | Others | Used by |
 |---|---|---|---|---|---|
-| PHY lane | 0-15 | 16 | 17 | 18 `clkP`, 19 `clkN`, **20** the PhyTest loopback pair | `txctl_N_*`, `rxctl_N_*`, `rxDebugLane` (0-17) (`Phy.scala:8-24,51-59`; `TileLink.scala:1566-1574`) |
+| PHY lane | 0-15 | 16 | 17 | 18 `clkP`, 19 `clkN`, **20** the PhyTest loopback pair | `txctl_N_*`, `rxctl_N_*`, `rxDebugLane` (0-17) (`Phy.scala:8-24,51-59`; `TileLink.scala:1568-1576`) |
 | Test lane (`UCIE_NUM_TEST_LANES` = numLanes + 3) | 0-15 | 16 `UCIE_VALID_LANE` | 17 `UCIE_TRACK_LANE` | **18** `UCIE_LOOPBACK_LANE` | seeds, error counts, `txInjectLane`, `rxTriggerLaneMask`, `rxDataLane`, the pattern and capture SRAMs (`PhyTest.scala:597-605`) |
 | Valid-lane select code | 0-15 | 16 (default) | 17 | | `txValidLaneSel`, `rxValidLaneSel` |
 
@@ -1047,7 +1063,7 @@ There are two numberings, so check which one a register uses.
 | `UCIE_TX_CLK_P`, `UCIE_TX_CLK_N` | The forwarded-clock words. | Defaults; swap them to invert the forwarded clock. |
 | `UCIE_RX_UI_DELAY` + lane × `UCIE_RX_UI_DELAY_WIDTH` | Holds an RX lane back 0 to 64 whole UI, past the shuffler: data lanes, then valid, then track. `align_rx_words` sets every lane to 32 − `UCIE_RX_FRAME_OFFSET`, mod 32 (section 8.4). | Before the UCIe controller takes the lanes; lane to lane skew of whole UI. |
 | `UCIE_TX_UI_DELAY` + lane × `UCIE_TX_UI_DELAY_WIDTH` | Holds a TX lane back 0 to 64 whole UI, ahead of the shuffler, in `txctl` lane order. Not the tile's `Dctrl`, which moves a lane a fraction of a UI. On lanes 18 and 19, the forwarded clock, an odd delay inverts the clock against the data. | Lane to lane skew of whole UI. With the clock gated, the postamble has to cover the largest data lane delay. |
-| `UCIE_TX_CLK_DIRECT` | The forwarded clock comes straight from `txClkP`/`txClkN`, whichever controller is selected. It runs through empty queues and datapath resets and overrides gating (`TileLink.scala:200-204,2881-2884`). | To keep the partner clocked through resets or controller changes. |
+| `UCIE_TX_CLK_DIRECT` | The forwarded clock comes straight from `txClkP`/`txClkN`, whichever controller is selected. It runs through empty queues and datapath resets and overrides gating (`TileLink.scala:200-204,2883-2886`). | To keep the partner clocked through resets or controller changes. |
 | Pattern SRAM: `UCIE_TX_DATA_LANE_GROUP` (groups of 4 test lanes; group 4 is valid/track/loopback), `UCIE_TX_DATA_OFFSET` (row 0 to `UCIE_SRAM_PACKETS` − 1), `UCIE_TX_DATA_CHUNK_IN0` (lanes 4g, 4g+1), `_IN1` (lanes 4g+2, 4g+3), `UCIE_TX_WRITE_CHUNK`; readback `UCIE_TX_DATA_CHUNK_OUT0/1` | Loads one row for four lanes. **Accepted only in idle.** | Manual patterns. Do `txFsmRst` first. |
 | `UCIE_TX_MANUAL_REPEAT_PERIOD` | Rows per period; 0, or more than the SRAM depth, means all of it. | Short repeating patterns. |
 | `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | Bursts of packets separated by idle packets; the pattern doesn't advance across the gaps. | Burst tests; the RX needs `rxBurstMode`. |

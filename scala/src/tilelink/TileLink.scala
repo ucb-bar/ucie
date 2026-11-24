@@ -504,13 +504,14 @@ class UcieClkRegs(
         RegInit(0.U(ClockingTile.sbClkSrcSelWidth.W))
       )
 
-    // Which TX data clock edge hands the TX clock gate's decision to the TX
-    // quadrature clock's latch; see the tile's `ClkGateEdgeSel`. The right one
+    // Which tap of the TX clock gate's data clock chain the TX quadrature
+    // clock's flops take; see the tile's `ClkGateEdgeSel`. The right one
     // depends on the lag the delay code and coarse phase set, so it is applied
     // with them: every apply carries it, a phase's own included, but writing
     // it starts none. Written before the delay code or phase, it moves in the
-    // same apply, so the gate never shuts or opens on one edge at a lag meant
-    // for the other. Low out of reset, the rising edge.
+    // same apply, so the gate never shuts or opens on one tap at a lag meant
+    // for the other. Low out of reset, the tap that changes as the data clock
+    // rises.
     val clkGateEdgeSel = RegInit(false.B)
 
     // Software's enables for the PHY test and TX sideband clocks, at the gate
@@ -1139,8 +1140,9 @@ object UcieClkRegs {
     * it can be on. The PHY test and TX sideband gates take theirs through three
     * flops on the falling edge of the clock they gate, so they need up to four
     * of its periods: 7.5 ns at /15 of PLL8. 32 cycles of a 500 MHz chip clock,
-    * 64 ns, covers a gated clock down to about 60 MHz. It has nothing to do
-    * with a PLL waking up.
+    * 64 ns, covers a gated clock down to about 60 MHz. The TX gate needs up to
+    * eight TX clock periods, so a TX clock of 125 MHz or more. It has nothing
+    * to do with a PLL waking up.
     */
   val gateDwell = 32
 
