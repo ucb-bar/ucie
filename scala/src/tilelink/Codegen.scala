@@ -262,15 +262,15 @@ object Codegen {
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
 
-  /** Bit position of the rail `one` sets the lowest bit of, inside the packed
-    * `TxLaneCtlIO` word. Taken from the Chisel type rather than written down,
-    * so a field added to `TxLaneCtlIO` cannot silently move it.
+  /** Position of `name`'s lowest control bit in the packed `TxLaneCtlIO` word,
+    * from `one`, which sets only that bit. Read off the Chisel type so a new
+    * control bit cannot silently move it.
     */
-  private def txCtlLsb(rail: String, one: TxLaneCtlIO): BigInt = {
+  private def txCtlLsb(name: String, one: TxLaneCtlIO): BigInt = {
     val bit = one.litValue
     require(
       bit.bitCount == 1,
-      s"one bit of `$rail` should set exactly one bit of the word, got 0x${bit.toString(16)}"
+      s"one bit of `$name` should set exactly one bit of the word, got 0x${bit.toString(16)}"
     )
     BigInt(bit.lowestSetBit)
   }
@@ -284,10 +284,9 @@ object Codegen {
   val txCtlDelayLsb: BigInt =
     txCtlLsb("Dctrl", TxLaneCtlIO.raw(0, 0, 0, 0, 1))
 
-  /** Bit positions of the driver rails inside the packed `TxLaneCtlIO` word, so
-    * software can turn any segment of any stack on or off by itself. Every rail
-    * is active high but `ENP_EQ`, which is active low, so a high impedance
-    * driver is all of them zero except `ENP_EQ`, which is all ones.
+  /** Positions of the driver's control bits in the packed `TxLaneCtlIO` word,
+    * so software can set each segment on its own. All are active high except
+    * `ENP_EQ`: a high impedance driver is all zeros with `ENP_EQ` all ones.
     */
   val txCtlEnpLsb: BigInt = txCtlLsb("ENP", TxLaneCtlIO.raw(1, 0, 0, 0, 0))
   val txCtlEnnLsb: BigInt = txCtlLsb("ENN", TxLaneCtlIO.raw(0, 1, 0, 0, 0))
