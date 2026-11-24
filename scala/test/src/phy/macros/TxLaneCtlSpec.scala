@@ -4,12 +4,8 @@ import chisel3._
 
 import org.scalatest.funspec.AnyFunSpec
 
-// The tile's control pins reach the driver unchanged, so nothing translates a
-// count into a code at run time and the whole risk sits in the polarity of the
-// codes software starts from. Every rail is active high but `ENP_EQ`, which
-// gates the equalizer's PMOS headers and is active low. Getting `ENP` backwards
-// leaves a lane unable to drive a one, and getting `ENP_EQ` backwards leaves the
-// equalizer's pull-up on in a lane meant to be off, so pin the rails down here.
+// The control bits reach the tile unchanged, so the risk is in the polarity of
+// the codes software starts from: all active high except `ENP_EQ`.
 class TxLaneCtlSpec extends AnyFunSpec {
   val driverMask: BigInt = (BigInt(1) << TxLane.DriverSegments) - 1
   val eqMask: BigInt = (BigInt(1) << TxLane.EqSegments) - 1
@@ -28,7 +24,7 @@ class TxLaneCtlSpec extends AnyFunSpec {
       assertThrows[IllegalArgumentException](TxLane.thermometer(-1, 9))
     }
 
-    it("should enable the low segments with zeros on an active low rail") {
+    it("should enable the low segments with zeros when active low") {
       assert(TxLane.thermometerLow(0, 4) == BigInt("1111", 2))
       assert(TxLane.thermometerLow(1, 4) == BigInt("1110", 2))
       assert(TxLane.thermometerLow(3, 4) == BigInt("1000", 2))
@@ -39,9 +35,7 @@ class TxLaneCtlSpec extends AnyFunSpec {
 
   describe("lane control codes") {
     it("should leave the driver high impedance in the reset state") {
-      // No separate driver enable: high impedance is every segment of every
-      // stack off, which is all zeros on the active high rails and all ones on
-      // `ENP_EQ`.
+      // No driver enable: high impedance is all zeros, `ENP_EQ` all ones.
       val off = TxLaneCtlIO.off
       assert(off.ENP.litValue == 0)
       assert(off.ENN.litValue == 0)
@@ -60,7 +54,7 @@ class TxLaneCtlSpec extends AnyFunSpec {
       assert(full.Dctrl.litValue == 0)
     }
 
-    it("should build every rail from segment counts") {
+    it("should build every control from segment counts") {
       val c = TxLaneCtlIO.codes(driver = 3, eq = 2, delay = TxLane.DelayTaps)
       assert(c.ENP.litValue == TxLane.thermometer(3, TxLane.DriverSegments))
       assert(c.ENN.litValue == TxLane.thermometer(3, TxLane.DriverSegments))
@@ -69,11 +63,11 @@ class TxLaneCtlSpec extends AnyFunSpec {
       assert(c.Dctrl.litValue == delayMask)
     }
 
-    it("should carry each rail exactly as given, one bit at a time") {
-      // Software has to be able to set any segment of any stack on its own,
-      // so a single bit in one rail must land in that rail alone, uninverted.
+    it("should carry each control bit exactly as given") {
+      // Software sets each segment on its own, so each control bit must land
+      // in a bit of the word of its own, uninverted.
       val zero = TxLaneCtlIO.raw(0, 0, 0, 0, 0).litValue
-      val rails = Seq[(String, Int, Int => TxLaneCtlIO, TxLaneCtlIO => BigInt)](
+      val pins = Seq[(String, Int, Int => TxLaneCtlIO, TxLaneCtlIO => BigInt)](
         (
           "ENP",
           TxLane.DriverSegments,
@@ -112,24 +106,22 @@ class TxLaneCtlSpec extends AnyFunSpec {
         )
       )
       val seen = scala.collection.mutable.Set[BigInt]()
-      for ((name, width, build, field) <- rails; b <- 0 until width) {
+      for ((name, width, build, field) <- pins; b <- 0 until width) {
         withClue(s"$name bit $b: ") {
           val c = build(b)
           assert(field(c) == (BigInt(1) << b))
           val word = c.litValue ^ zero
           assert(word.bitCount == 1)
-          assert(seen.add(word), "two rails share a bit of the packed word")
+          assert(seen.add(word), "two control bits share a word bit")
         }
       }
     }
 
-    it("should keep Edge_Sel off and out of the way of the other rails") {
-      // Out of reset and at full strength alike, so a lane synchronizes its
-      // divider reset on the same edge it always has unless software asks.
+    it("should keep Edge_Sel off and in the word's top bit") {
+      // Off by default, so lanes keep their reset edge unless software asks.
       assert(TxLaneCtlIO.off.Edge_Sel.litValue == 0)
       assert(TxLaneCtlIO.full.Edge_Sel.litValue == 0)
-      // The packed word's top bit: every rail below it keeps the position
-      // software already uses.
+      // The MSB, so the other control bits keep their positions.
       val width = (new TxLaneCtlIO).getWidth
       val edge = TxLaneCtlIO.raw(0, 0, 0, 0, 0, edgeSel = true).litValue
       assert(edge == (BigInt(1) << (width - 1)))

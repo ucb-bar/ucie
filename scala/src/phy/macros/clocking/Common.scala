@@ -235,10 +235,8 @@ class Esd(implicit includeDefaultModels: Boolean = false)
   }
 }
 
-// Die-to-die bump ESD clamp, the delivered `D2D_ESD`: back-to-back diodes from
-// the protected net to each supply, with the net and both supplies on M8 so a
-// bump's wiring can land on it from above. Like `IO_ESD`, the digital side only
-// attaches the net.
+// Die-to-die bump ESD clamp, the delivered `D2D_ESD`. Only the protected net
+// is connected here; the physical flow connects the supplies.
 class EsdRoutable(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {

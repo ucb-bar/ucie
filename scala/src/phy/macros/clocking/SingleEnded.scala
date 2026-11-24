@@ -8,23 +8,17 @@ class ClkRxIO extends Bundle {
   val Vout = Output(Clock())
 }
 
-/** Which delivered clock receiver a single-ended clock bump lands on.
-  *
-  * Both have the same front end: the pad's `IO_ESD` clamp on `Vin`, then a
-  * self-biased inverter and a restoring inverter. They differ in what follows
-  * it, and both end in a CKND24 driver, so both invert: `Vout` is `Vin`
-  * complemented.
+/** Which delivered clock receiver a single-ended clock bump lands on. Both are
+  * an ESD clamp and receiver followed by a CKND24 driver, so both invert.
   */
 sealed abstract class ClkRxKind(val cellName: String)
 
 object ClkRxKind {
 
-  /** The high-speed bypass clock's: duty-cycle correction (four AC-coupled
-    * self-biased inverters) before the driver.
-    */
+  /** For the high-speed bypass clock: adds duty-cycle correction. */
   case object HighSpeed extends ClkRxKind("clock_receiver_esd_dcc")
 
-  /** For 100 MHz to 1 GHz: the driver straight after the front end. */
+  /** For 100 MHz to 1 GHz: no duty-cycle correction. */
   case object LowSpeed extends ClkRxKind("clock_receiver_esd_drv_lowspeed")
 }
 
@@ -104,9 +98,8 @@ class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
   val testTxPadClk = Output(Clock())
   val testRxPadClk = Output(Clock())
 
-  // The clocking tile's two bypass clocks, on their way to it: each one the
-  // restored clock out of its bump's own clock receiver. Every module has its
-  // own bump for each. A physical network may buffer either of them.
+  // The clocking tile's two bypass clocks, each from its own bump's clock
+  // receiver. A physical network may buffer either.
   val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
   val tileBypassClk = Output(Clock())

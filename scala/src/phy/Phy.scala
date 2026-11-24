@@ -361,10 +361,9 @@ class Phy(
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
-  // Single-ended clock pads: each bump lands on a delivered clock receiver,
-  // the pad's ESD clamp and a receiver in one macro, which restores the pad
-  // signal to a full-swing clock. The analog bypass clock gets the high-speed
-  // receiver; the other three run at 1 GHz or less. Both kinds invert.
+  // Single-ended clock bumps, each into a delivered clock receiver (ESD clamp
+  // and receiver in one macro, inverting). The analog bypass clock gets the
+  // high-speed one; the other three run at 1 GHz or less.
   val bypassClkRx = Module(new ClkRx(ClkRxKind.HighSpeed))
   bypassClkRx.io.Vin := io.top.bypassClk
   val digitalBypassClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))

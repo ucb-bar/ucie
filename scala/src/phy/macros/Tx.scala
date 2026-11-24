@@ -22,9 +22,9 @@ object TxLane {
   /** Taps in the delay line on the high speed clock (`Dctrl`). */
   val DelayTaps = 32
 
-  /** Thermometer code with the low `count` of `segments` segments enabled.
-    * Every control rail on the tile but `ENP_EQ` is active high, so this is the
-    * code for all of them; `ENP_EQ` takes [[thermometerLow]].
+  /** Thermometer code with the low `count` of `segments` segments enabled, for
+    * the active high control bits: all but `ENP_EQ`, which takes
+    * [[thermometerLow]].
     */
   def thermometer(count: Int, segments: Int): BigInt = {
     require(
@@ -41,33 +41,22 @@ object TxLane {
     thermometer(count, segments) ^ thermometer(segments, segments)
 }
 
-/** Control pins of a [[TxLane]], driven straight through to the tile.
+/** Control pins of a [[TxLane]], passed to the tile unchanged.
   *
-  * These are the codes as the pins carry them: thermometer coded, and active
-  * high, a one enabling its segment or tap, on every rail but `ENP_EQ`. That
-  * one gates the equalizer's PMOS headers directly, so it is active low: a zero
-  * enables its segment. Nothing between the register and the pin inverts a
-  * rail, and every bit is its own, so any pattern the tile accepts is
-  * reachable, including ones no binary code could express, and the pull-up and
-  * pull-down stacks need not match.
+  * Thermometer coded: each control bit drives one pin and enables one segment
+  * or tap. All are active high except `ENP_EQ`, which gates the equalizer's
+  * PMOS headers and is active low.
   *
-  * There is no separate driver enable. The driver is high impedance when every
-  * segment of `ENP`, `ENN`, `ENP_EQ` and `ENN_EQ` is off: `ENP`, `ENN` and
-  * `ENN_EQ` all zeros, and `ENP_EQ` all ones.
-  *
-  * Use [[TxLane.thermometer]] to build a code from a segment count, or
-  * [[TxLane.thermometerLow]] for `ENP_EQ`.
+  * There is no driver enable: the driver is high impedance with `ENP`, `ENN`
+  * and `ENN_EQ` all zeros and `ENP_EQ` all ones.
   */
 class TxLaneCtlIO extends Bundle {
 
-  /** Which edge of the tile's clock synchronizes `RST_async` into the reset of
-    * its clock dividers: the select of the tile's `MUX_for_FF_Reset`, which
-    * clocks the two-flop synchronizer from one phase of the duty-cycle
-    * corrected clock or its complement. Either makes a clean reset; this picks
-    * the half cycle the dividers come out of it on.
+  /** Which clock edge the tile synchronizes its divider reset (`RST_async`) on:
+    * the select of its `MUX_for_FF_Reset`. Either edge gives a clean reset.
     *
-    * First in the bundle, so it is the packed word's top bit and every rail
-    * below keeps the position it had before the tile had this pin.
+    * Declared first, so it is the MSB of the packed control word and the other
+    * control bits keep the positions they had before it was added.
     */
   val Edge_Sel = Bool()
 
@@ -92,9 +81,8 @@ class TxLaneCtlIO extends Bundle {
 
 object TxLaneCtlIO {
 
-  /** Every driver segment off, so the driver is high impedance, and no added
-    * clock delay. What a lane resets to, so that it stays quiet until software
-    * brings it up.
+  /** Every driver segment off (high impedance), no added clock delay. A lane
+    * resets to this.
     */
   def off: TxLaneCtlIO = codes(driver = 0, eq = 0, delay = 0)
 
@@ -115,9 +103,8 @@ object TxLaneCtlIO {
       dctrl = TxLane.thermometer(delay, TxLane.DelayTaps)
     )
 
-  /** Control with each rail given as its pins carry it, for what [[codes]] does
-    * not build: unequal stacks, or segments other than the low ones. `edgeSel`
-    * is `Edge_Sel`, low unless given.
+  /** Control given bit for bit as the pins take it, for patterns [[codes]]
+    * cannot build. `edgeSel` sets `Edge_Sel`.
     */
   def raw(
       enp: BigInt,
@@ -177,15 +164,12 @@ class TxLane(implicit includeDefaultModels: Boolean = false) extends RawModule {
   verilogBlackBox.io.Edge_Sel := io.ctl.Edge_Sel
 }
 
-/** The delivered TX tile, `TX`. Port names match its pins verbatim.
+/** The delivered TX tile, `TX`. Port names match its pins.
   *
-  * The tile's netlist has more pins than these: VDDQ (output driver), VDD
-  * (pre-driver and digital logic) and VSS, which the physical flow connects,
-  * and some thirty internal nodes brought out as outputs -- the divided clocks,
-  * the duty-cycle corrector's taps, the serializer's intermediate stages, and
-  * `rst`, the divider reset the tile synchronizes from `RST_async`. Nothing
-  * outside the tile reads those, so they are left off here and unconnected.
-  * `rst` in particular is the tile's own output, not a second reset input.
+  * Left off: the supplies (VDDQ, VDD, VSS), which the physical flow connects,
+  * and about thirty internal nodes the tile brings out as outputs, which
+  * nothing reads. One of those is `rst`, the tile's synchronized divider reset:
+  * an output, not a second reset input.
   */
 class VerilogTxLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
