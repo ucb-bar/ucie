@@ -9,11 +9,10 @@ import edu.berkeley.cs.uciedigital.phy.{Phy, TxIO}
 /** Loops PhyTest's mainband TX back onto its own RX through a [[TxClkGater]],
   * as the PHY end has it, with every control register brought out to the test.
   *
-  * Unlike [[PhyTestLfsrLoopback]], which fixes the mode it runs, this leaves
-  * every register to the test, so one harness covers every mode layered on top
-  * of the original ones. Registers a test does not poke read zero, which for
-  * every one of those layered controls is the value that leaves the original
-  * modes as they were.
+  * Unlike [[PhyTestLfsrLoopback]], which fixes its mode, this leaves every
+  * register to the test, so one harness covers every mode added on top of the
+  * original ones. Registers a test does not poke read zero, and zero in each
+  * added control leaves the original modes unchanged.
   *
   * @param dataDelay
   *   delay every pattern lane one UI behind valid, so the RX latches onto the
@@ -99,12 +98,12 @@ class PhyTestRegLoopback(
       dut.io.rx.valid := driving
       sent
     } else {
-      // The RX deserializer counts its word boundaries on forwarded-clock
-      // edges, so it takes only the UIs an edge samples and hands over a
-      // word once it has a whole one. The clock lanes change at the start of
-      // a UI and the clock is centred on the data, so an edge on P samples
-      // the UI it starts: a parked clock samples nothing, and a high park's
-      // late falling edge samples the UI it comes in.
+      // The RX deserializer counts word boundaries on forwarded clock edges:
+      // it takes only the UIs an edge samples, and hands over a word once it
+      // has a whole one. The clock lanes change at the start of a UI and the
+      // clock is centred on the data, so an edge on P samples the UI it
+      // starts. A parked clock samples nothing, and a high park's late
+      // falling edge samples the UI it occurs in.
       val clkp = out.clkp
       val lastClkp =
         RegEnable(clkp(Phy.SerdesRatio - 1), false.B, driving)

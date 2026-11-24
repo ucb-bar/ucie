@@ -6,19 +6,16 @@ import org.scalatest.funspec.AnyFunSpec
 
 import edu.berkeley.cs.uciedigital.Utils
 
-// Drives `global_delayline_gate` with the two TX clocks at every lag across a
-// period, and with and without the delay line, toggling the enable at random
-// times that bear no relation to either clock, as the chip clock's register
-// block does. Neither clock may come out with a pulse cut short, with either
-// `edgeSel`. Each quadrature pulse has to pass exactly when the data pulse
-// before it did, except with `edgeSel` high at a lag over half a period, where
-// it has to do what the data pulse after it does.
+// Sweeps `global_delayline_gate` across a period of lag between TxClk and
+// TxClkQ, with and without the delay line, and toggles `enable` at random
+// times. With either `edgeSel`, no pulse may be cut short. Each TxClkQ pulse
+// must pass or block with the TxClk pulse before it, or with the one after it
+// when `edgeSel` is 1 and the lag is over half a period.
 //
-// The model has no delays, so the race between the tap `edgeSel` picks and the
-// quadrature clock's flops is checked on its own: with `edgeSel` as software
-// sets it, high within a quarter period of a lag of zero, the tap must not
-// change within `WINDOW` of the delayed quadrature clock rising. The other way
-// has to, somewhere in the sweep, or the check is seeing nothing.
+// The model has no delays, so the race is checked directly. With `edgeSel` set
+// as software sets it (1 within a quarter period of a lag of 0), the tap must
+// not change within `WINDOW` of a TxClkQ rise. The other setting must,
+// somewhere in the sweep, or the check is not working.
 class GlobalDelaylineGateLagSweep extends ExtModule {
   val Dctrl = IO(Output(UInt(ClockingTile.phaseSelWidth.W)))
   val Vin = IO(Output(Clock()))
@@ -43,8 +40,8 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
         timeunit 1ps;
         timeprecision 1fs;
 
-        // 8 GHz. The model has no delays, so what matters is the lag as a share
-        // of the period, which the sweep covers whole, and the line's taps.
+        // 8 GHz. With no delays, only the lag as a fraction of the period
+        // matters.
         localparam real T = 125.0;
         localparam integer LAGS = 40;
         localparam integer TOGGLES = 40;
@@ -52,16 +49,15 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
 
         // Line settings: none, and enough taps to move the lag a third of a period.
         localparam int SWEEP_TAPS[2] = '{0, 37};
-        // Stands in for the quadrature flops' setup and hold until the cell has
-        // numbers. Anything under a quarter period passes with the tap
-        // software picks.
+        // Stands in for the TxClkQ flops' setup plus hold. Anything under a
+        // quarter period passes with software's tap.
         localparam real WINDOW = 10.0;
         real line_delay = 0.0;
         bit running = 0;
         integer wrong, runts, passed, blocked, near;
         integer total_wrong = 0, total_runts = 0, total_near = 0, other_near = 0;
 
-        // Each data pulse, by index, and whether it got through.
+        // Each TxClk pulse, by index, and whether it got through.
         int dn = 0;
         bit dpass [int];
         always @(posedge VinData) if (running) begin
@@ -70,8 +66,8 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
           #(T / 4) dpass[n] = VoutData;
         end
 
-        // Each quadrature pulse, at the gate: the data pulse before it, and
-        // whether it got through.
+        // Each TxClkQ pulse at the gate: the TxClk pulse before it, and whether
+        // it got through.
         int qn = 0;
         bit qpass [int];
         int qafter [int];
@@ -82,8 +78,8 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
           #(T / 4) qpass[n] = Vout;
         end
 
-        // Neither clock may come out with a pulse cut short.
-        // Each falls only after rising, so the edge from X at time zero is not one.
+        // No pulse may be cut short. Only falls after a rise count, so the
+        // edge from X at time zero is ignored.
         realtime data_rise = -1, q_rise = -1;
         always @(posedge VoutData) data_rise = $realtime;
         always @(negedge VoutData)
@@ -92,9 +88,8 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
         always @(negedge Vout)
           if (q_rise >= 0 && $realtime - q_rise < T / 2 - 0.01) runts++;
 
-        // The quadrature flops sample the tap as the delayed quadrature clock
-        // rises. The tap changing within `WINDOW` of that, either side, is
-        // the race.
+        // The race: the tap changing within `WINDOW` of a TxClkQ rise, on
+        // either side.
         realtime tap_change = -1, q_sample = -1;
         always @(GlobalDelaylineGateHarness.gate.en_tap) begin
           tap_change = $realtime;
@@ -115,12 +110,12 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
             line_delay = SWEEP_TAPS[t] * TAP_PS;
             for (k = 0; k < LAGS; k = k + 1) begin
               lag = (k + 0.5) * T / LAGS;
-              // The whole lag of the delayed quadrature clock, within a period.
+              // Total lag of the delayed TxClkQ, within a period.
               phase = lag + line_delay;
               while (phase >= T) phase = phase - T;
               rule_sel = phase < T / 4 || phase >= 3 * T / 4;
               for (s = 0; s < 2; s = s + 1) begin
-                // Changed with the gate shut and settled, which moves nothing.
+                // Changed with the gate shut and settled, so it has no effect.
                 edgeSel = (s == 0) ? rule_sel : !rule_sel;
                 wrong = 0; runts = 0; passed = 0; blocked = 0; near = 0;
                 dn = 0; qn = 0; dpass.delete(); qpass.delete(); qafter.delete();
@@ -141,8 +136,8 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
                   end
                 join
                 #(2 * T + line_delay);
-                // Past half a period the latch's tap carries the decision of
-                // the data pulse after.
+                // Above half a period, the latch's tap follows the TxClk pulse
+                // after.
                 shift = (edgeSel && phase > T / 2) ? 1 : 0;
                 for (j = 0; j < qn; j = j + 1)
                   if (qafter[j] + shift >= 1 && qafter[j] + shift < dn - 1) begin

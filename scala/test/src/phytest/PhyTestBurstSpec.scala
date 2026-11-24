@@ -223,9 +223,9 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
     }
 
     it("should move the RX's word boundary by as little as one clock cycle") {
-      // 2 UI past the last whole packet: the finest postamble step. Shifted
-      // 2, 4 or 6 UI, the valid word reads no closer to the waveform than to
-      // idle, so `rxBurstMode` drops every burst after the first.
+      // 2 UI past the last whole packet: the finest postamble step. A valid
+      // word shifted 2, 4 or 6 UI is no closer to the waveform than to idle,
+      // so `rxBurstMode` drops every burst after the first.
       val (_, received) =
         gatedRun(postUi = 2 * Phy.SerdesRatio + 2, packets = 24)
       assert(received == 6)
@@ -237,9 +237,9 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
       it(
         s"should score clean with UCIe's gating and a packet of postamble, $parks"
       ) {
-        // No preamble. A high park holds back the postamble's last edge until
-        // just before the next burst, so every gap still carries a packet's
-        // worth and the RX word boundary stays put.
+        // No preamble. A high park delays the postamble's last edge until
+        // just before the next burst, so every gap still has a packet's worth
+        // of edges and the RX word boundary does not move.
         val packets = 24
         val (counts, received) =
           gatedRun(postUi = Phy.SerdesRatio, packets, pre = 0, alternate)

@@ -12,9 +12,8 @@ import chisel3.util._
 
 object ClkMux {
 
-  // Clocks the observation mux can choose between. Each input hangs its own
-  // pass gate off the shared internal node, so widening this loads every
-  // source clock a little more.
+  // Clocks the observation mux can select. Each input adds a pass gate on the
+  // shared node, so more inputs load every source clock more.
   val numInputs = 16
 
   def selWidth: Int = log2Ceil(numInputs)
@@ -29,12 +28,10 @@ class ClkMuxIO extends Bundle {
 
 // Single-ended `ClkMux.numInputs` to 1 clock mux cell.
 //
-// Every input drives a complementary pass gate onto one shared node, so `sel`
-// has to be one-hot and `selb` its exact complement: any other combination
-// either floats the node or shorts two clocks together. The shared output
-// inverter means `Vout` is the inverse of the selected input, which does not
-// matter for the observation-only uses this cell has. Use `connect` rather
-// than driving `sel`/`selb` by hand.
+// Each input has a pass gate onto one shared node. `sel` must be one-hot and
+// `selb` its exact complement; anything else floats the node or shorts two
+// clocks. `Vout` is the inverse of the selected input, which is fine for
+// observation. Use `connect` instead of driving `sel`/`selb` by hand.
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
@@ -46,9 +43,8 @@ class ClkMux(implicit includeDefaultModels: Boolean = false)
     addResource("/vsrc/debug_clkmux.v")
   }
 
-  // Passes `ins(sel)`, returning the muxed clock. Inputs past the end of `ins`
-  // are tied off, and the one-hot the cell needs is decoded here so that an out
-  // of range select turns every pass gate off rather than shorting two clocks.
+  // Returns `ins(sel)`. Unused inputs are tied off. An out-of-range `sel` turns
+  // every pass gate off instead of shorting two clocks.
   def connect(ins: Seq[Clock], sel: UInt): Clock = {
     require(
       ins.length <= ClkMux.numInputs,
@@ -74,10 +70,10 @@ object ClockingTile {
   val sbClkDivWidth = 2
   val sbClkSrcSelWidth = 2
 
-  /** What the tile ties one PLL's loop settings to. They have no registers, so
-    * these are what the part runs with. `Dcoarseb` is tied to the complement
-    * of `dcoarse`. `dbias` is the RDAC code the PLL runs on while enabled; the
-    * tile drives zero there to turn the PLL off, so it has to be nonzero.
+  /** Fixed loop settings for one PLL; there are no registers for them.
+    * `Dcoarseb` is tied to the complement of `dcoarse`. `dbias` is the RDAC
+    * code used while the PLL is enabled. It must be nonzero, because the tile
+    * drives zero to turn the PLL off.
     */
   case class PllSettings(
       autoEn: Boolean,
@@ -89,53 +85,46 @@ object ClockingTile {
       dcoarse: Int
   )
 
-  /** Placeholders until the PLL designer supplies the nominal settings: every
-    * setting zero but the RDAC, at mid-scale so that an enabled PLL runs. The
-    * behavioral PLL models only look at whether the RDAC is zero.
+  /** Placeholders until the PLL designer gives nominal settings. All zero
+    * except the RDAC, which is mid-scale so an enabled PLL runs. The behavioral
+    * models only check whether the RDAC is zero.
     */
   val pll8Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
   val pll12Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
 }
 
-/** The clocking tile's controls and clocks.
-  *
-  * These were once the pins of a single macro. The tile is now six -- the two
-  * PLLs, the TX clock generator, the global delay line and its gate, and the
-  * PHY test and TX sideband dividers -- and `ClockingTile` wires them up behind
-  * this same interface, translating each control into the pins of the macro it
-  * reaches.
+/** The clocking tile's controls and clocks. The tile is six macros: two PLLs,
+  * the TX clock generator, the global delay line and gate, and the PHY test
+  * and TX sideband dividers. `ClockingTile` maps each control to its macro's
+  * pins.
   */
 class ClockingTileIO extends Bundle {
 
-  /** Global delay line on the TX quadrature clock, thermometer coded. The line
-    * sits ahead of the TX clock gate, which an apply shuts across a change.
+  /** Global delay line on TxClkQ, thermometer coded. It is before the TX clock
+    * gate, which an apply shuts during a change.
     */
   val PhaseSel = Input(UInt(ClockingTile.phaseSelWidth.W))
 
-  /** UCIe main clock source: 0 PLL8, 1 PLL12, 2 the PLL8 X2 clock, 3 the analog
-    * bypass pin. Each PLL is named for the clock it puts out, in GHz; the X2
-    * multiplier makes 16 GHz from PLL8. The bypass pin can run at any rate up
-    * to 16 GHz.
+  /** UCIe main clock source: 0 PLL8, 1 PLL12, 2 PLL8 X2 (16 GHz), 3 the analog
+    * bypass pin (up to 16 GHz). PLLs are named for their output in GHz.
     */
   val MainClkSel = Input(UInt(ClockingTile.mainClkSelWidth.W))
 
-  /** Per-PLL enables, so an unselected one can be powered down. Either PLL can
-    * also feed the PHY test and TX sideband dividers. Low drives the PLL's RDAC
-    * (`Dbias`) to zero, which is what turns it off, and holds its digital loop
-    * in `reset`, which on its own only stops the loop.
+  /** Per-PLL enables. Either PLL can also feed the PHY test and TX sideband
+    * dividers. Low sets the RDAC (`Dbias`) to zero, which turns the PLL off,
+    * and holds its digital loop in reset.
     */
   val Pll8En = Input(Bool())
   val Pll12En = Input(Bool())
 
-  /** Kept for the register map, and drives nothing: the X2 multiplier inside
-    * `main_clk_sel_core` has no enable, and doubles PLL8 whenever PLL8 runs.
+  /** Drives nothing; kept for the register map. The X2 multiplier in
+    * `main_clk_sel_core` has no enable and runs whenever PLL8 does.
     */
   val X2En = Input(Bool())
 
-  /** Per-PLL lock. Low while a PLL is off and from the moment it is enabled
-    * until it has settled, so a configuration apply has something to hold the
-    * clock gate across rather than counting out a guess. The X2 multiplier has
-    * no lock of its own; it is ready once PLL8 is.
+  /** Per-PLL lock. Low while the PLL is off, and after enable until it
+    * settles. An apply keeps the clock gate shut until lock. The X2 clock is
+    * ready when PLL8 is locked.
     */
   val Pll8Lock = Output(Bool())
   val Pll12Lock = Output(Bool())
@@ -145,29 +134,24 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
 
-  /** The TX quadrature clock's lead over the TX data clock, in UCIe main clock
-    * half cycles, 0 to 2*div-1. Half a main clock period a step, which is
-    * inside the global delay line's ~69 ps range for any main clock from about
-    * 7.2 GHz up -- every PLL rate -- so coarse and fine together reach any
-    * phase. A slower main clock off the bypass pin makes steps the line cannot
-    * bridge. At /1 there is no divider to rotate, and the TX quadrature clock
-    * is the main clock whatever this says.
+  /** TxClkQ's lead over TxClk, in UCIe main clock half cycles, 0 to 2*div-1.
+    * A step of half a main clock period is within the global delay line's
+    * ~69 ps range for main clocks of about 7.2 GHz and up (every PLL rate), so
+    * this and the delay line together reach any phase. A slower bypass clock
+    * leaves gaps. At /1 this has no effect: TxClkQ is the main clock.
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** PHY test clock division of whichever source `PhyTestClkSrcSel` picks: 3
-    * /6, 4 /8, 5 /12, 6 /15; 7 is spare and selects /15 too. The divider has
-    * no /1, /2 or /4, so 0, 1 and 2 select /8, the reset ratio. 1 GHz is /8 off
-    * PLL8 or /12 off PLL12, 800 MHz /15 off PLL12. It divides a PLL or the
-    * analog bypass pin rather than the UCIe main clock, so nothing done to the
-    * main clock reaches the PHY test clock. /15 has no duty cycle corrector:
-    * `PhyTestClk` is high for 9 source cycles of the 15 and low for 6.
+  /** PHY test clock divider for the source `PhyTestClkSrcSel` picks: 3 /6,
+    * 4 /8, 5 /12, 6 and 7 /15. 0, 1 and 2 select /8, the reset value. 1 GHz is
+    * PLL8/8 or PLL12/12; 800 MHz is PLL12/15. The source is never the UCIe main
+    * clock, so main clock changes don't affect it. /15 has no duty cycle
+    * corrector: high for 9 source cycles, low for 6.
     */
   val PhyTestClkDiv = Input(UInt(ClockingTile.phyTestClkDivWidth.W))
 
-  /** What the PHY test divider divides: 0 PLL8, 1 PLL12, 2 the analog bypass
-    * pin, for running the divider with no PLL; 3 is spare and selects the
-    * analog bypass pin too.
+  /** PHY test divider source: 0 PLL8, 1 PLL12, 2 and 3 the analog bypass pin
+    * (to run without a PLL).
     */
   val PhyTestClkSrcSel = Input(UInt(ClockingTile.phyTestClkSrcSelWidth.W))
 
@@ -175,22 +159,17 @@ class ClockingTileIO extends Bundle {
   val PhyTestClkBypassEn = Input(Bool())
 
   /** Active-high enable for the glitch-free gate after the PHY test clock's
-    * bypass mux. Shut, it covers both the divider and the bypass pin, so the
-    * source, the ratio or the bypass select can change behind it; the muxes
-    * themselves are not glitch free.
-    *
-    * The gate takes the enable through three flops on the falling edge of the
-    * clock it gates, so a change lands three to four of that clock's periods
-    * later, and only while that clock runs. Shut, `PhyTestClk` sits high.
+    * bypass mux. Change the source, ratio or bypass select only while it is
+    * shut; the muxes are not glitch-free. The enable goes through three flops
+    * on the gated clock's falling edge, so it takes effect 3-4 periods later,
+    * and only while that clock runs. When shut, `PhyTestClk` stays high.
     */
   val PhyTestClkEn = Input(Bool())
 
-  /** TX sideband clock division of whichever source `SbClkSrcSel` picks: 1 /5,
-    * 2 /10, 3 /15. The divider has no /1, so 0 selects /10, the reset ratio.
-    * 800 MHz is /10 off PLL8, /15 off PLL12. A divider of its own, since the
-    * TX sideband clock runs at a rate the PHY test clock does not. /5 and /15
-    * have no duty cycle corrector: `SbClk` is high for 3 source cycles of the 5
-    * and for 10 of the 15.
+  /** TX sideband clock divider for the source `SbClkSrcSel` picks: 1 /5,
+    * 2 /10, 3 /15. 0 selects /10, the reset value. 800 MHz is PLL8/10 or
+    * PLL12/15. /5 and /15 have no duty cycle corrector: `SbClk` is high for 3
+    * of 5 and 10 of 15 source cycles.
     */
   val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
 
@@ -205,40 +184,33 @@ class ClockingTileIO extends Bundle {
     */
   val SbClkEn = Input(Bool())
 
-  /** Active-high enable for the TX clock gate; the register that drives it is
-    * `clkEn`. The gate is after the global delay line. This crosses to the TX
-    * data clock through three flops in the gate, and three more hold it back
-    * while the TX quadrature clock's three flops take it from that chain. A
-    * clock gate cell on each clock, fed from a flop on that clock, gates it, so
-    * the quadrature clock stops and starts on the pulse that goes with the data
-    * clock's at any lag, and no path has to fit in half a period. Low stops
-    * both between pulses, 6 to 7 data clock periods later. The TX dividers in
-    * front keep running, so a source,
-    * a ratio, a phase, or a delay code can change behind it with no edge
-    * reaching a lane. The PHY test and TX sideband clocks do not come from the
-    * main clock and keep running, which is how the PHY test clock domain keeps
-    * servicing the RX AFEs with the gate shut.
+  /** Active-high enable for the TX clock gate, driven by the `clkEn`
+    * register. The gate is after the global delay line. Three flops synchronize
+    * the enable to TxClk, and three more delay it to match TxClkQ's three
+    * flops. Each clock goes through a clock gate cell driven by a flop on the
+    * same clock, so no pulse is cut short and no path has to fit in half a
+    * period. Low stops both clocks 6-7 TxClk periods later. The TX dividers
+    * before the gate keep running, so the source, ratio, phase or delay code
+    * can change with no edge reaching a lane. The PHY test and sideband clocks
+    * keep running, so the PHY test domain can still service the RX AFEs.
     */
   val ClkGateEn = Input(Bool())
 
-  /** Which tap of the TX clock gate's data clock chain the TX quadrature
-    * clock's flops take; the register that drives it is `clkGateEdgeSel`. Low
-    * takes the fourth flop, which changes as the data clock rises. High takes
-    * the third through a latch open while the data clock is low, half a period
-    * earlier. Each races the quadrature flops at one lag, where a change may
-    * land on either of two quadrature pulses but never cuts one: the flop at
-    * its own and the select's delay, the latch half a period before that. So
-    * software sets this within a quarter period of the flop's race. With the
-    * gate steadily open or shut it moves nothing.
+  /** TX clock gate tap select, driven by the `clkGateEdgeSel` register. It
+    * picks the TxClk-chain tap that TxClkQ's flops sample. 0: flop 4, which
+    * changes as TxClk rises. 1: flop 3 through a latch open while TxClk is
+    * low, half a period earlier. Each tap has a race: a lag where a gate change
+    * can take effect on either of two TxClkQ pulses, though none is cut. Tap
+    * 0's race is at its flop and mux delay; tap 1's is half a period before.
+    * Software sets this to 1 within a quarter period of tap 0's race. It has
+    * no effect while the gate stays open or shut.
     */
   val ClkGateEdgeSel = Input(Bool())
 
-  /** Shared reset of the TX data and quadrature dividers, the ones that make
-    * the TX data and TX quadrature clocks from the main clock. Held, both stop;
-    * released, both restart on one main clock edge, so the quadrature clock's
-    * lead is the one `TxClkPhase` asks for rather than whatever the two
-    * dividers happened to power up in or a glitch left them in. They sit ahead
-    * of the TX clock gate, so this reaches no lane.
+  /** Shared reset of the TX data and quadrature dividers. While held, both
+    * stop. On release, both restart on the same main clock edge, so TxClkQ's
+    * lead is the one `TxClkPhase` sets. The dividers are before the TX clock
+    * gate, so this does not reach the lanes.
     */
   val TxClkGenRstb = Input(AsyncReset())
 
@@ -255,21 +227,15 @@ class ClockingTileIO extends Bundle {
   val TxClk = Output(Clock())
 }
 
-/** The clocking tile: the two PLLs, the TX clock generator, the global delay
-  * line and TX clock gate, and the PHY test and TX sideband dividers, wired up
-  * behind `ClockingTileIO`.
-  *
-  * Each PLL feeds the TX clock generator and both dividers; the analog bypass
-  * pin does too. Every control is translated here into the pins and codes of
-  * the macro it reaches, so nothing outside sees which macro has which pin or
-  * how its codes run.
+/** The clocking tile behind `ClockingTileIO`. Each PLL and the analog bypass
+  * pin feed the TX clock generator and both dividers. Controls are translated
+  * here into each macro's pins and codes.
   */
 class ClockingTile(implicit includeDefaultModels: Boolean = false)
     extends RawModule {
   val io = FlatIO(new ClockingTileIO)
-  // Reaches no macro, but kept, with the register behind it, so the X2
-  // enable can still be watched at the tile, and a doubler that grows an
-  // enable has one to take.
+  // Drives no macro. Kept so the X2 enable is visible here, ready for a
+  // doubler that gets an enable.
   dontTouch(io.X2En)
 
   // A PLL is off with its RDAC at zero, and `reset` holds only its digital
@@ -311,12 +277,11 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
   val txClkSel = MuxLookup(io.TxClkDiv, 3.U)(Seq(0.U -> 1.U, 1.U -> 0.U))
   txClkGen.io.TxClkSel := txClkSel
   txClkGen.io.TxClkQSel := txClkSel
-  // The cell sets the quadrature clock's lag behind the data clock: whole main
-  // clock cycles by rotating its divider, and half of one by running that
-  // divider off the main clock's other edge (`S2DSel` low). `TxClkPhase` is a
-  // lead in half cycles, so the lag is its negative, modulo the 2*div half
-  // cycles of a period: three bits wrap at /4's eight, and the low two at /2's
-  // four. Both dividers get their share; only the selected one is seen.
+  // The cell sets TxClkQ's lag behind TxClk: whole main clock cycles by
+  // rotating its divider, half a cycle by clocking it on the other main clock
+  // edge (`S2DSel` low). `TxClkPhase` is a lead in half cycles, so the lag is
+  // its negative modulo 2*div: 3 bits wrap at 8 (/4), the low 2 at 4 (/2).
+  // Both dividers get the setting; only the selected one is used.
   val txClkLag = 0.U(ClockingTile.txClkPhaseWidth.W) - io.TxClkPhase
   txClkGen.io.TxClkQDiv2PhaseSel := txClkLag(1)
   txClkGen.io.TxClkQDiv2PhaseS2DSel := !txClkLag(0)
@@ -370,14 +335,12 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
   io.SbClk := sbDiv.io.SbClk
 }
 
-// The clocking tile's macros. Each takes its cell's module and pin names, so
-// any pin marked as not on the cell yet is one the cell has to grow, under
-// that name, before the emitted Verilog will connect to it.
+// The clocking tile's macros, with the cells' module and pin names. A pin
+// marked "not on the cell yet" must be added to the cell under that name.
 
-/** The pins `8gpll_top` and `12gpll_top` have in common: the ref clock, the
-  * digital loop's reset and settings, and the RDAC, whose code powers the PLL:
-  * zero is off. `ClockingTile` drives the reset and the RDAC from the enable
-  * and ties the rest off.
+/** Pins shared by `8gpll_top` and `12gpll_top`: ref clock, digital loop reset
+  * and settings, and the RDAC (zero turns the PLL off). `ClockingTile` drives
+  * the reset and RDAC from the enable and ties off the rest.
   */
 class PllIO extends Bundle {
   val clk_ref = Input(Clock())
@@ -469,9 +432,8 @@ class GlobalDelaylineGateIO extends Bundle {
   val VoutData = Output(Clock())
 }
 
-// The global delay line on the TX quadrature clock, then the TX clock gate on
-// both TX clocks. The cell's name is a placeholder: the delay line's pins with
-// the gate's added.
+// Global delay line on TxClkQ, then the TX clock gate on both TX clocks. The
+// cell name is a placeholder.
 class GlobalDelaylineGate(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {

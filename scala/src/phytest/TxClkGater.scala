@@ -8,51 +8,51 @@ import edu.berkeley.cs.uciedigital.phy.{Phy, TxIO}
 /** A word for the TX lanes, as a controller queues it for [[TxClkGater]]. */
 class TxQueueWord(numLanes: Int) extends Bundle {
   val word = new TxIO(numLanes)
-  // Leave `idlePackets` words of gap after this one before the next. Only
-  // PhyTest's bursts set it.
+  // Leave `idlePackets` words of gap after this word. Only PhyTest's bursts
+  // set it.
   val gapAfter = Bool()
-  // More data follows this word in the same run, so the queue running dry
-  // before it comes is a word lost. Only PhyTest sets it.
+  // More data follows in the same run, so if the queue runs dry first, a word
+  // is lost. Only PhyTest sets it.
   val continues = Bool()
 }
 
-/** Puts a word on the TX lanes every packet, whichever controller drives them:
-  * the controller's next queued word when there is one and nothing else is due,
-  * and otherwise a word of its own. Controllers therefore queue only the words
-  * that carry something, and nothing waits behind idle words.
+/** Puts a word on the TX lanes every packet, for whichever controller drives
+  * them: the controller's next queued word if one is waiting and nothing else
+  * is due, otherwise a word of its own. Controllers queue only words that
+  * carry something, so nothing waits behind idle words.
   *
-  * A word of its own carries `fill` on the data, valid and track lanes. Its
-  * clock lanes run `clkP`/`clkN` unless `gate` is set, in which case the clock
-  * runs only around data, the way UCIe's strobe mode asks:
+  * Its own words carry `fill` on the data, valid and track lanes and
+  * `clkP`/`clkN` on the clock lanes. With `gate` set, the clock runs only
+  * around data, as in UCIe strobe mode:
   *
-  *   - after a word from the queue it runs on for `postamble` units of
-  *     `PhyTest.ClkPostambleUi` UI, then parks;
-  *   - parked, each lane holds its pattern's UI 1 level (with the usual
-  *     patterns, P low and N high: a differential low), or with
-  *     `parkAlternate`, every other park, its UI 0 level (a differential high);
-  *   - a high park keeps the level of the postamble's last rising edge through
-  *     the UI it would have fallen on, and that falling edge goes out
-  *     `PhyTest.ClkPreconditionUi` UI before the clock runs again instead, so
-  *     every gap carries exactly the postamble's edges and the far RX's word
-  *     boundary stays where it was whenever that is a whole word;
-  *   - before data after a park, `preamble` words of running clock.
+  *   - After a queued word it runs for `postamble` units of
+  *     `PhyTest.ClkPostambleUi` UI, then parks.
+  *   - A park holds each lane's UI 1 level (with the usual patterns, P low
+  *     and N high: differential low). With `parkAlternate`, every other park
+  *     holds the UI 0 level (differential high).
+  *   - A high park holds the postamble's last rising edge through the UI it
+  *     would fall on. That falling edge goes out `PhyTest.ClkPreconditionUi`
+  *     UI before the clock restarts instead. So every gap has exactly the
+  *     postamble's edges, and the far RX's word boundary stays put when the
+  *     postamble is a whole word.
+  *   - After a park, `preamble` words of running clock precede data.
   *
-  * A queued word goes out exactly as queued, clock lanes included, so a
-  * controller's own clock patterns pass straight through. A park straight after
-  * one (`postamble` = 0) stays low, since a high park would change that word's
-  * last UI; so does one that comes from the queue running dry.
+  * Queued words go out unchanged, clock lanes included, so a controller's
+  * own clock patterns pass through. A park right after a queued word
+  * (`postamble` = 0) or caused by the queue running dry stays low, since a
+  * high park would change the last word's last UI.
   *
-  * Gaps come one of two ways. After a word with `gapAfter`, exactly
-  * `idlePackets` words of its own, with the preamble in the last of them and a
-  * precondition in the word before it, as PhyTest's bursts have always had.
-  * Otherwise for as long as the queue is empty; then the clock can only start
-  * once the next word is there, so after a high park one word goes out first
-  * just for the precondition.
+  * Gaps:
+  *   - After a word with `gapAfter`: exactly `idlePackets` own words, with the
+  *     preamble in the last of them and a precondition in the one before.
+  *   - Otherwise, while the queue is empty. The clock starts only once the
+  *     next word is there, so after a high park one word goes out first just
+  *     for the precondition.
   *
-  * Every setting but `gate` is a quasi-static register, read as it stands each
-  * packet; change one only while the queue is empty and no gap is running.
-  * `gate` may change at any time: it applies from the next word. Runs on the TX
-  * divided clock, one word per cycle.
+  * Settings other than `gate` are quasi-static, read each packet: change them
+  * only while the queue is empty and no gap is running. `gate` may change any
+  * time and applies from the next word. Runs on the TX divided clock, one
+  * word per cycle.
   */
 class TxClkGater(numLanes: Int) extends Module {
   val io = IO(new Bundle {
@@ -99,9 +99,9 @@ class TxClkGater(numLanes: Int) extends Module {
   val stopped = !lastRunning
   val heldHigh = stopped && parkHigh && !preconditioned
 
-  // Which UIs a word `s` words after the last queued one runs the clock for,
-  // by the postamble alone. Bit 0 goes out first, so a postamble ending
-  // partway through a word keeps its low bits.
+  // The UIs the postamble alone clocks in the word `s` words after the last
+  // queued one. Bit 0 goes out first, so a postamble that ends mid-word sets
+  // the low bits.
   val unitsPerWord = n / PhyTest.ClkPostambleUi
   val postamblePackets = io.postamble >> log2Ceil(unitsPerWord)
   val postambleUnitsLeft = io.postamble(log2Ceil(unitsPerWord) - 1, 0)
@@ -124,9 +124,8 @@ class TxClkGater(numLanes: Int) extends Module {
     postambleMask(s) | Mux(left <= io.preamble, full, 0.U)
   val sinceNext = Mux(sinceData === sinceDataMax.U, sinceData, sinceData + 1.U)
 
-  // What goes out this packet, and the clock it runs: `clocked` for this
-  // word's UIs, `nextClocked0` for the next word's first UI as far as can be
-  // told now.
+  // What goes out this packet. `clocked` marks this word's UIs that run the
+  // clock. `nextClocked0` is the best guess now for the next word's first UI.
   val sendData = WireDefault(false.B)
   val clocked = WireDefault(0.U(n.W))
   val nextClocked0 = WireDefault(false.B)
@@ -157,10 +156,10 @@ class TxClkGater(numLanes: Int) extends Module {
   // The UI the clock stops after, if it stops in this word: at most one,
   // since it only ever starts again at a word boundary.
   val stopsAfter = clocked & ~Cat(nextClocked0, clocked)(n, 1)
-  // Or it stopped at the boundary before this word without the last one
-  // seeing it coming: after a queued word with no postamble, or a queue that
-  // ran dry. That park is low, since a high one would have changed the last
-  // word's last UI, which has gone.
+  // Or the clock stopped at the start of this word, which the last word could
+  // not predict: after a queued word with no postamble, or when the queue ran
+  // dry. That park is low, since a high park would change the last word's
+  // last UI, which is already sent.
   val stopsAtStart = !sendData && lastRunning && !clocked(0)
   val parkHighNow = Mux(
     stopsAfter.orR,

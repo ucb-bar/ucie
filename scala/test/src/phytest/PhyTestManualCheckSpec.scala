@@ -95,8 +95,8 @@ class PhyTestManualCheckSpec extends AnyFunSpec with ChiselSim {
     c.io.rx.valid.poke(false.B)
   }
 
-  /** The counts and the packet count sit behind a couple of registers, and the
-    * manual check's a cycle more.
+  /** The counts and the packet count lag by a couple of registers, and the
+    * manual check's results by one cycle more.
     */
   def settle(c: PhyTest): Unit =
     c.clock.step(PhyTestRegLoopback.outputDelay + 1)

@@ -26,7 +26,7 @@ class UiDelaySpec extends AnyFunSpec with ChiselSim {
       val stream = Seq.fill(2 * n)(0) ++ words.flatMap(w =>
         (0 until n).map(b => ((w >> b) & 1).toInt)
       )
-      // Past the top, the top.
+      // Delays past the maximum, which clamp to it.
       val delays = (0 to Phy.MaxUiDelay) ++ Seq(
         Phy.MaxUiDelay + 1,
         (1 << Phy.uiDelayWidth) - 1

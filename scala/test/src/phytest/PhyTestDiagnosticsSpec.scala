@@ -10,7 +10,7 @@ import org.scalatest.funspec.AnyFunSpec
 import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 
-/** Per-lane pattern sources, and where the errors landed: by lane, by UI, by
+/** Per-lane pattern sources, and where the errors occurred: by lane, by UI, by
   * sampling edge and by the bit that was sent.
   */
 class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
@@ -171,7 +171,7 @@ class PhyTestDiagnosticsSpec extends AnyFunSpec with ChiselSim {
       simulate(new PhyTestRegLoopback(numLanes)) { c =>
         setupLfsr(c)
         c.io.regs.rxErrClassLane.poke(lane.U)
-        // Before the run, so it lands on the first packet, which the capture
+        // Before the run, so it hits the first packet, which the capture
         // SRAM keeps.
         c.io.regs.txInjectLane.poke(lane.U)
         strobe(c, c.io.regs.txInjectError)

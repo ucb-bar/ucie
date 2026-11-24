@@ -1,30 +1,28 @@
 # PhyTest bring-up guide
 
-This guide covers bringing up a UCIe link under PhyTest, the IP's built-in link tester, on silicon.
-It's generic to the IP. Chip-specific details live with the chip: base addresses, which bumps carry
-which clock, and how software reaches the registers. For Iris, see `docs/ucie_bringup.md` in the
+This guide covers bringing up a UCIe link on silicon under PhyTest, the IP's built-in link tester.
+It is generic to the IP. Chip-specific details (base addresses, which bumps carry which clock, how
+software reaches the registers) live with the chip. For Iris, see `docs/ucie_bringup.md` in the
 Iris repository.
 
 **Conventions**
-- File paths are relative to the root of this repository. Code citations are `file:line`.
-- Register names are the ones the generated C header uses (`UCIE_...`). `GenUcieHeader` emits the
-  header from `scala/src/tilelink/Codegen.scala`. Regenerate it from the chip's own `UcieTLParams`
-  whenever the IP or the parameters change, because the per-lane arrays are sized from them.
-- Offsets are relative to `base`, the link's `UcieTLParams.address`. The generated helpers all take
-  `base` as their first argument.
-- "Verified" statements come from the RTL and the behavioral models. Bench numbers are not known yet,
-  and statements that depend on analog behavior are marked as such.
+- Paths are relative to this repository's root. Code citations are `file:line`.
+- Register names follow the generated C header (`UCIE_...`). `GenUcieHeader` emits it from
+  `scala/src/tilelink/Codegen.scala`. Regenerate it from the chip's own `UcieTLParams` whenever the
+  IP or the parameters change, because they size the per-lane arrays.
+- Offsets are relative to `base`, the link's `UcieTLParams.address`. Every generated helper takes
+  `base` as its first argument.
+- There are no bench numbers yet. Statements that depend on analog behavior, and inferences, are
+  marked.
 
 **Figures** (in `docs/figures/`)
-- `top_level_clocking_doc.png`: every clock domain, its async FIFOs, and the sideband controllers.
-- `clk_manager_doc.png`: the clocking tile's six macros, showing which fields are applied and which
-  take effect immediately.
+- `top_level_clocking_doc.png`: all clock domains, their async FIFOs, and the sideband controllers.
+- `clk_manager_doc.png`: the clocking tile's six macros, and which fields are applied or immediate.
 - `clk_dividers_doc_chains.png`: the PHY test and TX sideband divider chains.
-- `clk_dividers_doc_tx.png`: the TX clock generator and the TX gate.
-- `clk_dividers_doc_blocks.png`: the divider stages at the flip-flop level.
-- `clk_dividers_doc_disable.png`: the TX gate and the PHY test and sideband gates at the gate level.
-- The source for all of these is `ucie_claude.svg`, one Inkscape page per PNG.
-- `lane_clock_distribution.png`: the lane clock trees, the delay lines, and the RX clock select.
+- `clk_dividers_doc_tx.png`: the TX clock generator and TX gate.
+- `clk_dividers_doc_blocks.png`: the divider stages at flop level.
+- `clk_dividers_doc_disable.png`: the TX, PHY test and sideband gates at gate level.
+- `lane_clock_distribution.png`: the lane clock trees, delay lines, and RX clock select.
 
 ---
 
@@ -34,133 +32,116 @@ Iris repository.
 
 ### 1.1 Clocks and what they clock
 
-| Clock | Source and range | Selected by | Clocks | Code |
-|---|---|---|---|---|
-| **Chip clock** | The SoC clock on `UcieTL.digitalClockNode`. | Fixed | `UcieClkRegs`, the register port (crossbar, FIFO fixer, source shrinker, the bus side of both register crossings), the TL path (framing, credits, A/D buffers), the sideband TL link's body, the enqueue end of `txTlFifo`/`txAQ`, the dequeue end of `rxTlFifo`/`rxAQ`. | `scala/src/tilelink/TileLink.scala:2051-2058,2116-2148,2495-2918` |
-| **PHY test clock** `PhyTestClk` | The `digitalBypassClk` pin (reset default; the figure gives ≤ 1.1 GHz), or PLL8, PLL12 or the analog bypass pin divided by 6, 8, 12 or 15. Nominally ~1 GHz. | `phyTestClkBypassEn`, `phyTestClkSrcSel`, `phyTestClkDiv` (applied); gate `phyTestClkEn` (immediate; lands 3–4 of its periods later) | `UcieTLRegs` (every PhyTest, lane-control and debug register), `PhyTest` (FSMs, SRAMs, LFSRs, counters), every RX AFE controller (`RxAfeCtl`, clock lanes included), the PhyTest ends of the mainband test queues and of PhyTest's own lane queues, the sideband tester's register side. | `scala/src/phy/Phy.scala:278-287,450,623-628`; `TileLink.scala:2117,2177-2189` |
-| **TX sideband clock** `SbClk` | The `sidebandBypassClk` pin (reset default, 800 MHz), or PLL8, PLL12 or the analog bypass pin divided by 5, 10 or 15 (800 MHz is PLL8/10 or PLL12/15). | `sbClkBypassEn`, `sbClkSrcSel`, `sbClkDiv` (applied); gate `sbClkEn` (immediate; lands 3–4 of its periods later) | `UcieController` (the UCIe digital stack and its spec registers), every sideband serializer (PhyTest's tester, the SB TL link, the controller), the controller's mainband queue ends. | `Phy.scala:289-292,451-458`; `TileLink.scala:2118,2302-2308,2334-2341,2453-2487` |
-| **UCIe main clock** | PLL8 (8 GHz), PLL12 (12 GHz), the PLL8 X2 clock (16 GHz), or the analog bypass pin `bypassClk` (≤ 16 GHz; reset default). | `mainClkSel` (applied) | The TX data and quadrature dividers only. There's no gate on it: the TX gate (`clkEn`) is after the global delay line. | `scala/src/phy/macros/clocking/Common.scala:113-118,208-222` |
-| **TX data clock** `TxClk` | Main clock ÷ 1, 2 or 4, then the TX gate. | `txClkDiv` (applied); gate `clkEn` (immediate) | Data, valid and track TX lanes; PhyTest's TX debug lane, loopback TX lane and loopback RX lane; the global TX ÷16. | `ucie_clk_dist_network.sv`; `figures/lane_clock_distribution.png` |
-| **TX quadrature clock** `TxClkQ` | `TxClk`, advanced by `txClkPhase` half-cycles of the main clock, then through the global delay line (64 thermometer taps, ~1.086 ps each in the model), then the TX gate. | `txClkPhase`, `clkPhaseSel` (both applied, each write by an apply of its own); gate `clkEn` (immediate), with `clkGateEdgeSel` (applied with them) | The two forwarded-clock TX lanes; optionally the RX clock tree (`rxClkFromTxQ`). | `Common.scala:108-111,145-153`; `resources/vsrc/global_delayline_gate.v` (`TAP_PS`) |
-| **TX divided clock** `txDivClk` | `TxClk` ÷ 16, inverted (`ucie_clk_div4`, a ripple ÷16). The TX tiles load on the rising edge of their own ÷16, in step with the global one, so the queue presents each word half a word ahead of the load. | Follows `TxClk` | Hand-off of each TX word to the tiles; the PHY end of every TX queue; the TX underflow flags. | `Phy.scala:502-539` |
-| **RX clock** | The partner's forwarded clock on `rxClkP` through the RX clock lane gate `rxClkEn`, or this die's `TxClkQ` when `rxClkFromTxQ` = 1. | `rxClkEn`, `rxClkFromTxQ` (both immediate) | The RX clock tree: every RX data, valid and track tile, plus the global RX ÷16. | `Phy.scala:629-647`; `figures/lane_clock_distribution.png` |
-| **RX divided clock** `rxDivClk` | RX clock ÷ 16, **not** inverted. The RX tiles put their word out on the falling edge of their own ÷16, in step with the global one, so the queue enqueues half a word after the word appears. | Follows the RX clock | Hand-off from the RX tiles; the PHY end of every RX queue; the RX overflow flags. | `Phy.scala:540-548` |
-| **RX sideband clock** | The partner's `sbTxClk` on the `sbRxClk` bump. | n/a | Every sideband deserializer (falling edge) and its RX queue's enqueue end. | `scala/src/phy/SidebandSerial.scala` (RX section) |
-| **Reference clock** `refClk` | 100 MHz bump. | n/a | Both PLLs (×80, ×120). Needed only when a PLL is used. | `Common.scala`; `pll8g_top.v`, `pll12g_top.v` |
+| Clock | Source (reset default first) | Selected by | Clocks |
+|---|---|---|---|
+| **Chip clock** | SoC clock. | Fixed | `UcieClkRegs` and the bus side of the register port. |
+| **PHY test clock** `PhyTestClk` | `digitalBypassClk` pin (≤ 1.1 GHz per the figure), or PLL8, PLL12 or analog bypass ÷6, 8, 12 or 15. Nominal ~1 GHz. | `phyTestClkBypassEn`, `phyTestClkSrcSel`, `phyTestClkDiv` (applied); gate `phyTestClkEn` (immediate) | `UcieTLRegs` (PhyTest, lane-control and debug registers); `PhyTest`; every `RxAfeCtl`, clock lanes included; the sideband tester's registers. |
+| **TX sideband clock** `SbClk` | `sidebandBypassClk` pin (800 MHz), or PLL8, PLL12 or analog bypass ÷5, 10 or 15. 800 MHz is PLL8/10 or PLL12/15. | `sbClkBypassEn`, `sbClkSrcSel`, `sbClkDiv` (applied); gate `sbClkEn` (immediate) | `UcieController` (UCIe digital stack, its registers, its end of the mainband queues); every sideband serializer. |
+| **UCIe main clock** | Analog bypass pin `bypassClk` (≤ 16 GHz), PLL8 (8 GHz), PLL12 (12 GHz), or PLL8 X2 (16 GHz). | `mainClkSel` (applied) | Only the TX data and quadrature dividers. It has no gate. The TX gate (`clkEn`) is after the global delay line. |
+| **TX data clock** `TxClk` | Main clock ÷1, 2 or 4, then the TX gate. | `txClkDiv` (applied); gate `clkEn` (immediate) | TX data, valid and track lanes; PhyTest's TX debug, loopback TX and loopback RX lanes; the global TX ÷16. |
+| **TX quadrature clock** `TxClkQ` | `TxClk` advanced by `txClkPhase` main-clock half-cycles, then the global delay line (64 thermometer taps, ~1.086 ps each in the model; `resources/vsrc/global_delayline_gate.v`, `TAP_PS`), then the TX gate. | `txClkPhase`, `clkPhaseSel` (applied; section 1.4); gate `clkEn` (immediate) with `clkGateEdgeSel` (applied) | The two forwarded-clock TX lanes; the RX clock tree when `rxClkFromTxQ` = 1. |
+| **TX divided clock** `txDivClk` | `TxClk` ÷16. | Follows `TxClk` | TX word hand-off to the tiles; PHY end of every TX queue; TX underflow flags. |
+| **RX clock** | The partner's forwarded clock on `rxClkP` through the RX clock lane gate `rxClkEn`, or this die's `TxClkQ` when `rxClkFromTxQ` = 1. | `rxClkEn`, `rxClkFromTxQ` (immediate) | Every RX data, valid and track tile; the global RX ÷16. |
+| **RX divided clock** `rxDivClk` | RX clock ÷16. | Follows the RX clock | RX word hand-off; PHY end of every RX queue; RX overflow flags. |
+| **RX sideband clock** | The partner's `sbTxClk` on the `sbRxClk` bump. | n/a | Every sideband deserializer. |
+| **Reference clock** `refClk` | 100 MHz bump. | n/a | Both PLLs (×80, ×120). Needed only when a PLL is used. |
 
-Two properties hold by construction:
-- Nothing done to the main clock reaches the PHY test or TX sideband clock. They divide a PLL or the
-  bypass pin, not the main clock (`Common.scala:155-163`).
-- The RX AFEs are sequenced on the PHY test clock, so it has to be running whenever any lane
-  receives, even with the UCIe digital stack in control (`Phy.scala:278-287,623-628`).
+`figures/lane_clock_distribution.png` shows how the TX, RX and loopback lanes get their clocks.
+
+Two properties hold by design:
+- Nothing done to the main clock reaches the PHY test or TX sideband clock. They divide a PLL or a
+  bypass pin, not the main clock (`Common.scala:142-149`).
+- The PHY test clock sequences the RX AFEs. It must run whenever any lane receives, even when the
+  UCIe digital stack is in control (`Phy.scala:242-249,561-566`).
 
 ### 1.2 The clocking tile
 
 ![Clocking tile](figures/clk_manager_doc.png)
 
-The tile is six macros, each a black box under its cell's name, wired up behind the old single
-macro's interface by `ClockingTile` (`scala/src/phy/macros/clocking/Common.scala`).
-Each UCIe port has its own six, PLLs included.
+`ClockingTile` (`scala/src/phy/macros/clocking/Common.scala`) connects six black-box macros. Each
+UCIe port has its own six, PLLs included.
 
-| Macro | What it does | Model |
-|---|---|---|
-| `pll8g_top`, `pll12g_top` (cells `8gpll_top`, `12gpll_top`) | ×80 and ×120 off `refClk`. Off with the RDAC (`Dbias`) at 0; `reset` holds only the digital loop. `pll8En`/`pll12En` drives both. | `pll8g_top.v`, `pll12g_top.v` |
-| `main_clk_sel_core` | The X2 doubler (always on with PLL8), the main clock mux, and a ÷2 and a ÷4 each for `TxClk` and `TxClkQ`, the quadrature ones with rotate and half-cycle selects | `main_clk_sel_core.v` |
-| `global_delayline_gate` | The global delay line on `TxClkQ`, then the TX gate on both clocks | `global_delayline_gate.v` |
-| `phytest_div_core` | Source mux, ÷6/÷8/÷12/÷15, bypass mux, gate | `phytest_div_core.v` |
-| `sb_div_core` | Source mux, ÷5/÷10/÷15 and bypass in one mux, gate | `sb_div_core.v` |
+| Macro | What it does |
+|---|---|
+| `pll8g_top`, `pll12g_top` (cells `8gpll_top`, `12gpll_top`) | ×80 and ×120 from `refClk`. `pll8En`/`pll12En` = 0 sets the RDAC (`Dbias`) to 0, which turns the PLL off, and holds its digital loop in reset. |
+| `main_clk_sel_core` | Main clock mux, X2 doubler (always on with PLL8), and the `TxClk` and `TxClkQ` dividers with `TxClkQ`'s coarse phase. |
+| `global_delayline_gate` | Global delay line on `TxClkQ`, then the TX gate on both clocks. |
+| `phytest_div_core` | Source mux, ÷6/÷8/÷12/÷15, bypass mux, gate. |
+| `sb_div_core` | Source mux, one mux for ÷5/÷10/÷15 and bypass, gate. |
 
-Pins the cells don't have yet, all marked in `Common.scala`: the PLLs' `clk_out` and `lock`,
-`main_clk_sel_core`'s divider `reset`, the divider cores' source muxes, and the gate's `enable`,
-`edgeSel` and data clock pins. The PLL cell names start with a digit, which firtool won't emit, so the RTL uses
-`pll8g_top` and `pll12g_top`. The PLLs' loop settings (`kp`, `ki`, `code_init`, `code_byp`,
-`Dcoarse`, `auto_en`) and the RDAC code an enabled PLL runs on (`Dbias`) have no registers;
-`ClockingTile.pll8Settings` and `pll12Settings` set them, and are placeholders: zero, but `Dbias` at
-mid-scale.
+**Silicon caveats.**
+- `Common.scala` marks pins the cells don't have yet: the PLLs' `clk_out` and `lock`,
+  `main_clk_sel_core`'s divider `reset`, the divider cores' source muxes, and the gate's `enable`,
+  `edgeSel` and data clock pins. If `lock` isn't wired, see step 2.
+- The PLL loop settings (`kp`, `ki`, `code_init`, `code_byp`, `Dcoarse`, `auto_en`) and an enabled
+  PLL's RDAC code (`Dbias`) have no registers. `ClockingTile.pll8Settings` and `pll12Settings` set
+  them to placeholders: zero, with `Dbias` at mid-scale.
 
 **Gates.**
-- **TX gate (`clkEn`).** After the global delay line. `clkEn` is asynchronous to the TX clocks, so
-  it crosses to the data clock through three flops on that clock's rising edge, and three more hold
-  it back while the quadrature clock's side catches up. Each clock is gated by a clock gate cell (a
-  latch open while the clock is low, then an AND) fed from a flop on that clock, so neither AND
-  clips a pulse. The quadrature clock's gate takes the decision through three flops on the delayed
-  quadrature clock, from a tap of the data clock's chain that `clkGateEdgeSel` picks. So the
-  quadrature clock stops and starts on the pulse that goes with the data clock's, at any lag. Every
-  path has a whole period, or ends in flops that expect a crossing; none has to fit in half a
-  period, which at 16 GHz (31 ps) a standard-cell latch may not. A change lands 6–7
-  data clock periods later, and only while that clock runs. The TX dividers in front keep running,
-  so every TX mux, divider and delay code is behind the gate.
-  - The gate before this one was a chain of latches, each with half a period. A latch slower than
-    that misses its hop, and the gate clips the data clock.
-  - `GlobalDelaylineGateSpec` sweeps the lag across a whole period on the model. No pulse is cut,
-    at any lag, with either `clkGateEdgeSel`. The model has no delays.
-  - What the gate needs of the real cells: a flop's clock-to-output plus the clock gate cell's
-    setup within one period at the slowest corner, which no arrangement of the gate avoids. The
-    cell designer's timing on the real cells signs it off.
-- **TX gate edge select (`clkGateEdgeSel`).** Picks the tap the quadrature clock's flops sample: 0
-  the fourth data clock flop, which changes as the data clock rises; 1 the third through a latch
-  open while the data clock is low, which carries the same decision from half a period earlier.
-  Neither setting can cut a pulse. Each tap races the quadrature flops at one lag. A gate change
-  there may land on either of two quadrature pulses, so the RX could see its clock burst move by
-  one pulse against the data from one reopen to the next.
-  - 0 races a lag of the fourth flop's clock-to-output plus the select's delay, at the middle of
-    the flops' setup and hold: 0 in the model; on the chip it comes from the cell's timing. 1
-    races half a period before that, while the latch's clock-to-output is near the flop's. Each
-    race is the flops' setup plus hold wide.
-  - Set it to 1 when the lag is within a quarter period of 0's race, and 0 otherwise. Either race
-    is then a quarter period away, less half its width.
-  - With that rule a change lands on the same pair of pulses at every lag but one, a quarter period
-    before 0's race, where the quadrature clock's start moves by one pulse. In the model each quadrature
-    pulse goes with the data pulse before it, until it leads the next one by a quarter period or
-    less, when it goes with that one.
-  - The lag is the delay line's taps × ~1.086 ps, less `txClkPhase` half periods of the main
-    clock, plus whatever the cell's two paths differ by, all modulo the TX clock period. At ÷1 the
-    delay line alone moves it from about 0 to 70 ps, across at least one race at 8 GHz and both at
-    16 GHz.
-  - It is applied with the delay code and phase: write it first, and the apply that
-    `set_global_delay` or `set_tx_phase` starts carries both (section 1.4).
-  - Reset is 0. No program sets it yet. The race lags come from the cell, which hasn't been built.
-  - With the gate steadily open or shut both taps carry the same decision, so the select moves
-    nothing then. The model has no delays, so `GlobalDelaylineGateSpec` checks its race directly:
-    with the select set by the rule, the tap never changes within 10 ps of the quadrature flops
-    sampling it, at any lag.
-- **PHY test and sideband gates (`phyTestClkEn`, `sbClkEn`).** Three flops on the falling edge of
-  the clock being gated, then an AND, then the cell's output inverter. A change lands 3–4 periods
-  later, and only while that clock runs. Shut, the clock sits **high**.
+- **TX gate (`clkEn`).** Safe to write at any time. A change takes effect 6–7 TxClk periods later,
+  and only while TxClk runs. It never cuts a pulse short, and TxClkQ stops and starts on the pulse
+  that matches TxClk's, at any lag. The TX dividers keep running while the gate is shut, and every
+  TX mux, divider and delay code is before it.
+  - On silicon, a flop's clock-to-output plus the clock gate cell's setup must fit in one TX clock
+    period at the slowest corner. The cell designer's timing signs this off.
+- **TX gate edge select (`clkGateEdgeSel`).** The TX gate's decision passes through flops on TxClk,
+  and the TxClkQ side samples one of them. 0 picks the fourth flop, which changes as TxClk rises. 1
+  picks the third flop through a latch open while TxClk is low, which has the same decision half a
+  period earlier. Neither setting can cut a pulse.
+  - Each setting has a *race*: the lag of TxClkQ behind TxClk at which the sampled flop changes
+    just as the TxClkQ flops sample it. A gate change at that lag may take effect on either of two
+    TxClkQ pulses. The RX clock burst can then shift by one pulse against the data from one reopen
+    to the next.
+  - 0's race is at the fourth flop's clock-to-output plus the select's delay (0 in the model; on
+    the chip, from the cell's timing). 1's race is half a period earlier, if the latch's
+    clock-to-output is close to the flop's. Each race is the flops' setup plus hold wide.
+  - **Rule:** set it to 1 when the lag is within a quarter period of 0's race, and 0 otherwise. The
+    chosen race is then a quarter period away, less half its width. A change then takes effect on
+    the same pair of pulses at every lag but one: a quarter period before 0's race, where TxClkQ's
+    start moves by one pulse. In the model, each TxClkQ pulse pairs with the TxClk pulse before it,
+    unless it leads the next one by a quarter period or less.
+  - The lag is the delay line's taps × ~1.086 ps, minus `txClkPhase` main-clock half periods, plus
+    the difference between the cell's two paths, modulo the TX clock period. At ÷1 the delay line
+    alone moves it from about 0 to 70 ps, across at least one race at 8 GHz and both at 16 GHz.
+  - It is applied with the delay code and phase (section 1.4). It matters only when the gate opens
+    or shuts. Reset is 0. No program sets it yet, because the race lags come from the cell, which
+    hasn't been built.
+- **PHY test and sideband gates (`phyTestClkEn`, `sbClkEn`).** Safe to write at any time. A change
+  takes effect 3–4 periods of that clock later, and only while it runs. When shut, the clock stays
+  **high**.
 
-The muxes in front of the gates are **not** glitch-free. Every source change has to happen with the
-gate shut, and the apply sequencer in section 1.4 does that.
+The muxes before the gates are **not** glitch-free. Change a source only with the gate shut. The
+apply sequencer (section 1.4) does this.
 
-**Divider codes.** The register fields keep their old codes; `ClockingTile` translates each into
-its cell's.
+**Divider codes.** `ClockingTile` translates the register codes to each cell's codes.
 
 | Field | Codes |
 |---|---|
 | `mainClkSel` | 0 PLL8, 1 PLL12, 2 X2 (16 GHz; needs PLL8), 3 analog bypass |
 | `txClkDiv` | 0 ÷1, 1 ÷2, 2 ÷4, 3 = ÷4 |
-| `txClkPhase` | 0 … 2·div − 1, the quadrature clock's lead in half-cycles of the main clock. No effect at ÷1. |
+| `txClkPhase` | 0 … 2·div − 1: the `TxClkQ` lead in main-clock half-cycles. No effect at ÷1. |
 | `phyTestClkSrcSel`, `sbClkSrcSel` | 0 PLL8, 1 PLL12, 2 analog bypass, 3 = analog bypass |
-| `phyTestClkDiv` | 3 ÷6, 4 ÷8, 5 ÷12, 6 ÷15, 7 = ÷15. 0, 1 and 2 (once ÷1, ÷2, ÷4) select ÷8. |
-| `sbClkDiv` | 1 ÷5, 2 ÷10, 3 ÷15. 0 (once ÷1) selects ÷10. |
-| `x2En` | Drives nothing: the doubler has no enable. |
+| `phyTestClkDiv` | 3 ÷6, 4 ÷8, 5 ÷12, 6 ÷15, 7 = ÷15. 0, 1 and 2 select ÷8. |
+| `sbClkDiv` | 1 ÷5, 2 ÷10, 3 ÷15. 0 selects ÷10. |
+| `x2En` | Drives nothing; the doubler has no enable. |
 
-**Duty cycles.** There's no duty-cycle corrector. The even ratios are 50%. `PhyTestClk` at ÷15 is
-high 9 source cycles of 15. `SbClk` is high 3 of 5 at ÷5 and 10 of 15 at ÷15, so 800 MHz off PLL12
-is 67/33. The dividers free-run and are never reset.
+**Duty cycles.** There is no duty-cycle corrector. Even ratios give 50%. `PhyTestClk` at ÷15 is high
+9 of 15 source cycles. `SbClk` is high 3 of 5 at ÷5 and 10 of 15 at ÷15, so 800 MHz from PLL12 is
+67/33. The dividers free-run and are never reset.
 
-**TX dividers.** The data and quadrature dividers share a reset (`txClkGenRstb`), held with the TX
-divider reset and pulsed by every apply that changes the TX clocking (section 1.4), so the
-quadrature clock always comes back at the lead `txClkPhase` asks for.
+**TX dividers.** The `TxClk` and `TxClkQ` dividers share one reset, `txClkGenRstb`. The TX divider
+reset holds it, and every apply that changes TX clocking pulses it (section 1.4). So `TxClkQ`
+always restarts at the lead `txClkPhase` sets.
 
 **Keep the main clock fast; divide for low rates.** A coarse phase step is half a main-clock
-period. It fits inside the ~69 ps global delay line only for main clocks of about 7.2 GHz and up.
-Below that, a sweep leaves gaps (`Common.scala`, `TxClkPhase`). So a low
-line rate should come from `txClkDiv` on an 8 GHz or faster main clock, not from a slow bypass clock.
+period. It fits in the ~69 ps global delay line only for main clocks of about 7.2 GHz and up. Below
+that, a sweep has gaps (`Common.scala`, `TxClkPhase`). Get a low line rate from `txClkDiv` on an
+8 GHz or faster main clock, not from a slow bypass clock.
 
 ### 1.3 Line rates, and the rule for the PHY test clock
 
 A TX tile is a 16:1 DDR serializer: 32 bits per lane per `txDivClk` cycle, with
-`txDivClk` = `TxClk`/16 (`scala/src/phy/macros/Tx.scala`, `SerdesRatio`; `Phy.scala:531-534`).
+`txDivClk` = `TxClk`/16 (`scala/src/phy/macros/Tx.scala`, `SerdesRatio`; `Phy.scala:470-473`).
 
 | Main clock | `txClkDiv` | `TxClk` | Lane rate | UI | `txDivClk` (packet clock) |
 |---|---|---|---|---|---|
@@ -170,123 +151,116 @@ A TX tile is a 16:1 DDR serializer: 32 bits per lane per `txDivClk` cycle, with
 | 12 GHz (PLL12) | ÷1 / ÷2 / ÷4 | 12 / 6 / 3 GHz | 24 / 12 / 6 GT/s | | 750 / 375 / 187.5 MHz |
 | 16 GHz (X2) | ÷1 / ÷2 / ÷4 | 16 / 8 / 4 GHz | 32 / 16 / 8 GT/s | | 1000 / 500 / 250 MHz |
 
-**The PHY test clock must be faster than both packet clocks**: this die's `txDivClk` and the
-partner's, which arrives as this die's `rxDivClk`.
-- During a run PhyTest feeds its TX queue one data word per PHY test clock, and it drains its RX
-  queue one word per PHY test clock (`scala/src/phytest/PhyTest.scala:1339-1340,1579`). Between runs
-  and bursts it queues nothing.
-- The PHY end puts a word on the lanes every divided-clock cycle: the next queued one, or between
-  them one of `TxClkGater`'s own (section 8.1). Its RX queue takes a word every cycle and can't be
-  held off (`TileLink.scala:2251-2254,2302-2318`).
+**The PHY test clock must be faster than both packet clocks**: this die's `txDivClk`, and the
+partner's, which arrives as this die's `rxDivClk`. During a run, PhyTest puts one word per
+PHY test clock into its TX queue and takes one per PHY test clock from its RX queue
+(`scala/src/phytest/PhyTest.scala:1270-1271,1507`). The PHY end sends a word every packet clock
+(the next queued word, or one of `TxClkGater`'s own; section 8.1). Its RX queue takes a word every
+packet clock and can't be stalled (`TileLink.scala:2206-2209,2255-2271`). Between runs and bursts,
+PhyTest queues nothing.
 
 If the PHY test clock is slower, words drop silently and read as bit errors. Two sticky flags record
-it:
-- `UCIE_TX_TEST_FIFO_UNDERFLOW`: the TX queue ran dry partway through a run, where the last word
-  said more of the run followed.
+it, and the datapath reset clears both (`TileLink.scala:203-209,2273-2285`):
+- `UCIE_TX_TEST_FIFO_UNDERFLOW`: the TX queue ran empty mid-run, after a word that said more of
+  the run followed.
 - `UCIE_RX_TEST_FIFO_OVERFLOW`: the RX queue overflowed.
 
-Both are cleared by the datapath reset (`TileLink.scala:205-211,2320-2332`).
+If the next data word isn't queued in time, `TxClkGater` sends an idle word instead
+(`TileLink.scala:2763-2829`; `scala/src/phytest/TxClkGater.scala`). With the forwarded clock
+running, the run gets an extra idle word, and the RX still takes a word every packet clock, faster
+than PhyTest drains it. With the clock gated, the burst splits in two, each part with its own
+postamble. A looped-back link then shows both flags = 1, with both packet clocks metering the same;
+Iris's `software/phytest-clocks.c` checks exactly that. Between two dies, the RX flag sets on the
+die with the slower PHY test clock, whichever die sends.
 
-A slow PHY test clock starves this die's TX and overflows its RX. Where the next data word isn't
-queued in time, `TxClkGater` sends an idle word instead (`TileLink.scala:2814-2879`;
-`scala/src/phytest/TxClkGater.scala`): with the clock running that is an extra idle word in the
-middle of the run, and with it gated the burst splits in two, each with its postamble. With the
-clock running the RX still takes a word every packet clock, more than a slow PHY test clock
-drains. On a looped-back link that reads as `UCIE_TX_TEST_FIFO_UNDERFLOW` = 1 and
-`UCIE_RX_TEST_FIFO_OVERFLOW` = 1, with both packet clocks metering the same; Iris's
-`software/phytest-clocks.c` checks exactly that. Between two dies, the RX flag sets on the die
-with the slower PHY test clock, whichever one is sending.
+Equal nominal rates are safe only when both clocks come from one source. With two unlocked
+generators at ~100 ppm, a 32-entry queue drifts into underflow or overflow in under a millisecond
+(inference). At 32 GT/s the packet clock is 1 GHz, so a 1 GHz PHY test clock has no margin.
 
-Equal nominal rates are safe only when both clocks come off one source. From two unlocked
-generators, a 32-entry queue drifts into underflow or overflow in under a millisecond at ~100 ppm
-(inference). At 32 GT/s the packet clock is 1 GHz, so a 1 GHz PHY test clock has no margin there.
-
-PHY test clock choices off the PLLs:
+PHY test clock choices from the PLLs:
 
 | Source | ÷6 | ÷8 | ÷12 | ÷15 |
 |---|---|---|---|---|
 | PLL8 | 1.33 GHz | **1 GHz** (the preset `phyTestClkDiv` = 4) | 667 MHz | 533 MHz |
 | PLL12 | 2 GHz | 1.5 GHz | **1 GHz** | **800 MHz** |
 
-Only use rates the PHY test domain was closed at. This guide doesn't know that number; the
-domain's nominal is ~1 GHz (`Phy.scala:278`).
+Use only rates the PHY test domain was timing-closed at. This guide doesn't know that number. The
+domain's nominal is ~1 GHz (`Phy.scala:242`).
 
 ### 1.4 How a clock setting reaches the tile
 
-`UcieClkRegs` runs on the chip clock and the chip reset, so its registers stay writable when every
-PHY clock is stopped (`TileLink.scala:246-263`).
+`UcieClkRegs` runs on the chip clock and chip reset, so it stays writable while every PHY clock is
+stopped (`TileLink.scala:243-259`).
 
-**Applied fields.** These are shadow registers. Nothing reaches the tile until
-`UCIE_CLK_CFG_APPLY` (`TileLink.scala:561-585,700-880`):
+**Applied fields** are shadow registers. Nothing reaches the tile until `UCIE_CLK_CFG_APPLY`
+(`TileLink.scala:547-570,669-846`):
 - `mainClkSel`, `txClkDiv`
 - `pll8En`, `pll12En`, `x2En`
 - `phyTestClkSrcSel`, `phyTestClkDiv`, `phyTestClkBypassEn`
 - `sbClkSrcSel`, `sbClkDiv`, `sbClkBypassEn`
-- `txClkPhase`, `clkPhaseSel`, which apply themselves: see below.
-- `clkGateEdgeSel`, which every apply carries, a phase's own included. Writing it starts none.
+- `txClkPhase`, `clkPhaseSel`, which start their own apply (see below).
+- `clkGateEdgeSel`, included in every apply, phase applies too. Writing it starts none.
 
 An apply runs these steps:
-1. Shut the TX gate always. Shut the PHY test or sideband gate only when this apply changes
-   something under it and `clkCfgGatePhyTest`/`clkCfgGateSb` allows it (both reset to 1).
-2. Wait `gateDwell` = 32 chip cycles, long enough for the three-flop gates at ~60 MHz and the TX gate
-   at a TX clock of ~125 MHz (a change takes up to 8 of its periods).
+1. Shut the TX gate. Shut the PHY test or sideband gate only if this apply changes something under
+   it and `clkCfgGatePhyTest`/`clkCfgGateSb` allows it (both reset to 1).
+2. Wait `gateDwell` = 32 chip cycles. This is enough for the PHY test and sideband gates at ~60 MHz
+   and the TX gate at a TX clock of ~125 MHz (a change takes up to 8 of its periods).
 3. Copy the shadows into the live registers, and hold the TX data and quadrature dividers in reset.
 4. Wait for the ungate condition.
 5. Release the TX dividers, and wait 4 cycles.
 6. Reopen the gates.
 7. Wait 32 more cycles, then clear `UCIE_CLK_CFG_BUSY`.
 
-**Phase applies.** Writing `txClkPhase` or `clkPhaseSel` starts an apply of its own, with no
+**Phase applies.** A write to `txClkPhase` or `clkPhaseSel` starts an apply with no
 `UCIE_CLK_CFG_APPLY`. It shuts only the TX gate, moves only those two and `clkGateEdgeSel`, resets
-the TX dividers only if `txClkPhase` changed, and skips step 4. Write `clkGateEdgeSel` before the
-phase or delay code, so the gate never opens or shuts with one new and the other old. To move it
-alone, write `UCIE_CLK_CFG_APPLY`. `UCIE_CLK_CFG_BUSY` reads 1 from the write until it
-finishes, and `set_tx_phase` and `set_global_delay` wait for it. A pending `UCIE_CLK_CFG_APPLY` is
-left for after it, and the controller's clocks-ready answer stays up through it.
+the TX dividers only if `txClkPhase` changed, and skips step 4. `UCIE_CLK_CFG_BUSY` reads 1 from the
+write until it finishes, and `set_tx_phase` and `set_global_delay` wait for it. A pending
+`UCIE_CLK_CFG_APPLY` runs after it. The controller's clocks-ready answer stays asserted throughout.
+- Write `clkGateEdgeSel` before the phase or delay code, so the gate never opens or shuts with one
+  new and the other old. To change `clkGateEdgeSel` alone, write `UCIE_CLK_CFG_APPLY`.
 
-**Ungate condition** (`UCIE_CLK_CFG_UNGATE_SRC`, `TileLink.scala:1079-1102`):
+**Ungate condition** (`UCIE_CLK_CFG_UNGATE_SRC`, `TileLink.scala:1042-1065`):
 
 | Value | Condition |
 |---|---|
-| 0, `pllLock` (reset) | Lock from every PLL a reopened clock now divides. The bypass pin counts as locked. |
+| 0, `pllLock` (reset) | Lock from every PLL that a reopened clock now divides. The bypass pin counts as locked. |
 | 1, `mmio` | Wait for `UCIE_CLK_CFG_UNGATE_REQ`. |
 | 2, `delay` | `UCIE_CLK_CFG_UNGATE_DELAY` chip cycles; reset value 1024. |
 
-Writing `UCIE_CLK_CFG_UNGATE_REQ` ends any wait, whatever the source (`TileLink.scala:627-631`).
+Writing `UCIE_CLK_CFG_UNGATE_REQ` ends any wait, whatever the source (`TileLink.scala:608-612`).
 
-**PLL keep-alive.** A PLL stays on while the PHY test or sideband divider takes it, whatever its
-enable says (`TileLink.scala:915-927`).
+**PLL keep-alive.** A PLL stays on while the PHY test or sideband divider uses it, whatever its
+enable says (`TileLink.scala:879-891`).
 
-**Immediate fields.** These take effect when written: `clkEn`, `rxClkEn`, `phyTestClkEn`, `sbClkEn`,
+**Immediate fields** take effect when written: `clkEn`, `rxClkEn`, `phyTestClkEn`, `sbClkEn`,
 `rxClkFromTxQ`, `txDividerRst`, `rxDividerRst` and `ucieRst`.
-- `rxClkFromTxQ` switches a plain mux on two running clocks (`Phy.scala:643-647`). Change it only
-  with `clkEn` = 0 and `rxClkEn` = 0, then realign the RX dividers (section 2.4).
+- `rxClkFromTxQ` switches a plain mux between two running clocks (`Phy.scala:579-583`). Change it
+  only with `clkEn` = 0 and `rxClkEn` = 0, then realign the RX dividers (section 2.4).
 
-**Manual mode.** `UCIE_CLK_MANUAL_EN` = 1 hands every output to its own register, with no apply,
-no keep-alive and no `ucieRst` on the dividers. Use it to re-sequence by hand. `txClkPhase` and
-`clkPhaseSel` then move as written, under a running clock unless `clkEn` = 0. Entry and exit move
-no output (`TileLink.scala:531-557,932-975`).
+**Manual mode.** `UCIE_CLK_MANUAL_EN` = 1 drives every output straight from its own register: no
+apply, no keep-alive, and no `ucieRst` on the dividers. Use it to sequence by hand. `txClkPhase`
+and `clkPhaseSel` then change as written, under a running clock unless `clkEn` = 0. Entering or
+leaving manual mode changes no output (`TileLink.scala:517-543,896-939`).
 
 **Rate table.** `UCIE_RATE_CFG` + 8·rate, with `freqSelAutoEn`, is for the UCIe digital stack's
-training (`TileLink.scala:388-403,761-783`). PhyTest doesn't use it. Leave `freqSelAutoEn` = 0. An
+training (`TileLink.scala:381-394,729-749`). PhyTest doesn't use it; leave `freqSelAutoEn` = 0. An
 all-zero entry selects PLL8 with no PLL on.
 
 ### 1.5 Clock domain crossings
 
-| Crossing | Mechanism | Notes | Code |
-|---|---|---|---|
-| Bus → `UcieTLRegs` (PHY test clock) and bus → `UcieController` (sideband clock) | One-entry `AsyncQueue` TL crossing, `safe` | The request isn't accepted until the destination domain is clocked and out of reset. See section 3. | `TileLink.scala:2134-2142` |
-| `UcieTLRegs` → `PhyTest` | **None: same clock.** | Strobes such as `txExecute`, `txFsmRst`, `rxFsmRst`, `txInjectError` and `trackCntRst` are one-cycle pulses made in the PHY test domain and consumed there. The FSM and datapath resets are stretched to 8 cycles. | `TileLink.scala:1492-1625` |
-| PHY test clock ↔ `txDivClk`/`rxDivClk`, mainband data | `AsyncQueue`, depth 32 | One queue per controller per direction; only the selected controller's TX words reach the lanes. | `TileLink.scala:2237-2318` |
-| PHY test clock → divided clocks, datapath resets | Reset synchronizer: asynchronous assert, release after 3 divided-clock edges (`ucie_rst_sync.v`) | Release needs the divided clock to be running. The strobe leaves `UcieTLRegs` from a flop (`TileLink.scala:1499-1512,1537-1541,1552-1553`), so no glitch out of the write decode or the stretch counter reaches the asynchronous clear. The PHY, and PhyTest for its own lanes, register it once more on the PHY test clock, held while that domain is in reset, so the clear sees one flop rather than an OR of that strobe and the UCIe reset. | `Phy.scala:517-548`; `PhyTest.scala:813-817,899-901,1060-1062` |
-| Divided clocks → PHY test clock, sticky flags | Two flops | Levels, so nothing is lost. | `TileLink.scala:1450-1457`; `PhyTest.scala:934,1098-1099` |
-| `UcieClkRegs` → clocking tile | Registered levels; source changes only under a shut gate (section 1.4) | | `TileLink.scala:977-1002` |
-| `UcieClkRegs` → the clock gates (`clkEn`, `phyTestClkEn`, `sbClkEn`) | Three flops on the gated clock, inside each cell | Can change at any time; lands 3–4 periods of the gated clock later (the TX gate: 6–7 data clock periods), and only while that clock runs. | `resources/vsrc/global_delayline_gate.v`, `phytest_div_core.v`, `sb_div_core.v` |
-| `UcieClkRegs` → dividers | Asynchronous reset off a flop | Release only with that direction's clock stopped. | `TileLink.scala:658-682` |
-| `UcieClkRegs` → TX data and quadrature dividers (`txClkGenRstb`) | Asynchronous reset off a flop | Releases with the main clock running, behind the shut TX gate; `main_clk_sel_core` has to synchronize the release to the main clock, as its model does. | `TileLink.scala:709-724` |
-| `UcieClkRegs` → every UCIe domain | `ucieRst` into a reset synchronizer per domain | | `Phy.scala:455-462,535-548`; `TileLink.scala:2164-2173` |
-| PLL lock → chip clock; `freqSel` → chip clock; clock status → sideband clock | Two flops; `freqSel` must also hold for 3 cycles; lock must hold for 4 | | `TileLink.scala:410-428,773-782,2392-2419` |
-| `UcieTLRegs` → lanes and divided-clock datapaths, quasi-static controls | **Not synchronized** | Covers `txctl`/`rxctl` (tile codes, shufflers, `sampleNegedge`, vref, termination, `Dctrl`), `controllerSel`/`mainbandMode`/`sidebandMode`, `txClkDirect` with `txClkP`/`txClkN`, `txUiDelay_*`/`rxUiDelay_*`, `rxValidStartThreshold`, the gating settings `TxClkGater` reads (`txClkPreamble`, `txClkPostamble`, `txIdlePackets`, `txClkParkAlternate`), and the debug muxes. Change them with the lanes quiet, then reset the datapath. Change delay codes only with `clkEn` = 0. The gate itself (`txClkGate`, or the controller's `mbTxClkGate`) crosses through a two-flop synchronizer and can change at any time. | `TileLink.scala:1563-1594,2228-2247,2814-2886`; `Phy.scala:584-619,657-721` |
+Only the crossings that set a rule for software:
+
+| Crossing | Rule | Code |
+|---|---|---|
+| Bus → `UcieTLRegs` (PHY test clock) and bus → `UcieController` (sideband clock) | One-entry asynchronous crossing. Accepts no request until the destination domain is clocked and out of reset (section 3). | `TileLink.scala:2090-2098` |
+| PHY test clock ↔ `txDivClk`/`rxDivClk`, mainband data | Asynchronous queue, depth 32, one per controller per direction. Only the selected controller's TX words reach the lanes. The PHY test clock must outrun both packet clocks (section 1.3). | `TileLink.scala:2193-2271` |
+| PHY test clock → divided clocks, datapath resets | Asynchronous assert; release after 3 divided-clock edges. **Release needs the divided clock running.** | `Phy.scala:457-487` |
+| `UcieClkRegs` → dividers | Asynchronous reset. **Release only with that direction's clock stopped.** | `TileLink.scala:635-654` |
+| `UcieClkRegs` → TX data and quadrature dividers (`txClkGenRstb`) | Released with the main clock running, behind the shut TX gate. `main_clk_sel_core` must synchronize the release to the main clock, as its model does. | `TileLink.scala:678-693` |
+| `UcieTLRegs` → lanes and divided-clock datapaths, quasi-static controls | **Not synchronized**: `txctl`/`rxctl` (tile codes, shufflers, `sampleNegedge`, vref, termination, `Dctrl`), `controllerSel`/`mainbandMode`/`sidebandMode`, `txClkDirect` with `txClkP`/`txClkN`, `txUiDelay_*`/`rxUiDelay_*`, `rxValidStartThreshold`, the `TxClkGater` settings (`txClkPreamble`, `txClkPostamble`, `txIdlePackets`, `txClkParkAlternate`), and the debug muxes. Change them with the lanes quiet, then reset the datapath. Change delay codes only with `clkEn` = 0. The gate control (`txClkGate`, or the controller's `mbTxClkGate`) is synchronized and can change at any time. | `TileLink.scala:1520-1550,2184-2202,2763-2836`; `Phy.scala:522-557,593-656` |
+
+The clock gates are synchronized inside each cell (section 1.2).
 
 ---
 
@@ -296,81 +270,75 @@ all-zero entry selects PLL8 with no PLL on.
 
 | Reset | Asserted by | Released | Resets | Code |
 |---|---|---|---|---|
-| Chip reset | The SoC | The SoC | `UcieClkRegs` (with `ucieRst` = 1), **asynchronously**, so that the PLL and X2 enables, the clock gates, muxes and dividers, and `ucieRst` hold their reset values before the chip clock runs. Each clock meter's counter through a reset synchronizer on that meter's clock. The chip-clock logic and the bus side of the crossings. **It reaches nothing else in the block.** | `TileLink.scala:290-301,430-475,633-656,2164-2168` |
-| `UCIE_UCIE_RST` | Reset value **1**, set by the chip reset asynchronously (so the UCIe domains are held from power-on, before the chip clock runs), or software | Software writes 0 | Every UCIe domain through its own synchronizer: the PHY test domain (`UcieTLRegs`, PhyTest, AFE controllers), the sideband domain (controller and its registers), and both datapaths. In FSM mode it also holds both divider resets. | `TileLink.scala:655,678-682,2169`; `Phy.scala:455-462,535-548` |
-| PHY test and sideband domain resets | `ucieRst`, asynchronously | 3 edges of that domain's clock after `ucieRst` = 0 | As above. Everything PhyTest-side resets **asynchronously** on them, so it holds its reset values from the moment `ucieRst` asserts, whether or not its clock runs: `UcieTLRegs` (the lane, termination, AFE and pad controls), PhyTest, `RxAfeCtl`, the sideband tester, and the TX and RX datapaths with `TxClkGater`. PhyTest's software resets (`txFsmRst`, `rxFsmRst`, `txDebugFsmRst`, `trackCntRst`, and the modes that hold an FSM) stay synchronous clears on top, which win over every other write the cycle they're set. The UCIe controller's registers reset **synchronously**, so they only reset while the sideband clock runs. | `Phy.scala:455-462,629-647`; `PhyTest.scala:762-793,2109-2110`; `TileLink.scala:2171,2177-2190` |
-| `UCIE_UCIE_CONTROLLER_RST` | Reset value **1**, set by the sideband domain reset (so by every `ucieRst`), or software | Software writes 0: `setup_ucie_digital` does once the controller has the lanes | The UCIe controller itself: logical PHY, adapter, protocol layer. Not its registers, the crossing into them, or the queues to and from it. Without it the controller would run whenever `ucieRst` = 0, on the RX words and partner sideband it hears whichever controller has the lanes. | `TileLink.scala:1922-1930,1948-1950` |
-| `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | Software level (or `ucieRst`) | Software level | TX: the global TX ÷16, every TX tile, PhyTest's TX debug and loopback TX lanes. RX: the global RX ÷16, every RX data tile, PhyTest's loopback RX lane. | `TileLink.scala:658-682,2192-2198`; `Phy.scala:533,543,602,682`; `PhyTest.scala:891,1052` |
-| `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | Software strobe (8 PHY test cycles), registered once more on the PHY test clock, where it is also held while that domain is in reset; that one flop alone drives each datapath synchronizer, so the synchronizer's asynchronous input can't glitch | Synchronized to `txDivClk`/`rxDivClk` | The serdes hand-off registers, the PHY end of every queue in that direction (the `safe` queues also reset the far end's pointers), the underflow/overflow flags, and PhyTest's lane queues. **Not** a divider, **not** an FSM. | `TileLink.scala:224-228,1499-1512,1540-1541,1552-1553`; `Phy.scala:535-548` |
-| `UCIE_TX_FSM_RST` | Software strobe | Synchronous | TX FSM back to idle; `txPacketsSent` to 0; LFSRs reseeded from `txLfsrSeed`; error injection disarmed; and burst state. The clock gating is `TxClkGater`'s, at the PHY end, which the TX datapath reset resets to parked low (gated) or running; nothing else touches the level it last parked at, so a run starts where the last one parked. Also held while `mainbandMode` = `tl`. | `PhyTest.scala:1102-1122,1354-1361` |
-| `UCIE_RX_FSM_RST` | Software strobe | Synchronous | RX FSM, all RX counters and error counts, signature, framing, capture state, self-sync history; LFSRs reseeded from `rxLfsrSeed`. Also held while `mainbandMode` = `tl` unless `rxMonitor` = 1. | `PhyTest.scala:1130-1165,1195-1195,1625-1710,1768-1768,1816-1816` |
-| `UCIE_DEBUG_TX_FSM_RST`, `UCIE_TRACK_CNT_RST`, `UCIE_SB_RX_RST` | Software strobe | Synchronous | The TX debug lane FSM; the track counters; the sideband tester's receiver. | `PhyTest.scala:943-958,2087`; `scala/src/phytest/SidebandTest.scala` |
+| Chip reset | The SoC | The SoC | `UcieClkRegs` (with `ucieRst` = 1), **asynchronously**, so the clock controls and `ucieRst` hold their reset values before the chip clock runs. The clock meters, which keep counting through every other reset. The bus side of the crossings. **Nothing else in the block.** | `TileLink.scala:286-295,420-463,614-633,2120-2124` |
+| `UCIE_UCIE_RST` | Reset value **1**, set asynchronously by the chip reset (so the UCIe domains are held from power-on), or software | Software writes 0 | Every UCIe domain, each through its own synchronizer: the PHY test domain (`UcieTLRegs`, PhyTest, AFE controllers), the sideband domain (controller and its registers), and both datapaths. Outside manual mode it also holds both divider resets. | `TileLink.scala:632,650-654,2125`; `Phy.scala:402-409,474-487` |
+| PHY test and sideband domain resets | `ucieRst`, asynchronously | 3 edges of that domain's clock after `ucieRst` = 0 | Everything PhyTest-side resets **asynchronously**, so it holds reset values from when `ucieRst` asserts, even with no clock: `UcieTLRegs` (lane, termination, AFE and pad controls), PhyTest, `RxAfeCtl`, the sideband tester, and the TX and RX datapaths with `TxClkGater`. PhyTest's software resets (`txFsmRst`, `rxFsmRst`, `txDebugFsmRst`, `trackCntRst`, and modes that hold an FSM) are synchronous clears on top. They win over any other write in the cycle they are set. The UCIe controller's registers reset **synchronously**, so only while the sideband clock runs. | `Phy.scala:402-409,567-583`; `PhyTest.scala:712-744,2026-2027`; `TileLink.scala:2127,2133-2146` |
+| `UCIE_UCIE_CONTROLLER_RST` | Reset value **1**. Set by every `ucieRst` (through the sideband domain reset), or by software. | Software writes 0. `setup_ucie_digital` does this once the controller has the lanes. | The UCIe controller: logical PHY, adapter, protocol layer. Not its registers. It keeps the controller from training on whatever it hears while it doesn't have the lanes. | `TileLink.scala:1878-1886,1904-1906` |
+| `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | Software level (or `ucieRst`) | Software level | TX: the global TX ÷16, every TX tile, PhyTest's TX debug and loopback TX lanes. RX: the global RX ÷16, every RX data tile, PhyTest's loopback RX lane. | `TileLink.scala:635-654,2148-2154`; `Phy.scala:472,482,540,618`; `PhyTest.scala:829,987` |
+| `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | Software strobe (8 PHY test cycles) | Synchronized to `txDivClk`/`rxDivClk`, so it needs that clock running | The serdes hand-off registers; the PHY end of every queue in that direction; the underflow/overflow flags; PhyTest's lane queues. **Not** a divider, **not** an FSM. | `TileLink.scala:222-226`; `Phy.scala:474-487` |
+| `UCIE_TX_FSM_RST` | Software strobe | Synchronous | TX FSM to idle; `txPacketsSent` to 0; LFSRs reseeded from `txLfsrSeed`; error injection disarmed; burst state. Also held while `mainbandMode` = `tl`. Not the forwarded-clock gating: `TxClkGater` keeps the level it last parked at, so a run starts where the last one parked. Only the TX datapath reset resets it, to parked low (gated) or running. | `PhyTest.scala:1036-1055,1284-1291` |
+| `UCIE_RX_FSM_RST` | Software strobe | Synchronous | RX FSM, all RX counters and error counts, signature, framing, capture state, self-sync history; LFSRs reseeded from `rxLfsrSeed`. Also held while `mainbandMode` = `tl` unless `rxMonitor` = 1. | `PhyTest.scala:1063-1098,1128-1128,1553-1635,1693-1693,1741-1741` |
+| `UCIE_DEBUG_TX_FSM_RST`, `UCIE_TRACK_CNT_RST`, `UCIE_SB_RX_RST` | Software strobe | Synchronous | The TX debug lane FSM; the track counters; the sideband tester's receiver. | `PhyTest.scala:877-894,2004`; `scala/src/phytest/SidebandTest.scala` |
 
-`scala/test/src/phytest/ResetSchemeSpec.scala` pins down which state belongs to which reset.
+`scala/test/src/phytest/ResetSchemeSpec.scala` checks which state belongs to which reset.
 
 ### 2.2 Reset values that matter for bring-up
 
-`UcieClkRegs` (`TileLink.scala:361-385,492-529,623-677`):
+Section 4.0 lists every register's reset value. These are the ones that shape the plan.
+
+`UcieClkRegs` (`TileLink.scala:354-378,480-515,604-649`):
 
 | Register | Reset | Meaning |
 |---|---|---|
 | `UCIE_UCIE_RST` | 1 | The block is held. PhyTest and controller registers **do not answer** (section 3). |
 | `UCIE_MAIN_CLK_SEL` / `UCIE_TX_CLK_DIV` / `UCIE_TX_CLK_PHASE` | 3 / 0 / 0 | Main clock from the `bypassClk` pin, ÷1, no coarse phase. |
-| `UCIE_CLK_PHASE_SEL` | all 64 taps | The longest global delay, ~69.5 ps. At ÷1 that's ~1.1 UI. See step 5. |
-| `UCIE_CLK_EN` / `UCIE_RX_CLK_EN` | 0 / 0 | Main clock and RX clock off, so the dividers leave reset with no clock. |
+| `UCIE_CLK_PHASE_SEL` | all 64 taps | The longest global delay, ~69.5 ps (~1.1 UI at ÷1). See step 5. |
+| `UCIE_CLK_EN` / `UCIE_RX_CLK_EN` | 0 / 0 | TX and RX clocks gated, so the dividers leave reset with no clock. |
 | `UCIE_PHY_TEST_CLK_BYPASS_EN` / `_SRC_SEL` / `_DIV` / `_EN` | 1 / 0 / 4 / 1 | PHY test clock from the `digitalBypassClk` pin. The divider is preset to PLL8 ÷8. |
 | `UCIE_SB_CLK_BYPASS_EN` / `_SRC_SEL` / `_DIV` / `_EN` | 1 / 0 / 2 / 1 | Sideband clock from the `sidebandBypassClk` pin. The divider is preset to PLL8 ÷10. |
 | `UCIE_PLL8_EN` / `UCIE_PLL12_EN` / `UCIE_X2_EN` | 0 | No PLL running. |
-| `UCIE_CLK_CFG_UNGATE_SRC` / `_DELAY` | 0 (PLL lock) / 1024 | |
+| `UCIE_CLK_CFG_UNGATE_SRC` / `_DELAY` | 0 (PLL lock) / 1024 | An apply waits for PLL lock. |
 | `UCIE_CLK_CFG_GATE_PHY_TEST` / `_GATE_SB` | 1 / 1 | An apply gates a clock when it changes that clock's source. |
-| `UCIE_TX_DIVIDER_RST` / `UCIE_RX_DIVIDER_RST` / `UCIE_CLK_MANUAL_EN` / `UCIE_FREQ_SEL_AUTO_EN` | 0 | |
 
 So with nothing written, the block needs three board clocks: `bypassClk`, `digitalBypassClk` and
-`sidebandBypassClk`. `refClk` is needed only if a PLL is used.
+`sidebandBypassClk`, plus `refClk` if a PLL is used.
 
-`UcieTLRegs` (`TileLink.scala:1232-1475`):
+`UcieTLRegs` (`TileLink.scala:1191-1432`):
 
 | Register | Reset | Notes |
 |---|---|---|
 | `txctl_N_tile` | `TxLaneCtlIO.off` | Every driver segment off, so every TX lane is high-impedance. |
-| `rxctl_N` | `zen` = 0, `zctl` = 0, `vrefSel` = 63, `afeOpCycles` = 16, `afeOverlapCycles` = 2, `dctrl` = 0 | Unterminated. Kodiak's RX reset state was the same. |
+| `rxctl_N` | `zen` = 0, `zctl` = 0, `vrefSel` = 63, `afeOpCycles` = 16, `afeOverlapCycles` = 2, `dctrl` = 0 | Unterminated. |
 | Shufflers | Cancel the tile's bit-reversal tree (`Phy.treeBitOrder`) | Except the TX debug lane, which resets to identity. |
 | `txClkP`, `txClkN` | `0x55555555`, `0xAAAAAAAA` | A running forwarded clock out of reset, for `TxClkGater`'s idle words and `txClkDirect`. |
 | `txValid`, `rxLfsrValid` | 0 | No valid until written. `setup_ucie` writes `0x0F0F0F0F` to both. |
-| `txUiDelay_*`, `rxUiDelay_*` | 0 | No lane held back: the deserializers' own word boundary until `align_rx_words` measures the partner's. |
-| `rxValidStartThreshold` | 4 (`PhyTest.rxValidStartThresholdReset`) | Recording starts on four set valid bits in a row, the first run of `0x0F0F0F0F`, so a lone bit on an idle valid lane can't frame a run. |
-| `txLfsrSeed_*`, `rxLfsrSeed_*` | `0x0123456789abcdef` + lane × `0x1111` (`PhyTest.defaultLfsrSeed`) | A distinct stream per lane out of reset, so adjacent lanes don't carry the same bits. TX and RX reset to the same seeds, so a loopback scores clean without seeding. |
-| `txTestMode` / `txDataMode` / `rxDataMode` | manual / finite / infinite | |
+| `txUiDelay_*`, `rxUiDelay_*` | 0 | No lane delayed. The deserializers use their own word boundary until `align_rx_words` measures the partner's. |
+| `rxValidStartThreshold` | 4 (`PhyTest.rxValidStartThresholdReset`) | Recording starts on four set valid bits in a row (the first run of `0x0F0F0F0F`), so a lone bit on an idle valid lane can't frame a run. |
+| `txLfsrSeed_*`, `rxLfsrSeed_*` | `0x0123456789abcdef` + lane × `0x1111` (`PhyTest.defaultLfsrSeed`) | A distinct stream per lane, so adjacent lanes differ. TX and RX reset to the same seeds, so a loopback scores clean without seeding. |
 | `controllerSel` / `mainbandMode` / `sidebandMode` | PhyTest / manual / manual | |
-| `txValidLaneSel` / `rxValidLaneSel` | 16 | The dedicated valid lane (`Phy.scala:29-49`). |
-| `debugDriverctl_*` | Off | Every observation pad is off. |
+| `txValidLaneSel` / `rxValidLaneSel` | 16 | The dedicated valid lane (`Phy.scala:24-41`). |
 
 ### 2.3 Cold-start reset procedure
 
-Do it in this order. Section 3 explains why steps 1-3 must not touch base + 0x0000 to 0x7FFF.
+Do these steps in order. Section 3 explains why steps 1-3 must not touch base + 0x0000 to 0x7FFF.
 
-1. **Chip reset.** Only `UcieClkRegs`, at base + 0x10000 to 0x10FFF, is safe to access.
-2. **Configure clocks** in `UcieClkRegs` while `ucieRst` = 1 (step 2 of section 4). Nothing in the
-   apply sequencer depends on `ucieRst`. Leave `clkEn` = 0 and `rxClkEn` = 0.
-3. **Make sure the PHY test clock's source is running.** For a bypass pin, scope it on the board.
-   For a PLL, `UCIE_CLK_CFG_BUSY` = 0 and the lock bit is set in `UCIE_PLL_LOCK_OBSERVED`. There's no
-   on-chip way to check.
+1. **Chip reset.** Only `UcieClkRegs` (base + 0x10000 to 0x10FFF) is safe to access.
+2. **Configure clocks** in `UcieClkRegs` while `ucieRst` = 1 (step 2 of section 4). The apply
+   sequencer doesn't depend on `ucieRst`. Leave `clkEn` = 0 and `rxClkEn` = 0.
+3. **Check that the PHY test clock runs:** `UCIE_CLK_METER_PHY_TEST` reads nonzero (section 3).
+   For a PLL, also check `UCIE_CLK_CFG_BUSY` = 0 and the lock bit in `UCIE_PLL_LOCK_OBSERVED`.
 4. **Write `UCIE_UCIE_RST` = 0.** The PHY test and sideband domains leave reset after 3 edges of
-   their own clocks. The dividers leave reset with no clock present, so they're in phase.
-5. **First access to the PHY test domain:** a single read of `UCIE_TX_TEST_STATE`, which should be 0.
-6. **Program the lanes** (`setup_ucie`, section 4 step 4). It does the following:
-   1. Asserts and releases `ucieRst` again.
-   2. Enables the lanes.
-   3. Realigns the dividers with both clocks gated: `clkEn` = 0 and `rxClkEn` = 0,
-      `reset_dividers`, then `clkEn` = 1 and `rxClkEn` = 1.
-   4. Sets the selects.
-   5. Calls `reset_fsms`, which runs the datapath resets and then the FSM resets
-      (`Codegen.scala:1669-1763`).
+   their own clocks. The dividers leave reset with no clock, so they are in phase.
+5. **First access to the PHY test domain:** one read of `UCIE_TX_TEST_STATE`, which should be 0.
+6. **Program the lanes** (`setup_ucie`, section 4 step 4). For reset, what matters is that it
+   asserts and releases `ucieRst` again, realigns the dividers with both clocks gated (`clkEn` = 0
+   and `rxClkEn` = 0, `reset_dividers`, then both = 1), and ends with `reset_fsms`: the datapath
+   resets, then the FSM resets.
 
 ### 2.4 Re-initializing, and recovering from the partner
 
-- **Re-running `setup_ucie`** is safe as long as nothing else is touching the link. Its `reset_ucie`
-  can release the dividers against running clocks, but its own divider realign fixes that.
+- **Re-running `setup_ucie`** is safe if nothing else is using the link. Its `reset_ucie` can
+  release the dividers against running clocks, but its own divider realign fixes that.
 - **After the partner die resets or restarts its TX clock,** realign only this die's RX:
   1. `set_rx_clk_en(base, 0)`. If the loopback lane is in use, also `set_clk_en(base, 0)`, because
      its RX tile runs on the TX clock.
@@ -378,23 +346,22 @@ Do it in this order. Section 3 explains why steps 1-3 must not touch base + 0x00
   3. `set_rx_clk_en(base, 1)` (and `set_clk_en(base, 1)`).
   4. `UCIE_RX_DATAPATH_RST` = 1, then `UCIE_RX_FSM_RST` = 1.
 
-  This is inferred, not tested. A partner reset asynchronously clears its TX tiles and turns its
-  drivers off, so its forwarded clock can end with a runt pulse into this die's running RX dividers.
-  No generated helper does this today.
+  This is inferred, not tested. A partner reset can end its forwarded clock with a runt pulse into
+  this die's running RX dividers. No generated helper does this yet.
 - **After changing `controllerSel`, `mainbandMode` or `sidebandMode`,** run `reset_datapath`. The
-  queues' PHY ends don't synchronize the selects (`TileLink.scala:2237-2247`; `Codegen.scala:930-943`).
+  queues' PHY ends don't synchronize the selects (`TileLink.scala:2193-2202`; `Codegen.scala:918-931`).
 
 ### 2.5 What goes wrong out of order
 
 | Mistake | Result | Recovery |
 |---|---|---|
-| Any access to the PhyTest or controller registers before `ucieRst` = 0, or while that domain's clock is stopped | The access never completes, and the register port and bus behind it wedge (section 3). | Chip reset only. |
-| `ucieRst` = 0 with `clkEn` or `rxClkEn` = 1, or a divider reset released with its clock running | Dividers start on arbitrary edges, so lanes hand words over at the wrong time or a UI off. | `set_clk_en(0)`, `set_rx_clk_en(0)`, `reset_dividers`, then turn both clocks back on. |
-| A TX `Dctrl` change with `clkEn` = 1, or a `clkPhaseSel` or `txClkPhase` change in manual mode with `clkEn` = 1 | The delay line moves under an edge; a tile divider can lose a count and its lane stays a UI off (`Codegen.scala:1072-1082`). | `reset_dividers` with both clocks gated. |
-| A select change without `reset_datapath` | Queue pointers can be corrupted by a select landing on an edge. | `reset_datapath`. |
+| Any access to the PhyTest or controller registers before `ucieRst` = 0, or while that domain's clock is stopped | The access never completes. The register port and the bus behind it hang (section 3). | Chip reset only. |
+| `ucieRst` = 0 with `clkEn` or `rxClkEn` = 1, or a divider reset released with its clock running | Dividers start on arbitrary edges. Lanes hand words over at the wrong time or a UI off. | `set_clk_en(0)`, `set_rx_clk_en(0)`, `reset_dividers`, then turn both clocks back on. |
+| A TX `Dctrl` change with `clkEn` = 1, or a `clkPhaseSel` or `txClkPhase` change in manual mode with `clkEn` = 1 | The delay line moves under an edge. A tile divider can lose a count, and its lane stays a UI off (`Codegen.scala:1056-1065`). | `reset_dividers` with both clocks gated. |
+| A select change without `reset_datapath` | A select that changes on an edge can corrupt queue pointers. | `reset_datapath`. |
 | `txExecute` before the receiver was reset | The receiver frames on the first run of valid it sees, possibly mid-burst, so every lane reads ~50%. | Reset the receiver's FSM, then start TX again. |
-| A pattern SRAM write after a run with no `txFsmRst` first | The write is dropped; the FSM is `done`, not `idle` (`PhyTest.scala:1380-1387`). | `txFsmRst`, then load. |
-| `reset_ucie` from one agent while another agent touches PhyTest | Deadlock (section 3). | Chip reset. |
+| A pattern SRAM write after a run with no `txFsmRst` first | The write is dropped; the FSM is `done`, not `idle` (`PhyTest.scala:1309-1316`). | `txFsmRst`, then load. |
+| `reset_ucie` from one agent while another agent uses PhyTest | Deadlock (section 3). | Chip reset. |
 
 ---
 
@@ -402,52 +369,50 @@ Do it in this order. Section 3 explains why steps 1-3 must not touch base + 0x00
 
 This is the most important rule for bring-up.
 
-**The structure** (`TileLink.scala:2121-2142`):
-- The three register blocks share one register port: a crossbar behind a source shrinker and a
-  `TLFIFOFixer`.
-- `UcieTLRegs` (base + 0x0000 to 0x3BFF) and `UcieController` (base + 0x3C00 to 0x7FFF) are each
-  behind a one-entry asynchronous crossing into their own clock domain.
-- `UcieClkRegs` (base + 0x10000 to 0x10FFF) is on the chip clock and answers in the cycle it's asked.
+**The structure** (`TileLink.scala:2077-2098`). The three register blocks share one register port:
+- `UcieTLRegs` (base + 0x0000 to 0x3BFF), on the PHY test clock, behind a one-entry asynchronous
+  crossing.
+- `UcieController` (base + 0x3C00 to 0x7FFF), on the sideband clock, behind its own crossing.
+- `UcieClkRegs` (base + 0x10000 to 0x10FFF), on the chip clock. It always answers, in the same
+  cycle.
 
 **What hangs:**
-- The crossing doesn't accept a request until the destination domain is clocked and out of reset,
-  and a request accepted just before that domain's clock stops is never answered. In rocket-chip,
-  `AsyncQueueSource` gives `enq.ready = ready_reg && sink_ready`.
-- The FIFO fixer then holds back every request to another block until that one completes
-  (`TileLink.scala:2127-2133`). That includes the `UcieClkRegs` write that would fix the clock.
-- Upstream, a request that can't move blocks everything behind it on the bus.
+- A crossing accepts no request until its domain is clocked and out of reset. A request accepted
+  just before that domain's clock stops is never answered.
+- The port then blocks every request to another block until that one completes
+  (`TileLink.scala:2083-2089`). This includes the `UcieClkRegs` write that would fix the clock.
+- Upstream, a stuck request blocks everything behind it on the bus.
 
 **The PhyTest block hangs:**
-- while `ucieRst` = 1, the reset value;
+- while `ucieRst` = 1 (the reset value);
 - when the PHY test clock's source is absent (the `digitalBypassClk` pin by default);
-- while an apply holds the PHY test clock's gate for a PLL that doesn't lock;
+- while an apply holds the PHY test clock's gate shut for a PLL that doesn't lock;
 - after `phyTestClkEn` = 0.
 
-The controller block hangs in the same situations with the sideband clock.
+The controller block hangs in the same cases, with the sideband clock.
 
-`UCIE_CLK_METER_PHY_TEST` and `UCIE_CLK_METER_SB`, in `UcieClkRegs`, say whether each clock is
-running before you touch its block: each counts its clock's cycles over every
+`UCIE_CLK_METER_PHY_TEST` and `UCIE_CLK_METER_SB`, in `UcieClkRegs`, show whether each clock runs
+before you touch its block. Each counts its clock's cycles in every window of
 `UCIE_CLK_METER_WINDOW_CYCLES` (1024) chip clock cycles, and reads zero for a stopped clock. They
-answer in any state, because `UcieClkRegs` runs on the chip clock. A running clock does not take
-the domain out of reset, so `ucieRst` still has to be 0.
+answer in any state. A running clock does not take the domain out of reset; `ucieRst` must still
+be 0.
 
 **Rules:**
-1. Ping the block through `UcieClkRegs` first (base + 0x10000 and up).
+1. Check the block through `UcieClkRegs` first (base + 0x10000 and up).
 2. Don't touch base + 0x0000 to 0x3BFF until `ucieRst` = 0 and `UCIE_CLK_METER_PHY_TEST` reads
-   nonzero. Don't touch base + 0x3C00 to 0x7FFF until `UCIE_CLK_METER_SB` does too.
-3. After any apply that touches the PHY test clock, wait for `UCIE_CLK_CFG_BUSY` = 0 with a
-   time-based bound, before any PhyTest access. If it stays busy, `release_clk_gate` is still safe,
-   because it's a `UcieClkRegs` write.
-4. Only one agent (core, TSI host or debugger) touches a link at a time. Halt the core before poking
-   registers from outside.
+   nonzero. Don't touch base + 0x3C00 to 0x7FFF until `UCIE_CLK_METER_SB` also reads nonzero.
+3. After any apply that touches the PHY test clock, wait for `UCIE_CLK_CFG_BUSY` = 0, with a time
+   limit, before any PhyTest access. If it stays busy, `release_clk_gate` is still safe, because it
+   writes `UcieClkRegs`.
+4. Only one agent (core, TSI host or debugger) uses a link at a time. Halt the core before
+   accessing registers from outside.
 5. Use 64-bit, 8-byte-aligned accesses.
    - A write to a field wider than 32 bits is dropped silently unless every byte of the field is in
-     the write mask. Those fields include `txctl_N_tile` (58 bits), `clkPhaseSel`, the seeds,
-     `txDataChunkIn0/1`, `txPacketsToSend`, `rxPacketsToReceive` and `sbTxPacket`. (In rocket-chip,
-     `RegMapper.scala` requires `wimask = mask.andR`.)
+     the write mask. These include `txctl_N_tile` (58 bits), `clkPhaseSel`, the seeds,
+     `txDataChunkIn0/1`, `txPacketsToSend`, `rxPacketsToReceive` and `sbTxPacket`.
    - A 32-bit read of a 64-bit counter returns half of it.
 6. Keep remote (manager-port) addresses out of tooling while PhyTest owns the mainband. The manager
-   port isn't ready with no TL path selected (`TileLink.scala:2666-2681`).
+   port isn't ready when no TL path is selected (`TileLink.scala:2615-2630`).
 
 ---
 
@@ -456,127 +421,127 @@ the domain out of reset, so `ucieRst` still has to be 0.
 ### 4.0 The registers the plan uses
 
 Offsets are from the UCIe block's base (`UcieTLParams.address`; in Iris, `0x200000` for `c2c_ucie0`
-and `0x208000` for `c2c_ucie1`), as `software/ucie.h` names them. Per-lane registers sit at the
-offset plus lane × the register's `_WIDTH`. **Reset** is the value out of chip reset. "Strobe" means
-write 1 for a one-cycle pulse; "RO" means read-only. Section 6 has every mode in more detail.
+and `0x208000` for `c2c_ucie1`). Names are from `software/ucie.h`. Lane l of a per-lane register is
+at its offset + l × its `_WIDTH`. **Reset** is the value after chip reset. **Strobe** means write 1
+for a one-cycle pulse. **RO** means read-only. Section 1.4 explains the clock registers, and
+section 6 every PhyTest mode.
 
-**Clock and reset registers** (`UcieClkRegs`, on the chip clock). These always answer.
-"Applied" fields reach the clocking tile only through an apply (section 1.4).
+**Clock and reset registers** (`UcieClkRegs`, chip clock). These always respond. An "applied" field
+reaches the clocking tile only at an apply (section 1.4).
 
 | Register | Offset | Reset | What it does | Step |
 |---|---|---|---|---|
-| `UCIE_MAIN_CLK_SEL` | `0x10000` | 3 | Applied. UCIe main clock: 0 PLL8, 1 PLL12, 2 X2, 3 the `bypassClk` pin. | 1, 5 |
-| `UCIE_PLL8_EN`, `UCIE_PLL12_EN`, `UCIE_X2_EN` | `0x10008`, `0x10010`, `0x10018` | 0 | Applied. PLL enables: off drives the PLL's RDAC to 0 and holds its loop in reset. A PLL a divider takes stays on regardless. `x2En` drives nothing: the doubler runs whenever PLL8 does. | 2 |
-| `UCIE_TX_CLK_DIV` | `0x10020` | 0 | Applied. TX division: 0 ÷1, 1 ÷2, 2 ÷4. | 5 |
-| `UCIE_TX_CLK_PHASE` | `0x10028` | 0 | Applied by its own write. The TX quadrature clock's lead in main-clock half cycles (`set_tx_phase`). | 5, 9 |
-| `UCIE_PHY_TEST_CLK_DIV` | `0x10030` | 4 (÷8) | Applied. 3 ÷6, 4 ÷8, 5 ÷12, 6 ÷15; 0–2 select ÷8. | 2 |
-| `UCIE_PHY_TEST_CLK_BYPASS_EN` | `0x10038` | 1 | Applied. 1 takes the PHY test clock from `digitalBypassClk`. | 2 |
-| `UCIE_CLK_PHASE_SEL` | `0x10040` | all 64 taps | Applied by its own write. The global delay line, thermometer coded (`set_global_delay`). | 5, 9 |
-| `UCIE_CLK_EN` | `0x10048` | 0 | The TX clock gate (`set_clk_en`). | 5, 6, 7 |
-| `UCIE_RX_CLK_EN` | `0x10050` | 0 | The RX forwarded clock's gate, at the RX clock lanes (`set_rx_clk_en`). | 7 |
-| `UCIE_FREQ_SEL_AUTO_EN` | `0x10058` | 0 | 1 hands the TX clocking to the rate table (`UCIE_RATE_CFG`), applied on its own whenever link training negotiates a new rate. Leave 0 under PhyTest. | — |
-| `UCIE_SB_CLK_DIV` | `0x10068` | 2 (÷10) | Applied. 1 ÷5, 2 ÷10, 3 ÷15; 0 selects ÷10. | 2 |
-| `UCIE_SB_CLK_BYPASS_EN` | `0x10070` | 1 | Applied. 1 takes the sideband clock from `sidebandBypassClk`. | 2 |
-| `UCIE_RX_CLK_FROM_TX_Q` | `0x10078` | 0 | 1 clocks the RX lanes from this die's `TxClkQ`, not the forwarded clock. | 7 |
-| `UCIE_CLK_CFG_APPLY` | `0x10080` | 0 | Write 1 to apply the applied fields (`apply_clk_cfg`). | 2, 5 |
-| `UCIE_CLK_CFG_BUSY` | `0x10088` | RO | 1 while an apply, or a phase write's own apply, is under way. | 1, 2, 5, 7 |
-| `UCIE_CLK_CFG_UNGATE_SRC`, `_DELAY` | `0x10090`, `0x10098` | 0, 1024 | What ends an apply's wait: 0 PLL lock, 1 software, 2 `_DELAY` chip cycles (`set_ungate_src`). | 1, 2 |
-| `UCIE_CLK_CFG_UNGATE_REQ` | `0x100A0` | 0 | Write 1 to end an apply's wait at once (`release_clk_gate`). | 2 |
-| `UCIE_PLL_LOCK_OBSERVED` | `0x100A8` | RO | PLL lock, PLL8 in bit 0 and PLL12 in bit 1. | 1, 2 |
-| `UCIE_UCIE_RST` | `0x100B0` | 1 | Holds every UCIe clock domain in reset. Nothing below answers until it's 0 (section 3). | 1, 3 |
-| `UCIE_PHY_TEST_CLK_SRC_SEL`, `UCIE_SB_CLK_SRC_SEL` | `0x100B8`, `0x100C0` | 0, 0 | Applied. What each divider divides: 0 PLL8, 1 PLL12, 2 the `bypassClk` pin. | 2 |
+| `UCIE_MAIN_CLK_SEL` | `0x10000` | 3 | Applied. Main clock: 0 PLL8, 1 PLL12, 2 X2, 3 `bypassClk` pin. | 1, 5 |
+| `UCIE_PLL8_EN`, `UCIE_PLL12_EN`, `UCIE_X2_EN` | `0x10008`, `0x10010`, `0x10018` | 0 | Applied. 0 turns the PLL off. A PLL that a divider uses stays on. `x2En` drives nothing; the doubler runs with PLL8. | 2 |
+| `UCIE_TX_CLK_DIV` | `0x10020` | 0 | Applied. 0 ÷1, 1 ÷2, 2 ÷4. | 5 |
+| `UCIE_TX_CLK_PHASE` | `0x10028` | 0 | Applied by its own write. `TxClkQ` lead, in main-clock half cycles (`set_tx_phase`). | 5, 9 |
+| `UCIE_PHY_TEST_CLK_DIV` | `0x10030` | 4 (÷8) | Applied. 3 ÷6, 4 ÷8, 5 ÷12, 6 ÷15; 0–2 ÷8. | 2 |
+| `UCIE_PHY_TEST_CLK_BYPASS_EN` | `0x10038` | 1 | Applied. 1: PHY test clock from `digitalBypassClk`. | 2 |
+| `UCIE_CLK_PHASE_SEL` | `0x10040` | all 64 taps | Applied by its own write. Global delay line, thermometer code (`set_global_delay`). | 5, 9 |
+| `UCIE_CLK_EN` | `0x10048` | 0 | TX clock gate (`set_clk_en`). | 5, 6, 7 |
+| `UCIE_RX_CLK_EN` | `0x10050` | 0 | RX forwarded-clock gate (`set_rx_clk_en`). | 7 |
+| `UCIE_SB_CLK_DIV` | `0x10068` | 2 (÷10) | Applied. 1 ÷5, 2 ÷10, 3 ÷15; 0 ÷10. | 2 |
+| `UCIE_SB_CLK_BYPASS_EN` | `0x10070` | 1 | Applied. 1: sideband clock from `sidebandBypassClk`. | 2 |
+| `UCIE_RX_CLK_FROM_TX_Q` | `0x10078` | 0 | 1: RX lanes run on this die's `TxClkQ`, not the forwarded clock. | 7 |
+| `UCIE_CLK_CFG_APPLY` | `0x10080` | 0 | Write 1 to apply (`apply_clk_cfg`). | 2, 5 |
+| `UCIE_CLK_CFG_BUSY` | `0x10088` | RO | 1 during an apply, including a phase write's own apply. | 1, 2, 5, 7 |
+| `UCIE_CLK_CFG_UNGATE_SRC`, `_DELAY` | `0x10090`, `0x10098` | 0, 1024 | Ends an apply's wait: 0 PLL lock, 1 software, 2 after `_DELAY` chip cycles (`set_ungate_src`). | 1, 2 |
+| `UCIE_CLK_CFG_UNGATE_REQ` | `0x100A0` | 0 | Write 1 to end an apply's wait now (`release_clk_gate`). | 2 |
+| `UCIE_PLL_LOCK_OBSERVED` | `0x100A8` | RO | Lock: bit 0 PLL8, bit 1 PLL12. | 1, 2 |
+| `UCIE_UCIE_RST` | `0x100B0` | 1 | Holds every UCIe clock domain in reset. Must be 0 before the other two tables respond (section 3). | 1, 3 |
+| `UCIE_PHY_TEST_CLK_SRC_SEL`, `UCIE_SB_CLK_SRC_SEL` | `0x100B8`, `0x100C0` | 0, 0 | Applied. Divider source: 0 PLL8, 1 PLL12, 2 `bypassClk` pin. | 2 |
 | `UCIE_TX_DIVIDER_RST`, `UCIE_RX_DIVIDER_RST` | `0x100C8`, `0x100D0` | 0, 0 | Hold that direction's dividers. Release only with its clock gated (`reset_dividers`). | 6, 7, 12 |
-| `UCIE_PHY_TEST_CLK_EN`, `UCIE_SB_CLK_EN` | `0x100D8`, `0x100E0` | 1, 1 | The PHY test and sideband clocks' gates. | — |
-| `UCIE_CLK_CFG_GATE_PHY_TEST`, `_GATE_SB` | `0x100E8`, `0x100F0` | 1, 1 | Whether an apply gates that clock across a change of its source. | — |
-| `UCIE_CLK_MANUAL_EN` | `0x100F8` | 0 | Manual mode: every output its own register, with no sequencing. | — |
-| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | `0x10118`–`0x10130` | RO | Each clock's cycles per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles. Zero means stopped. | 2, 3, 5 |
+| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | `0x10118`–`0x10130` | RO | Cycles per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles. 0 means stopped. | 2, 3, 5 |
 | `UCIE_PLL_LOCK_LOST` | `0x10138` | 0 | Sticky per PLL: lost lock while enabled. Write 0 to clear. | 9 |
-| `UCIE_CLK_GATE_EDGE_SEL` | `0x10140` | 0 | Applied by the next apply of any kind. Which tap of the TX gate's `TxClk` chain `TxClkQ`'s flops take: 0 the one that changes as `TxClk` rises, 1 half a period earlier. 1 for a `TxClkQ` lag within a quarter period of 0's race (section 1.2). | 5, 9 |
-| `UCIE_RATE_CFG` | `0x10180` + 8 × rate | 0 | The rate table `UCIE_FREQ_SEL_AUTO_EN` uses (`set_rate_cfg`). | — |
+| `UCIE_CLK_GATE_EDGE_SEL` | `0x10140` | 0 | Applied by any apply. TX gate edge select: 1 if the `TxClkQ` lag is within a quarter period of 0's race, else 0 (section 1.2). | 5, 9 |
 
-**PhyTest, lane and debug registers** (`UcieTLRegs`, on the PHY test clock). These answer only with
+Leave the rest at reset under PhyTest (section 1.4):
+- `UCIE_PHY_TEST_CLK_EN`, `UCIE_SB_CLK_EN` = 1. 0 stops that clock and hangs its block (section 3).
+- `UCIE_CLK_CFG_GATE_PHY_TEST`, `_GATE_SB` = 1: an apply gates that clock across a source change.
+- `UCIE_CLK_MANUAL_EN` = 0. 1 drives each output from its own register, with no sequencing.
+- `UCIE_FREQ_SEL_AUTO_EN` = 0. 1 makes TX clocking follow the `UCIE_RATE_CFG` rate table at each
+  rate link training negotiates.
+
+**PhyTest, lane and debug registers** (`UcieTLRegs`, PHY test clock). These respond only with
 `UCIE_UCIE_RST` = 0 and the PHY test clock running.
 
 | Register | Offset | Reset | What it does | Step |
 |---|---|---|---|---|
-| `UCIE_TEST_TARGET` | `0x0` | 0 | 0 the mainband, 1 the on-chip loopback lane. | 6 |
+| `UCIE_TEST_TARGET` | `0x0` | 0 | 0 mainband, 1 on-chip loopback lane. | 6 |
 | `UCIE_TX_TEST_MODE` | `0x8` | 0 | 0 manual (pattern SRAM), 1 LFSR. | 6, 7 |
 | `UCIE_TX_DATA_MODE`, `UCIE_RX_DATA_MODE` | `0x10`, `0x130` | 0, 1 | 0 finite, 1 infinite. | 6, 7, 9, 12 |
-| `UCIE_TX_LFSR_SEED`, `UCIE_RX_LFSR_SEED` | `0x18`, `0x138`, per lane | `0x0123456789abcdef` + lane × `0x1111` | Per-lane LFSR seeds (`seed_lfsrs`). | 7 |
+| `UCIE_TX_LFSR_SEED`, `UCIE_RX_LFSR_SEED` | `0x18`, `0x138`, per lane | `0x0123456789abcdef` + lane × `0x1111` | LFSR seeds (`seed_lfsrs`). | 7 |
 | `UCIE_TX_DATAPATH_RST`, `UCIE_RX_DATAPATH_RST` | `0xB0`, `0x398` | Strobe | Reset the divided-clock datapaths (`reset_datapath`). | 6, 7, 12 |
-| `UCIE_TX_FSM_RST`, `UCIE_RX_FSM_RST` | `0xB8`, `0x3A0` | Strobe | Reset the TX or RX test FSM (`reset_fsms`). | 4, 6, 7, 12 |
+| `UCIE_TX_FSM_RST`, `UCIE_RX_FSM_RST` | `0xB8`, `0x3A0` | Strobe | Reset the test FSM (`reset_fsms`). | 4, 6, 7, 12 |
 | `UCIE_TX_EXECUTE` | `0xC0` | Strobe | Start the TX run. | 6, 7, 11 |
-| `UCIE_TX_PACKETS_SENT`, `UCIE_RX_PACKETS_RECEIVED` | `0xD0`, `0x3B8` | RO | Packets sent and received this run. | 6, 7, 12 |
+| `UCIE_TX_PACKETS_SENT`, `UCIE_RX_PACKETS_RECEIVED` | `0xD0`, `0x3B8` | RO | Packets this run. | 6, 7, 12 |
 | `UCIE_TX_PACKETS_TO_SEND`, `UCIE_RX_PACKETS_TO_RECEIVE` | `0xE0`, `0x3A8` | 0, 0 | Run length in finite mode. | 6, 7, 12 |
 | `UCIE_TX_TEST_STATE` | `0x128` | RO | TX FSM state; `UCIE_TX_TEST_STATE_IDLE` before a run. | 3, 6, 7 |
-| `UCIE_RX_BIT_ERRORS` | `0x1D0`, per lane | RO | Errors per lane (and `_EARLY`/`_LATE`, the same capture framed ±1 UI). | 6, 7 |
+| `UCIE_RX_BIT_ERRORS` | `0x1D0`, per lane | RO | Errors. `_EARLY`/`_LATE`: the same capture framed ±1 UI. | 6, 7 |
 | `UCIE_RX_PAUSE_COUNTERS` | `0x3B0` | 0 | 1 freezes the counters for a consistent read. | 6, 7, 9 |
-| `UCIE_RX_IDLE_WORDS_OBSERVED` | `0x3C8` | RO | RX words seen while no run is on: proof a clock and words arrive. | 7, 11 |
-| `UCIE_TXCTL` | `0x3E8`, per lane | Drivers off | Each TX lane's tile word (driver segments, EQ, `Dctrl`), shufflers and `sampleNegedge` (`write_txctl`, `set_tx_delay`). | 4, 9 |
-| `UCIE_RXCTL` | `0x1A38`, per lane | Unterminated, vref 63 | Each RX lane's termination, vref, `Dctrl` and AFE timing (`set_rx_vref`, `set_rx_delay`). | 3, 4, 9 |
-| `UCIE_DEBUG_DRIVERCTL` | `0x35D8`, per pad | Off | The observation pad drivers (`enable_debug_drivers`). | 4 |
-| `UCIE_DEBUG_CLK_MUX_SEL` | `0x3710` | 0 | The clock on the observation clock pad: 0 `sbTxClk`, 1 `txDivClk`. | 4, 10 |
-| `UCIE_CONTROLLER_SEL` | `0x3738` | 0 | 0 PhyTest owns both bands, 1 the UCIe controller. | 3, 12 |
-| `UCIE_SIDEBAND_MODE` | `0x3748` | 0 | Under PhyTest: 0 manual (the sideband tester), 1 TileLink. | 10 |
-| `UCIE_SB_TX_PACKET`, `_SEND`, `_BUSY` | `0x3770`, `0x3778`, `0x3780` | 0, strobe, RO | The sideband tester's transmitter. | 10 |
-| `UCIE_SB_RX_PACKET`, `_VALID`, `_POP`, `_OVERFLOW`, `_RST` | `0x3788`–`0x37A8` | RO, RO, strobe, RO, strobe | The sideband tester's receiver. | 10 |
-| `UCIE_RX_START_MODE` | `0x37B8` | 0 | 0 start on valid, 1 on the first word. | 7 |
+| `UCIE_RX_IDLE_WORDS_OBSERVED` | `0x3C8` | RO | RX words seen between runs. Proves a clock and words arrive. | 7, 11 |
+| `UCIE_TXCTL` | `0x3E8`, per lane | Drivers off | Tile word (driver segments, EQ, `Dctrl`), shufflers, `sampleNegedge` (`write_txctl`, `set_tx_delay`). | 4, 9 |
+| `UCIE_RXCTL` | `0x1A38`, per lane | Unterminated, vref 63 | Termination, vref, `Dctrl`, AFE timing (`set_rx_vref`, `set_rx_delay`). | 3, 4, 9 |
+| `UCIE_DEBUG_DRIVERCTL` | `0x35D8`, per pad | Off | Observation pad drivers (`enable_debug_drivers`). | 4 |
+| `UCIE_DEBUG_CLK_MUX_SEL` | `0x3710` | 0 | Observation clock pad: 0 `sbTxClk`, 1 `txDivClk`. | 4, 10 |
+| `UCIE_CONTROLLER_SEL` | `0x3738` | 0 | Owner of both bands: 0 PhyTest, 1 UCIe controller. | 3, 12 |
+| `UCIE_SIDEBAND_MODE` | `0x3748` | 0 | Under PhyTest: 0 manual (sideband tester), 1 TileLink. | 10 |
+| `UCIE_SB_TX_PACKET`, `_SEND`, `_BUSY` | `0x3770`, `0x3778`, `0x3780` | 0, strobe, RO | Sideband tester transmitter. | 10 |
+| `UCIE_SB_RX_PACKET`, `_VALID`, `_POP`, `_OVERFLOW`, `_RST` | `0x3788`–`0x37A8` | RO, RO, strobe, RO, strobe | Sideband tester receiver. | 10 |
+| `UCIE_RX_START_MODE` | `0x37B8` | 0 | Start on: 0 valid, 1 first word. | 7 |
 | `UCIE_RX_BURST_MODE` | `0x37C0` | 0 | 1 skips idle packets between bursts. | 11 |
-| `UCIE_RX_SELF_SYNC` | `0x37C8` | 0 | 1 scores each LFSR lane against its own history, with no seed or framing. | 6 |
-| `UCIE_RX_CAPTURE_MODE` | `0x37D8` | 0 | Capture SRAM trigger: 0 the first packet, 1 the first error. | 9 |
-| `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | `0x3800`, `0x3808` | 0, 0 | The shape of gated-clock bursts. | 11 |
+| `UCIE_RX_SELF_SYNC` | `0x37C8` | 0 | 1 checks each LFSR lane against its own history. No seed or framing needed. | 6 |
+| `UCIE_RX_CAPTURE_MODE` | `0x37D8` | 0 | Capture SRAM trigger: 0 first packet, 1 first error. | 9 |
+| `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | `0x3800`, `0x3808` | 0, 0 | Gated-clock burst shape. | 11 |
 | `UCIE_TX_CLK_GATE` | `0x3810` | 0 | 1 parks the forwarded clock between bursts. | 11 |
 | `UCIE_TX_CLK_POSTAMBLE` | `0x3820` | 16 | Postamble, in `UCIE_CLK_POSTAMBLE_UI` units. | 11, 12 |
-| `UCIE_TX_TRACK_CLK`, `UCIE_TX_TRACK_WORD` | `0x3828`, `0x3880` | 0, `0x55555555` | 1 puts the word on the track lane in every packet. | 9 |
+| `UCIE_TX_TRACK_CLK`, `UCIE_TX_TRACK_WORD` | `0x3828`, `0x3880` | 0, `0x55555555` | 1 sends the word on track in every packet. | 9 |
 | `UCIE_TX_INJECT_ERROR`, `UCIE_TX_INJECT_LANE` | `0x3830`, `0x3838` | Strobe, 0 | Flip bit 0 of the next packet on one lane. | 7 |
-| `UCIE_TRACK_ONES`, `_ZEROS`, `_ONES_EVEN`, `_CNT_RST`, `_CNT_HOLD` | `0x3840`, `0x3848`, `0x38A0`, `0x3850`, `0x3858` | RO, RO, RO, strobe, 0 | Ones and zeros on the track lane, and the even-UI ones. | 7, 9 |
-| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW` | `0x3868`, `0x3870` | 0, 0 | Sticky clock-crossing flags: the PHY test clock too slow for the link. | 7 |
-| `UCIE_LOOPBACK_RX_FIFO_OVERFLOW`, `UCIE_LOOPBACK_TX_FIFO_UNDERFLOW` | `0x3878`, `0x3890` | 0, 0 | The loopback lane's crossing flags. | 6 |
-| `UCIE_RX_LANE_ERRORED` | `0x38E0` | RO | Sticky, a bit per lane at its first error. | 9 |
-| `UCIE_RX_ERR_CLASS_LANE` | `0x38F8` | 0 | Which lane the error-class counters watch. | 9 |
-| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | `0x3920` | 0 | The UCIe controller's RX crossing flag. | 12 |
-| `UCIE_TX_CLK_PARK_ALTERNATE` | `0x3930` | 1 | Park a gated clock high and low in turn; 0 parks low every time. | 11, 12 |
-| `UCIE_RX_FRAME_OFFSET` | `0x3938` | RO | The UI of the RX word the run's first packet started on (`align_rx_words`). | 12 |
+| `UCIE_TRACK_ONES`, `_ZEROS`, `_ONES_EVEN`, `_CNT_RST`, `_CNT_HOLD` | `0x3840`, `0x3848`, `0x38A0`, `0x3850`, `0x3858` | RO, RO, RO, strobe, 0 | Ones and zeros on track, and ones on even UIs. | 7, 9 |
+| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW` | `0x3868`, `0x3870` | 0, 0 | Sticky crossing flags: PHY test clock too slow for the link. | 7 |
+| `UCIE_LOOPBACK_RX_FIFO_OVERFLOW`, `UCIE_LOOPBACK_TX_FIFO_UNDERFLOW` | `0x3878`, `0x3890` | 0, 0 | Loopback lane's crossing flags. | 6 |
+| `UCIE_RX_LANE_ERRORED` | `0x38E0` | RO | Sticky bit per lane, set at its first error. | 9 |
+| `UCIE_RX_ERR_CLASS_LANE` | `0x38F8` | 0 | Lane the error-class counters watch. | 9 |
+| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | `0x3920` | 0 | UCIe controller's RX crossing flag. | 12 |
+| `UCIE_TX_CLK_PARK_ALTERNATE` | `0x3930` | 1 | 1 parks a gated clock high and low in turn; 0 parks low every time. | 11, 12 |
+| `UCIE_RX_FRAME_OFFSET` | `0x3938` | RO | UI of the RX word where the run's first packet started (`align_rx_words`). | 12 |
 
-**UCIe controller registers** (`UcieController`, on the TX sideband clock). These answer only with
+**UCIe controller registers** (`UcieController`, TX sideband clock). These respond only with
 `UCIE_UCIE_RST` = 0 and the sideband clock running.
 
 | Register | Offset | Reset | What it does | Step |
 |---|---|---|---|---|
 | `UCIE_UCIE_CONTROLLER_RST` | `0x3C18` | 1 | Holds the UCIe controller in reset. | 3, 12 |
-| `UCIE_RAW_FORMAT_ENABLE`, `UCIE_RAW_FORMAT_ENABLED` | `0x4010`, `0x4014` | Per the UCIe spec, RO | UCIe link control and status (`setup_ucie_digital`). | 11, 12 |
-| `UCIE_ERR_LOG0_STATE_NM0`, `UCIE_ERR_LOG1_STATE_NM3_M0` | `0x6080`, `0x6090` | RO | The link-training state log, for a link that won't come up. | 12 |
+| `UCIE_RAW_FORMAT_ENABLE`, `UCIE_RAW_FORMAT_ENABLED` | `0x4010`, `0x4014` | Per the UCIe spec, RO | Link control and status (`setup_ucie_digital`). | 12 |
+| `UCIE_ERR_LOG0_STATE_NM0`, `UCIE_ERR_LOG1_STATE_NM3_M0` | `0x6080`, `0x6090` | RO | Link-training state log. | 12 |
 
 Steps 0 to 9 take the mainband from power-on to a clean, margined LFSR run under PhyTest. Steps 10
-and 11 then check what the UCIe controller relies on and PhyTest's runs don't exercise, the
-sideband and the gated forwarded clock, and step 12 hands it the link. Each step lists the writes,
-what to observe, and a diagnosis for each failure. The C helpers are in
-the generated header. **What the generated helpers do:**
-- `run_lfsr` waits until every packet is in, or until the count has stood still for
-  `Codegen.packetStallReads` (32) reads after starting to climb, at most 1024 reads. It prints a
-  line if it comes back short, and one if no RX words arrive at all before the run. It is still
-  correct only for a TX looped to its own RX (step 7).
-- `apply_clk_cfg` polls `UCIE_CLK_CFG_BUSY` up to 65536 times and prints a line if the apply never
-  finished. `setup_ucie_digital` gives up on link-up after 2^24 reads, also with a line.
-- `seed_lfsrs` restores every lane's own reset seed, `UCIE_TRAIN_LFSR_SEED` + lane ×
-  `UCIE_LFSR_SEED_LANE_STEP`; the seed registers reset to the same values. No two lanes send the
-  same stream (on Kodiak a shared seed inflated errors and hid crosstalk).
-- `setup_ucie` leaves every observation pad driver and the TX debug lane off;
-  `enable_debug_drivers(base, 1)` turns them on for a scope.
-- `set_tx_delay` changes only `Dctrl`, keeping driver strength and EQ. It doesn't gate `clkEn`:
-  bracket it with `set_clk_en(0)`/`set_clk_en(1)` (step 9). `set_global_delay` and `set_tx_phase`
-  go through an apply, which gates the TX clock for them. `set_global_delay(64)` sets every tap.
+and 11 test what the UCIe controller needs but PhyTest runs don't use: the sideband and the gated
+forwarded clock. Step 12 hands the link to the controller.
 
-`software/phytest.h` in the Iris repository adds time-bounded waits and checks on top of these.
+**Generated C helpers to know first** (section 6.8 lists all):
+- `run_lfsr` waits for every packet, or until the count, once nonzero, stops for
+  `Codegen.packetStallReads` (32) reads, up to 1024 reads. It prints a line if the run is short,
+  and one if no RX words arrive before the run. It is correct only for a TX looped to its own RX
+  (step 7).
+- `apply_clk_cfg` polls `UCIE_CLK_CFG_BUSY` up to 65536 times. It prints a line if the apply
+  doesn't finish.
+- `seed_lfsrs` restores each lane's reset seed, `UCIE_TRAIN_LFSR_SEED` + lane ×
+  `UCIE_LFSR_SEED_LANE_STEP`, so no two lanes send the same stream. (On Kodiak a shared seed
+  inflated errors and hid crosstalk.)
+- `set_tx_delay` changes only `Dctrl`, not driver strength or EQ. It doesn't gate `clkEn`, so call
+  `set_clk_en(0)` before it and `set_clk_en(1)` after. `set_global_delay` and `set_tx_phase` go
+  through an apply, which gates the TX clock. `set_global_delay(64)` sets every tap.
+
+`software/phytest.h` in the Iris repository adds time-bounded waits and checks.
 
 ### Step 0: before power-on
 
-- **Board clocks.** Supply `bypassClk`, `digitalBypassClk` and `sidebandBypassClk`, plus `refClk`
-  (100 MHz) for PLL use. Scope each at the chip connector. `digitalBypassClk` must be faster than
-  every packet clock you'll run (section 1.3). 800 MHz covers up to 24 GT/s.
+- **Board clocks.** Supply `bypassClk`, `digitalBypassClk`, `sidebandBypassClk`, and `refClk`
+  (100 MHz) for the PLLs. Scope each at the chip connector. `digitalBypassClk` must be faster than
+  every packet clock you run (section 1.3). 800 MHz covers up to 24 GT/s.
 - **Header.** Regenerate the C header for this chip's parameters.
-- **Topology.** Decide the topology: this die's TX looped to its own RX, or two dies. `run_lfsr` is
-  correct only for the looped-back case (step 7).
+- **Topology.** Choose loopback (this die's TX to its own RX) or two dies.
 
 ### Step 1: ping the clock registers
 
@@ -590,127 +555,124 @@ reg_write64(base + UCIE_CLK_CFG_UNGATE_DELAY, 0x1234);  // write/read check, the
 
 | Symptom | Cause |
 |---|---|
-| A read hangs | Not the UCIe clocks. Check the chip clock, the bus path and the address. On a SoC with no bus error device, an unmapped address hangs. |
+| A read hangs | Not the UCIe clocks. Check the chip clock, bus path and address. With no bus error device, an unmapped address hangs. |
 | Wrong values | Wrong `base`, or a stale header. |
 
 ### Step 2: clocks for the UCIe domains
 
-**Option A: bypass pins** (the reset defaults). Write nothing. The PHY test clock is
-`digitalBypassClk`, the sideband clock is `sidebandBypassClk`, and the main clock is `bypassClk`.
+**Option A: bypass pins** (reset default). Write nothing. The PHY test clock is `digitalBypassClk`,
+the sideband clock `sidebandBypassClk`, and the main clock `bypassClk`.
 
-**Option B: PLLs.** This sequence follows the testbench's clock-source test
-(`TileLinkSpec.scala:1467-1485`; the test itself puts the PHY test clock on PLL12 ÷15):
+**Option B: PLLs.** The testbench's clock-source test runs this sequence (`TileLinkSpec.scala:1395-1421`),
+with the PHY test clock on PLL12 ÷15 instead:
 
 ```c
 reg_write64(base + UCIE_SB_CLK_SRC_SEL, 0);     // sideband: PLL8
 reg_write64(base + UCIE_SB_CLK_DIV, 2);         //           /10 = 800 MHz
 reg_write64(base + UCIE_SB_CLK_BYPASS_EN, 0);
 use_internal_clk(base, 0, 4);  // PHY test: PLL8 /8 = 1 GHz. Also turns on PLL8, PLL12 and X2, then applies.
-// apply_clk_cfg() polls up to 65536 times, and prints if the apply never finished. Then check:
-//   UCIE_CLK_CFG_BUSY == 0, bit 0 (PLL8) / bit 1 (PLL12) of UCIE_PLL_LOCK_OBSERVED set,
-//   and UCIE_CLK_METER_PHY_TEST reading 1 GHz (2048 at a 500 MHz chip clock).
+// Check: UCIE_CLK_CFG_BUSY == 0; UCIE_PLL_LOCK_OBSERVED bit 0 (PLL8) / bit 1 (PLL12) set;
+//   UCIE_CLK_METER_PHY_TEST reads 1 GHz (2048 at a 500 MHz chip clock).
 ```
 
-To look at a clock before letting it out, first call
-`set_ungate_src(base, UCIE_CLK_UNGATE_SRC_MMIO, 0)`, and later `release_clk_gate(base)`.
+To inspect a clock before it is released, call `set_ungate_src(base, UCIE_CLK_UNGATE_SRC_MMIO, 0)`
+first and `release_clk_gate(base)` after.
 
-Don't call `set_main_clk` before step 4: it writes `clkEn` = 1 (`Codegen.scala:1301-1312`).
-`setup_ucie` realigns the dividers anyway.
+Don't call `set_main_clk` before step 4: it writes `clkEn` = 1 (`Codegen.scala:1280-1291`). If you
+do, `setup_ucie` realigns the dividers anyway.
 
 | Symptom | Cause |
 |---|---|
-| `UCIE_CLK_CFG_BUSY` stays 1 and the lock bit is 0 | No `refClk`, or the PLL isn't locking. `release_clk_gate(base)` ends the apply. Fall back to option A, or use `set_ungate_src(base, UCIE_CLK_UNGATE_SRC_DELAY, n)` if lock isn't wired. **Don't touch PhyTest registers while busy.** |
-| Busy with the lock bit 1 | The source is `mmio`. Call `release_clk_gate`. |
+| `UCIE_CLK_CFG_BUSY` stays 1, lock bit 0 | No `refClk`, or the PLL doesn't lock. `release_clk_gate(base)` ends the apply. Use option A, or `set_ungate_src(base, UCIE_CLK_UNGATE_SRC_DELAY, n)` if lock isn't wired. **Don't touch PhyTest registers while busy.** |
+| Busy, lock bit 1 | The ungate source is `mmio`. Call `release_clk_gate`. |
 
 ### Step 3: release the UCIe reset, and the first PHY test access
 
 ```c
 reg_read64(base + UCIE_CLK_METER_PHY_TEST);  // nonzero, or stop: a PhyTest access would hang
-reg_read64(base + UCIE_CLK_METER_SB);        // nonzero before touching the controller window
+reg_read64(base + UCIE_CLK_METER_SB);        // nonzero before touching the controller window (base + 0x3C00 and up)
 reg_write64(base + UCIE_UCIE_RST, 0);   // clkEn = rxClkEn = 0 still (reset values)
 reg_read64(base + UCIE_TX_TEST_STATE);  // the first PhyTest access: expect UCIE_TX_TEST_STATE_IDLE
 reg_read64(base + UCIE_CONTROLLER_SEL); // expect UCIE_CONTROLLER_SEL_PHYTEST
 reg_read64(base + UCIE_RXCTL + UCIE_RXCTL_VREF_SEL_OFS);  // expect 63
 ```
 
-A meter reading zero means that clock isn't running: fix its source (the board clock, or the PLL
-and divider) before any access to its block. If the `UCIE_TX_TEST_STATE` read hangs anyway, the
-domain is still in reset or the clock stopped since: chip reset. Stay out of the controller window (base + 0x3C00
-and up) unless the sideband clock is known good.
+- If a meter reads 0, fix that clock's source (board clock, or PLL and divider) before any access
+  to its block.
+- If the `UCIE_TX_TEST_STATE` read hangs anyway, the domain is still in reset or the clock has
+  stopped. Reset the chip.
 
-The UCIe controller itself stays in reset (`UCIE_UCIE_CONTROLLER_RST` = 1, set again by every
-`ucieRst`) until step 12 hands it the lanes, so it doesn't train against PhyTest's traffic in the
-meantime. Its registers answer regardless.
+The UCIe controller stays in reset until step 12 (`UCIE_UCIE_CONTROLLER_RST` = 1, set again by
+every `ucieRst`), so it doesn't train against PhyTest traffic. Its registers still respond.
 
 ### Step 4: lane setup
 
 ```c
-setup_ucie(base);   // leaves the observation drivers off, as link tests want them (Kodiak lesson)
+setup_ucie(base);
 ```
 
-`setup_ucie` does the following (`Codegen.scala:1669-1763`):
+`setup_ucie` (`Codegen.scala:1640-1733`):
 - Runs `reset_ucie`.
-- Writes `UCIE_ENABLE_TX_CTL` (every main driver segment on, EQ off, no delay) to `txctl_0..20`.
-  That covers the data, valid, track, both forwarded-clock lanes and the loopback TX lane.
-- Writes `zen` = 1 and `zctl` = 0 to `rxctl_0..20`.
+- Writes `UCIE_ENABLE_TX_CTL` (every main driver segment on, EQ off, no delay) to `txctl_0..20`:
+  data, valid, track, both forwarded-clock lanes, and the loopback TX lane.
+- Writes `zen` = 1, `zctl` = 0 to `rxctl_0..20`.
 - Writes `txClkP`/`txClkN` = `0x55555555`/`0xAAAAAAAA` and `txValid`/`rxLfsrValid` = `0x0F0F0F0F`.
-- Turns every observation pad driver and the TX debug lane off (`enable_debug_drivers(base, 0)`).
+- Turns off every observation pad driver and the TX debug lane (`enable_debug_drivers(base, 0)`).
+  Keep them off for link tests; on Kodiak they disturbed the link.
 - Realigns the dividers with both clocks gated, then leaves `clkEn` = `rxClkEn` = 1.
 - Sets PhyTest and manual on both bands, and runs `reset_fsms`, which asserts idle and zero counts.
 
-**Before relying on the lanes,** confirm with analog what `zen` = 1 with `zctl` = 0 terminates to.
-The wrapper drives a thermometer of `zctl` legs, so `zctl` = 0 turns no leg pins on
-(`scala/src/phy/macros/Rx.scala:28-44`).
+**Before relying on the lanes,** confirm with analog what `zen` = 1, `zctl` = 0 terminates to.
+`zctl` drives a thermometer of legs, so 0 turns on no leg pins (`scala/src/phy/macros/Rx.scala:28-44`).
 
-**To see the TX divided clock on a scope,** briefly enable the clock-mux pad:
-- `reg_write64(base + UCIE_DEBUG_CLK_MUX_SEL, 1)`; 1 selects `txDivClk`, 0 selects `sbTxClk`.
-- `enable_debug_drivers(base, 1)`, or `reg_write64(base + UCIE_DEBUG_DRIVERCTL + 8*3,
-  UCIE_ENABLE_DRIVER_CTL)` for the clock-mux pad alone.
-- It should read `TxClk`/16. The cell's output is inverted, which doesn't matter for observation
-  (`Common.scala:30-37`).
-- Turn the pad off again before link tests (`enable_debug_drivers(base, 0)`).
+**To scope the TX divided clock,** briefly enable the clock-mux pad:
+1. `reg_write64(base + UCIE_DEBUG_CLK_MUX_SEL, 1)` (`txDivClk`).
+2. `enable_debug_drivers(base, 1)`, or for the clock-mux pad alone,
+   `reg_write64(base + UCIE_DEBUG_DRIVERCTL + 8*3, UCIE_ENABLE_DRIVER_CTL)`.
+3. Check: it reads `TxClk`/16.
+4. Turn the pad off before link tests (`enable_debug_drivers(base, 0)`).
 
 | Symptom | Cause |
 |---|---|
-| An assert in `reset_fsms` fails | The TX state isn't idle, or a counter isn't 0. `mainbandMode`/`controllerSel` may not be PhyTest/manual, or the writes may not have landed (check with 64-bit reads). |
+| An assert in `reset_fsms` fails | TX state not idle, or a counter not 0. `mainbandMode`/`controllerSel` may not be PhyTest/manual, or the writes didn't take effect (check with 64-bit reads). |
 
 ### Step 5: line rate and sampling phase
 
-Start at ÷4 off an 8 GHz main clock: 4 GT/s, with a 125 MHz packet clock (section 1.2).
+Start at ÷4 from an 8 GHz main clock: 4 GT/s, 125 MHz packet clock (section 1.2).
 
 ```c
 set_main_clk(base, 3 /* bypass pin; 0 = PLL8 */, 2 /* /4 */);  // applies; also sets clkEn = 1
-// set_main_clk calls apply_clk_cfg; confirm UCIE_CLK_CFG_BUSY == 0 with a time bound.
-set_tx_phase(base, 2);     // applies under the TX gate, and waits for it
+// confirm UCIE_CLK_CFG_BUSY == 0, with a time bound
+set_tx_phase(base, 2);     // applies under the TX gate and waits for it
 set_global_delay(base, 0); // the same
 ```
 
-Then confirm the rate on the meters, two meter windows after the apply. `UCIE_CLK_METER_TX_DIV`
-should read the packet clock: f × `UCIE_CLK_METER_WINDOW_CYCLES` / f_chip, so 256 for 125 MHz at a
-500 MHz chip clock (`pt_meter_mhz` in Iris's `phytest.h` does the arithmetic). With this die's TX
-looped to its own RX, `UCIE_CLK_METER_RX_DIV` should read the same; zero means no forwarded clock
-is arriving (step 7's table).
+Two meter windows after the apply, check:
+- `UCIE_CLK_METER_TX_DIV` = f × `UCIE_CLK_METER_WINDOW_CYCLES` / f_chip, for packet clock f. That is
+  256 for 125 MHz at a 500 MHz chip clock (`pt_meter_mhz` in Iris's `phytest.h` computes it).
+- In loopback, `UCIE_CLK_METER_RX_DIV` reads the same. 0 means no forwarded clock arrives (step 7's
+  table).
 
-**Nominal starting phases.** These put the forwarded clock half a UI from the data, before any
-clock-tree/replica mismatch is accounted for. Find the real optimum by sweeping (step 9).
+**Nominal starting phases** put the forwarded clock half a UI from the data, ignoring
+clock-tree/replica mismatch. Sweep for the real optimum (step 9).
 
 | Rate (8 GHz main) | `txClkPhase` | Global delay taps | Why |
 |---|---|---|---|
-| ÷4, 4 GT/s | 2 | 0 | Two half-cycles of 62.5 ps = 125 ps = UI/2 |
+| ÷4, 4 GT/s | 2 | 0 | 2 × 62.5 ps = 125 ps = UI/2 |
 | ÷2, 8 GT/s | 1 | 0 | 62.5 ps = UI/2 |
 | ÷1, 16 GT/s | 0 | 29 | 31.25 ps; `Codegen.digitalGlobalDelayTaps` |
 
-The reset delay (64 taps, ~69.5 ps) with phase 0 sits ~0.11 UI past a data edge at ÷1. That's a
-bad starting point (`Codegen.scala:315-324`; `TileLink.scala:1164-1167`).
+Don't start ÷1 at the reset delay: 64 taps (~69.5 ps) with phase 0 sits ~0.11 UI past a data edge
+(`Codegen.scala:314-322`; `TileLink.scala:1125-1128`).
 
 ### Step 6: first-day check on the on-chip loopback lane
 
-This step tests the serializer, driver, AFE and deserializer with no channel. Repeat it at each TX
-division and source, to separate TX or clock faults from the channel. Kodiak's bring-up separated TX and clock faults from channel faults like this. Kodiak's own loopback lane had no alignment step and never passed.
+This tests the serializer, driver, AFE and deserializer with no channel. Repeat it at each TX
+division and source to separate TX or clock faults from channel faults.
 
-The loopback RX lane samples on the same clock that launched the data (`PhyTest.scala:1049-1051`),
-so it's a low-rate check. A failure here doesn't condemn the mainband. Its framing starts at the
-first one it receives, so use `rxSelfSync` (or a manual pattern with bit 0 set, like Codegen's
+The loopback RX lane samples on the clock that launched the data (`PhyTest.scala:984-986`). So
+this is a low-rate check, and a failure doesn't condemn the mainband. Its framing starts at the
+first 1 it receives, so use `rxSelfSync` or a manual pattern with bit 0 set (Codegen's
 `manual_loopback`).
 
 ```c
@@ -734,28 +696,23 @@ reg_read64(base + UCIE_LOOPBACK_RX_FIFO_OVERFLOW);       // expect 0
 // restore: UCIE_RX_SELF_SYNC = 0, UCIE_TEST_TARGET = MAINBAND, reset_datapath
 ```
 
-Self-sync leaves the first two packets unscored, and counts one bit error 1 + (number of LFSR taps)
-times (`PhyTest.scala:404-415`).
+Self-sync doesn't score the first two packets. It counts each bit error 1 + (number of LFSR taps)
+times (`PhyTest.scala:370-391`).
 
 | Symptom | Cause |
 |---|---|
-| `UCIE_TX_PACKETS_SENT` stays 0 with `UCIE_TX_TEST_STATE` = run | `txDivClk` isn't running (step 7's table, first row). |
-| Received count doesn't move | The loopback RX lane's divided clock isn't running. Check that `UCIE_RX_DIVIDER_RST` = 0 and `UCIE_CLK_EN` = 1; this lane runs on the TX clock. If its divider was released while `clkEn` = 1, it starts at an arbitrary phase, so realign with both clocks gated. |
-| Errors at every division | The TX lane `txctl_20` or the RX lane `rxctl_20` (vref, termination), or the same-clock sampling limit. Try the `Dctrl` trims, then `rxctl_20_sampleNegedge` (the backup word handoff, in case the tile updates its word on the other edge). |
+| `UCIE_TX_PACKETS_SENT` stays 0, `UCIE_TX_TEST_STATE` = run | `txDivClk` stopped (step 7's table, first row). |
+| Received count doesn't move | The loopback RX lane's divided clock is stopped. It runs on the TX clock: check `UCIE_RX_DIVIDER_RST` = 0 and `UCIE_CLK_EN` = 1. A divider released with `clkEn` = 1 starts at an arbitrary phase; realign with both clocks gated. |
+| Errors at every division | `txctl_20`, `rxctl_20` (vref, termination), or the same-clock sampling limit. Try the `Dctrl` trims, then `rxctl_20_sampleNegedge` (the backup hand-off edge). |
 
 ### Step 7: first mainband LFSR run
 
 **Topology A: this die's TX looped to its own RX.**
 
 ```c
-// Distinct per-lane seeds (not seed_lfsrs): Kodiak's top measurement lesson.
-for (int l = 0; l < UCIE_NUM_TEST_LANES; l++) {
-  uint64_t s = 0x0123456789abcdefULL ^ (0x9e3779b97f4a7c15ULL * (l + 1));  // any nonzero
-  reg_write64(base + UCIE_TX_LFSR_SEED + l * UCIE_TX_LFSR_SEED_WIDTH, s);
-  reg_write64(base + UCIE_RX_LFSR_SEED + l * UCIE_RX_LFSR_SEED_WIDTH, s);
-}
+seed_lfsrs(base);        // distinct per-lane seeds, the same on TX and RX
 run_lfsr(base, N);       // N = UCIE_TRAIN_PACKETS (16) first
-// run_lfsr may return before the burst lands; wait while the count is still moving:
+// run_lfsr may return before the burst arrives; wait while the count still moves:
 uint64_t prev = ~0ULL, p; int stalls = 0;
 for (int w = 0; w < 100000 && stalls < 32; w++) {   // bound by time on silicon
   p = reg_read64(base + UCIE_RX_PACKETS_RECEIVED);
@@ -770,116 +727,110 @@ reg_write64(base + UCIE_RX_PAUSE_COUNTERS, 0);
 // expect UCIE_TX_TEST_FIFO_UNDERFLOW == 0 and UCIE_RX_TEST_FIFO_OVERFLOW == 0
 ```
 
-The wait loop above is the testbench's `wait_for_packets` (`TileLinkSpec.scala:848-874`) in C. It
-isn't in the generated header.
+The wait loop is the testbench's `wait_for_packets` (`TileLinkSpec.scala:824-846`) in C. It is not
+in the generated header.
 
 **Topology B: two dies.** Arm the receiving die R before the transmitting die T starts.
-1. On R: write the seeds, `UCIE_RX_DATA_MODE` = finite, `UCIE_RX_PACKETS_TO_RECEIVE` = N, then
+1. On R: write the seeds, `UCIE_RX_DATA_MODE` = finite, `UCIE_RX_PACKETS_TO_RECEIVE` = N. Strobe
    `UCIE_RX_DATAPATH_RST` and `UCIE_RX_FSM_RST`.
-2. On R: confirm that `UCIE_RX_IDLE_WORDS_OBSERVED` is moving.
+2. On R: check that `UCIE_RX_IDLE_WORDS_OBSERVED` is rising.
 3. On T: write `UCIE_TX_TEST_MODE` = LFSR, `UCIE_TX_DATA_MODE` = finite,
-   `UCIE_TX_PACKETS_TO_SEND` = N, `UCIE_TX_FSM_RST`, then `UCIE_TX_EXECUTE`.
+   `UCIE_TX_PACKETS_TO_SEND` = N. Strobe `UCIE_TX_FSM_RST`, then `UCIE_TX_EXECUTE`.
 
 R's `rxLfsrSeed_l` must equal T's `txLfsrSeed_l`, and R's `rxLfsrValid` must equal T's `txValid`.
-Don't call `run_lfsr` on both dies: each call resets its own TX and RX, and the two calls race.
+Don't call `run_lfsr` on both dies. Each call resets its own TX and RX, and the two calls race.
 
-**What a clean run looks like:**
-- `UCIE_TX_PACKETS_SENT` = `UCIE_RX_PACKETS_RECEIVED` = N.
-- Nominal errors are 0 on lanes 0 to 17 (data, valid, track).
-- Both FIFO flags are 0.
+**A clean run:** `UCIE_TX_PACKETS_SENT` = `UCIE_RX_PACKETS_RECEIVED` = N. Nominal errors are 0 on
+lanes 0 to 17 (data, valid, track). Both FIFO flags are 0.
 
-**Classifying each lane**, as the testbench's `score_lanes` does (`TileLinkSpec.scala:883-908`):
+**Classify each lane** as the testbench's `score_lanes` does (`TileLinkSpec.scala:852-874`):
 
 | Case | Meaning |
 |---|---|
-| Packets received < N | "Received nothing". Look at the RX clock and valid first, not the lane. |
+| Packets received < N | "Received nothing". Check the RX clock and valid first, not the lane. |
 | Nominal = 0 | Clean. |
-| Early × 4 < nominal, or late × 4 < nominal | The capture was framed a UI late or early. The data are fine and valid's sampling is marginal. |
+| Early × 4 < nominal, or late × 4 < nominal | Capture framed a UI late or early. The data are fine; valid's sampling is marginal. |
 | Otherwise | Real errors. |
 
 **Prove the counters count** before trusting a clean result. In an infinite LFSR run, write
-`UCIE_TX_INJECT_LANE` = l and strobe `UCIE_TX_INJECT_ERROR`. Under `UCIE_RX_PAUSE_COUNTERS`, lane
-l reads exactly one nominal error and every other lane none. `phytest-loopback.c`'s error
+`UCIE_TX_INJECT_LANE` = l and strobe `UCIE_TX_INJECT_ERROR`. Under `UCIE_RX_PAUSE_COUNTERS`, lane l
+must read exactly one nominal error and every other lane none. `phytest-loopback.c`'s error
 injection check does this on a data lane and on track.
 
-**Diagnosis when the run isn't clean** (see section 5 for the indicators):
+**If the run isn't clean** (section 5 lists the indicators):
 
 | Symptom | Check |
 |---|---|
-| `UCIE_TX_TEST_STATE` = run and `UCIE_TX_PACKETS_SENT` = 0 | **TX divided clock not running.** The TX queue never accepts, and `UCIE_CLK_METER_TX_DIV` reads 0. Check `UCIE_CLK_EN` = 1, `UCIE_CLK_CFG_BUSY` = 0 (an apply still waiting), the main clock source (bypass present, PLL locked), and `txDivClk` on the clock-mux pad (step 4). |
-| `UCIE_TX_TEST_STATE` stays idle | `mainbandMode` = `tl` or `controllerSel` = UCIe holds the TX FSM, or `txExecute` didn't land. |
-| TX sent N; `UCIE_CLK_METER_RX_DIV` reads 0, and `UCIE_RX_IDLE_WORDS_OBSERVED` and `UCIE_TRACK_ONES` + `UCIE_TRACK_ZEROS` are frozen | **No RX divided clock.** Check `UCIE_RX_CLK_EN`. Check the partner's forwarded clock: its `clkEn`, `txctl_18/19_tile`, and `txClkP`/`txClkN` ≠ 0. Check the RX clock receiver: `rxctl_18` vref and termination. The RX datapath reset can't release without this clock. With TX looped to RX, `UCIE_RX_CLK_FROM_TX_Q` = 1 (both clocks gated across the change, then the RX dividers realigned) separates the clock receiver from the rest of the RX. |
-| Track counters moving, `UCIE_RX_PACKETS_RECEIVED` = 0, idle-word count still climbing | **Valid never seen.** Check the valid TX lane (`txctl_16`), the valid RX lane (`rxctl_16` vref and termination), `txValid` (bit 0 should be set, and its first run at least `rxValidStartThreshold` long), and that `rxValidLaneSel` matches the partner's `txValidLaneSel`. Capture raw words with `UCIE_RX_START_MODE` = immediate and read the capture SRAM (section 6). Moving valid onto track (code 17) rules out the valid lane. |
-| `UCIE_RX_PACKETS_RECEIVED` below N and still climbing | The poll window was too short. Wait longer. |
-| Every lane ~50% in every framing | Lanes slipped against valid, or bad phase or seeds. In order: `rxSelfSync` = 1 (clean means the data are fine, so look at framing or seeds); then `reset_dividers` with both clocks gated; then sweep the phase (step 9); then check the seeds against the partner's. |
-| One lane ~50%, the rest clean | A per-lane divider misstart, Kodiak's "misstart". `reset_dividers` and re-run (step 8). |
-| One lane clean only under the early or late framing, on every bring-up | Whole-UI skew rather than a misstart, which would move from one bring-up to the next. Clean early means that lane arrives a UI ahead of valid: hold it back one UI with `rxUiDelay_l`. Clean late means it arrives a UI behind: hold valid and every other lane back one UI instead (step 9). |
+| `UCIE_TX_TEST_STATE` = run, `UCIE_TX_PACKETS_SENT` = 0 | **TX divided clock stopped.** `UCIE_CLK_METER_TX_DIV` reads 0. Check `UCIE_CLK_EN` = 1, `UCIE_CLK_CFG_BUSY` = 0 (an apply still waiting), the main clock source (bypass present, PLL locked), and `txDivClk` on the clock-mux pad (step 4). |
+| `UCIE_TX_TEST_STATE` stays idle | `mainbandMode` = `tl` or `controllerSel` = UCIe holds the TX FSM, or `txExecute` didn't take effect. |
+| TX sent N; `UCIE_CLK_METER_RX_DIV` = 0; `UCIE_RX_IDLE_WORDS_OBSERVED` and `UCIE_TRACK_ONES` + `UCIE_TRACK_ZEROS` frozen | **No RX divided clock.** Check `UCIE_RX_CLK_EN`; the partner's forwarded clock (its `clkEn`, `txctl_18/19_tile`, `txClkP`/`txClkN` ≠ 0); the RX clock receiver (`rxctl_18` vref, termination). The RX datapath reset can't release without this clock. In loopback, `UCIE_RX_CLK_FROM_TX_Q` = 1 isolates the clock receiver from the rest of the RX (gate both clocks across the change, then realign the RX dividers). |
+| Track counters move, `UCIE_RX_PACKETS_RECEIVED` = 0, idle words still rising | **Valid never seen.** Check the valid lanes `txctl_16` and `rxctl_16` (vref, termination); `txValid` (bit 0 set, first run at least `rxValidStartThreshold` long); and `rxValidLaneSel` = the partner's `txValidLaneSel`. Capture raw words with `UCIE_RX_START_MODE` = immediate and read the capture SRAM (section 6). Moving valid onto track (code 17) rules out the valid lane. |
+| `UCIE_RX_PACKETS_RECEIVED` < N, still rising | Poll window too short. Wait longer. |
+| Every lane ~50% in every framing | Lanes slipped against valid, or bad phase or seeds. In order: `rxSelfSync` = 1 (clean means the data are fine; check framing or seeds); `reset_dividers` with both clocks gated; phase sweep (step 9); compare seeds with the partner's. |
+| One lane ~50%, the rest clean | Per-lane divider misstart. `reset_dividers` and re-run (step 8). |
+| One lane clean only under early or late framing, on every bring-up | Whole-UI skew. (A misstart would change between bring-ups.) Clean early: the lane is a UI ahead of valid; delay it one UI with `rxUiDelay_l`. Clean late: it is a UI behind; delay valid and every other lane one UI instead (step 9). |
 | A few errors | Margin. Go to step 9. |
-| `UCIE_TX_TEST_FIFO_UNDERFLOW` or `UCIE_RX_TEST_FIFO_OVERFLOW` = 1 | The PHY test clock is slower than a packet clock (section 1.3). |
+| `UCIE_TX_TEST_FIFO_UNDERFLOW` or `UCIE_RX_TEST_FIFO_OVERFLOW` = 1 | PHY test clock slower than a packet clock (section 1.3). |
 
 ### Step 8: screen for misstarts and slips before trusting a result
 
-On Kodiak, the previous chip, a random lane misstarted on some bring-ups (`kodiak-bringup/docs/bringup_guide.md`, sections 4 and 6). After every bring-up, run each lane once with `rxSelfSync` = 1
-and once normally, keeping the early and late counts. A lane that's ~50% nominal with early or
-late ≈ 0 has slipped a UI. A lane that's dirty even under self-sync is broken.
+On Kodiak a random lane misstarted on some bring-ups. So after every bring-up, run each lane once
+with `rxSelfSync` = 1 and once normally, and keep the early and late counts:
+- ~50% nominal with early or late ≈ 0: the lane slipped a UI.
+- Errors even under self-sync: the lane is broken.
 
-Record the slip statistics against:
-- the release order of the two dies;
-- termination at reset;
-- `rxClkEn` gating;
-- gated versus live delay changes.
+Record slips against: the release order of the two dies, termination at reset, `rxClkEn` gating,
+and gated versus live delay changes.
 
 ### Step 9: margining and scale-up
 
-- **Phase sweep.** Sweep the global delay × `txClkPhase`. Each `set_global_delay` and
-  `set_tx_phase` applies under the TX gate and waits for it.
-  - Constants: `UCIE_TRAIN_GLOBAL_CODES`/`_STEP`, `UCIE_TRAIN_EYE_FINE_POINTS`/`_STEP`,
-    `UCIE_TRAIN_EYE_DIVS`.
-  - `scala/test/src/tilelink/TileLinkSpec.scala` has the training and eye drivers to copy.
-- **Phase without framing.** `UCIE_TX_TRACK_CLK` = 1 puts `UCIE_TX_TRACK_WORD` on track in every
-  packet (`UCIE_DEFAULT_TRACK` is a clock). The RX samples even UIs on one clock edge and odd UIs
-  on the other, and `UCIE_TRACK_ONES_EVEN` counts the ones that land on even UIs. With both edges
-  inside the eye every one lands on one edge (`UCIE_TRACK_ONES_EVEN` = 0, or = `UCIE_TRACK_ONES`);
-  as an edge crosses a data transition the ones split between them. Swept against the global
-  delay, the splits mark the transitions and the centre lies halfway between. Clear with
-  `UCIE_TRACK_CNT_RST` and read under `UCIE_TRACK_CNT_HOLD`. The counters see every RX word
-  whoever owns the mainband, so the same reading tracks drift under the UCIe controller, which
-  sends a clock on track as well.
-- **Per-lane trims.** TX `Dctrl`: `set_tx_delay`, which keeps the driver and EQ bits, with clocks
-  gated. RX `Dctrl`: `set_rx_delay`. Per-lane `vrefSel` (`set_rx_vref`). Use the error classes
-  (`UCIE_RX_ERR_CLASS_LANE`) to tell which way to move: errors mostly on one value point at the
-  threshold, mostly on one edge at the clock.
-- **Whole-UI skew.** `rxUiDelay_l` holds RX lane l back 0 to 64 whole UI after its shuffler, where
-  PhyTest and the UCIe controller both see it; `txUiDelay_l` does the same ahead of a TX lane's
-  shuffler (section 8.4). They cover skew of a UI or more, which `Dctrl` can't reach. Read the
-  direction from step 7's early and late counts. An odd `txUiDelay` on a forwarded-clock lane (18,
-  19) inverts that clock against the data.
+- **Phase sweep.** Sweep global delay × `txClkPhase`. Constants: `UCIE_TRAIN_GLOBAL_CODES`/`_STEP`,
+  `UCIE_TRAIN_EYE_FINE_POINTS`/`_STEP`, `UCIE_TRAIN_EYE_DIVS`. Copy the training and eye drivers
+  from `scala/test/src/tilelink/TileLinkSpec.scala`.
+- **Phase without framing.** `UCIE_TX_TRACK_CLK` = 1 sends `UCIE_TX_TRACK_WORD` on track in every
+  packet (`UCIE_DEFAULT_TRACK` is a clock).
+  - The RX samples even UIs on one clock edge and odd UIs on the other. `UCIE_TRACK_ONES_EVEN`
+    counts ones on even UIs.
+  - With both edges inside the eye, all ones fall on one edge (`UCIE_TRACK_ONES_EVEN` = 0, or =
+    `UCIE_TRACK_ONES`). When an edge crosses a data transition, the ones split.
+  - Sweep the global delay. The splits mark the transitions; the centre is halfway between.
+  - Clear with `UCIE_TRACK_CNT_RST`. Read under `UCIE_TRACK_CNT_HOLD`.
+  - The counters see every RX word, whoever owns the mainband. The UCIe controller also sends a
+    clock on track, so this reading tracks drift under the controller too.
+- **Per-lane trims.** TX `Dctrl`: `set_tx_delay`, with clocks gated. RX `Dctrl`: `set_rx_delay`.
+  `vrefSel`: `set_rx_vref`. The error classes (`UCIE_RX_ERR_CLASS_LANE`) show which way to move.
+  Errors mostly on one value point to the threshold; errors mostly on one edge point to the clock.
+- **Whole-UI skew.** `rxUiDelay_l` delays RX lane l by 0 to 64 UI after its shuffler, where PhyTest
+  and the UCIe controller both see it. `txUiDelay_l` does the same before a TX lane's shuffler
+  (section 8.4). They fix skew of a UI or more, which `Dctrl` can't reach. Take the direction from
+  step 7's early and late counts. An odd `txUiDelay` on a forwarded-clock lane (18, 19) inverts that
+  clock against the data.
 - **Clock-receiver vref.** Sweep `rxctl_18` (`clkP`) and watch whether the RX clock is present.
-  Nothing else sets it, and it feeds every RX lane. On Kodiak the clock receivers peaked sharply near one vref.
-- **AFE hand-over.** The RX front end on this chip is not Kodiak's, and its controller will
-  change with it, so Kodiak's hand-over settings (its biggest single fix, 256/32 at 500 MHz) are
-  not a starting point here. If the current controller is in use, the counts are PHY-test-clock
-  cycles, and the counter matches by equality, so a value below the current count waits up to 2^17
-  cycles.
+  Nothing else sets it, and it feeds every RX lane. On Kodiak the clock receivers peaked sharply
+  near one vref.
+- **AFE hand-over** (`rxctl` `afeOpCycles`, `afeOverlapCycles`). Don't start from Kodiak's settings
+  (256/32 at 500 MHz). This chip's RX front end is different, and its controller will change with
+  it. With the current controller, counts are in PHY-test-clock cycles and the counter matches by
+  equality. A value below the current count waits up to 2^17 cycles.
 - **Duty split.** Invert the forwarded clock (`txClkP` = `0xAAAAAAAA`, `txClkN` = `0x55555555`) to
   separate TX duty from RX duty.
-- **Crosstalk.** Pick a victim lane and set the others up as aggressors with the per-lane sources:
-  quiet (`txLaneFixed` with `txFixedWord` = 0), toggling in step (their LFSR streams), or toggling
-  against the victim (`txLaneInvert`). The partner's RX expects the same through `rxLaneFixed`,
-  `rxLaneInvert` and `rxFixedWord`. Record the victim's counts, classes and error positions.
-  Don't turn a driver off instead: on Kodiak an undriven neighbour was worse.
+- **Crosstalk.** Pick a victim lane. Set the others as aggressors with the per-lane sources: quiet
+  (`txLaneFixed` with `txFixedWord` = 0), toggling in step (their LFSR streams), or toggling against
+  the victim (`txLaneInvert`). The partner's RX matches with `rxLaneFixed`, `rxLaneInvert` and
+  `rxFixedWord`. Record the victim's counts, classes and error positions. Don't turn a driver off
+  instead: on Kodiak an undriven neighbour was worse.
 - **Long runs.**
-  - Set `UCIE_TX_DATA_MODE` and `UCIE_RX_DATA_MODE` to infinite.
-  - Arm `UCIE_RX_CAPTURE_MODE` = error with `rxTriggerLaneMask` excluding unused lanes.
-  - Read counters under `UCIE_RX_PAUSE_COUNTERS`.
-  - Check both FIFO flags, `UCIE_RX_LANE_ERRORED` and `UCIE_PLL_LOCK_LOST` at the end.
-- **Scale-up.** Move to ÷2, then ÷1 (start at 29 taps), then PLL12 and X2. Raise the PHY test clock
-  above each packet clock first.
+  1. Set `UCIE_TX_DATA_MODE` and `UCIE_RX_DATA_MODE` to infinite.
+  2. Arm `UCIE_RX_CAPTURE_MODE` = error, with `rxTriggerLaneMask` excluding unused lanes.
+  3. Read counters under `UCIE_RX_PAUSE_COUNTERS`.
+  4. At the end, check both FIFO flags, `UCIE_RX_LANE_ERRORED` and `UCIE_PLL_LOCK_LOST`.
+- **Scale-up.** Go to ÷2, then ÷1 (start at 29 taps), then PLL12 and X2. Before each, raise the PHY
+  test clock above the new packet clock.
 
 ### Step 10: the sideband
 
-PhyTest's runs never use the sideband, and the UCIe controller trains over it. With
-`UCIE_SIDEBAND_MODE` = manual, where `setup_ucie` leaves it, the sideband tester sends and receives
+PhyTest runs never use the sideband, but the UCIe controller trains over it. With
+`UCIE_SIDEBAND_MODE` = manual (as `setup_ucie` leaves it), the sideband tester sends and receives
 single 64-bit packets on the sideband clock (`scala/src/phytest/SidebandTest.scala`):
 
 ```c
@@ -895,50 +846,51 @@ reg_write64(base + UCIE_SB_RX_POP, 1);
 // expect UCIE_SB_RX_VALID == 0 and UCIE_SB_RX_OVERFLOW == 0
 ```
 
-With two dies, send each way. The receiver holds four packets; one more before a pop is dropped
-and sets `UCIE_SB_RX_OVERFLOW`. `pt_sb_send` and `pt_sb_recv` in Iris's `phytest.h` do the same
-with time bounds.
+With two dies, test both directions. The receiver holds four packets. A fifth before a pop is
+dropped and sets `UCIE_SB_RX_OVERFLOW`. `pt_sb_send` and `pt_sb_recv` in Iris's `phytest.h` do the
+same with time bounds.
 
 | Symptom | Cause |
 |---|---|
-| `UCIE_SB_TX_BUSY` never clears | No sideband clock on the sender: `UCIE_CLK_METER_SB` reads 0 (step 2). |
-| Nothing arrives | The receiver hears no sideband clock. Look at the partner's `sbTxClk` on its clock-mux pad (`UCIE_DEBUG_CLK_MUX_SEL` = 0) and at the bump wiring, and check that both dies have `UCIE_SIDEBAND_MODE` = manual: any other mode holds the tester in reset. |
-| The packet arrives shifted or corrupted | The receiver started mid-packet, after a partner reset: `UCIE_SB_RX_RST` realigns it. If it persists, scope the sideband clock and data bumps. |
+| `UCIE_SB_TX_BUSY` never clears | No sideband clock at the sender: `UCIE_CLK_METER_SB` reads 0 (step 2). |
+| Nothing arrives | No sideband clock at the receiver. Check the partner's `sbTxClk` on its clock-mux pad (`UCIE_DEBUG_CLK_MUX_SEL` = 0) and the bump wiring. Check `UCIE_SIDEBAND_MODE` = manual on both dies; other modes hold the tester in reset. |
+| Packet shifted or corrupted | The receiver started mid-packet after a partner reset. `UCIE_SB_RX_RST` realigns it. If it persists, scope the sideband clock and data bumps. |
 
 ### Step 11: the gated forwarded clock
 
-Out of reset the UCIe controller asks for strobe mode (`rx_clk_mode_sel` = 0, section 8.3), so
-once ACTIVE it parks the forwarded clock between transfers, through the same `TxClkGater` PhyTest
-uses. Every run so far kept the clock running. Run bursts with the clock gated at the controller's
-settings, after step 9 has centred the forwarded clock: with no preamble, the first edge after a
-park has to sample the burst's first data UI (section 8.2).
+Out of reset the UCIe controller asks for strobe mode (`rx_clk_mode_sel` = 0, section 8.3). Once
+ACTIVE, it parks the forwarded clock between transfers with the same `TxClkGater` PhyTest uses.
+Every run so far kept the clock running. So after step 9 centres the forwarded clock, run bursts
+with the clock gated at the controller's settings. There is no preamble, so the first edge after a
+park must sample the burst's first data UI (section 8.2).
 
 ```c
 reg_write64(base + UCIE_TX_CLK_POSTAMBLE, 64 / UCIE_CLK_POSTAMBLE_UI);  // what setup_ucie_digital sets
 reg_write64(base + UCIE_TX_BURST_PACKETS, 6);
 reg_write64(base + UCIE_TX_IDLE_PACKETS, 10);
 reg_write64(base + UCIE_RX_BURST_MODE, 1);
-// arm a finite LFSR run of N as in step 7 (seeds, modes, datapath and FSM resets); the RX
+// arm a finite LFSR run of N as in step 7 (seeds, modes, datapath and FSM resets). The RX
 // datapath reset needs clock edges to release, so gate only after it:
 reg_write64(base + UCIE_TX_CLK_GATE, 1);
-// UCIE_RX_IDLE_WORDS_OBSERVED holds still while the clock is parked; then
+// check UCIE_RX_IDLE_WORDS_OBSERVED holds still while the clock is parked, then
 reg_write64(base + UCIE_TX_EXECUTE, 1);
 // expect a clean run and both FIFO flags 0, as in step 7. Repeat with
-// UCIE_TX_CLK_PARK_ALTERNATE = 0 (park low every time), then put UCIE_TX_CLK_GATE,
+// UCIE_TX_CLK_PARK_ALTERNATE = 0 (park low every time). Then set UCIE_TX_CLK_GATE,
 // UCIE_TX_BURST_PACKETS, UCIE_TX_IDLE_PACKETS and UCIE_RX_BURST_MODE back to 0.
 ```
 
-Two packets of postamble deliver every burst at any RX word alignment. One packet, the reset value,
-needs the training in section 8.3 (realign the RX dividers behind the parked clock, then one 40 UI
-gap), which `test_gated_bursts` in `software/phytest-loopback.c` runs at both park settings. On
-the bench, a postamble sweep finds the least the silicon lanes need (section 8.2).
+Two packets of postamble deliver every burst at any RX word alignment of the behavioral tiles. The
+silicon tile may need more; on the bench, a postamble sweep finds the least it needs (section 8.2).
+One packet (the reset value) needs the training in section 8.3: realign the RX dividers behind the
+parked clock, then one 40 UI gap. `test_gated_bursts` in `software/phytest-loopback.c` runs it at
+both park settings.
 
 | Symptom | Cause |
 |---|---|
-| Every burst about half wrong, clean with the clock running | The forwarded clock trails the data by more than a UI, so each edge samples the UI after its own and the burst's first UI is lost (section 8.2). Centre it (step 9). |
-| Each burst's last packet missing, the rest clean | The postamble is too short for the alignment in effect. Two packets cover every alignment of the behavioral tiles; the silicon tile may need more (section 8.2). |
-| `UCIE_RX_IDLE_WORDS_OBSERVED` moves while parked | The clock isn't parking: check `UCIE_TX_CLK_GATE` = 1, and that PhyTest has the mainband in manual mode. |
-| Clean parking low, errors when alternating | A high park, or the precondition edge 2 UI before the next burst, isn't reaching the RX intact. `UCIE_TX_CLK_PARK_ALTERNATE` = 0 parks low every time, for the UCIe controller as well, since the gater's settings are shared. |
+| Every burst about half wrong, clean with the clock running | The forwarded clock trails the data by more than a UI. Each edge samples the next UI, so the burst's first UI is lost (section 8.2). Centre it (step 9). |
+| Each burst's last packet missing, the rest clean | Postamble too short for the alignment in effect. Sweep it (above). |
+| `UCIE_RX_IDLE_WORDS_OBSERVED` moves while parked | The clock isn't parking. Check `UCIE_TX_CLK_GATE` = 1 and that PhyTest has the mainband in manual mode. |
+| Clean parking low, errors when alternating | A high park, or the precondition edge 2 UI before the next burst, doesn't reach the RX intact. `UCIE_TX_CLK_PARK_ALTERNATE` = 0 parks low every time. The UCIe controller shares this gater setting. |
 
 ### Step 12: hand the link to the UCIe controller
 
@@ -949,56 +901,56 @@ setup_ucie_digital(base);   // prints, and gives up after 2^24 reads, if the lin
 ```
 
 In order, it:
-1. Writes `ucieRst` = 0. With both clocks gated, it sets the global delay to
-   `Codegen.digitalGlobalDelayTaps` and runs `reset_dividers`, then turns the clocks back on.
-2. Writes `UCIE_ENABLE_TX_CTL` to every TX lane's tile, which also clears `Dctrl`, and `zen` = 1,
+1. Writes `ucieRst` = 0. With both clocks gated, sets the global delay to
+   `Codegen.digitalGlobalDelayTaps` and runs `reset_dividers`, then ungates the clocks.
+2. Writes `UCIE_ENABLE_TX_CTL` to every TX lane's tile (this clears `Dctrl`), and `zen` = 1,
    `zctl` = 0 to every RX lane.
-3. Runs `align_rx_words` (section 8.4): a 4-packet PhyTest LFSR run, then every `rxUiDelay_l` set
-   from `UCIE_RX_FRAME_OFFSET`, so that RX words start where the TX's do.
+3. Runs `align_rx_words` (section 8.4): a 4-packet PhyTest LFSR run, then sets every `rxUiDelay_l`
+   from `UCIE_RX_FRAME_OFFSET` so RX words start where TX words do.
 4. Sets `UCIE_TX_CLK_POSTAMBLE` to two packets (step 11).
-5. Writes `controllerSel` = UCIe, which also hands the controller the sideband bumps, then runs
-   `reset_datapath` and writes `UCIE_UCIE_CONTROLLER_RST` = 0. The controller starts from reset
-   on lanes that are now its own.
-6. Sets raw format and Start Link Training in DVSEC LinkControl (`UCIE_RAW_FORMAT_ENABLE`, by
-   read-modify-write), clears the error masks, and polls link-up, bit 15 of
-   `UCIE_RAW_FORMAT_ENABLED`.
+5. Writes `controllerSel` = UCIe (this also gives the controller the sideband bumps), runs
+   `reset_datapath`, and writes `UCIE_UCIE_CONTROLLER_RST` = 0. The controller starts from reset on
+   lanes it now owns.
+6. Sets raw format and Start Link Training in DVSEC LinkControl (`UCIE_RAW_FORMAT_ENABLE`,
+   read-modify-write), clears the error masks, and polls link-up (bit 15 of
+   `UCIE_RAW_FORMAT_ENABLED`).
 
 `Codegen.digitalGlobalDelayTaps` is 29, the Iris harness's centre at 16 GT/s. On silicon, set it to
-the code step 9 found and regenerate the header. Item 2 drops step 9's TX `Dctrl` trims; to keep
-them, do the sequence by hand as for two dies.
+the code step 9 found and regenerate the header. Item 2 drops step 9's TX `Dctrl` trims. To keep
+them, run the sequence by hand as for two dies.
 
-**Two dies.** `setup_ucie_digital` can't line the words up here: `align_rx_words` measures with
-`run_lfsr`, which is correct only for a TX looped to its own RX, and each die has to measure
-against the partner's TX (limitation 16). There's no generated helper for this yet. By hand:
-1. On both dies, items 1 and 2 above, at the trained delay.
-2. For each direction in turn, receiving die R and transmitting die T:
-   - On R: PhyTest on the mainband with `setup_ucie`'s waveforms and every `rxUiDelay_l` = 0. Arm a
-     finite 4-packet receive (`UCIE_RX_DATA_MODE`, `UCIE_RX_PACKETS_TO_RECEIVE`,
-     `UCIE_RX_DATAPATH_RST`, `UCIE_RX_FSM_RST`).
+**Two dies.** `setup_ucie_digital` can't align the words here. `align_rx_words` measures with
+`run_lfsr` (loopback only), but each die must measure against the partner's TX (limitation 16). No
+generated helper does this yet. By hand:
+1. On both dies: items 1 and 2 above, at the trained delay.
+2. For each direction in turn, with receiving die R and transmitting die T:
+   - On R: PhyTest on the mainband, `setup_ucie`'s waveforms, every `rxUiDelay_l` = 0. Arm a finite
+     4-packet receive (`UCIE_RX_DATA_MODE`, `UCIE_RX_PACKETS_TO_RECEIVE`, `UCIE_RX_DATAPATH_RST`,
+     `UCIE_RX_FSM_RST`).
    - On T: a finite 4-packet LFSR run (step 7, topology B).
    - On R: if `UCIE_RX_PACKETS_RECEIVED` = 4, set every `rxUiDelay_l` to
      (32 − `UCIE_RX_FRAME_OFFSET`) mod 32.
-3. On both dies, items 4 and 5.
-4. On both dies, item 6, then poll link-up on each.
+3. On both dies: items 4 and 5.
+4. On both dies: item 6, then poll link-up on each.
 
-Don't reset the RX dividers between 2 and 4: that moves the word boundary that 2 measured.
+Don't reset the RX dividers between 2 and 4 of this list. That moves the word boundary measured in 2.
 
-**Once it's up**, `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` should stay 0: the PHY's packet clock outrunning
-the sideband clock the controller runs on (1 GHz at 32 GT/s, against 800 MHz) loses RX words there.
-On Iris, `software/ucie-digital-loopback.c` then carries remote reads and writes through the
-router.
+**Once it's up**, `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` should stay 0. If the packet clock outruns the
+controller's sideband clock (1 GHz at 32 GT/s, against 800 MHz), RX words are lost there. On Iris,
+`software/ucie-digital-loopback.c` then sends remote reads and writes through the router.
 
-The controller logs the training state on an error. Error Log 0 (`UCIE_ERR_LOG0_STATE_NM0`) holds
-the state at the error and the two before it, and Error Log 1 (`UCIE_ERR_LOG1_STATE_NM3_M0`) the one
-before those, with flags for a training timeout and a sideband deserializer timeout. The state codes
-are `LTSMState` in `scala/src/uciedigital/logphy/utils/Types.scala`.
+On an error, the controller logs the training state. State codes are `LTSMState` in
+`scala/src/uciedigital/logphy/utils/Types.scala`.
+- Error Log 0 (`UCIE_ERR_LOG0_STATE_NM0`): the state at the error and the two before it.
+- Error Log 1 (`UCIE_ERR_LOG1_STATE_NM3_M0`): the state before those, plus flags for a training
+  timeout and a sideband deserializer timeout.
 
 | Symptom | Cause |
 |---|---|
-| No link-up; Error Log 1 flags a sideband deserializer timeout, or Error Log 0 shows SBINIT | The sideband: step 10, and `controllerSel` = UCIe on both dies, since the sideband bumps follow it. |
-| Trains through MBINIT, then fails in MBTRAIN (LINKSPEED, its first LFSR comparison) | RX words misaligned: `align_rx_words` received nothing (it says so), measured against the wrong TX, or the RX dividers were reset after it (section 8.4). |
-| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` = 1 | The packet clock is faster than the sideband clock (above). Lower the rate, or raise the sideband clock. |
-| Up, then errors or retraining once traffic flows | The gated clock: step 11 at the same postamble, and `UCIE_TX_CLK_PARK_ALTERNATE`. |
+| No link-up; Error Log 1 flags a sideband deserializer timeout, or Error Log 0 shows SBINIT | The sideband (step 10). Check `controllerSel` = UCIe on both dies; the sideband bumps follow it. |
+| Trains through MBINIT, fails in MBTRAIN (LINKSPEED, its first LFSR comparison) | RX words misaligned: `align_rx_words` received nothing (it prints this), measured the wrong TX, or the RX dividers were reset after it (section 8.4). |
+| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` = 1 | Packet clock faster than the sideband clock (above). Lower the rate or raise the sideband clock. |
+| Up, then errors or retraining once traffic flows | The gated clock: repeat step 11 at the same postamble; check `UCIE_TX_CLK_PARK_ALTERNATE`. |
 | A controller-window access hangs | `UCIE_CLK_METER_SB` reads 0 (section 3). |
 
 ---
@@ -1007,118 +959,117 @@ are `LTSMState` in `scala/src/uciedigital/logphy/utils/Types.scala`.
 
 | Indicator | Moves when | Use |
 |---|---|---|
-| `UCIE_PLL_LOCK_OBSERVED`, `UCIE_CLK_CFG_BUSY` | PLL lock; an apply in progress | PLL and apply state (`TileLink.scala:1005-1041`). |
-| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` | Cycles of each clock per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles | Whether each clock runs, and at what rate, from the block that always answers. `_RX_DIV` at zero means no forwarded clock is arriving; below `_TX_DIV` on a looped-back link, the TX queue is running dry. |
-| `UCIE_PLL_LOCK_LOST` | Sticky: a PLL lost lock while enabled | A PLL dropping out mid-run. Write 0 to clear. |
-| `UCIE_TX_PACKETS_SENT` | PhyTest enqueues a TX packet | Stuck at 0 in `run` means no `txDivClk`. In infinite mode, with the PHY test clock faster, its rate is the packet rate, which gives a frequency meter. It counts *enqueued* packets, and the queue holds 32. |
-| `UCIE_TRACK_ONES` + `UCIE_TRACK_ZEROS` | Every RX word, whatever owns the mainband, +32 per word (`PhyTest.scala:2084-2106`) | RX divided clock alive, and its rate. Use `UCIE_TRACK_CNT_HOLD` to read the pair coherently and `UCIE_TRACK_CNT_RST` to clear. Both stop at 2^32. |
-| `UCIE_RX_IDLE_WORDS_OBSERVED` | RX words before recording starts | Moving with no packets received means valid wasn't seen. It stops once recording starts, so use the track counters for clock presence after that. |
-| `UCIE_RX_PACKETS_RECEIVED`, error counters, `UCIE_RX_SIGNATURE` | Processed packets | Data quality. Read them under `UCIE_RX_PAUSE_COUNTERS`. |
-| `UCIE_RX_LANE_ERRORED`, `UCIE_RX_ERR_POS_MASK`, the error classes | Sticky per lane; per UI; per edge and sent bit | Which lanes, which UIs and which edge. Errors on one UI point at a serializer or deserializer phase; on one edge, at clock duty cycle. |
-| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW`, `UCIE_LOOPBACK_*_FIFO_*`, `UCIE_TX_DEBUG_FIFO_UNDERFLOW`, `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | A queue ran dry or overflowed | A rate problem rather than a channel problem. |
-| Capture SRAM (`UCIE_RX_DATA_LANE`, `UCIE_RX_DATA_OFFSET`, `UCIE_RX_DATA_CHUNK`) | Raw received words | Bit-level view; `CaptureMode.error` keeps the window around the first error. |
-| Debug pads: `txClk`, `rxClk` (full-rate taps), `rxData` (`UCIE_DEBUG_RX_LANE`/`_BIT`), `clkMux` (`sbTxClk`/`txDivClk`) | | Off-chip observation. These are PHY-test-domain registers, and may disturb the link (Kodiak). |
+| `UCIE_PLL_LOCK_OBSERVED`, `UCIE_CLK_CFG_BUSY` | PLL lock; apply in progress | PLL and apply state. |
+| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` (in `UcieClkRegs`) | Cycles of each clock per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles. MHz = count × chip MHz / 1024. | Whether each clock runs, and its rate. Readable whatever the rest of the block is doing. `_RX_DIV` = 0: no forwarded clock. `_RX_DIV` below `_TX_DIV` on a looped-back link: the TX queue is running dry. |
+| `UCIE_PLL_LOCK_LOST` (in `UcieClkRegs`) | Sticky per PLL (PLL8 bit 0): lost lock while enabled. Write 0 to clear. | A PLL dropping out mid-run. |
+| `UCIE_TX_PACKETS_SENT` | PhyTest puts a packet in the TX queue | Stuck at 0 in `run`: no `txDivClk`. Counts *enqueued* packets; the queue holds 32. |
+| `UCIE_TRACK_ONES`, `UCIE_TRACK_ZEROS`, `UCIE_TRACK_ONES_EVEN` | Every RX word, whoever owns the mainband. Ones + zeros grow 32 per word. "Even" counts ones on even UIs, one sampling edge's share. | RX divided clock alive, and its rate. Phase without framing (step 9). Read under `UCIE_TRACK_CNT_HOLD`; clear with `UCIE_TRACK_CNT_RST`. They stop at 2^32. |
+| `UCIE_RX_IDLE_WORDS_OBSERVED` | RX words before recording starts (32-bit) | Rising with no packets received: valid wasn't seen. Stops once recording starts; then use the track counters. |
+| `UCIE_RX_PACKETS_RECEIVED`, error counters, `UCIE_RX_SIGNATURE` | Processed packets | Data quality (section 6.4). Read under `UCIE_RX_PAUSE_COUNTERS`. |
+| `UCIE_RX_LANE_ERRORED`, `UCIE_RX_ERR_POS_MASK`, the error classes | Sticky per lane; per UI; per edge and sent bit | Errors on one UI point at a serializer or deserializer phase; on one edge, at clock duty cycle. |
+| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW` | Sticky. The mainband TX queue ran dry mid-run, or the RX queue overflowed. Cleared by the datapath reset. | A rate problem, not a channel problem: PHY test clock too slow (section 1.3). |
+| `UCIE_LOOPBACK_TX_FIFO_UNDERFLOW`, `UCIE_LOOPBACK_RX_FIFO_OVERFLOW`, `UCIE_TX_DEBUG_FIFO_UNDERFLOW` | The same, for the loopback lane and the TX debug lane | As above. |
+| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | The UCIe controller's RX queue lost a word while it had the lanes. Cleared by the RX datapath reset. | The packet clock outran the sideband clock (limitation 14). |
+| Capture SRAM (`UCIE_RX_DATA_LANE`, `UCIE_RX_DATA_OFFSET`, `UCIE_RX_DATA_CHUNK`) | Raw received words | Bit-level view. `CaptureMode.error` keeps the window around the first error. |
+| Debug pads: `txClk`, `rxClk` (full-rate taps), `rxData` (`UCIE_DEBUG_RX_LANE`/`_BIT`), `clkMux` (`sbTxClk`/`txDivClk`) | | Off-chip observation. Set from PHY-test-domain registers. May disturb the link (Kodiak), so keep them off during link tests. |
 
 
 ---
 
 ## 6. PhyTest mode reference
 
-The registers are documented at their declarations in `PhyTestRegsIO`
-(`scala/src/phytest/PhyTest.scala:104-540`) and `UcieTLRegsIO`
-(`scala/src/tilelink/TileLink.scala:184-220`). Below is what each does and when to use it.
+Offsets are in the generated C header; section 4.0 gives reset values for the registers the plan
+uses. Each register is documented at its declaration in
+`PhyTestRegsIO` (`scala/src/phytest/PhyTest.scala:104-492`) or `UcieTLRegsIO`
+(`scala/src/tilelink/TileLink.scala:182-218`).
 
 ### 6.1 Lane numbering
 
-There are two numberings, so check which one a register uses.
+Check which numbering a register uses.
 
 | Numbering | Data | Valid | Track | Others | Used by |
 |---|---|---|---|---|---|
-| PHY lane | 0-15 | 16 | 17 | 18 `clkP`, 19 `clkN`, **20** the PhyTest loopback pair | `txctl_N_*`, `rxctl_N_*`, `rxDebugLane` (0-17) (`Phy.scala:8-24,51-59`; `TileLink.scala:1568-1576`) |
-| Test lane (`UCIE_NUM_TEST_LANES` = numLanes + 3) | 0-15 | 16 `UCIE_VALID_LANE` | 17 `UCIE_TRACK_LANE` | **18** `UCIE_LOOPBACK_LANE` | seeds, error counts, `txInjectLane`, `rxTriggerLaneMask`, `rxDataLane`, the pattern and capture SRAMs (`PhyTest.scala:597-605`) |
+| PHY lane | 0-15 | 16 | 17 | 18 `clkP`, 19 `clkN`, **20** the PhyTest loopback pair | `txctl_N_*`, `rxctl_N_*`, `rxDebugLane` (0-17) (`Phy.scala:8-19,43-49`; `TileLink.scala:1524-1532`) |
+| Test lane (`UCIE_NUM_TEST_LANES` = numLanes + 3) | 0-15 | 16 `UCIE_VALID_LANE` | 17 `UCIE_TRACK_LANE` | **18** `UCIE_LOOPBACK_LANE` | seeds, error counts, `txInjectLane`, `rxTriggerLaneMask`, `rxDataLane`, the pattern and capture SRAMs (`PhyTest.scala:549-556`) |
 | Valid-lane select code | 0-15 | 16 (default) | 17 | | `txValidLaneSel`, `rxValidLaneSel` |
 
 ### 6.2 General
 
 | Register | What it does | When to use it |
 |---|---|---|
-| `UCIE_CONTROLLER_SEL` | PhyTest (0) or the UCIe digital stack (1) owns both bands. | Leave it on PhyTest for bring-up. Run `reset_datapath` after any change. |
-| `UCIE_MAINBAND_MODE`, `UCIE_SIDEBAND_MODE` | Per band under PhyTest: manual (PhyTest drives) or `tl` (TileLink frames). `tl` holds PhyTest's TX FSM, and its RX too unless `rxMonitor` is set. If both are `tl`, the mainband wins. | TileLink-over-PHY tests after PhyTest is clean. |
-| `UCIE_TEST_TARGET` | The mainband or the on-chip loopback pair. | Loopback for the first-day check (step 6). |
-| `UCIE_TX_VALID_LANE_SEL`, `UCIE_RX_VALID_LANE_SEL` | Which physical lane carries or frames on valid. The displaced lane's data is **not** sent. | Working round a broken valid lane. The two dies must agree. |
+| `UCIE_CONTROLLER_SEL` | PhyTest (0) or the UCIe digital stack (1) owns both bands. | PhyTest for bring-up. Run `reset_datapath` after any change. |
+| `UCIE_MAINBAND_MODE`, `UCIE_SIDEBAND_MODE` | Per band under PhyTest: manual (PhyTest drives) or `tl` (TileLink frames). Mainband `tl` holds PhyTest's TX FSM, and its RX FSM unless `rxMonitor` is set. If both are `tl`, the mainband carries TileLink and the sideband stays idle. | TileLink-over-PHY tests, once PhyTest is clean. |
+| `UCIE_TEST_TARGET` | Mainband or the on-chip loopback pair. | Loopback for the first-day check (step 6). |
+| `UCIE_TX_VALID_LANE_SEL`, `UCIE_RX_VALID_LANE_SEL` | Physical lane for valid (codes in section 6.1). The displaced lane's data is **not** sent. | A broken valid lane. Both dies must agree. |
 
 ### 6.3 TX
 
 | Register | What it does | When to use it |
 |---|---|---|
-| `UCIE_TX_TEST_MODE` | Manual (pattern SRAM) or LFSR. | LFSR for BER. Manual for fixed patterns and bit-order checks. |
+| `UCIE_TX_TEST_MODE` | Manual (pattern SRAM) or LFSR. | LFSR for BER. Manual for fixed patterns and bit order. |
 | `UCIE_TX_DATA_MODE`, `UCIE_TX_PACKETS_TO_SEND` | Finite (that many packets) or infinite (LFSR runs on; manual repeats). | Finite for sweeps, infinite for long runs. |
-| `UCIE_TX_LFSR_SEED` + l·`_WIDTH` | 64-bit seed per test lane, loaded at `txFsmRst`. Resets to a different seed per lane (`UCIE_TRAIN_LFSR_SEED` + l × `UCIE_LFSR_SEED_LANE_STEP`). Valid's slot is unused. A seed of 0 sends zeros. | Keep every lane on its own seed; `seed_lfsrs` restores the defaults. |
-| `UCIE_TX_LANE_FIXED`, `UCIE_TX_LANE_INVERT`, `UCIE_TX_FIXED_WORD` | LFSR mode: per test lane, send `txFixedWord` every packet, or the lane's stream inverted, instead of the stream. Fixed wins. Valid's bits are ignored; the LFSRs keep advancing; injection, `txTrackClk` and `txValidLaneSel` act on top. No effect in manual mode. | Crosstalk aggressor/victim patterns, static levels, polarity checks. The partner's RX needs the matching `rxLane*`. |
-| `UCIE_TX_QUEUE_LIMIT` | Caps the words PhyTest keeps in its TX queue; 0 leaves it uncapped (the whole 32-word queue). Resets to 16. | Lower latency (section 8). A cap below the queue's synchronizer round trip shows up as `UCIE_TX_TEST_FIFO_UNDERFLOW`: 10 is the least that holds with the PHY test clock at the packet clock, 8 with it at 1.6 times. |
+| `UCIE_TX_LFSR_SEED` + l·`_WIDTH` | 64-bit seed per test lane, loaded at `txFsmRst`. Reset: a different seed per lane (`UCIE_TRAIN_LFSR_SEED` + l × `UCIE_LFSR_SEED_LANE_STEP`). Valid's slot is unused. Seed 0 sends zeros. | One seed per lane. `seed_lfsrs` restores the defaults. |
+| `UCIE_TX_LANE_FIXED`, `UCIE_TX_LANE_INVERT`, `UCIE_TX_FIXED_WORD` | LFSR mode only. Per test lane: send `txFixedWord` every packet, or the inverted stream. Fixed wins. Valid's bits are ignored. LFSRs keep advancing. Injection, `txTrackClk` and `txValidLaneSel` still apply. | Crosstalk aggressor/victim, static levels, polarity. The partner's RX needs the matching `rxLane*`. |
+| `UCIE_TX_QUEUE_LIMIT` | Most words PhyTest keeps queued. 0: the whole 32-word queue. Reset 16. | Lower latency. Too low a cap underflows; minimums in section 8.1. |
 | `UCIE_TX_EXECUTE` | Starts a run from idle. Ignored in `run` **and in `done`**. | After `txFsmRst`. |
-| `UCIE_TX_FSM_RST`, `UCIE_TX_DATAPATH_RST` | See section 2.1. | Before every run, and after any select change. |
-| `UCIE_TX_PACKETS_SENT`, `UCIE_TX_TEST_STATE` | Packets enqueued; idle/run/done. | Progress, and TX clock presence. |
-| `UCIE_TX_VALID` | The valid word in LFSR mode. In manual mode valid comes from SRAM slot 16. Keep bit 0 set so the RX frames on packet boundaries. | `UCIE_DEFAULT_VALID`. |
-| `UCIE_TX_CLK_P`, `UCIE_TX_CLK_N` | The forwarded-clock words. | Defaults; swap them to invert the forwarded clock. |
-| `UCIE_RX_UI_DELAY` + lane × `UCIE_RX_UI_DELAY_WIDTH` | Holds an RX lane back 0 to 64 whole UI, past the shuffler: data lanes, then valid, then track. `align_rx_words` sets every lane to 32 − `UCIE_RX_FRAME_OFFSET`, mod 32 (section 8.4). | Before the UCIe controller takes the lanes; lane to lane skew of whole UI. |
-| `UCIE_TX_UI_DELAY` + lane × `UCIE_TX_UI_DELAY_WIDTH` | Holds a TX lane back 0 to 64 whole UI, ahead of the shuffler, in `txctl` lane order. Not the tile's `Dctrl`, which moves a lane a fraction of a UI. On lanes 18 and 19, the forwarded clock, an odd delay inverts the clock against the data. | Lane to lane skew of whole UI. With the clock gated, the postamble has to cover the largest data lane delay. |
-| `UCIE_TX_CLK_DIRECT` | The forwarded clock comes straight from `txClkP`/`txClkN`, whichever controller is selected. It runs through empty queues and datapath resets and overrides gating (`TileLink.scala:200-204,2883-2886`). | To keep the partner clocked through resets or controller changes. |
-| Pattern SRAM: `UCIE_TX_DATA_LANE_GROUP` (groups of 4 test lanes; group 4 is valid/track/loopback), `UCIE_TX_DATA_OFFSET` (row 0 to `UCIE_SRAM_PACKETS` − 1), `UCIE_TX_DATA_CHUNK_IN0` (lanes 4g, 4g+1), `_IN1` (lanes 4g+2, 4g+3), `UCIE_TX_WRITE_CHUNK`; readback `UCIE_TX_DATA_CHUNK_OUT0/1` | Loads one row for four lanes. **Accepted only in idle.** | Manual patterns. Do `txFsmRst` first. |
-| `UCIE_TX_MANUAL_REPEAT_PERIOD` | Rows per period; 0, or more than the SRAM depth, means all of it. | Short repeating patterns. |
-| `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | Bursts of packets separated by idle packets; the pattern doesn't advance across the gaps. | Burst tests; the RX needs `rxBurstMode`. |
-| `UCIE_TX_CLK_GATE`, `UCIE_TX_CLK_PREAMBLE` (packets), `UCIE_TX_CLK_POSTAMBLE` (units of `UCIE_CLK_POSTAMBLE_UI` = 2 UI, one forwarded clock cycle) | Forwarded clock only around data, as UCIe's strobe mode gates it, in LFSR and manual mode and for TileLink frames alike. `TxClkGater` at the PHY end does it, with the same settings for the UCIe controller once it negotiates strobe mode (section 8.3). Reset the partner's datapath with the clock running. Every burst scores clean only with a postamble that's a multiple of 32 UI; the last burst arrives whole only with enough postamble (section 8). They reset to no preamble, as UCIe sends, and one packet of postamble (32 UI, 16 units), which is enough once the link is trained for it (section 8.3). With no preamble, centre the forwarded clock first or the first UI of every burst is lost. | Clock-gating tests, and finding the minimum postamble. |
-| `UCIE_TX_CLK_PARK_ALTERNATE` | Parks a gated clock at differential high and low in turn, as UCIe asks; 0 parks it low every time. Resets to 1. A high park holds back the postamble's last falling edge until `PhyTest.ClkPreconditionUi` = 2 UI before the clock runs again, so a gap carries the same edges either way (section 8.3). The last register in the map. | Falling back to low parks if alternating ever misbehaves. |
-| `UCIE_TX_TRACK_CLK`, `UCIE_TX_TRACK_WORD` | Sends a fixed word on track (a clock by default). | Track-based measurements; clear that lane from `rxTriggerLaneMask`. |
-| `UCIE_TX_INJECT_ERROR`, `UCIE_TX_INJECT_LANE` | Flips bit 0 of the next packet on one test lane. | Checking that the counters and capture work end to end. |
+| `UCIE_TX_FSM_RST`, `UCIE_TX_DATAPATH_RST` | See section 2.1. | Before every run and after any select change. |
+| `UCIE_TX_PACKETS_SENT`, `UCIE_TX_TEST_STATE` | Packets enqueued; idle/run/done. | Progress; TX clock presence. |
+| `UCIE_TX_VALID` | Valid word in LFSR mode. Manual mode takes valid from SRAM slot 16. Keep bit 0 set so the RX frames on packet boundaries. | `UCIE_DEFAULT_VALID`. |
+| `UCIE_TX_CLK_P`, `UCIE_TX_CLK_N` | Forwarded-clock words. | Defaults. Swap to invert the clock. |
+| `UCIE_RX_UI_DELAY` + lane × `UCIE_RX_UI_DELAY_WIDTH` | Delays an RX lane 0 to 64 whole UI, after the shuffler. Order: data lanes, valid, track. `align_rx_words` sets each to 32 − `UCIE_RX_FRAME_OFFSET`, mod 32 (section 8.4). | Word alignment for the UCIe controller; whole-UI lane skew. |
+| `UCIE_TX_UI_DELAY` + lane × `UCIE_TX_UI_DELAY_WIDTH` | Delays a TX lane 0 to 64 whole UI, before the shuffler, in `txctl` lane order. Not the tile's `Dctrl` (fractions of a UI). On lanes 18 and 19 (forwarded clock), an odd delay inverts the clock against the data. | Whole-UI lane skew. With gating, the postamble must cover the largest data-lane delay. |
+| `UCIE_TX_CLK_DIRECT` | Forwarded clock straight from the selected controller's `txClkP`/`txClkN`. Runs through empty queues and datapath resets. Overrides gating. | Keeps the partner clocked through resets or controller changes. |
+| Pattern SRAM: `UCIE_TX_DATA_LANE_GROUP` (groups of 4 test lanes; group 4 is valid/track/loopback), `UCIE_TX_DATA_OFFSET` (row 0 to `UCIE_SRAM_PACKETS` − 1), `UCIE_TX_DATA_CHUNK_IN0` (lanes 4g, 4g+1), `_IN1` (lanes 4g+2, 4g+3), `UCIE_TX_WRITE_CHUNK`; readback `UCIE_TX_DATA_CHUNK_OUT0/1` | Loads one row for four lanes. **Accepted only in idle.** | Manual patterns. `txFsmRst` first. |
+| `UCIE_TX_MANUAL_REPEAT_PERIOD` | Rows per period. 0, or more than the SRAM depth: all rows. | Short repeating patterns. |
+| `UCIE_TX_BURST_PACKETS`, `UCIE_TX_IDLE_PACKETS` | Bursts with idle packets between. The pattern doesn't advance in gaps. | Burst tests. RX needs `rxBurstMode`. |
+| `UCIE_TX_CLK_GATE`, `UCIE_TX_CLK_PREAMBLE` (packets), `UCIE_TX_CLK_POSTAMBLE` (units of `UCIE_CLK_POSTAMBLE_UI` = 2 UI, one forwarded clock cycle) | Forwarded clock only around data, like UCIe strobe mode, in LFSR, manual and TileLink modes. The UCIe controller in strobe mode shares the gating. Reset: no preamble, one packet of postamble (32 UI, 16 units). Postamble rules: sections 8.2 and 8.3. With no preamble, centre the clock first. Reset the partner's datapath with the clock running. | Clock-gating tests; minimum-postamble search. |
+| `UCIE_TX_CLK_PARK_ALTERNATE` | 1 (reset): park high and low in turn, as UCIe asks. 0: always park low. | 0 if alternating misbehaves. High-park timing: section 8.3. |
+| `UCIE_TX_TRACK_CLK`, `UCIE_TX_TRACK_WORD` | Fixed word on track (a clock by default). | Track measurements. Clear that lane from `rxTriggerLaneMask`. |
+| `UCIE_TX_INJECT_ERROR`, `UCIE_TX_INJECT_LANE` | Flips bit 0 of the next packet on one test lane. | End-to-end check of counters and capture. |
 
 ### 6.4 RX
 
 | Register | What it does | When to use it |
 |---|---|---|
 | `UCIE_RX_DATA_MODE`, `UCIE_RX_PACKETS_TO_RECEIVE` | Finite or infinite. | Finite for sweeps. Left running, the RX scores the idle zeros after a finite TX run. |
-| `UCIE_RX_LFSR_SEED` + l·`_WIDTH`, `UCIE_RX_LFSR_VALID` | The expected seeds and valid word. They must match the partner's TX. | |
-| `UCIE_RX_START_MODE` | Start at the first run of `UCIE_RX_VALID_START_THRESHOLD` set bits on valid (default), or on the first word received (immediate). | Immediate to look at raw bits on a link nothing can frame. |
-| `UCIE_RX_VALID_START_THRESHOLD` | How many UI in a row valid has to be set to start recording, on the first of them; the run may straddle two words. 0 and 1 both start on the first set bit. Resets to 4. The loopback lane ignores it and starts on its first set bit. | No more than the valid waveform's first run, or nothing frames. Raise it for a valid lane that glitches while idle; 1 for a waveform with lone bits. |
-| `UCIE_RX_SELF_SYNC` | Scores each LFSR lane against its own history, with no seed and no framing. The first 2 packets aren't scored, and one error counts 1 + (number of taps) times. | Separating a data problem from a framing or seed problem; the loopback lane. |
-| `UCIE_RX_MANUAL_CHECK` | Scores against this die's TX pattern SRAM, loaded with the partner's pattern. Shares the SRAM port, so this die can't send a manual pattern at the same time. | Manual-pattern BER. |
-| `UCIE_RX_LANE_FIXED`, `UCIE_RX_LANE_INVERT`, `UCIE_RX_FIXED_WORD` | Per test lane, score against `rxFixedWord`, or the reference inverted, at all three framings. Applies under `rxSelfSync` too; ignored under `rxManualCheck` and for valid. | Matching the partner's `txLane*`. |
+| `UCIE_RX_LFSR_SEED` + l·`_WIDTH`, `UCIE_RX_LFSR_VALID` | Expected seeds and valid word. Must match the partner's TX. | |
+| `UCIE_RX_START_MODE` | Start at the first run of `UCIE_RX_VALID_START_THRESHOLD` set bits on valid (default), or on the first word (immediate). | Immediate: raw bits on a link nothing can frame. |
+| `UCIE_RX_VALID_START_THRESHOLD` | Set UI in a row on valid needed to start recording, on the first of them. The run may span two words. 0 and 1: first set bit. Reset 4. The loopback lane ignores it and starts on its first set bit. | At most the valid waveform's first run, or nothing frames. Raise it if valid glitches while idle; 1 for lone-bit waveforms. |
+| `UCIE_RX_SELF_SYNC` | Scores each LFSR lane against its own history: no seed, no framing. First 2 packets unscored. One error counts 1 + (number of taps) times. | Data problem vs framing or seed problem; the loopback lane. |
+| `UCIE_RX_MANUAL_CHECK` | Scores against this die's TX pattern SRAM, loaded with the partner's pattern. Shares the SRAM port, so this die can't send a manual pattern meanwhile. | Manual-pattern BER. |
+| `UCIE_RX_LANE_FIXED`, `UCIE_RX_LANE_INVERT`, `UCIE_RX_FIXED_WORD` | Per test lane, score against `rxFixedWord` or the inverted reference, at all three framings. Applies under `rxSelfSync`. Ignored under `rxManualCheck` and for valid. | Matching the partner's `txLane*`. |
 | `UCIE_RX_BURST_MODE` | Skips idle packets between bursts. | With TX bursts. |
 | `UCIE_RX_MONITOR` | Keeps the RX FSM running under `tl`. | Capturing TileLink traffic. |
-| `UCIE_RX_PACKETS_RECEIVED`, `UCIE_RX_BIT_ERRORS(_EARLY/_LATE)` + l·`_WIDTH`, `UCIE_RX_SIGNATURE` | Counts and scores. Early/late are the same capture framed ±1 UI. The signature is a MISR over the counted packets, modelled by `PhyTest.signatureNext`. | Read under `UCIE_RX_PAUSE_COUNTERS`, which freezes all of them together (`PhyTest.scala:1606-1621`). |
-| `UCIE_RX_IDLE_WORDS_OBSERVED` | Free-running 32-bit count of words before recording starts. | Shows whether the RX clock and datapath are alive before a run. |
-| `UCIE_RX_LANE_ERRORED`; `UCIE_RX_ERR_POS_LANE`, `UCIE_RX_ERR_POS_MASK` | Sticky: a bit per lane set at its first nominal error; per lane, a bit per packet UI an error has landed on. Only the target's lanes collect bits. Cleared by `rxFsmRst`, not paused. | One read screens every lane; repeat offenders on one UI point at a serdes phase. |
-| `UCIE_RX_ERR_CLASS_LANE`; `UCIE_RX_ERR_RISE_ONE`, `_RISE_ZERO`, `_FALL_ONE`, `_FALL_ZERO` | One lane's nominal errors by sampling edge (rising: even UIs of the lane's own word, whatever the framing) and by the bit sent (`ONE`: a 1 read as 0). Paused with the counts; reset the RX FSM after changing the lane. | Duty cycle and comparator phase (edge) against threshold offset (value). |
-| Capture: `UCIE_RX_CAPTURE_MODE` (first or error), `UCIE_RX_CAPTURE_START`, `UCIE_RX_CAPTURE_POST_TRIGGER`, `UCIE_RX_TRIGGER_LANE_MASK`, `UCIE_RX_CAPTURE_TRIGGERED`, `UCIE_RX_CAPTURE_TRIGGER_PACKET`; readout `UCIE_RX_DATA_LANE`, `UCIE_RX_DATA_OFFSET`, `UCIE_RX_DATA_CHUNK` (32 bits) | `UCIE_SRAM_PACKETS` packets per lane. Error mode keeps a window around the first error on an unmasked lane. | Bit-level debug. Mask lanes that aren't carrying their pattern, or they trigger on the first packet. |
+| `UCIE_RX_PACKETS_RECEIVED`, `UCIE_RX_BIT_ERRORS(_EARLY/_LATE)` + l·`_WIDTH`, `UCIE_RX_SIGNATURE` | Counts and scores. Early/late: the same capture framed ±1 UI. Signature: a MISR over counted packets, modelled by `PhyTest.signatureNext`. | Read under `UCIE_RX_PAUSE_COUNTERS`, which freezes them all together. |
+| `UCIE_RX_LANE_ERRORED`; `UCIE_RX_ERR_POS_LANE`, `UCIE_RX_ERR_POS_MASK` | Sticky. A bit per lane, set at its first nominal error. For the selected lane, a bit per packet UI that had an error. Only the target's lanes collect bits. Cleared by `rxFsmRst`; not paused. | One read screens every lane. Repeat errors on one UI: a serdes phase. |
+| `UCIE_RX_ERR_CLASS_LANE`; `UCIE_RX_ERR_RISE_ONE`, `_RISE_ZERO`, `_FALL_ONE`, `_FALL_ZERO` | One lane's nominal errors by sampling edge (rising: even UIs of the lane's own word, whatever the framing) and bit sent (`ONE`: a 1 read as 0). Paused with the counts. Reset the RX FSM after changing the lane. | Duty cycle and comparator phase (edge) vs threshold offset (value). |
+| Capture: `UCIE_RX_CAPTURE_MODE` (first or error), `UCIE_RX_CAPTURE_START`, `UCIE_RX_CAPTURE_POST_TRIGGER`, `UCIE_RX_TRIGGER_LANE_MASK`, `UCIE_RX_CAPTURE_TRIGGERED`, `UCIE_RX_CAPTURE_TRIGGER_PACKET`; readout `UCIE_RX_DATA_LANE`, `UCIE_RX_DATA_OFFSET`, `UCIE_RX_DATA_CHUNK` (32 bits) | `UCIE_SRAM_PACKETS` packets per lane. Error mode keeps a window around the first error on an unmasked lane. | Bit-level debug. Mask lanes not carrying their pattern, or they trigger on the first packet. |
 
 ### 6.5 Status and track
 
+The FIFO flags, clock meters, `UCIE_PLL_LOCK_LOST`, `UCIE_RX_IDLE_WORDS_OBSERVED` and the track
+counters are in section 5. One more:
+
 | Register | What it does |
 |---|---|
-| `UCIE_TX_TEST_FIFO_UNDERFLOW`, `UCIE_RX_TEST_FIFO_OVERFLOW` | The mainband crossings lost words: the TX queue ran dry partway through a run, or the RX queue overflowed. Cleared by the datapath reset. |
-| `UCIE_RX_FRAME_OFFSET` | The UI of the RX's word, after `rxUiDelay`, that the run's first packet started on: where the partner TX's words start. `align_rx_words` reads it. |
-| `UCIE_LOOPBACK_TX_FIFO_UNDERFLOW`, `UCIE_LOOPBACK_RX_FIFO_OVERFLOW`, `UCIE_TX_DEBUG_FIFO_UNDERFLOW` | The same, for PhyTest's own lanes. |
-| `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` | The UCIe controller's RX queue lost a word while the controller had the lanes: the packet clock outran the sideband clock. Cleared by the RX datapath reset. |
-| `UCIE_CLK_METER_PHY_TEST`, `_SB`, `_TX_DIV`, `_RX_DIV` (in `UcieClkRegs`) | Each clock's cycles per `UCIE_CLK_METER_WINDOW_CYCLES` chip cycles: MHz = count × chip MHz / 1024. Readable whatever the rest of the block is doing. |
-| `UCIE_PLL_LOCK_LOST` (in `UcieClkRegs`) | Sticky per PLL (PLL8 bit 0): lost lock while enabled. Write 0 to clear. |
-| `UCIE_TRACK_ONES`, `UCIE_TRACK_ZEROS`, `UCIE_TRACK_ONES_EVEN`, `UCIE_TRACK_CNT_RST`, `UCIE_TRACK_CNT_HOLD` | Ones and zeros on the track lane over every RX word. "Even" counts the even-UI ones, one sampling edge's share. |
+| `UCIE_RX_FRAME_OFFSET` | The UI of the RX word (after `rxUiDelay`) where the run's first packet started, which is where the partner TX's words start. `align_rx_words` reads it. |
 
 ### 6.6 Lane controls
 
 | Register | Fields | Notes |
 |---|---|---|
-| `UCIE_TXCTL` + N·`UCIE_TXCTL_WIDTH` + `UCIE_TXCTL_TILE_OFS` | 58 bits, MSB first: ENP[9], ENN[9], ENP_EQ[4] (active low), ENN_EQ[4], Dctrl[32]. LSB positions are in `UCIE_TX_CTL_*_LSB`. | High-impedance is ENP = ENN = ENN_EQ = 0 with ENP_EQ all ones. Change `Dctrl` only with `clkEn` = 0. Write 64 bits (`scala/src/phy/macros/Tx.scala`). |
-| `..._TXCTL_SHUFFLER_OFS` + j·`_WIDTH`, `..._TXCTL_SAMPLE_NEGEDGE_OFS` | Per-bit permutation; the backup hand-off edge. | The reset shuffler cancels the tile's bit-reversal tree. Use `sampleNegedge` if a lane's hand-off timing fails (`Phy.scala:570-597`). |
-| `UCIE_RXCTL` + N·`UCIE_RXCTL_WIDTH` + `_ZEN_OFS`, `_ZCTL_OFS`, `_VREF_SEL_OFS`, `_AFE_BYPASS_EN_OFS`, `_AFE_BYPASS_OFS`, `_AFE_OP_CYCLES_OFS`, `_AFE_OVERLAP_CYCLES_OFS`, `_SHUFFLER_OFS`, `_SAMPLE_NEGEDGE_OFS`, `_DCTRL_OFS` | Termination; the 7-bit reference ladder; the two-sampler hand-over (A, A+B, B, ...) or a fixed AFE state; RX data delay (more taps sample earlier). | The clock lanes (18, 19) use only the AFE fields; 19's output is unused. See `scala/src/phy/RxAfeCtl.scala` and `scala/src/phy/macros/Rx.scala`. |
+| `UCIE_TXCTL` + N·`UCIE_TXCTL_WIDTH` + `UCIE_TXCTL_TILE_OFS` | 58 bits, MSB first: ENP[9], ENN[9], ENP_EQ[4] (active low), ENN_EQ[4], Dctrl[32]. LSB positions in `UCIE_TX_CTL_*_LSB`. | High-impedance: ENP = ENN = ENN_EQ = 0, ENP_EQ all ones. Change `Dctrl` only with `clkEn` = 0. Write 64 bits (`scala/src/phy/macros/Tx.scala`). |
+| `..._TXCTL_SHUFFLER_OFS` + j·`_WIDTH`, `..._TXCTL_SAMPLE_NEGEDGE_OFS` | Per-bit permutation; backup hand-off edge. | The reset shuffler cancels the tile's bit-reversal tree. Use `sampleNegedge` if a lane's hand-off timing fails (`Phy.scala:509-535`). |
+| `UCIE_RXCTL` + N·`UCIE_RXCTL_WIDTH` + `_ZEN_OFS`, `_ZCTL_OFS`, `_VREF_SEL_OFS`, `_AFE_BYPASS_EN_OFS`, `_AFE_BYPASS_OFS`, `_AFE_OP_CYCLES_OFS`, `_AFE_OVERLAP_CYCLES_OFS`, `_SHUFFLER_OFS`, `_SAMPLE_NEGEDGE_OFS`, `_DCTRL_OFS` | Termination; 7-bit reference ladder; two-sampler hand-over (A, A+B, B, ...) or a fixed AFE state; RX data delay (more taps sample earlier). | Clock lanes (18, 19) use only the AFE fields; 19's output is unused. See `scala/src/phy/RxAfeCtl.scala`, `scala/src/phy/macros/Rx.scala`. |
 
 ### 6.7 Debug circuitry and the sideband tester
 
 | Register | What it does |
 |---|---|
-| `UCIE_DEBUG_DRIVERCTL` + 8·i | Pad drivers for the `txClk`, `rxClk`, `rxData` and `clkMux` bumps: `{pu[6], pd[6], en, en_b}`. `UCIE_ENABLE_DRIVER_CTL` for on, `UCIE_DISABLE_DRIVER_CTL` (0x1) for off, or `enable_debug_drivers` for all four and the TX debug lane. Off out of reset and after `setup_ucie`. |
-| `UCIE_DEBUG_CLK_MUX_SEL` | 0 `sbTxClk`, 1 `txDivClk`. The other codes are tied off. |
-| `UCIE_DEBUG_RX_LANE`, `UCIE_DEBUG_RX_BIT` | The RX lane (0-17) and bit, after the shuffler, that the `rxData` pad shows. |
-| TX debug lane: `UCIE_DEBUG_TXCTL_TILE`, `UCIE_DEBUG_TXCTL_SHUFFLER`, `UCIE_DEBUG_TX_TEST_MODE`, `_DATA_MODE`, `_LFSR_SEED`, `_FSM_RST`, `_EXECUTE`, `_MANUAL_REPEAT_PERIOD`, `_PACKETS_TO_SEND`, `UCIE_DEBUG_DATA` (16 × 64 bits = 32 packets, low half first), `UCIE_DEBUG_TX_TEST_STATE`, `UCIE_DEBUG_TX_PACKETS_SENT` | One TX lane on its own bump for the scope. Its shuffler resets to identity, so the wire order is the tile's tree order unless reprogrammed. |
+| `UCIE_DEBUG_DRIVERCTL` + 8·i | Pad drivers for the `txClk`, `rxClk`, `rxData` and `clkMux` bumps: `{pu[6], pd[6], en, en_b}`. On: `UCIE_ENABLE_DRIVER_CTL`. Off: `UCIE_DISABLE_DRIVER_CTL` (0x1). `enable_debug_drivers` sets all four and the TX debug lane. Off out of reset and after `setup_ucie`. |
+| `UCIE_DEBUG_CLK_MUX_SEL` | 0 `sbTxClk`, 1 `txDivClk`. Other codes tied off. |
+| `UCIE_DEBUG_RX_LANE`, `UCIE_DEBUG_RX_BIT` | RX lane (0-17) and bit, after the shuffler, shown on the `rxData` pad. |
+| TX debug lane: `UCIE_DEBUG_TXCTL_TILE`, `UCIE_DEBUG_TXCTL_SHUFFLER`, `UCIE_DEBUG_TX_TEST_MODE`, `_DATA_MODE`, `_LFSR_SEED`, `_FSM_RST`, `_EXECUTE`, `_MANUAL_REPEAT_PERIOD`, `_PACKETS_TO_SEND`, `UCIE_DEBUG_DATA` (16 × 64 bits = 32 packets, low half first), `UCIE_DEBUG_TX_TEST_STATE`, `UCIE_DEBUG_TX_PACKETS_SENT` | One TX lane on its own bump for a scope. Its shuffler resets to identity, so wire order is the tile's tree order unless reprogrammed. |
 | `UCIE_SB_TX_PACKET`, `UCIE_SB_TX_SEND`, `UCIE_SB_TX_BUSY`, `UCIE_SB_RX_PACKET`, `UCIE_SB_RX_VALID`, `UCIE_SB_RX_POP`, `UCIE_SB_RX_OVERFLOW`, `UCIE_SB_RX_RST` | One 64-bit sideband packet each way, on the sideband clock, with `sidebandMode` = manual (`scala/src/phytest/SidebandTest.scala`). |
 
 ### 6.8 Generated helpers at a glance
@@ -1139,59 +1090,56 @@ There are two numberings, so check which one a register uses.
 | `set_rx_delay`, `set_rx_vref` | `rxctl` `dctrl`, `vrefSel` | |
 | `set_ungate_src`, `release_clk_gate`, `set_rate_cfg`, `set_freq_sel_auto`, `set_clk_manual` | Clock-register fields | |
 | `enable_debug_drivers(en)` | Every observation pad driver and the TX debug lane, on or off | |
-| `setup_ucie` | Section 4, step 4 | Observation drivers off; the global delay is left at the reset 64 taps. |
+| `setup_ucie` | Section 4, step 4 | Observation drivers off; global delay left at the reset 64 taps. |
 | `seed_lfsrs` | Every lane's own default seed, TX and RX | |
 | `run_lfsr(n)` | `reset_fsms`, a settle wait (up to 4096 reads), a finite LFSR run, a packet wait that ends when the count stops climbing | Prints if short. Correct only for TX looped to RX. |
-| `setup_ucie_digital` | UCIe digital stack bring-up | Gives up on link-up after 2^24 reads, with a message. |
+| `setup_ucie_digital` | UCIe digital stack bring-up (step 12) | Gives up on link-up after 2^24 reads, with a message. |
 
 ---
 
 ## 7. Known limitations
 
-1. **The register port can wedge.** An access to the PhyTest or controller block while it's held
-   in reset or unclocked hangs the port and the bus behind it. Only a chip reset recovers
-   (section 3).
-2. **Clock observability is by meter, not by guard.** The clock meters say whether the PHY test and
-   sideband clocks run, from a block that always answers; nothing stops an access made while they
-   read zero.
+1. **The register port can wedge.** An access to the PhyTest or controller block while it is in
+   reset or unclocked hangs the port and the bus behind it. Only a chip reset recovers (section 3).
+2. **Clocks are metered, not guarded.** The meters show whether the PHY test and sideband clocks
+   run, but nothing stops an access while they read zero. Read them first (step 3).
 3. **The PHY test clock must outrun every packet clock.** 32 GT/s has no margin with a 1 GHz PHY
    test clock (section 1.3).
-4. **During a run PhyTest's TX queue holds up to 16 packets** out of reset, because PhyTest outruns
-   the packet clock and fills it up to `UCIE_TX_QUEUE_LIMIT` (section 8); 0 lets it fill the whole
-   queue (depth `UcieTLParams.queueParams`). Between runs and bursts it is empty: PhyTest queues
-   only data. `txPacketsSent` counts enqueued packets.
-5. **The RX frames once per run,** on the first run of `rxValidStartThreshold` set bits it sees
-   on valid (or on the first word in immediate mode). It doesn't re-frame, so a clock postamble that isn't a whole number of packets
-   breaks every burst after the first (`PhyTest.scala:218-222`).
-6. **`rxIdleWordsObserved` stops counting once recording starts.**
+4. **During a run PhyTest's TX queue holds up to `UCIE_TX_QUEUE_LIMIT` words** (reset 16; 0 is the
+   whole queue). This sets how long a word waits before it is sent (section 8.1). The queue is
+   empty between runs and bursts, because PhyTest queues only data.
+5. **The RX frames once per run** and doesn't re-frame. So a postamble that isn't a whole number of
+   packets breaks every burst after the first (`PhyTest.scala:202-225`).
+6. **`rxIdleWordsObserved` stops counting once recording starts.** Use the track counters after
+   that.
 7. **SRAM limits.** Pattern SRAM writes are accepted only in idle. `rxManualCheck` borrows the TX
-   SRAM's read port. Each SRAM holds `UCIE_SRAM_PACKETS` packets per lane, and the TX debug lane
-   holds 32.
-8. **The loopback RX lane is sampled by its own launch clock,** with only the per-lane trims
-   (32 × ~0.16 ps) to move it (`Codegen.scala:404-413`).
-9. **Phase steps and the main-clock rate.** Phase steps are half a main-clock period. Below ~7.2 GHz
-   the global line can't bridge them, and at ÷1 only 0 and 180° coarse phases exist.
+   SRAM's read port. Each SRAM holds `UCIE_SRAM_PACKETS` packets per lane; the TX debug lane holds
+   32.
+8. **The loopback RX lane is sampled by its own launch clock.** Only the per-lane trims
+   (32 × ~0.16 ps) can move it (`Codegen.scala:400-409`).
+9. **Phase steps and the main-clock rate.** Phase steps are half a main-clock period. Below
+   ~7.2 GHz the global line can't bridge them. At ÷1 only 0 and 180° coarse phases exist.
 10. **The track lane is clocked from the in-phase TX clock,** like the data lanes
-    (`ucie_clk_dist_network.sv`). So the track counters can probably not act as a mid-eye drift
-    sensor the way Kodiak's track lane did (inference).
-11. **No RX-only divider realign helper,** and `reset_dividers` stops both directions.
-12. **Fields wider than 32 bits need 64-bit writes;** 32-bit writes are dropped silently.
+    (`ucie_clk_dist_network.sv`). So it probably can't sense mid-eye drift the way Kodiak's track
+    lane did (inference).
+11. **No RX-only divider realign helper.** `reset_dividers` resets both directions. Gate both
+    clocks around it (section 8.3, training step 3).
+12. **Fields wider than 32 bits need 64-bit writes.** 32-bit writes are dropped silently.
 13. **Moving valid onto another lane doesn't move that lane's data.**
-14. **The UCIe controller's RX crossing overflows** once the RX divided clock outruns the 800 MHz
-    sideband clock, above 25.6 GT/s. `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` reports it on silicon, and a
-    simulation assertion in simulation. This doesn't affect PhyTest.
-15. **The behavioral models** (`scala/resources/vsrc`) model no analog behavior, wake-up after a
-    clock restart, or lock loss. Use `verilog/models` (see `verilog/README.md`) for anything about
-    eyes, vref or termination. Their handoff timing does follow the silicon tiles: each tile's ÷16
-    leaves reset like the global one, the TX tile (`tx_lane.v`) loads on its rising edge, and the RX
-    tile (`rx_data_lane.v`) puts its word out on its falling edge. So does the structural RX tile in
-    `verilog/common/rx.sv`, through a bank of flops on that edge behind its deserializer tree, whose
-    last latches are transparent while the divided clock is high. The two count edges the same way
-    but differ in latency (item 17).
-17. **The RX-side figures in section 8 assume the behavioral RX tile's latency.** In it, the word
-    the RX divided clock's rising edge reads ended 17 UI before that edge. In the structural tile in
-    `verilog/common/rx.sv` it ended 31 UI before: each latch level of the tree adds delay, 14 UI in
-    all. Which of the two the silicon tile is closer to decides section 8's receiver figures:
+14. **The UCIe controller's RX crossing overflows above 25.6 GT/s,** where the RX divided clock
+    outruns the 800 MHz sideband clock. On silicon `UCIE_CONTROLLER_RX_FIFO_OVERFLOW` flags it; in
+    simulation an assertion fires. PhyTest is unaffected.
+15. **The behavioral models** (`scala/resources/vsrc`) don't model analog behavior, wake-up after a
+    clock restart, or lock loss. For eyes, vref or termination use `verilog/models` (see
+    `verilog/README.md`). Their word handoff timing matches the silicon tiles, but the RX tile's
+    latency is uncertain (item 17).
+16. **The UCIe controller's RX word alignment is measured with PhyTest.** `align_rx_words` needs
+    the partner's TX sending PhyTest's LFSR run while it measures. Between two dies, the partner
+    must run PhyTest at the same time (section 8.4).
+17. **The RX-side figures in section 8 assume the behavioral RX tile's latency.** There, the word
+    read on the RX divided clock's rising edge ended 17 UI before that edge. In the structural tile
+    (`verilog/common/rx.sv`) it ended 31 UI before. Section 8's receiver figures depend on which
+    the silicon tile is closer to:
 
     | RX tile latency | 17 UI (behavioral) | 31 UI (structural) |
     |---|---|---|
@@ -1200,95 +1148,58 @@ There are two numberings, so check which one a register uses.
     | 32 UI postamble after section 8.3's training | every packet | 7 of 8 packets |
     | 64 UI postamble, untrained | every packet | every packet |
 
-    The 31 UI column was measured by rerunning the latency and gated-burst Verilator tests with the
-    behavioral tile given the structural tree's 14 UI. The packet missing is the run's last: each
-    burst's last word reaches the RX queue only once the next burst's clock arrives. At 31 UI, a
-    32 UI postamble only works if every burst ends on an RX word's last UI, and gaps that move the
-    boundary in 8 UI steps can't get there from a divider realign: the bursts need 33, 41, 49 or 57
-    edges. A
-    training gap of 34 UI would, but its gated period isn't a multiple of 8 UI. Two packets of
+    The 31 UI column comes from rerunning the latency and gated-burst Verilator tests with 14 UI
+    added to the behavioral tile. The lost packet is the run's last: each burst's last word reaches
+    the RX queue only when the next burst's clock arrives. Training can't fix this at 31 UI: gaps
+    move the word boundary in 8 UI steps and never reach a working alignment. Two packets of
     postamble cover every alignment at either latency.
-16. **The UCIe controller's RX word alignment is measured with PhyTest.** `align_rx_words` (section
-    8.4) needs the partner's TX sending PhyTest's LFSR run while it measures: in loopback that is
-    this die's own, and `setup_ucie_digital` calls it. Two dies need the partner's PhyTest run at
-    the same time. The alignment holds until the RX dividers are next reset, or a gated gap carries
-    a number of edges that isn't a whole word.
 
 ---
 
 ## 8. Latency, and the forwarded clock postamble
 
-Measured in simulation against the behavioral lanes at 16 GT/s by
+Measured in simulation by
 `UcieTL should time PhyTest's path and its minimum postamble using Verilator`
-(`scala/test/src/tilelink/TileLinkSpec.scala`, `PhyTestLatencyTestDriver`). The lanes are looped back
-with no channel delay, the forwarded clock is centred on the data (global delay 29 taps), and
-gated bursts have no preamble, as in UCIe. The analog lanes add their own delays. The structure
-below is what the digital and the tiles' handoff timing set.
-
-That timing is the silicon tiles' (section 7, item 15). Every tile's ÷16 leaves reset in step with
-the global ÷16 for its direction, whose output is `clkout_3`:
-
-- **TX:** a tile loads its word on the rising edge of its ÷16. `txDivClk` is `clkout_3` inverted, so
-  the TX queue presents each word half a word (16 UI) ahead of the load.
-- **RX:** a tile puts its word out on the falling edge of its ÷16. `rxDivClk` is `clkout_3` itself,
-  so the RX queue enqueues each word half a word after it appears.
+(`scala/test/src/tilelink/TileLinkSpec.scala`, `PhyTestLatencyTestDriver`). Setup: behavioral
+lanes at 16 GT/s, looped back with no channel delay; forwarded clock centred on the data (global
+delay 29 taps); gated bursts with no preamble, as in UCIe. The analog lanes add their own delays.
+The RX figures assume the behavioral RX tile (limitation 17).
 
 ### 8.1 Latency
 
-**Definition:** from the `txDivClk` edge on which the TX queue dequeues a word (`deq.fire`) to the
-`rxDivClk` edge on which the RX queue enqueues the RX word holding that word's first UI, and the
-one holding its last. The time a word spends waiting in the TX queue is not part of it.
-
-The RX's word boundary is not aligned to the TX's packets, so the measurement is made at every
-alignment:
+**Definition:** from the `txDivClk` edge where the TX queue dequeues a word to the `rxDivClk` edge
+where the RX queue enqueues the RX word holding that word's first UI (or its last UI). Time waiting
+in the TX queue is not included. RX words aren't aligned to TX packets, so every alignment is
+measured:
 
 | | Every alignment |
 |---|---|
-| Dequeue edge to the word's first UI at the bump | −16 UI |
+| Dequeue edge to the word's first UI at the bump | −16 UI (the tiles load the word halfway through the cycle that ends with the dequeue) |
 | Dequeue to RX enqueue, first UI's word | 2.5 to 32.5 UI |
 | Dequeue to RX enqueue, last UI's word | 32.5 to 62.5 UI |
 | With the TX lanes on their backup handoff | one word (32 UI) more |
-| With the RX lanes on their backup handoff | unchanged in the model (see below) |
+| With the RX lanes on their backup handoff | unchanged in the model; one word more on silicon |
 
-- **The first UI leaves before the dequeue edge.** The TX queue shows a word on its output for the
-  whole `txDivClk` cycle that ends with the dequeue, and the tiles load it halfway through.
-- **The extra registers on the divided clocks are already out of the path.** Out of reset the TX
-  queue's output register feeds each tile, and each tile's output feeds the RX queue, with nothing
-  between (`scala/src/phy/Phy.scala`). The backup `sample_negedge` registers are opt-in, per lane.
-  The RX one samples on the falling edge of `rxDivClk`, the edge the tile updates on. The model
-  passes the new word through on that edge, so it costs nothing there. On silicon it costs a word,
-  as its comment says. It exists in case the tile turns out to update on the other edge.
-- **The receiver's part** is finishing the RX word a UI lands in (0 to 31 UI), then half a word
-  (16 UI) from the tile's falling edge to the RX divided clock's rising edge, which the RX queue
-  takes the word on. The half UI is the centred clock sampling half a UI into each UI.
-- **`UCIE_TX_QUEUE_LIMIT`**, 16 out of reset (0 lets the whole 32-word queue fill), caps how many
-  words PhyTest keeps queued: the time before the dequeue, not the latency above. PhyTest offers a
-  word every cycle of a clock faster than the packet clock, so uncapped it keeps the queue full.
-  Too small a cap runs the queue dry, which `UCIE_TX_TEST_FIFO_UNDERFLOW` reports. The closer the
-  PHY test clock is to the packet clock, the more room a cap needs, since PhyTest can't make up a
-  cycle the cap held it off: at 16 GT/s, 8 is the smallest that holds with an 800 MHz PHY test
-  clock and 10 with a 500 MHz one, over 4096 packets. 16 leaves room for jitter the simulation
-  doesn't have.
-- **No controller queues idle words.** PhyTest queues only data packets, the mainband TileLink path
-  only frames that carry a beat or a credit return, and the UCIe controller in ACTIVE only beats.
-  `TxClkGater` (`scala/src/phytest/TxClkGater.scala`), between the selected controller's queue and
-  the lanes, sends a word of its own whenever the queue has nothing due: valid low, the data lanes
-  at zero, track as that controller runs it, and the clock running or gated. So nothing waits
-  behind idle words: a run, burst or frame starts behind an empty queue, about 4 to 5 words of
-  crossing, and only a run longer than that fills the queue up to the cap. When idle words were
-  queued too, the queue sat full whenever the controller's clock outran the packet clock. At 8
-  GT/s with a 500 MHz bus, a TileLink read's round trip over the mainband loopback was 140 bus
-  cycles; it is now 36.
+- **Backup handoff registers** (`sample_negedge`) are off out of reset and opt-in per lane. They are
+  there in case a tile updates its word on the other edge.
+- **`UCIE_TX_QUEUE_LIMIT`** (reset 16; 0 = the whole 32-word queue) sets the wait before the
+  dequeue, not this latency. PhyTest runs faster than the packet clock, so without a cap it keeps
+  the queue full. The cap must cover the queue's synchronizer round trip, or the queue runs dry
+  (`UCIE_TX_TEST_FIFO_UNDERFLOW`). It needs more room as the PHY test clock nears the packet clock.
+  At 16 GT/s over 4096 packets the minimum is 8 with an 800 MHz PHY test clock and 10 with 500 MHz
+  (the packet clock). 16 leaves margin for jitter the simulation lacks.
+- **Idle words come from `TxClkGater`, not the queues.** When the selected controller's queue has
+  nothing due, `TxClkGater` at the PHY end sends its own word: valid low, data lanes zero, track as
+  that controller runs it, clock running or gated. So a run, burst or frame starts behind an empty
+  queue (about 4 to 5 words of crossing). Only a longer run fills the queue to the cap.
 
 ### 8.2 The postamble a burst needs
 
-`UCIE_TX_CLK_POSTAMBLE` is in units of `UCIE_CLK_POSTAMBLE_UI` = 2 UI, one forwarded clock cycle.
 Each UI of postamble is one clock edge. After the edge that samples a burst's last data UI, the
-receiver needs 17 more: one for the tile to put out the RX word that UI ends, and 16 to the RX
-divided clock's rising edge, which its queue takes the word on. The first lands on the next rising
-edge, since an RX word's last UI is a falling-edge sample, and that edge is also the tile's ÷16
-falling. If the last data UI is not the last of its RX word, add the 1 to 31 UI it takes to finish
-the word first.
+receiver needs 17 more edges: 1 for the tile to put out the RX word, and 16 to the `rxDivClk`
+rising edge where the RX queue takes it. If the last data UI doesn't end its RX word, add the 1 to
+31 UI that finish the word. Rounded up to the 2 UI unit, the receiver needs 18 UI at best and 48 UI
+at worst. The postamble starts right after the burst's last word.
 
 | Minimum postamble, over every RX alignment | Measured |
 |---|---|
@@ -1296,62 +1207,48 @@ the word first.
 | Backup RX handoff (`sample_negedge`) | 18 to 48 UI |
 | Manual mode, at the worst alignment | 48 UI |
 
-- **18 to 48 UI is the receiver's own need**: 17 edges, rounded up to the 2 UI unit, when the last
-  data UI ends an RX word, and 31 more when it starts one. The forwarded clock tiles load in step
-  with the data tiles, so the clock pattern of a burst's last word goes out with that word and the
-  postamble starts right after it.
 - **Centre the forwarded clock before gating it.** With no preamble, the first edge after the gate
-  opens has to sample the burst's first UI. At the global delay's reset value (64 taps, about
-  1.1 UI at 16 GT/s) the clock trails the data by more than a UI. Each edge then samples the UI
-  after its own, and the first data UI is lost: the same 4-packet burst arrives with about 1200 bit
-  errors, against none at 29 taps. A preamble (`UCIE_TX_CLK_PREAMBLE`, in packets) hides that.
-  UCIe has none, and the register resets to 0.
-- **Use a whole number of packets.** That leaves the RX word boundary where it was for the next
-  burst. A partial packet moves it by the postamble modulo 32 UI, and PhyTest's RX does not
-  re-frame (section 7). One packet (32 UI, the reset value) is enough after the training in
-  section 8.3; two (64 UI) cover every alignment untrained.
-- **On the bench**, a PhyTest postamble sweep finds the smallest postamble that still delivers the
-  last packet at the alignment in effect: between 18 and 48 UI plus whatever the analog lanes add.
-- **Manual mode** can test any postamble the register can express, and needs the same minimum as
-  LFSR mode: the gating applies to a manual run exactly as to an LFSR one, since every pattern packet
-  counts as data. The pattern SRAM has no say in the clock lanes, which come from `txClkP`/`txClkN`
-  under the gate's mask.
+  opens must sample the burst's first UI. At the reset global delay (64 taps, about 1.1 UI at
+  16 GT/s) the clock trails the data by more than a UI. Each edge samples the next UI, and the
+  first data UI is lost: a 4-packet burst gets about 1200 bit errors, against none at 29 taps. A
+  preamble (`UCIE_TX_CLK_PREAMBLE`, in packets) hides this. UCIe has none, and the register resets
+  to 0.
+- **Use a whole number of packets.** A partial packet moves the RX word boundary by the postamble
+  mod 32 UI, and PhyTest's RX doesn't re-frame (section 7). One packet (32 UI, the reset value) is
+  enough after section 8.3's training. Two (64 UI) cover every alignment untrained.
+- **On the bench**, a postamble sweep finds the minimum at the alignment in effect: 18 to 48 UI,
+  plus what the analog lanes add.
+- **Manual mode** can test any postamble the register can express, and needs the same minimum:
+  every pattern packet counts as data. Its clock lanes come from `txClkP`/`txClkN` under the gate's
+  mask, not from the pattern SRAM.
 
 ### 8.3 Gating the UCIe way: one packet of postamble
 
-UCIe's strobe mode asks the TX for at least 16 UI of postamble, no preamble, a gated period that's
-a multiple of 8 UI, a parked level that alternates between differential high and low from one gap
-to the next, and 1 to 8 UI of differential low before the clock runs again. PhyTest's TX does all
-of it at the reset values (`UCIE_TX_CLK_GATE` = 1 is the only write):
+PhyTest's TX meets UCIe strobe mode at reset values. The only write is `UCIE_TX_CLK_GATE` = 1.
 
-- **Postamble and gated period.** 32 UI of postamble, twice UCIe's minimum. Gaps are whole packets,
-  so a postamble that's a multiple of 8 UI makes the gated period one too.
-- **Parked level.** Parked, each clock lane holds its pattern's UI 1 level, or its UI 0 level on a
-  high park: with the usual `txClkP`/`txClkN` patterns, P low and N high, or the reverse. A park
-  straight after a data packet, which only a zero postamble or an FSM reset makes, stays low.
-- **High parks.** The clock keeps the level of the postamble's last rising edge through the UI it
-  would have fallen on, and falls `PhyTest.ClkPreconditionUi` = 2 UI before the next burst, or the
-  next run, starts. That falling edge is the one the postamble held back, so a gap carries exactly
-  the postamble's edges at either level, and the RX word boundary stays put. The receiver loses
-  nothing either: it always needs an odd number of edges, so the one held back never changes the
-  postamble it needs.
-- **Where it's done.** `TxClkGater`, at the PHY end, makes every word that isn't data, for
-  PhyTest, TileLink frames and the UCIe controller alike. PhyTest marks the word that ends a burst,
-  and the gater counts the `UCIE_TX_IDLE_PACKETS` gap itself, so it puts the precondition in the
-  gap's last word. Between runs it can only start the clock once the next word is queued, so after
-  a high park the run's first data waits one word for the precondition.
-- **`UCIE_TX_CLK_PARK_ALTERNATE` = 0** parks low every time, if alternating ever breaks something.
+| UCIe strobe mode asks for | PhyTest TX |
+|---|---|
+| At least 16 UI of postamble, no preamble | 32 UI of postamble (twice the minimum), no preamble |
+| A gated period that is a multiple of 8 UI | Gaps are whole packets and the postamble is a multiple of 8 UI |
+| A park level that alternates between differential high and low from gap to gap | `UCIE_TX_CLK_PARK_ALTERNATE` = 1. Set 0 to park low every time, if alternating ever breaks something. |
+| 1 to 8 UI of differential low before the clock runs again | `PhyTest.ClkPreconditionUi` = 2 UI, after a high park |
 
-One packet of postamble delivers a burst only if its last UI lands 17 UI or more into an RX word
-(section 8.2: 17 edges, plus what finishes the word, with 31 available on a high park). The
-alignment that a divider realign leaves behind a parked clock is just outside that: the first edge
-starts the tile's divider, which finishes its first word 16 UI later, so every burst ends 15 UI
-into an RX word and needs 33. One gap of 40 UI moves the boundary 8 UI, after which every burst
-ends 23 UI in and needs 25. All of this needs the forwarded clock centred on the data, as
-mainband training leaves it: with no preamble, the first edge after a park has to sample the
-burst's first data UI. Out of reset the global delay line is at its longest (`clkPhaseSel` all
-ones), a little over a UI at 16 GT/s, and there a burst's first UI gets no edge of its own. On the
-Iris harness `set_global_delay(29)` centres it. The training, once per link:
+- **Park level.** A parked clock lane holds its pattern's UI 1 level, or its UI 0 level on a high
+  park. With the usual `txClkP`/`txClkN` patterns, that is P low and N high, or the reverse. A park
+  straight after a data packet stays low. Only a zero postamble or an FSM reset makes one.
+- **High parks.** The clock holds the level of the postamble's last rising edge and falls 2 UI
+  before the next burst or run starts. That falling edge is the one the postamble held back, so a
+  gap has exactly the postamble's edges at either park level. The RX word boundary doesn't move,
+  and the receiver's minimum doesn't change.
+- **Where it's done.** `TxClkGater` at the PHY end does this for PhyTest, TileLink frames and the
+  UCIe controller. Between runs it can start the clock only once the next word is queued, so after
+  a high park a run's first data waits one word.
+
+**Training.** One packet of postamble delivers a burst only if its last UI is 17 UI or more into
+an RX word (section 8.2). After a divider realign behind a parked clock, every burst ends 15 UI
+into an RX word and needs 33 UI. One 40 UI gap moves the boundary 8 UI, so every burst then ends
+23 UI in and needs 25. Training needs the forwarded clock centred on the data (section 8.2), as
+mainband training leaves it. On the Iris harness `set_global_delay(29)` centres it. Once per link:
 
 1. With the clock running, reset the datapath and FSMs (`pt_arm`, or `reset_fsms`).
 2. `UCIE_TX_CLK_GATE` = 1, so the clock parks.
@@ -1359,60 +1256,54 @@ Iris harness `set_global_delay(29)` centres it. The training, once per link:
    loopback), `set_rx_clk_en(0)`, `reset_dividers`, then both back to 1.
 4. Send one burst with `UCIE_TX_CLK_POSTAMBLE` = 20 (40 UI), then set it back to 16 (32 UI).
 
-After that, a clock that runs or parks for whole packets leaves the boundary alone, so ungating to
+After that, a clock that runs or parks for whole packets doesn't move the boundary, so ungating to
 reset the FSMs between runs is fine. `test_gated_bursts` in `software/phytest-loopback.c` does
-this, at both park settings, and `UcieTL should keep gated bursts whole with a packet of postamble
-using Verilator` checks it on the silicon handoff timing, along with the untrained case losing its
-last packet. `UcieTL should run the bring-up program's gated bursts at equal rates using Verilator`
-runs `test_gated_bursts` step for step at the Iris harness's clocks, the PHY test clock at the
-packet clock. Getting down to UCIe's 16 UI would take 16 UI of clock ahead of each burst as well
-as a 2 UI earlier global RX divider, which is a change to the divider macro; 32 UI needs nothing.
+this at both park settings. These Verilator tests check it:
+- `UcieTL should keep gated bursts whole with a packet of postamble using Verilator`: on the silicon
+  handoff timing, including that the untrained case loses its last packet.
+- `UcieTL should run the bring-up program's gated bursts at equal rates using Verilator`:
+  `test_gated_bursts` step for step at the Iris harness's clocks (PHY test clock = packet clock).
 
-All of this holds for the behavioral RX tile's latency. If the silicon tile's is closer to the
-structural tree's, 31 UI rather than 17 (limitation 17), this training still leaves each burst's
-last word in the tile until the next burst, and two packets (64 UI) of postamble is the setting
-that works, untrained.
+UCIe's 16 UI minimum would need a change to the divider macro. 32 UI needs none.
 
-**TileLink frames and the UCIe controller.** The same gating applies to TileLink frames on the
-mainband (`UCIE_TX_CLK_GATE` = 1 with `mainbandMode` = `tl`), and to the UCIe controller once it
-has negotiated strobe mode and reached ACTIVE, which it reports to the PHY as `mbTxClkGate`.
+If the silicon RX tile is closer to the structural tree (31 UI rather than 17, limitation 17),
+each burst's last word stays in the tile until the next burst even after training. Then use two
+packets (64 UI) of postamble, untrained.
+
+**TileLink frames and the UCIe controller.** The same gating applies to mainband TileLink frames
+(`UCIE_TX_CLK_GATE` = 1 with `mainbandMode` = `tl`). It also applies to the UCIe controller once
+it negotiates strobe mode and reaches ACTIVE, which it signals to the PHY as `mbTxClkGate`.
 MBINIT.PARAM's clock mode is taken as 0 = strobe, 1 = continuous; check that against the spec.
-`rx_clk_mode_sel` resets to 0, so out of reset the controller asks for strobe. Neither gets
-PhyTest's training, so `setup_ucie_digital` sets two packets of postamble (64 UI), which covers
-every alignment, and `UcieTL should support simple TL test with the clock gated using Verilator`
-runs TileLink frames with the same.
+`rx_clk_mode_sel` resets to 0, so out of reset the controller asks for strobe. Neither path gets
+PhyTest's training, so `setup_ucie_digital` sets two packets (64 UI) of postamble, which covers
+every alignment. `UcieTL should support simple TL test with the clock gated using Verilator` runs
+TileLink frames with the same.
 
 ### 8.4 Lining the RX words up for the UCIe controller
 
-Which 32 UI land in an RX word is set by the forwarded clock's first edge after the RX dividers are
-realigned, and nothing in the PHY lines that up with the partner TX's words. PhyTest doesn't care:
-it frames on valid. The UCIe controller takes each word as it comes, so without help it trains
-through MBINIT and then fails MBTRAIN.LINKSPEED, its first LFSR comparison.
+The forwarded clock's first edge after an RX divider realign sets which 32 UI form an RX word.
+Nothing in the PHY aligns that to the partner TX's words. PhyTest frames on valid, so it doesn't
+care. The UCIe controller takes each word as it comes, so without help it trains through MBINIT
+and then fails MBTRAIN.LINKSPEED, its first LFSR comparison.
 
-`rxUiDelay_N` (`Phy.scala`, `PhyRegsIO.rxUiDelay`) holds each RX lane back 0 to 64 whole UI, out
-of the current word and the two before it, after the shuffler and before the RX queues, so PhyTest
-and the controller both see it. `txUiDelay_N` does the same for a TX lane ahead of its shuffler.
-Out of reset both are 0. These are the per-lane shifters the original uciephytest `Phy` had as
-`txctl_N_delay` and `rxctl_N_delay`; they don't touch the tiles' `Dctrl`, which moves a lane by a
-fraction of a UI.
+`rxUiDelay_N` (section 6.3) delays an RX lane by 0 to 64 whole UI before the RX queues, so PhyTest
+and the controller both see it. `txUiDelay_N` is the TX counterpart. Both reset to 0.
 
 `align_rx_words`, which `setup_ucie_digital` calls before handing the lanes to the controller,
 measures the alignment:
 
 1. PhyTest takes the mainband with the default clock and valid waveforms, and every `rxUiDelay_N`
    at 0.
-2. A four-packet LFSR run. PhyTest's RX frames on the first run of `rxValidStartThreshold` (4) set
-   bits on valid, which with `0x0F0F0F0F` is UI 0 of the partner TX's word, and reports where in
-   its own word that landed as `UCIE_RX_FRAME_OFFSET`.
-3. Every `rxUiDelay_N` is set to 32 − offset, mod 32, which puts that UI at the start of the next
-   word. If the RX framed nothing, they stay at 0 and it says so.
+2. A four-packet LFSR run. The RX frames on the first run of `rxValidStartThreshold` (4) set bits
+   on valid, which with `0x0F0F0F0F` is UI 0 of the partner TX's word. It reports where that UI
+   fell in its own word as `UCIE_RX_FRAME_OFFSET`.
+3. Every `rxUiDelay_N` is set to 32 − offset, mod 32, which moves that UI to the start of the next
+   word. If the RX framed nothing, the delays stay 0 and the helper says so.
 
-Lane to lane skew of whole UI goes on top, per lane, afterwards: up to 64 UI less the alignment.
-TileLinkSpec's `should align RX words and move whole lanes by UI` checks both: after
-`align_rx_words` a run frames at UI 0, and with data lane 0 held back at the RX and every other
-lane by the same at the TX, 1 or 33 UI, every lane reads clean.
+The partner's TX must send the run during the measurement; in loopback it is this die's own.
+Measure again after any RX divider reset, and after any gated gap whose edges aren't a whole word.
 
-The partner's TX has to be sending that run while it measures: in loopback it is this die's own.
-Measure after any RX divider reset, and after any gated gap whose edges aren't a whole word. On
-the Iris harness `align_rx_words` holds both links' RX lanes back 20 UI (a frame offset of 12), and
-Iris's `ucie digital loopback test` trains and carries traffic on both.
+Whole-UI lane-to-lane skew goes on top afterwards, per lane: up to 64 UI minus the alignment.
+TileLinkSpec's `should align RX words and move whole lanes by UI` checks both. On the Iris harness
+`align_rx_words` delays both links' RX lanes 20 UI (a frame offset of 12), and Iris's
+`ucie digital loopback test` trains and carries traffic on both.

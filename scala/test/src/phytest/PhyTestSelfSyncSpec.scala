@@ -99,9 +99,9 @@ class PhyTestSelfSyncSpec extends AnyFunSpec with ChiselSim {
         val counts = run(c)
         for (l <- patternLanes) {
           withClue(s"lane $l: ") {
-            // The first packet carries one bit from before the pattern,
-            // which the first scored packet still reaches back to through
-            // the largest tap.
+            // The first packet holds one bit from before the pattern, and
+            // the first scored packet still depends on it through the
+            // largest tap.
             assert(counts(l) <= 1)
           }
         }

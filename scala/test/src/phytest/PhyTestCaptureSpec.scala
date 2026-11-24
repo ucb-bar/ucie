@@ -132,9 +132,9 @@ class PhyTestCaptureSpec extends AnyFunSpec with ChiselSim {
             assert((twinWords(o) ^ laneWords(o)) == expected)
           }
         }
-        // Unrolled from the oldest entry, the SRAM holds one unbroken run of
-        // the pattern ending `post` packets after the trigger, which pins
-        // where the writes stopped.
+        // Read from the oldest entry, the SRAM holds one unbroken run of the
+        // pattern ending `post` packets after the trigger, which shows where
+        // the writes stopped.
         val oldest = (trigger + post + 1) % depth
         val unrolled = (0 until depth).map(i => twinWords((oldest + i) % depth))
         assert(followsLfsr(unrolled))

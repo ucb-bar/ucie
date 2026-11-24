@@ -6,12 +6,12 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.{SbIO, SidebandSerial}
 
 object SidebandTest {
-  // Bits per packet. Matches the 64-bit chunk the sideband spec transmits, and
-  // therefore what `SidebandLinkSerializer` puts on the wire.
+  // Bits per packet: the 64-bit chunk the sideband spec sends, and so what
+  // `SidebandLinkSerializer` puts on the wire.
   val PacketBits = 64
 
-  // Received packets waiting to be read out over MMIO. Also the depth of the
-  // crossing from the received forwarded clock into the digital domain.
+  // Received packets waiting to be read over MMIO. Also the depth of the
+  // crossing from the received forwarded clock to the digital domain.
   val RxQueueDepth = 4
 }
 
@@ -38,8 +38,8 @@ class SidebandTestRegsIO extends Bundle {
   // Sticky: a packet arrived with no room to store it and was dropped.
   val rxOverflow = Output(Bool())
   // Resets the receiver: clears the bit counter, the stored packets, and
-  // `rxOverflow`. Realigns the receiver if a partner reset mid-packet left it
-  // an odd number of bits out of step.
+  // `rxOverflow`. Use it to realign after a partner reset mid-packet leaves
+  // the receiver an odd number of bits out of step.
   val rxRst = Input(Bool())
 }
 
@@ -47,8 +47,8 @@ class SidebandTestIO extends Bundle {
   val regs = new SidebandTestRegsIO
 
   /** Low while another block owns the sideband bumps. Holds the tester's link
-    * in reset so it neither drives the bumps nor assembles that block's traffic
-    * into nonsense packets.
+    * in reset, so it does not drive the bumps or turn that block's traffic
+    * into bogus packets.
     */
   val en = Input(Bool())
 
@@ -63,9 +63,10 @@ class SidebandTestIO extends Bundle {
 
 /** Sideband PHY tester.
   *
-  * Stages single `SidebandTest.PacketBits`-bit packets through MMIO over a
-  * [[SidebandSerial]] link, which is also what the TileLink-over-sideband path
-  * in `UcieTL` uses, so both put the same waveform on the wire.
+  * Sends and receives single `SidebandTest.PacketBits`-bit packets, staged
+  * through MMIO, over a [[SidebandSerial]] link. The TileLink-over-sideband
+  * path in `UcieTL` uses the same link, so both put the same waveform on the
+  * wire.
   */
 class SidebandTest extends Module {
   import SidebandTest._
@@ -75,17 +76,17 @@ class SidebandTest extends Module {
   val link = Module(new SidebandSerial(PacketBits, RxQueueDepth))
   io.sb <> link.io.sb
 
-  // The transmitter drops out of busy on its own once a packet is shifted out,
-  // so `en` going low is the only thing that has to reset it.
+  // The transmitter leaves busy by itself once a packet is shifted out, so
+  // only `en` going low needs to reset it.
   link.io.txRst := !io.en
   link.io.txClock := io.txClock
   link.io.txReset := io.txReset
-  // One packet at a time, as before the serializer moved to its own clock: a
-  // send while the last packet is still queued or on the wire is dropped.
+  // One packet at a time: a send while the last packet is still queued or on
+  // the wire is dropped.
   link.io.tx.valid := io.regs.txSend && io.en && link.io.txIdle
   link.io.tx.bits := io.regs.txPacket
-  // Not ready only coming out of reset, while the TX queue's two clock domains
-  // finish their reset handshake. A send then would be dropped too.
+  // Not ready only after reset, while the TX queue's two clock domains finish
+  // their reset handshake. A send then is also dropped.
   io.regs.txBusy := !link.io.txIdle || !link.io.tx.ready
 
   link.io.rxRst := io.regs.rxRst || !io.en
