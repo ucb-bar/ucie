@@ -266,7 +266,8 @@ ${
             "ucie_clk_div4.v",
             "debug_clkmux.v",
             "clocking_tile.v",
-            "clock_receiver.v",
+            "clock_receiver_esd_dcc.v",
+            "clock_receiver_esd_drv_lowspeed.v",
             "IO_ESD.v",
             "D2D_ESD.v",
             "ucie_rst_sync.v"

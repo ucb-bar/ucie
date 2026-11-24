@@ -8,18 +8,37 @@ class ClkRxIO extends Bundle {
   val Vout = Output(Clock())
 }
 
-// Self-biased inverter input stage followed by a restoring inverter, so the
-// receiver is non-inverting. Port and module names match the analog IP top
-// cell; the VDD/VSS pins are connected by the physical flow.
-class ClkRx(implicit includeDefaultModels: Boolean = false)
+/** Which delivered clock receiver a single-ended clock bump lands on.
+  *
+  * Both have the same front end: the pad's `IO_ESD` clamp on `Vin`, then a
+  * self-biased inverter and a restoring inverter. They differ in what follows
+  * it, and both end in a CKND24 driver, so both invert: `Vout` is `Vin`
+  * complemented.
+  */
+sealed abstract class ClkRxKind(val cellName: String)
+
+object ClkRxKind {
+
+  /** The high-speed bypass clock's: duty-cycle correction (four AC-coupled
+    * self-biased inverters) before the driver.
+    */
+  case object HighSpeed extends ClkRxKind("clock_receiver_esd_dcc")
+
+  /** For 100 MHz to 1 GHz: the driver straight after the front end. */
+  case object LowSpeed extends ClkRxKind("clock_receiver_esd_drv_lowspeed")
+}
+
+// Port and module names match the analog IP top cell; the VDD/VSS pins are
+// connected by the physical flow.
+class ClkRx(kind: ClkRxKind)(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new ClkRxIO)
 
-  override val desiredName = "clock_receiver"
+  override val desiredName = kind.cellName
 
   if (includeDefaultModels) {
-    addResource("/vsrc/clock_receiver.v")
+    addResource(s"/vsrc/${kind.cellName}.v")
   }
 }
 
@@ -85,10 +104,9 @@ class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
   val testTxPadClk = Output(Clock())
   val testRxPadClk = Output(Clock())
 
-  // The clocking tile's two bypass clocks, on their way to it: the bypass
-  // clock receiver's restored clock, and the digital bypass clock, straight off
-  // its bump. Every module has its own bump for each. A physical network may
-  // buffer either of them.
+  // The clocking tile's two bypass clocks, on their way to it: each one the
+  // restored clock out of its bump's own clock receiver. Every module has its
+  // own bump for each. A physical network may buffer either of them.
   val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
   val tileBypassClk = Output(Clock())
