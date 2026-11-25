@@ -82,7 +82,14 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   }
   dut.io.debug.txDivClk := laneDivClk.asClock
   dut.io.debug.sbTxClk := false.B.asClock
-  dut.io.debug.rxData := DontCare
+  Seq(
+    dut.io.debug.rxDivClk,
+    dut.io.debug.digitalBypassClk,
+    dut.io.debug.sidebandBypassClk,
+    dut.io.debug.refClk
+  ).foreach(_ := false.B.asClock)
+  dut.io.debug.rxDataLsb := false.B
+  dut.io.debug.txDataLsb := false.B
   // The sideband tester stays in reset below, so its serializer's clock is the
   // main one.
   dut.io.sbTxClock := clock

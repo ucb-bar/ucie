@@ -50,7 +50,14 @@ class PhyTestRegLoopback(
   dut.io.debug.testRxPadClk := false.B.asClock
   dut.io.debug.txDivClk := false.B.asClock
   dut.io.debug.sbTxClk := false.B.asClock
-  dut.io.debug.rxData := 0.U.asTypeOf(dut.io.debug.rxData)
+  Seq(
+    dut.io.debug.rxDivClk,
+    dut.io.debug.digitalBypassClk,
+    dut.io.debug.sidebandBypassClk,
+    dut.io.debug.refClk
+  ).foreach(_ := false.B.asClock)
+  dut.io.debug.rxDataLsb := false.B
+  dut.io.debug.txDataLsb := false.B
   dut.io.sbTxClock := clock
   dut.io.sbTxReset := reset.asBool
   dut.io.sb.rxClk := false.B.asClock

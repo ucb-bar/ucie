@@ -261,16 +261,17 @@ ${
           val defaultModels = Seq(
             "ucie_clk_dist_network.sv",
             "ucie_clk_div4.v",
-            "debug_clkmux.v",
+            "mux16to1.v",
             "pll8g_top.v",
             "pll12g_top.v",
             "main_clk_sel_core.v",
             "global_delayline_gate.v",
             "phytest_div_core.v",
             "sb_div_core.v",
-            "clock_receiver.v",
+            "clock_receiver_esd_dcc.v",
+            "clock_receiver_esd_drv_lowspeed.v",
             "IO_ESD.v",
-            "ucie_esd_routable.v",
+            "D2D_ESD.v",
             "ucie_rst_sync.v"
           )
           // A renamed file leaves a dangling entry here that shows up only as

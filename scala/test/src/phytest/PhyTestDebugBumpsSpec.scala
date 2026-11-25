@@ -2,7 +2,6 @@ package edu.berkeley.cs.uciedigital.phytest
 
 import chisel3._
 import edu.berkeley.cs.uciedigital.phy.macros.SbDriver
-import chisel3.util._
 import chisel3.simulator.HasSimulator
 import chisel3.simulator.HasSimulator.simulators.verilator
 import chisel3.simulator.scalatest.ChiselSim
@@ -13,29 +12,27 @@ import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkMux
 
-/** Drives the PHY's observation taps and the selects that pick between them,
-  * and brings the resulting bumps back out so a test can watch them.
-  *
-  * The taps are clocks on the PHY side, so they are `Bool` here and converted
-  * at the boundary; nothing in this path is clocked, so a level on a tap shows
-  * up on its bump combinationally.
+/** Drives the PHY's observation taps and their selects, and brings the bumps
+  * back out for a test to watch. Taps are `Bool`s in `PhyTest.DebugMuxInputs`
+  * order and nothing in the path is clocked, so a tap's level shows up on its
+  * bump combinationally.
   */
-class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
+class PhyTestDebugBumpsHarness(
+    numLanes: Int = 4,
+    hasTxDebugLane: Boolean = true
+) extends Module {
   val io = IO(new Bundle {
-    val txClk = Input(Bool())
-    val rxClk = Input(Bool())
-    val txDivClk = Input(Bool())
-    val sbTxClk = Input(Bool())
-    val rxData = Input(Vec(Phy.numRxDataLanes(numLanes), UInt(32.W)))
-    val clkMuxSel = Input(UInt(ClkMux.selWidth.W))
-    val rxDebugLane = Input(UInt(log2Ceil(numLanes + 2).W))
-    val rxDebugBit = Input(UInt(log2Ceil(Phy.SerdesRatio).W))
-    val bumps = new DebugBumpsIO
+    val taps = Input(Vec(PhyTest.DebugMuxInputs.length, Bool()))
+    val debugMuxSel =
+      Input(Vec(PhyTest.NumDebugDrivers, UInt(ClkMux.selWidth.W)))
+    val bumps = new DebugBumpsIO(hasTxDebugLane)
   })
 
   // PhyTest resets asynchronously, as it does in the full block.
   val dut = withReset(reset.asAsyncReset) {
-    Module(new PhyTest(numLanes = numLanes)(true))
+    Module(
+      new PhyTest(numLanes = numLanes, hasTxDebugLane = hasTxDebugLane)(true)
+    )
   }
   dut.io.regs := DontCare
   // In the full block the divider resets come from the clock register
@@ -68,20 +65,20 @@ class PhyTestDebugBumpsHarness(numLanes: Int = 4) extends Module {
     dut.io.regs.driverctl(i).en := true.B
     dut.io.regs.driverctl(i).en_b := false.B
   }
+  dut.io.regs.debugMuxSel := io.debugMuxSel
 
-  dut.io.debug.testTxLaneClk.foreach(_ := io.txClk.asClock)
-  dut.io.debug.testTxPadClk := io.txClk.asClock
-  dut.io.debug.testRxPadClk := io.rxClk.asClock
-  dut.io.debug.txDivClk := io.txDivClk.asClock
-  dut.io.debug.sbTxClk := io.sbTxClk.asClock
-  dut.io.debug.rxData := io.rxData
+  dut.io.debug.testTxLaneClk.foreach(_ := false.B.asClock)
+  for ((name, i) <- PhyTest.DebugMuxInputs.zipWithIndex) {
+    dut.io.debug.elements(name) match {
+      case c: Clock => c := io.taps(i).asClock
+      case b: Bool  => b := io.taps(i)
+      case other    => throw new IllegalArgumentException(s"$name is $other")
+    }
+  }
   // The sideband tester is in reset, so its serializer's clock is the main
-  // one. This is not the `sbTxClk` tap above, which only feeds the clock mux.
+  // one. This is not the `sbTxClk` tap above, which only feeds the muxes.
   dut.io.sbTxClock := clock
   dut.io.sbTxReset := reset.asBool
-  dut.io.regs.clkMuxSel := io.clkMuxSel
-  dut.io.regs.rxDebugLane := io.rxDebugLane
-  dut.io.regs.rxDebugBit := io.rxDebugBit
 
   dut.io.tx.ready := true.B
   dut.io.rx.valid := false.B
@@ -113,104 +110,89 @@ class PhyTestDebugBumpsSpec extends AnyFunSpec with ChiselSim {
     verilator(verilatorSettings = Utils.quietVerilatorSettings)
 
   val numLanes = 4
-  val rxLanes = Phy.numRxDataLanes(numLanes)
+  val inputs = PhyTest.DebugMuxInputs
 
-  // A distinct word per lane, so that selecting the wrong lane cannot happen to
-  // give the right bit.
-  def laneWord(lane: Int): BigInt =
-    (BigInt("9e3779b9", 16) * (lane + 1)) & ((BigInt(1) << 32) - 1)
+  def bump(c: PhyTestDebugBumpsHarness, mux: Int): Boolean =
+    Seq(c.io.bumps.mux0, c.io.bumps.mux1)(mux).peek().litToBoolean
 
-  def bitOf(word: BigInt, bit: Int): Int = ((word >> bit) & 1).toInt
+  /** Drives tap `tap` to `level` and every other tap to its complement. */
+  def drive(c: PhyTestDebugBumpsHarness, tap: Int, level: Boolean): Unit =
+    for (i <- inputs.indices) {
+      c.io.taps(i).poke((if (i == tap) level else !level).B)
+    }
 
   def setup(c: PhyTestDebugBumpsHarness): Unit = {
-    for (lane <- 0 until rxLanes) {
-      c.io.rxData(lane).poke(laneWord(lane).U)
-    }
-    c.io.txClk.poke(false.B)
-    c.io.rxClk.poke(false.B)
-    c.io.txDivClk.poke(false.B)
-    c.io.sbTxClk.poke(false.B)
-    c.io.clkMuxSel.poke(0.U)
-    c.io.rxDebugLane.poke(0.U)
-    c.io.rxDebugBit.poke(0.U)
+    for (i <- inputs.indices) c.io.taps(i).poke(false.B)
+    for (m <- 0 until PhyTest.NumDebugDrivers) c.io.debugMuxSel(m).poke(0.U)
     c.clock.step()
   }
 
   describe("PhyTest observation bumps") {
-    it("should put the selected RX lane and bit on the rxData bump") {
+    it("should put every selectable input on both bumps, not inverted") {
       simulate(new PhyTestDebugBumpsHarness(numLanes)) { c =>
         setup(c)
-        // Every lane, and enough bits per lane to catch a stuck or swapped
-        // select rather than a single lucky match.
-        for (lane <- 0 until rxLanes; bit <- Seq(0, 1, 7, 16, 30, 31)) {
-          c.io.rxDebugLane.poke(lane.U)
-          c.io.rxDebugBit.poke(bit.U)
+        // The selected tap set opposite to every other one, so a wrong select
+        // and an inversion both show up as the wrong level.
+        for (
+          mux <- 0 until PhyTest.NumDebugDrivers;
+          (name, sel) <- inputs.zipWithIndex;
+          level <- Seq(true, false)
+        ) {
+          c.io.debugMuxSel(mux).poke(sel.U)
+          drive(c, sel, level)
           c.clock.step()
-          withClue(s"lane $lane bit $bit of ${laneWord(lane).toString(16)}: ") {
-            assert(
-              c.io.bumps.rxData.peek().litValue.toInt ==
-                bitOf(laneWord(lane), bit)
-            )
+          withClue(s"mux$mux sel $sel ($name) at $level: ") {
+            assert(bump(c, mux) == level)
           }
         }
       }
     }
 
-    it("should follow a lane whose word changes under a fixed select") {
+    it("should select independently on the two bumps") {
       simulate(new PhyTestDebugBumpsHarness(numLanes)) { c =>
         setup(c)
-        c.io.rxDebugLane.poke(2.U)
-        c.io.rxDebugBit.poke(5.U)
-        for (pattern <- Seq(BigInt(0), ~BigInt(0) & ((BigInt(1) << 32) - 1))) {
-          c.io.rxData(2).poke(pattern.U)
+        val (a, b) =
+          (inputs.indexOf("refClk"), inputs.indexOf("rxDataLsb"))
+        c.io.debugMuxSel(0).poke(a.U)
+        c.io.debugMuxSel(1).poke(b.U)
+        for (level <- Seq(true, false)) {
+          drive(c, a, level)
           c.clock.step()
-          assert(
-            c.io.bumps.rxData.peek().litValue.toInt == bitOf(pattern, 5),
-            s"bump did not follow lane 2 set to ${pattern.toString(16)}"
-          )
-        }
-      }
-    }
-
-    it("should put the selected clock on the clkMux bump, inverted") {
-      simulate(new PhyTestDebugBumpsHarness(numLanes)) { c =>
-        setup(c)
-        // Input 0 is the sideband forwarded clock and input 1 the TX global
-        // divided clock. The cell shares an output inverter, so the bump is the
-        // complement of whichever input is selected -- fine for observation,
-        // but worth pinning down.
-        for (sb <- Seq(false, true); div <- Seq(false, true)) {
-          c.io.sbTxClk.poke(sb.B)
-          c.io.txDivClk.poke(div.B)
-
-          c.io.clkMuxSel.poke(0.U)
-          c.clock.step()
-          withClue(s"sel 0 with sb=$sb div=$div: ") {
-            assert(c.io.bumps.clkMux.peek().litToBoolean == !sb)
-          }
-
-          c.io.clkMuxSel.poke(1.U)
-          c.clock.step()
-          withClue(s"sel 1 with sb=$sb div=$div: ") {
-            assert(c.io.bumps.clkMux.peek().litToBoolean == !div)
+          withClue(s"${inputs(a)} at $level, ${inputs(b)} at ${!level}: ") {
+            assert(bump(c, 0) == level)
+            assert(bump(c, 1) == !level)
           }
         }
       }
     }
 
-    it("should pass the tapped clocks straight through to their own bumps") {
+    it("should read 0 on the tied-off inputs") {
       simulate(new PhyTestDebugBumpsHarness(numLanes)) { c =>
         setup(c)
-        // These two have no mux in front of them: the tap drives a pad driver
-        // and nothing else, so the bump tracks the tap level for level.
-        for (tx <- Seq(false, true); rx <- Seq(false, true)) {
-          c.io.txClk.poke(tx.B)
-          c.io.rxClk.poke(rx.B)
+        for (i <- inputs.indices) c.io.taps(i).poke(true.B)
+        for (
+          mux <- 0 until PhyTest.NumDebugDrivers;
+          sel <- inputs.length until ClkMux.numInputs
+        ) {
+          c.io.debugMuxSel(mux).poke(sel.U)
           c.clock.step()
-          withClue(s"txClk=$tx rxClk=$rx: ") {
-            assert(c.io.bumps.txClk.peek().litToBoolean == tx)
-            assert(c.io.bumps.rxClk.peek().litToBoolean == rx)
-          }
+          assert(!bump(c, mux), s"mux$mux sel $sel")
+        }
+      }
+    }
+
+    it("should have no txData bump without the TX data debug lane") {
+      simulate(
+        new PhyTestDebugBumpsHarness(numLanes, hasTxDebugLane = false)
+      ) { c =>
+        assert(c.io.bumps.txData.isEmpty)
+        setup(c)
+        val sel = inputs.indexOf("txDataLsb")
+        c.io.debugMuxSel(1).poke(sel.U)
+        for (level <- Seq(true, false)) {
+          drive(c, sel, level)
+          c.clock.step()
+          assert(bump(c, 1) == level, s"txDataLsb at $level")
         }
       }
     }

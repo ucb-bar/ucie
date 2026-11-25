@@ -127,20 +127,27 @@ class PhyDebugIO(numLanes: Int = 16) extends Bundle {
   // Lane clocks for the tester's own lanes (TX data debug, loopback TX,
   // loopback RX, in that order), from TxClk through the lane clock network.
   val testTxLaneClk = Output(Vec(ClkDistNetwork.numTestLanes, Clock()))
-  // Full-rate TX and forwarded RX clocks for the clock observation pads.
-  // Buffered taps, so the pad wires don't load the network roots.
+  // Full-rate TX and forwarded RX clocks for the tester's observation muxes.
+  // Buffered taps, so the wires to the muxes don't load the network roots.
   val testTxPadClk = Output(Clock())
   val testRxPadClk = Output(Clock())
   // TX global divided clock, i.e. the clock the TX lanes take their words on.
   val txDivClk = Output(Clock())
+  // RX global divided clock, the one the RX lanes hand their words over on.
+  val rxDivClk = Output(Clock())
   // Sideband forwarded clock as transmitted, from whichever controller owns
   // the sideband.
   val sbTxClk = Output(Clock())
-  // Deserialized RX lane words, in the RX divided clock domain, in lane order:
-  // `numLanes` data lanes, then valid, then track.
-  val rxData = Output(
-    Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
-  )
+  // The PHY's clock inputs, straight off their bumps.
+  val digitalBypassClk = Output(Clock())
+  val sidebandBypassClk = Output(Clock())
+  val refClk = Output(Clock())
+  // Bit 0 of RX data lane 0's deserializer output, before the bit shuffle,
+  // in the RX divided clock domain.
+  val rxDataLsb = Output(Bool())
+  // Bit 0 of the word going into TX data lane 0's serializer, after the bit
+  // shuffle, in the TX divided clock domain.
+  val txDataLsb = Output(Bool())
 }
 
 class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
@@ -373,12 +380,17 @@ class Phy(
     extends RawModule {
   val io = IO(new PhyIO(numLanes))
 
-  // Analog bypass clock pad: ESD clamp, then the clock receiver that restores
-  // the single-ended pad signal to a full-swing clock.
-  val bypassClkEsd = Module(new Esd)
-  bypassClkEsd.io.IO_signal := io.top.bypassClk.asBool
-  val bypassClkRx = Module(new ClkRx)
+  // Single-ended clock bumps, each into a delivered clock receiver (ESD clamp
+  // and receiver in one macro, inverting). The analog bypass clock gets the
+  // high-speed one; the other three run at 1 GHz or less.
+  val bypassClkRx = Module(new ClkRx(ClkRxKind.HighSpeed))
   bypassClkRx.io.Vin := io.top.bypassClk
+  val digitalBypassClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  digitalBypassClkRx.io.Vin := io.top.digitalBypassClk
+  val sidebandBypassClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  sidebandBypassClkRx.io.Vin := io.top.sidebandBypassClk
+  val refClkRx = Module(new ClkRx(ClkRxKind.LowSpeed))
+  refClkRx.io.Vin := io.top.refClk
 
   // Clocking tile: sources the PHY test, TX sideband, TX data, and TX
   // quadrature clocks.
@@ -405,8 +417,8 @@ class Phy(
   clkTile.io.SbClkSrcSel := io.clkRst.sbClkSrcSel
   clkTile.io.SbClkBypassEn := io.clkRst.sbClkBypassEn
   clkTile.io.SbClkEn := io.clkRst.sbClkEn
-  clkTile.io.SbBypassClk := io.top.sidebandBypassClk
-  clkTile.io.RefClk := io.top.refClk
+  clkTile.io.SbBypassClk := sidebandBypassClkRx.io.Vout
+  clkTile.io.RefClk := refClkRx.io.Vout
 
   io.clkRst.pll8Lock := clkTile.io.Pll8Lock
   io.clkRst.pll12Lock := clkTile.io.Pll12Lock
@@ -434,16 +446,19 @@ class Phy(
   // bypass clocks into the clocking tile.
   val clkDist = Module(new ClkDistNetwork(clkDistLayout))
   clkDist.io.bypassClk := bypassClkRx.io.Vout
-  clkDist.io.digitalBypassClk := io.top.digitalBypassClk
+  clkDist.io.digitalBypassClk := digitalBypassClkRx.io.Vout
   clkTile.io.BypassClk := clkDist.io.tileBypassClk
   clkTile.io.DigBypassClk := clkDist.io.tileDigitalBypassClk
   clkDist.io.txClk := clkTile.io.TxClk
   clkDist.io.txClkQ := clkTile.io.TxClkQ
-  // The tester's lanes and clock observation pads also take clocks from the
+  // The tester's lanes and observation muxes also take clocks from the
   // network, so nothing else loads its roots.
   io.debug.testTxLaneClk := clkDist.io.testTxLaneClk
   io.debug.testTxPadClk := clkDist.io.testTxPadClk
   io.debug.testRxPadClk := clkDist.io.testRxPadClk
+  io.debug.digitalBypassClk := io.top.digitalBypassClk
+  io.debug.sidebandBypassClk := io.top.sidebandBypassClk
+  io.debug.refClk := io.top.refClk
 
   // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
   // and the pad driver as one cell.
@@ -457,8 +472,8 @@ class Phy(
   sbTxData.io.ctl := PadDriverCtlIO.full
   val esdSbRxClk = Module(new EsdRoutable)
   val esdSbRxData = Module(new EsdRoutable)
-  esdSbRxClk.io.term := io.top.sbRxClk.asBool
-  esdSbRxData.io.term := io.top.sbRxData.asBool
+  esdSbRxClk.io.D2D_signal := io.top.sbRxClk.asBool
+  esdSbRxData.io.D2D_signal := io.top.sbRxData.asBool
   io.sb.rxClk := io.top.sbRxClk
   io.sb.rxData := io.top.sbRxData
   // The forwarded sideband clock as transmitted, after the bump driver.
@@ -501,6 +516,7 @@ class Phy(
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
   rxClkDiv.io.resetb := io.clkRst.rxDividerRstb
   io.clkRst.rxDivClk := rxClkDiv.io.clkout_3
+  io.debug.rxDivClk := io.clkRst.rxDivClk
   val rxRstSync = Module(new RstSync)
   rxRstSync.io.rstbAsync := !rxDatapathRstReg
   rxRstSync.io.clk := io.clkRst.rxDivClk
@@ -566,6 +582,9 @@ class Phy(
     txLane.io.rst := (!io.clkRst.txDividerRstb.asBool).asAsyncReset
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
+    if (lane == 0) {
+      io.debug.txDataLsb := txShuffler.io.dout(0)
+    }
     // The bumps are named, so this is the one place the TX side maps a lane
     // index onto a role.
     if (lane < numLanes) {
@@ -638,6 +657,9 @@ class Phy(
       rxShuffler.suggestName(s"${laneName}_shuffler")
       rxShuffler.io.din := rxLane.io.dout.asUInt
       rxShuffler.io.permutation := io.regs.rxctl(lane).shuffler
+      if (lane == 0) {
+        io.debug.rxDataLsb := rxLane.io.dout(0)
+      }
 
       rxLaneDout(lane) := rxShuffler.io.dout
       rxLane.io.clk := clkDist.io.rxLaneClk(lane)
@@ -679,6 +701,5 @@ class Phy(
   }
   io.rx.valid := rxLaneDelayed(Phy.validLane(numLanes))
   io.rx.track := rxLaneDelayed(Phy.trackLane(numLanes))
-  io.debug.rxData := rxLaneDout
 
 }

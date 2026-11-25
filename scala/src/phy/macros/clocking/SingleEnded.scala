@@ -8,18 +8,32 @@ class ClkRxIO extends Bundle {
   val Vout = Output(Clock())
 }
 
-// Self-biased inverter input stage followed by a restoring inverter, so the
-// receiver is non-inverting. Port and module names match the analog IP top
-// cell; the VDD/VSS pins are connected by the physical flow.
-class ClkRx(implicit includeDefaultModels: Boolean = false)
+/** Which delivered clock receiver a single-ended clock bump lands on. Both are
+  * an ESD clamp and receiver followed by a clock inverter driver, so both
+  * invert.
+  */
+sealed abstract class ClkRxKind(val cellName: String)
+
+object ClkRxKind {
+
+  /** For the high-speed bypass clock: adds duty-cycle correction. */
+  case object HighSpeed extends ClkRxKind("clock_receiver_esd_dcc")
+
+  /** For 100 MHz to 1 GHz: no duty-cycle correction. */
+  case object LowSpeed extends ClkRxKind("clock_receiver_esd_drv_lowspeed")
+}
+
+// Port and module names match the analog IP top cell; the VDD/VSS pins are
+// connected by the physical flow.
+class ClkRx(kind: ClkRxKind)(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new ClkRxIO)
 
-  override val desiredName = "clock_receiver"
+  override val desiredName = kind.cellName
 
   if (includeDefaultModels) {
-    addResource("/vsrc/clock_receiver.v")
+    addResource(s"/vsrc/${kind.cellName}.v")
   }
 }
 
@@ -85,10 +99,8 @@ class ClkDistNetworkIO(numLanes: Int = 16) extends Bundle {
   val testTxPadClk = Output(Clock())
   val testRxPadClk = Output(Clock())
 
-  // The clocking tile's two bypass clocks, on their way to it: the bypass
-  // clock receiver's restored clock, and the digital bypass clock, straight off
-  // its bump. Every module has its own bump for each. A physical network may
-  // buffer either of them.
+  // The clocking tile's two bypass clocks, each from its own bump's clock
+  // receiver. A physical network may buffer either.
   val bypassClk = Input(Clock())
   val digitalBypassClk = Input(Clock())
   val tileBypassClk = Output(Clock())

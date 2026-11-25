@@ -1,13 +1,13 @@
 `timescale 1ps/100fs
 
-// Shim matching the `tx_lane` blackbox in `phy/macros/Tx.scala`, so a design
+// Shim matching the `TX` blackbox in `phy/macros/Tx.scala`, so a design
 // emitted from Chisel can be simulated against the tile model below. The port
 // widths are fixed here rather than taken from `constants.vams` because they
 // have to track `TxLane` on the Chisel side.
 //
 // VDDQ, VDD, and VSS are pins on the tile; this shim ties them off so the
 // digital-only flow does not have to route supplies.
-module tx_lane (
+module TX (
   input [31:0] DataIN,
   input CK,
   input [31:0] Dctrl,
@@ -16,6 +16,9 @@ module tx_lane (
   input [3:0] ENP_EQ,
   input [3:0] ENN_EQ,
   input RST_async,
+  // Picks the clock edge the tile synchronizes `RST_async` on, which the tile
+  // model below does not resolve.
+  input Edge_Sel,
   output D2D_TX
 );
   txdata_tile_intf intf();
@@ -98,9 +101,10 @@ module txdata_tile (
 
     // The delay line moves the edge the serializer loads `DataIN` on, but not
     // enough to matter: its whole range, `TX_DCDL_TAPS` steps of
-    // `DCDL_DELAY_STEP` (a few ps), is small next to a 32 UI word, and the
-    // digital hands each word over about half a word away from the load (see
-    // the TX handoff in `Phy.scala`). No code can pull the load into a change.
+    // `DCDL_DELAY_STEP` (a fraction of a UI), is small next to a 32 UI word,
+    // and the digital hands each word over about half a word away from the
+    // load (see the TX handoff in `Phy.scala`). No code can pull the load into
+    // a change.
     logic [`SERDES_STAGES-1:0] serclk;
     assign serclk[0] = clkin;
     generate

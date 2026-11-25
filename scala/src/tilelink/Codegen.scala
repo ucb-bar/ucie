@@ -289,15 +289,15 @@ object Codegen {
   // clock delay, which is enough to get a lane transmitting during bring-up.
   val enableTxCtl: BigInt = TxLaneCtlIO.full.litValue
 
-  /** Bit position, in the packed `TxLaneCtlIO` word, of the lowest bit of a
-    * rail; `one` sets that bit. Derived from the Chisel type so that a field
-    * added to `TxLaneCtlIO` cannot silently move it.
+  /** Position of `name`'s lowest control bit in the packed `TxLaneCtlIO` word,
+    * from `one`, which sets only that bit. Read off the Chisel type so a new
+    * control bit cannot silently move it.
     */
-  private def txCtlLsb(rail: String, one: TxLaneCtlIO): BigInt = {
+  private def txCtlLsb(name: String, one: TxLaneCtlIO): BigInt = {
     val bit = one.litValue
     require(
       bit.bitCount == 1,
-      s"one bit of `$rail` should set exactly one bit of the word, got 0x${bit.toString(16)}"
+      s"one bit of `$name` should set exactly one bit of the word, got 0x${bit.toString(16)}"
     )
     BigInt(bit.lowestSetBit)
   }
@@ -317,10 +317,9 @@ object Codegen {
   val txCtlDelayMask: BigInt =
     ((BigInt(1) << TxLane.DelayTaps) - 1) << txCtlDelayLsb.toInt
 
-  /** Bit positions of the driver rails inside the packed `TxLaneCtlIO` word, so
-    * software can switch each segment of each stack on its own. Every rail is
-    * active high except `ENP_EQ`, which is active low. A high-impedance driver
-    * has every rail at zero except `ENP_EQ`, which is all ones.
+  /** Positions of the driver's control bits in the packed `TxLaneCtlIO` word,
+    * so software can set each segment on its own. All are active high except
+    * `ENP_EQ`: a high impedance driver is all zeros with `ENP_EQ` all ones.
     */
   val txCtlEnpLsb: BigInt = txCtlLsb("ENP", TxLaneCtlIO.raw(1, 0, 0, 0, 0))
   val txCtlEnnLsb: BigInt = txCtlLsb("ENN", TxLaneCtlIO.raw(0, 1, 0, 0, 0))
@@ -335,11 +334,12 @@ object Codegen {
     * the UCIe controller; on silicon, bring-up uses the code it trained.
     *
     * Sized for the reset clocking: main clock on the 8 GHz bypass pin, TX
-    * division /1, so a 125 ps period. With the model's tap delay
-    * (`GLOBAL_DL_DELAY_STEP`, about 1 ps), a quarter period is 29 taps. A part
-    * brought up at a different rate needs its own value.
+    * division /1, so a 125 ps period. The behavioral delay line is a fixed
+    * offset plus under 2 ps per tap. At 51 taps, TxClkQ trails TxClk by a
+    * quarter period, modulo the period. A part brought up at a different rate
+    * needs its own value.
     */
-  val digitalGlobalDelayTaps: Int = 29
+  val digitalGlobalDelayTaps: Int = 51
 
   /** Seed for both ends of a training run's LFSRs.
     *
@@ -409,10 +409,9 @@ object Codegen {
     *
     * The global line delays the quadrature clock. The forwarded clock lanes
     * send that clock and the far side samples with it, so the line moves the
-    * sampling point of every lane at once. Its 64 taps of 1 ps are just over
-    * one UI at 16 GT/s, so a full sweep sees the eye open and close exactly
-    * once. A 4-tap step gives 16 points at 4 ps resolution, fine against an
-    * eye tens of ps wide.
+    * sampling point of every lane at once. Its 64 taps span more than a UI at
+    * 16 GT/s, so a full sweep sees a whole eye. A 4-tap step gives 16 points a
+    * few ps apart, fine against an eye tens of ps wide.
     */
   val trainGlobalCodes: Int = 16
   val trainGlobalStep: Int = 4
@@ -420,7 +419,7 @@ object Codegen {
   /** Points in the per-lane trim sweep, and taps between them, on a lane's own
     * delay line.
     *
-    * Each line is 32 taps of `DCDL_DELAY_STEP`, a few ps in total.
+    * Each line is 32 taps of `DCDL_DELAY_STEP`, a fraction of a UI in total.
     * That covers the lane-to-lane spread from the clock tree, but by design
     * cannot move a lane across a UI; the global line does that. A 2-tap step
     * covers the range in 16 points.
@@ -928,7 +927,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         ("clkUngateSrcPllLock", ClkUngateSrc.pllLock.litValue),
         ("clkUngateSrcMmio", ClkUngateSrc.mmio.litValue),
         ("clkUngateSrcDelay", ClkUngateSrc.delay.litValue)
-      )
+      ) ++ PhyTest.DebugMuxInputs.zipWithIndex.map { case (input, i) =>
+        // `debugMuxSel` codes, one per observation mux input.
+        (s"debugMux${input.capitalize}", BigInt(i))
+      }
     ) {
       sb.append(
         f.formatDefine(

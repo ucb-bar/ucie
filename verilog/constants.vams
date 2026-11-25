@@ -57,15 +57,15 @@
 // Digitally-controlled delay line bit width
 `define DCDL_CTRL_BITWIDTH 8
 // Digitally-controlled delay line delay offset (ps)
-`define DCDL_DELAY_OFS 30.0
+`define DCDL_DELAY_OFS 62.5
 // Digitally-controlled delay line delay sep (ps).
 //
 // This is the per-lane trim, not the coarse one. Its whole range is
-// `TX_DCDL_TAPS` steps, a few ps -- enough to pull a lane back through the
-// spread the clock tree gives it and no further. Moving the sampling point
-// across a UI is the global line's job, on the quadrature clock, which covers
-// a little over a UI at 16 GT/s in 64 taps.
-`define DCDL_DELAY_STEP 0.16875
+// `TX_DCDL_TAPS` steps, a fraction of a UI -- enough to pull a lane back
+// through the spread the clock tree gives it and no further. Moving the
+// sampling point across a UI is the global line's job, on the quadrature
+// clock, which covers a little over a UI at 16 GT/s in 64 taps.
+`define DCDL_DELAY_STEP 0.4
 
 // Global delay line on TXCLKQ: 64 thermometer taps.
 `define GLOBAL_DL_CTRL_BITWIDTH 64

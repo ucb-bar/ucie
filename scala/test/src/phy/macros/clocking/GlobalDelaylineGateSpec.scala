@@ -45,10 +45,12 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
         localparam real T = 125.0;
         localparam integer LAGS = 40;
         localparam integer TOGGLES = 40;
-        localparam real TAP_PS = 1.086;   // the model's tap
+        // The model's tap, and its delay with every tap off.
+        localparam real TAP_PS = 1.57;
+        localparam real OFS_PS = 826.0;
 
         // Line settings: none, and enough taps to move the lag a third of a period.
-        localparam int SWEEP_TAPS[2] = '{0, 37};
+        localparam int SWEEP_TAPS[2] = '{0, 27};
         // Stands in for the TxClkQ flops' setup plus hold. Anything under a
         // quarter period passes with software's tap.
         localparam real WINDOW = 10.0;
@@ -107,7 +109,7 @@ class GlobalDelaylineGateLagSweep extends ExtModule {
           Dctrl = '0; Vin = 0; VinData = 0; enable = 0; edgeSel = 0;
           for (t = 0; t < 2; t = t + 1) begin
             Dctrl = (64'b1 << SWEEP_TAPS[t]) - 1;
-            line_delay = SWEEP_TAPS[t] * TAP_PS;
+            line_delay = OFS_PS + SWEEP_TAPS[t] * TAP_PS;
             for (k = 0; k < LAGS; k = k + 1) begin
               lag = (k + 0.5) * T / LAGS;
               // Total lag of the delayed TxClkQ, within a period.

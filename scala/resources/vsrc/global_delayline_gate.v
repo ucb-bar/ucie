@@ -4,7 +4,8 @@
 // pins. `enable`, `edgeSel`, `VinData` (TxClk) and `VoutData` belong to the
 // gate.
 //
-// The line delays `Vin` by one tap for each set bit of `Dctrl`.
+// The line delays `Vin` by a fixed offset plus one tap for each set bit of
+// `Dctrl`.
 //
 // `enable` is asynchronous to both TX clocks. Three flops on TxClk synchronize
 // it, and three more delay it to match the TxClkQ side. Each clock goes
@@ -35,12 +36,13 @@ module global_delayline_gate(
   input VinData,
   output VoutData
 );
-  // A tap is about 1 ps, finer than some harnesses' default precision. Set
+  // A tap is under 2 ps, finer than some harnesses' default precision. Set
   // here rather than with `timescale, which would apply to later files too.
   timeunit 1ps;
   timeprecision 1fs;
 
-  localparam real TAP_PS = 1.086;   // matches `global_delayline`
+  localparam real TAP_PS = 1.57;    // one tap
+  localparam real OFS_PS = 826.0;   // the line with every tap off
 
   // ---- Global delay line ----
   integer taps;
@@ -50,7 +52,7 @@ module global_delayline_gate(
     for (i = 0; i < 64; i = i + 1) taps = taps + Dctrl[i];
   end
   real delay;
-  always @(*) delay = taps * TAP_PS;
+  always @(*) delay = taps * TAP_PS + OFS_PS;
 
   reg q_delayed = 1'b0;
   always @(Vin) q_delayed <= #(delay) Vin;

@@ -58,7 +58,7 @@ clocking_distribution_model #(
 // The global delay line, on the forwarded clock only, as it sits on TXCLKQ in
 // the PHY. It is the training knob for where in the UI the far end samples: a
 // little over a UI in `GLOBAL_DL_CTRL_BITWIDTH` taps, where a lane's own delay
-// line only trims it by a few ps.
+// line only trims it by a fraction of a UI.
 wire clk_q;
 global_delayline global_dl(
     .dl_ctrl(intf.clk_phase_sel),

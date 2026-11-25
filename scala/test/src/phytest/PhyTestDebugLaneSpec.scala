@@ -66,7 +66,14 @@ class PhyTestDebugLaneHarness(
   }
   dut.io.debug.txDivClk := laneDivClk.asClock
   dut.io.debug.sbTxClk := false.B.asClock
-  dut.io.debug.rxData := DontCare
+  Seq(
+    dut.io.debug.rxDivClk,
+    dut.io.debug.digitalBypassClk,
+    dut.io.debug.sidebandBypassClk,
+    dut.io.debug.refClk
+  ).foreach(_ := false.B.asClock)
+  dut.io.debug.rxDataLsb := false.B
+  dut.io.debug.txDataLsb := false.B
   // The sideband tester stays in reset below, so its serializer's clock is the
   // main one.
   dut.io.sbTxClock := clock
@@ -126,7 +133,7 @@ class PhyTestDebugLaneHarness(
 
   io.state := dut.io.regs.txDebugState
   io.packetsEnqueued := dut.io.regs.txDebugPacketsEnqueued
-  io.txData := dut.io.bumps.txData
+  io.txData := dut.io.bumps.txData.get
 }
 
 class PhyTestDebugLaneSpec extends AnyFunSpec with ChiselSim {

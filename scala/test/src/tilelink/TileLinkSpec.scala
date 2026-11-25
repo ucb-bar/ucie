@@ -1782,7 +1782,7 @@ end
 localparam int N_PKTS = 4;
 localparam int MAX_UNITS = 48;
 // Global delay taps that centre the forwarded clock on the data at 16 GT/s.
-localparam int CENTRED_TAPS = 29;
+localparam int CENTRED_TAPS = 51;
 localparam string HANDOFFS [3] = '{"default handoff", "TX backup handoff", "RX backup handoff"};
 
 // Every TX lane, the clock lanes included, and every RX lane on its default
@@ -2019,7 +2019,7 @@ localparam int HOLDS = $holds;
 localparam int FAILS_AT = $failsAt;
 localparam int N_PKTS = 4096;
 // Global delay taps that centre the forwarded clock on the data at 16 GT/s.
-localparam int CENTRED_TAPS = 29;
+localparam int CENTRED_TAPS = 51;
 localparam int CAPS [9] = '{0, 24, 16, 14, 12, 10, 8, 6, 4};
 """.trim
 }
@@ -2086,7 +2086,7 @@ end
   val moduleItems = """
 localparam int N_PKTS = 8;
 // Global delay taps that centre the forwarded clock on the data at 16 GT/s.
-localparam int CENTRED_TAPS = 29;
+localparam int CENTRED_TAPS = 51;
 
 task automatic wait_idle_words();
   reg [63:0] w0, w;
@@ -2257,7 +2257,7 @@ end
 localparam int N_PKTS = 24;
 // Global delay taps that centre the forwarded clock on the data at 16 GT/s,
 // `PT_CENTRED_DELAY_TAPS` in the program.
-localparam int CENTRED_TAPS = 29;
+localparam int CENTRED_TAPS = 51;
 
 task automatic arm(input int n);
   reg [63:0] w0, w;

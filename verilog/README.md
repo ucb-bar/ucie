@@ -121,7 +121,7 @@ their bumps as pins, and everything else on those tiles stays in the interface.
 A bench wires two tiles together by handing the same `wire` to both, rather than
 by assigning one interface member to another.
 
-The blackbox shims (`tx_lane`, `rx_data_lane`, `rx_clock_lane`, `sb_driver`) are
+The blackbox shims (`TX`, `rx_data_lane`, `rx_clock_lane`, `sb_driver`) are
 the exception and cannot be fixed: their ports are `Bool()` on the Chisel side,
 so a design emitted from Chisel digitizes its bumps at the tile boundary no
 matter what. A full-stack AMS simulation therefore has an eye whose edge rate
@@ -164,7 +164,7 @@ prints the sweep and the code it settled on.
 The sweep has to be on the global line. A lane's own delay line only trims it
 against the spread of the clock trees -- between the TX arms on one side, and
 between each RX arm and its replica on the other -- with `TX_DCDL_TAPS` taps
-of `DCDL_DELAY_STEP`, a few ps in all, where the global line covers a little
+of `DCDL_DELAY_STEP`, a fraction of a UI in all, where the global line covers a little
 over a UI. The RX lane's line is on the data, so more taps there move the
 sampling point earlier in the UI rather than later.
 

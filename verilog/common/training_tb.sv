@@ -52,7 +52,7 @@ module training_tb;
     // little over a UI -- enough that the sampling point has to leave one UI
     // and settle into the next somewhere along it. The tile's own delay line
     // cannot do this: its whole range is `TX_DCDL_TAPS` taps of
-    // `DCDL_DELAY_STEP`, a few ps, because it only trims a lane against the
+    // `DCDL_DELAY_STEP`, a fraction of a UI, because it only trims a lane against the
     // spread of the clock tree.
     localparam int PHASE_POINTS = 32;
     localparam int PHASE_STEP = 2;

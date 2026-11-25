@@ -13,51 +13,51 @@ import chisel3.util._
 
 object ClkMux {
 
-  // Clocks the observation mux can select. Each input adds a pass gate on the
-  // shared node, so more inputs load every source clock more.
+  // Inputs the observation mux selects between, clocks or data.
   val numInputs = 16
 
   def selWidth: Int = log2Ceil(numInputs)
+
+  // The cell's select code for input `index`, which is Gray coded.
+  def gray(index: UInt): UInt = index ^ (index >> 1)
 }
 
 class ClkMuxIO extends Bundle {
-  val Vin = Input(Vec(ClkMux.numInputs, Clock()))
-  val sel = Input(Vec(ClkMux.numInputs, Bool()))
-  val selb = Input(Vec(ClkMux.numInputs, Bool()))
-  val Vout = Output(Clock())
+  // Clocks or data, one bit per input. A bus rather than a `Vec` of clocks so
+  // the port is `Q[15:0]`, as the cell names it.
+  val Q = Input(UInt(ClkMux.numInputs.W))
+  val sel = Input(UInt(ClkMux.selWidth.W))
+  val clk_divided = Output(Clock())
 }
 
-// Single-ended `ClkMux.numInputs` to 1 clock mux cell.
-//
-// Each input has a pass gate onto one shared node. `sel` must be one-hot and
-// `selb` its exact complement; anything else floats the node or shorts two
-// clocks. `Vout` is the inverse of the selected input, which is fine for
-// observation. Use `connect` instead of driving `sel`/`selb` by hand.
+// The 16:1 clock mux `mux16to1` from the analog clocking IP. `sel` =
+// `ClkMux.gray(i)` picks `Q[i]`, not inverted, and every code picks some
+// input; use `connect` rather than driving `sel` by hand.
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new ClkMuxIO)
 
-  override val desiredName = "debug_clkmux"
+  override val desiredName = "mux16to1"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/debug_clkmux.v")
+    addResource("/vsrc/mux16to1.v")
   }
 
-  // Returns `ins(sel)`. Unused inputs are tied off. An out-of-range `sel` turns
-  // every pass gate off instead of shorting two clocks.
-  def connect(ins: Seq[Clock], sel: UInt): Clock = {
+  // Returns `ins(index)`, Gray coding `index` into the cell's select. Inputs
+  // past the end of `ins` are tied low, so selecting one gives a constant 0.
+  def connect(ins: Seq[Clock], index: UInt): Clock = {
     require(
       ins.length <= ClkMux.numInputs,
       s"${ins.length} clocks does not fit a ${ClkMux.numInputs} input mux"
     )
-    val oneHot = UIntToOH(sel, ClkMux.numInputs)
-    for (i <- 0 until ClkMux.numInputs) {
-      io.Vin(i) := ins.lift(i).getOrElse(false.B.asClock)
-      io.sel(i) := oneHot(i) && (i < ins.length).B
-      io.selb(i) := !io.sel(i)
-    }
-    io.Vout
+    io.Q := VecInit(
+      Seq.tabulate(ClkMux.numInputs)(i =>
+        ins.lift(i).map(_.asBool).getOrElse(false.B)
+      )
+    ).asUInt
+    io.sel := ClkMux.gray(index)
+    io.clk_divided
   }
 }
 
@@ -179,7 +179,7 @@ class ClockingTileIO extends Bundle {
 
   /** TxClkQ's lead over TxClk, in UCIe main clock half cycles, 0 to 2*div-1.
     * A step of half a main clock period is within the global delay line's
-    * ~69 ps range for main clocks of about 7.2 GHz and up (every PLL rate), so
+    * tap range for main clocks of about 5 GHz and up (every PLL rate), so
     * this and the delay line together reach any phase. A slower bypass clock
     * leaves gaps. At /1 this has no effect: TxClkQ is the main clock.
     */
@@ -576,17 +576,19 @@ class Esd(implicit includeDefaultModels: Boolean = false)
   }
 }
 
+// Die-to-die bump ESD clamp, the delivered `D2D_ESD`. Only the protected net
+// is connected here; the physical flow connects the supplies.
 class EsdRoutable(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
   val io = IO(new Bundle {
-    val term = Input(Bool())
+    val D2D_signal = Input(Bool())
   })
 
-  override val desiredName = "ucie_esd_routable"
+  override val desiredName = "D2D_ESD"
 
   if (includeDefaultModels) {
-    addResource("/vsrc/ucie_esd_routable.v")
+    addResource("/vsrc/D2D_ESD.v")
   }
 }
 
