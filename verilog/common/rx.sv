@@ -427,11 +427,30 @@ generate
 endgenerate
 assign intf.divclk = desclk[`SERDES_STAGES-1];
 
+logic [2**`SERDES_STAGES-1:0] dout_tree;
 tree_des des(
     .din(dout_delayed),
     .clk(desclk),
-    .dout(intf.dout)
+    .dout(dout_tree)
 );
+
+// The tile puts its word out on the falling edge of its divided clock. The
+// tree's last stage is latches that are transparent while that clock is high,
+// so its word is only whole while the clock is low; these flops take it as the
+// clock falls and hold it for a whole word period. `Phy` enqueues on the rising
+// edge, half a word period after the update.
+logic divclkb;
+assign divclkb = ~desclk[`SERDES_STAGES-1];
+generate
+    for (genvar j = 0; j < 2**`SERDES_STAGES; j++) begin : out
+        pos_dff ff (
+            .clk(divclkb),
+            .d(dout_tree[j]),
+            .rstb(intf.rstb),
+            .q(intf.dout[j])
+        );
+    end
+endgenerate
 
 endmodule
 
@@ -457,11 +476,17 @@ module rxclk_tile(
 // The recovered clock, before this lane's gate.
 logic clkout_raw;
 
-// Latched on the clock's low phase, so enabling or disabling mid-cycle cannot
-// hand a runt to the tree and leave a lane's divider a count out.
-logic gate_en_latched;
+// The gate, as in the TX gate (`global_delayline_gate`): three flops on this
+// clock synchronize the enable, and a clock gate cell (a latch open while the
+// clock is low, then an AND) driven by the third flop gates the clock. So a
+// change can't hand a runt to the tree and leave a lane's divider a count
+// out. It takes effect on the fourth rising edge after it, and only while
+// the clock runs.
+logic [2:0] en_sync = 3'b0;
+always @(posedge clkout_raw) en_sync <= {en_sync[1:0], intf.clk_gate_en};
+logic gate_en_latched = 1'b0;
 always @(*) begin
-    if (!clkout_raw) gate_en_latched = intf.clk_gate_en;
+    if (!clkout_raw) gate_en_latched = en_sync[2];
 end
 assign intf.clkout = clkout_raw & gate_en_latched;
 

@@ -28,9 +28,12 @@ class PhyTestDebugBumpsHarness(
     val bumps = new DebugBumpsIO(hasTxDebugLane)
   })
 
-  val dut = Module(
-    new PhyTest(numLanes = numLanes, hasTxDebugLane = hasTxDebugLane)(true)
-  )
+  // PhyTest resets asynchronously, as it does in the full block.
+  val dut = withReset(reset.asAsyncReset) {
+    Module(
+      new PhyTest(numLanes = numLanes, hasTxDebugLane = hasTxDebugLane)(true)
+    )
+  }
   dut.io.regs := DontCare
   // In the full block the divider resets come from the clock register
   // block; the harness reset stands in for it here.

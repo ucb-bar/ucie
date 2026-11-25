@@ -71,6 +71,8 @@ class PhyControlSignalTranslator(afeParams: AfeParams) extends Module {
   io.toPhy.mbTxClkEn := io.fromDigital.mbCtrlIo.txClkEn
   io.toPhy.mbTxValidEn := io.fromDigital.mbCtrlIo.txValidEn
   io.toPhy.mbTxTrackEn := io.fromDigital.mbCtrlIo.txTrackEn
+  // Set by `LogicalPhy`, which knows the link state and clock mode.
+  io.toPhy.mbTxClkGate := false.B
   io.toPhy.mbRxDataEn := io.fromDigital.mbCtrlIo.rxDataEn
   io.toPhy.mbRxClkEn := io.fromDigital.mbCtrlIo.rxClkEn
   io.toPhy.mbRxValidEn := io.fromDigital.mbCtrlIo.rxValidEn

@@ -1,6 +1,6 @@
 // Behavioral model of the UCIe TX tile.
 //
-// Models the 16:1 double data rate serializer, the tile's wake-up, and the
+// Models the 32:1 serializer (both clock edges), the tile's wake-up, and the
 // enable state of the output driver. `Dctrl`, `ENP_EQ`, and `ENN_EQ` only
 // shape the analog waveform, so they have no effect here; see
 // `verilog/tx.vams` for the model that does resolve them.
@@ -49,10 +49,16 @@ module TX (
   // this reset, releasing it, and only then letting CK run again, so that
   // every tile's divider restarts on the same first edge. A reset that needed
   // an edge of its own would never be applied in that window.
+  //
+  // The divider leaves reset the way the global one (`ucie_clk_div4`) does:
+  // `divClock` rises on the first edge of CK, and the tile loads `DataIN` on
+  // every rising edge of `divClock`, starting with that one. A tile reset with
+  // the global divider therefore loads in step with its `clkout_3` rising,
+  // which is the edge `Phy` hands each word over half a word period ahead of.
   always @(posedge CK or posedge RST_async) begin
     if (RST_async) begin
       divClock <= 1'b0;
-      ctr <= 3'b1;
+      ctr <= 3'b0;
       shiftReg <= 32'b0;
       wakeCtr <= 8'b0;
     end else begin

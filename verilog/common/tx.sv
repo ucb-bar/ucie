@@ -101,9 +101,10 @@ module txdata_tile (
 
     // The delay line moves the edge the serializer loads `DataIN` on, but not
     // enough to matter: its whole range, `TX_DCDL_TAPS` steps of
-    // `DCDL_DELAY_STEP` (5.4 ps), is small next to a 32 UI word, and the
-    // digital hands each word over about half a word away from the load (see
-    // the TX handoff in `Phy.scala`). No code can pull the load into a change.
+    // `DCDL_DELAY_STEP` (a fraction of a UI), is small next to a 32 UI word,
+    // and the digital hands each word over about half a word away from the
+    // load (see the TX handoff in `Phy.scala`). No code can pull the load into
+    // a change.
     logic [`SERDES_STAGES-1:0] serclk;
     assign serclk[0] = clkin;
     generate

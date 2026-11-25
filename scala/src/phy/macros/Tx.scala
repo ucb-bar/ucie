@@ -7,8 +7,8 @@ import chisel3.experimental.BundleLiterals._
 object TxLane {
 
   /** Bits of parallel data (`DataIN`) the tile consumes per divided clock
-    * cycle. The serializer is 16:1 and double data rate, so the tile emits two
-    * bits per `CK` period.
+    * cycle. The serializer is 32:1 and sends on both edges of `CK`, so the
+    * tile emits two bits per `CK` period.
     */
   val SerdesRatio = 32
 
@@ -140,7 +140,7 @@ class TxLaneIO extends Bundle {
   val ctl = Input(new TxLaneCtlIO)
 }
 
-/** One UCIe TX tile: a 16:1 double data rate serializer, a delay line on the
+/** One UCIe TX tile: a 32:1 serializer on both clock edges, a delay line on the
   * high speed clock, and the N-over-N output driver with its capacitive peaking
   * equalizer branch.
   *

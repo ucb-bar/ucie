@@ -52,7 +52,7 @@ module training_tb;
     // little over a UI -- enough that the sampling point has to leave one UI
     // and settle into the next somewhere along it. The tile's own delay line
     // cannot do this: its whole range is `TX_DCDL_TAPS` taps of
-    // `DCDL_DELAY_STEP`, a few ps, because it only trims a lane against the
+    // `DCDL_DELAY_STEP`, a fraction of a UI, because it only trims a lane against the
     // spread of the clock tree.
     localparam int PHASE_POINTS = 32;
     localparam int PHASE_STEP = 2;
@@ -238,10 +238,12 @@ module training_tb;
         logic [WORD-1:0] second;
         phase_sel = phase_taps(phase);
         rxdata_intf.vref_sel = vref[`RDAC_SEL_BITS-1:0];
-        repeat (SETTLE_WORDS) @(posedge rxdata_intf.divclk);
-        @(negedge rxdata_intf.divclk);
+        // Read on the rising edge, as `Phy` does: the tile updates `dout` on
+        // the falling one, so the word read there ended half a word period
+        // earlier. The extra edge keeps the settle what it was.
+        repeat (SETTLE_WORDS + 1) @(posedge rxdata_intf.divclk);
         first = shuffle(rxdata_intf.dout);
-        @(negedge rxdata_intf.divclk);
+        @(posedge rxdata_intf.divclk);
         second = shuffle(rxdata_intf.dout);
         rot = (first === second) ? rotation_of(first) : -1;
     endtask

@@ -5,9 +5,9 @@
 // A transport delay rather than a continuous assignment's: the line is far
 // longer than a clock period -- `GLOBAL_DL_DELAY_OFS` alone is 80 of them -- and
 // a delayed `assign` is inertial, so it would swallow every pulse shorter than
-// the delay and pass no clock at all. The same goes for `clocking_tile.v`'s
-// line in `scala/resources/vsrc`, which is written the same way for the same
-// reason.
+// the delay and pass no clock at all. The same goes for
+// `global_delayline_gate.v`'s line in `scala/resources/vsrc`, which is written
+// the same way for the same reason.
 module global_delayline #(
     parameter integer CTRL_BITWIDTH = `GLOBAL_DL_CTRL_BITWIDTH,
     parameter real    DELAY_OFS     = `GLOBAL_DL_DELAY_OFS,

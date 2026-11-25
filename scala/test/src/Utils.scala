@@ -10,11 +10,11 @@ import edu.berkeley.cs.uciedigital.tilelink.SimTop
 
 /** Abstraction level of the analog PHY models a simulation is built against.
   *
-  * Each level is a directory under `verilog/models` holding a complete set of
-  * analog cells, compiled alongside the level-independent `verilog/common`.
-  * `verilog/README.md` has the contract they all implement and what separates
-  * them. Selecting no level at all leaves the behavioral models in
-  * `scala/resources/vsrc` in place, which is what a Verilator build wants.
+  * Each level is a directory under `verilog/models` with a complete set of
+  * analog cells, compiled with the level-independent `verilog/common`.
+  * `verilog/README.md` describes their shared contract and how they differ.
+  * With no level, the behavioral models in `scala/resources/vsrc` are used, as
+  * a Verilator build needs.
   */
 sealed abstract class AmsLevel(val dirName: String)
 
@@ -35,12 +35,11 @@ object Utils {
 
   /** Whether the analog runs model lane to lane clock skew.
     *
-    * The skew model is a real distribution tree -- eighty analog clock nets --
-    * and costs several times the run time of the plain fanout, so it is off
-    * unless a run is specifically exercising the per-lane delay trim that
-    * exists to absorb that skew. Nothing else needs it: with the fanout every
-    * lane's clock is identical, which is the right model for a digital run and
-    * an acceptable one for a sweep that is only placing the sampling point.
+    * The skew model is a real distribution tree (eighty analog clock nets) and
+    * takes several times as long to run as the plain fanout. It is off unless a
+    * run tests the per-lane delay trim that corrects the skew. With the fanout
+    * every lane's clock is identical, which is right for a digital run and good
+    * enough for a sweep that only places the sampling point.
     */
   val clkSkew: Boolean = false
 
@@ -57,9 +56,9 @@ object Utils {
   val controlFile = xceliumDir / "amscf.scs"
   val probeFile = xceliumDir / "probe.tcl"
 
-  // The analog behavioral models trip Verilator lint warnings -- the serializer
-  // model drives its shift register and divided clock from more than one always
-  // block, for one -- and warnings are fatal by default.
+  // The analog behavioral models trip Verilator lint warnings (for example,
+  // the serializer model drives its shift register and divided clock from
+  // more than one always block), and warnings are fatal by default.
   val quietVerilatorSettings =
     CompilationSettings.default.withDisableFatalExitOnWarnings(true)
 
@@ -132,12 +131,11 @@ verilator \\
       incDirs: Seq[Path] = Seq.empty
   ) = {
     os.makeDir.all(path / os.up)
-    // `-Xcflags` is for the C that VCS generates and compiles itself, which
-    // `-CFLAGS` never reaches. Its `rmapats.c` calls runtime functions it does
-    // not declare, which GCC 14 made an error rather than a warning; this puts
-    // the warning back, and VCS's `-w` already silences it. Older GCCs accept
-    // the flag too. `-Xcflags` is undocumented: `$VCS_HOME/bin/vcs` is the only
-    // place it is described.
+    // `-Xcflags` passes flags to the C that VCS generates and compiles itself,
+    // which `-CFLAGS` does not reach. Its `rmapats.c` calls undeclared runtime
+    // functions, an error since GCC 14. This flag makes it a warning again,
+    // which VCS's `-w` silences. Older GCCs accept the flag too. `-Xcflags` is
+    // undocumented; only `$VCS_HOME/bin/vcs` describes it.
     os.write.over(
       path,
       s"""#!/bin/bash
@@ -170,10 +168,10 @@ vcs \\
       incDirs: Seq[Path] = Seq.empty
   ) = {
     os.makeDir.all(path / os.up)
-    // `-sysv_ext +.v` compiles `.v` files as SystemVerilog too, as `-sverilog`
-    // does for VCS: some behavioral models use SystemVerilog in a `.v` file,
-    // such as the `timeunit` in `clocking_tile.v`. Not `-sv`, which would take
-    // the `.vams` models and the disciplines they include as SystemVerilog.
+    // `-sysv_ext +.v` compiles `.v` files as SystemVerilog, like `-sverilog`
+    // for VCS: some behavioral models use SystemVerilog in a `.v` file, such
+    // as the `timeunit` in `main_clk_sel_core.v`. Not `-sv`, which would also
+    // treat the `.vams` models and their disciplines as SystemVerilog.
     os.write.over(
       path,
       s"""#!/bin/bash
@@ -206,9 +204,9 @@ ${
   /** Finds source files within a given source directory with the given file
     * extensions.
     *
-    * Packages come first: a simulator compiles in the order it is handed files
-    * and a package has to be compiled before whatever imports it. Nothing else
-    * here has an ordering requirement.
+    * Packages come first, since a simulator compiles files in the order given
+    * and a package must be compiled before anything that imports it. No other
+    * ordering is needed.
     */
   def getSourceFiles(
       sourceDir: Path,
@@ -223,10 +221,9 @@ ${
 
   /** Elaborates `dut`, writes a script that simulates it, and runs it.
     *
-    * `amsLevel` selects which set of analog PHY models the design is built
-    * against; leaving it `None` keeps the behavioral models in
-    * `scala/resources/vsrc`, which is the only thing Verilator can build. See
-    * `verilog/README.md`.
+    * `amsLevel` selects the analog PHY models to build against. `None` keeps
+    * the behavioral models in `scala/resources/vsrc`, the only ones Verilator
+    * can build. See `verilog/README.md`.
     */
   def simulate[T <: RawModule](
       dut: => T,
@@ -258,23 +255,28 @@ ${
             xceliumHome / "tools.lnx86/spectre/etc/ahdl/disciplines.vams"
           val constants =
             xceliumHome / "tools.lnx86/spectre/etc/ahdl/constants.vams"
-          // Behavioral models kept even in an AMS build, because `verilog/` has
-          // no model of these cells. Everything else in `defaultVsrcDir` is left
-          // out so that the AMS model of the same cell takes over.
+          // Behavioral models kept in an AMS build, because `verilog/` has no
+          // model of these cells. The rest of `defaultVsrcDir` is left out so
+          // the AMS model of each cell is used instead.
           val defaultModels = Seq(
             "ucie_clk_dist_network.sv",
             "ucie_clk_div4.v",
             "mux16to1.v",
-            "clocking_tile.v",
+            "pll8g_top.v",
+            "pll12g_top.v",
+            "main_clk_sel_core.v",
+            "global_delayline_gate.v",
+            "phytest_div_core.v",
+            "sb_div_core.v",
             "clock_receiver_esd_dcc.v",
             "clock_receiver_esd_drv_lowspeed.v",
             "IO_ESD.v",
             "D2D_ESD.v",
             "ucie_rst_sync.v"
           )
-          // These are filenames, so a rename elsewhere leaves a dangling entry
-          // that only shows up as `*SE,FILEMIS` once a simulator runs -- past
-          // compile, scalafmt and every CI step. Fail here instead.
+          // A renamed file leaves a dangling entry here that shows up only as
+          // `*SE,FILEMIS` when a simulator runs, after compile, scalafmt and
+          // every CI step have passed. Fail here instead.
           defaultModels.foreach { m =>
             require(
               os.exists(defaultVsrcDir / m),

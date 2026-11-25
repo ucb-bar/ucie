@@ -39,8 +39,8 @@ abstract class TestDriver extends ExtModule {
   val ucieDigitalBypassClock = IO(Output(Clock()))
   val ucieSidebandBypassClock = IO(Output(Clock()))
   // 100 MHz reference for the clocking tile's PLL. Unused while the tile is
-  // bypassed, which is its reset default, but present so the generated path
-  // can be exercised without rewiring the harness.
+  // bypassed (its reset default); present so the PLL path can be tested
+  // without rewiring the harness.
   val ucieRefClock = IO(Output(Clock()))
   val reset = IO(Output(Reset()))
 
@@ -52,12 +52,24 @@ abstract class TestDriver extends ExtModule {
 
 abstract class SVTestDriver extends TestDriver {
 
-  /** Half period of the analog bypass clock, in ps. 62.5 is 8 GHz, which with
-    * no division is 16 GT/s -- the rate every test here ran at before there was
-    * a reason to pick another. A driver overrides it to sit the part at a
-    * different rate without touching the design's reset defaults.
+  /** Half period of the analog bypass clock, in ps. 62.5 is 8 GHz, or 16 GT/s
+    * undivided. A driver overrides it to run at another rate without changing
+    * the design's reset defaults.
     */
   def bypassHalfPeriodPs: Double = 62.5
+
+  /** Half period of the digital bypass clock, the PHY test clock out of reset,
+    * in ps: 800 MHz unless a driver says otherwise.
+    */
+  def digitalBypassHalfPeriodPs: Double = 625.0
+
+  /** Chip clock cycles before the run is called hung. */
+  def timeoutCycles: Int = 100000
+
+  /** Whether to dump waveforms outside FSDB builds. A full dump of a long run
+    * at 8 GHz is too large to be useful.
+    */
+  def dumpWaves: Boolean = true
 
   val tltReg = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
   val tltMb = IO(Flipped(new TLTesterIO(TestHarness.tltParams)))
@@ -66,11 +78,9 @@ abstract class SVTestDriver extends TestDriver {
 
   /** Emits this driver as a SystemVerilog module.
     *
-    * `body` is the stimulus, inlined as statements into an `initial` block that
-    * has already brought the design out of reset, so it cannot declare
-    * subroutines. `moduleItems` is inlined at module scope next to the
-    * sequences `Codegen` emits, which is where a driver that needs a task of
-    * its own puts it.
+    * `body` is the stimulus, inlined into an `initial` block after reset, so it
+    * cannot declare subroutines. `moduleItems` goes at module scope next to the
+    * sequences `Codegen` emits; put a driver's own tasks there.
     */
   def setStimulus(name: String, body: String, moduleItems: String = "") =
     setInline(
@@ -111,17 +121,15 @@ module TLTDriver(
 );
   task op(input [63:0] addr, input [63:0] data, input is_write, input string ctx, output [63:0] resp_data);
     begin
-      // Declared and cleared separately: a variable declared inside a task is
-      // static, so an initializer here would run once at time zero and leave
-      // the flag set from the previous call.
+      // Declared and cleared separately. Task variables are static, so an
+      // initializer would run only once, at time zero, leaving the flag set
+      // from the previous call.
       bit got_resp;
       got_resp = 1'b0;
       // Drive on the falling edge, and sample only after a settling delay.
-      // Driving on the rising edge races the DUT sampling it: `op` returns on
-      // the posedge that carried the response, so the next call asserted
-      // req_valid at that same instant and the request could be presented in
-      // the very cycle that answered the previous one, reusing a source ID the
-      // TileLink monitor still counts as in flight.
+      // Driving on the rising edge races the DUT: the next request could
+      // appear in the cycle that answered the last one, reusing a source ID
+      // the TileLink monitor still counts as in flight.
       @(negedge clock);
       intf.resp_ready = 1'b1;
       intf.req_valid = 1'b1;
@@ -275,14 +283,14 @@ ${Codegen.indent(moduleItems)}
   initial ucieRefClock = 1'b0;
   always #1000 digitalClock = ~digitalClock;
   always #${bypassHalfPeriodPs} ucieBypassClock = ~ucieBypassClock;
-  always #625 ucieDigitalBypassClock = ~ucieDigitalBypassClock;
+  always #${digitalBypassHalfPeriodPs} ucieDigitalBypassClock = ~ucieDigitalBypassClock;
   // 800 MHz sideband bypass.
   always #625 ucieSidebandBypassClock = ~ucieSidebandBypassClock;
   // 100 MHz: the PLL multiplies this by 80 to reach 8 GHz.
   always #5000 ucieRefClock = ~ucieRefClock;
 
   initial begin
-    repeat(100000) @(posedge digitalClock);
+    repeat(${timeoutCycles}) @(posedge digitalClock);
     $$fatal(1, "Timeout");
   end
 
@@ -294,9 +302,10 @@ ${Codegen.indent(moduleItems)}
       $$fsdbDumpfile(fsdbfile);
       $$fsdbDumpvars(0, SimTop, "+all");
     end
-`else
-    $$dumpfile("trace.vcd");
-    $$dumpvars(0);
+`else${
+          if (dumpWaves) "\n    $dumpfile(\"trace.vcd\");\n    $dumpvars(0);"
+          else ""
+        }
 `endif
     reset = 1'b1;
     repeat(5) @(posedge digitalClock);
@@ -625,14 +634,11 @@ class MmioSimpleTestDriver extends SVTestDriver {
   )
 }
 
-/** A fast check on the two things a training sweep depends on and neither the
-  * Verilator tests nor a single `run_lfsr` exercises: that a run's packets are
-  * all counted, and that a lane still reads clean after its delay has been
-  * moved across the eye and back.
+/** Quickly checks two things training depends on that the Verilator tests and
+  * a single `run_lfsr` miss: every packet of a run is counted, and a lane
+  * reads clean after its delay moves across the eye and back.
   *
-  * Runs in about three minutes against `models/eye`, where the full sweep takes
-  * fifty, which is the difference between iterating on a change and guessing at
-  * it.
+  * Takes about three minutes against `models/eye`; the full sweep takes fifty.
   */
 class ResetReproTestDriver extends SVTestDriver {
   setStimulus(
@@ -654,8 +660,8 @@ begin : repro
   seed_lfsrs();
 
   // 1. Every packet sent is counted. `run_lfsr` gives up after a fixed number
-  // of read backs, so a run whose burst starts late reads a partial count --
-  // full packets sent, a fraction of them scored.
+  // of reads, so a burst that starts late shows a partial count: all packets
+  // sent, only some scored.
   for (i = 0; i < 3; i++) begin
     run_lfsr(`TRAIN_PACKETS);
     `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
@@ -667,12 +673,11 @@ begin : repro
     end
   end
 
-  // 2. The coarse knob moves the sampling point, and where it is approached
-  // from must not matter. Sweep 1 of the training run walks the global code
-  // upwards and finds code 12 clean; sweep 3 parks on code 12 coming down from
-  // 32 and finds it dirty. Either the approach direction matters -- a delay
-  // line shortened under a running clock loses an edge -- or something else
-  // sweep 2 leaves behind does. This asks the question directly.
+  // 2. The direction the coarse delay is approached from must not matter.
+  // Training sweep 1 walks the global code up and finds code 12 clean; sweep
+  // 3 comes down to 12 from 32 and finds it dirty. Either direction matters
+  // (a delay line shortened under a running clock loses an edge), or
+  // something sweep 2 leaves behind does.
   set_clk_en(0);
   set_global_delay(12);
   set_clk_en(1);
@@ -684,9 +689,8 @@ begin : repro
   $display("REPRO code 12 reached directly:   nominal errors %0d", nom);
   if (nom != 0) fails = fails + 1;
 
-  // The two things sweep 2 and sweep 3 do that the check above does not:
-  // leave vref at the trained code, and write every data lane's trim. Applied
-  // one at a time, so whichever flips it is named rather than inferred.
+  // What sweeps 2 and 3 also do: set vref to the trained code and write every
+  // data lane's trim. One at a time, to show which changes the result.
   for (int l = 0; l < `TRAIN_DATA_LANES; l++) set_rx_vref(l, 64);
   run_lfsr(`TRAIN_PACKETS);
   run_lfsr(`TRAIN_PACKETS);
@@ -720,12 +724,10 @@ begin : repro
   `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
   $display("REPRO code 12 reached from 32:    nominal errors %0d", nom);
 
-  // 3. The RX clock gate actually gates, and the receiver comes back after it.
-  // With the clock stopped at the clock lanes nothing downstream is clocked,
-  // so a burst sent across that window is not received at all. Ungating has to
-  // restore a receiver that counts every packet again -- everything on the RX
-  // divided clock stopped too, the reset synchronizer and the queue's PHY side
-  // among them, so coming back is the part worth checking.
+  // 3. A burst sent with the RX clock gated is not received. After ungating,
+  // every packet is counted again. Everything on the RX divided clock stops
+  // too, including the reset synchronizer and the queue's PHY side, so
+  // recovery is the main check.
   set_rx_clk_en(0);
   run_lfsr(`TRAIN_PACKETS);
   `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
@@ -749,9 +751,8 @@ begin : repro
   end
 
   // 4. Does the link carry anything at half rate? The eye sweep finds nothing
-  // at /2, and the first thing to separate is a phase the sweep missed from a
-  // link that is not running at all. Packets sent against packets counted says
-  // which: a receiver seeing nothing is not a phase problem.
+  // at /2. Packets sent vs. received tells a missed phase from a dead link:
+  // a receiver that sees nothing is not a phase problem.
   set_rx_clk_en(1);
   for (i = 0; i < 4; i++) begin
     set_main_clk(3, 1);
@@ -768,9 +769,9 @@ begin : repro
     `WRITE_UCIE(regDrv, `RX_PAUSE_COUNTERS, 64'h0);
     $display("REPRO /2 phase %0d: tx sent %0d, rx received %0d, nominal %0d",
              i, sent, got, nom);
-    // Is the count still climbing after `run_lfsr` gave up? If it is, the
-    // poll window is simply too short for a burst that now takes twice as
-    // long; if it is not, the receiver stopped for some other reason.
+    // Still counting after `run_lfsr` gave up? Then its poll window is too
+    // short for a burst twice as long. If not, the RX stopped for another
+    // reason.
     if (i == 0) begin
       for (int w = 0; w < 40; w++) begin
         `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
@@ -795,29 +796,21 @@ end
   )
 }
 
-/** Walks a coarse eye diagram at each of the rates the clocking tile can
-  * produce, and shows why the coarse phase shifter is needed to do it.
+/** Coarse eye at each rate the clocking tile can produce, showing why the
+  * coarse phase shifter is needed.
   *
-  * The global delay line covers 64 ps. That is a whole UI at 16 GT/s and less
-  * than half of one at 8, so below the top rate the line alone cannot walk the
-  * sampling point across an eye -- it runs out of range partway. The tile's
-  * phase shifter moves TXCLKQ in main clock half cycles, 62.5 ps off an 8 GHz
-  * main clock, which is inside what the line covers; the two together tile any
-  * UI with no gap. This sweeps both: the shifter for the coarse position and
-  * the line within it.
+  * The global delay line covers 64 ps: a whole UI at 16 GT/s but only about
+  * half of one at 8, so below the top rate it cannot cross an eye alone. The phase
+  * shifter moves TXCLKQ in main clock half cycles (62.5 ps at 8 GHz), within
+  * the line's range, so together they reach any point in a UI. The shifter
+  * sets the coarse position and the line sweeps within it.
   *
-  * A point counts as open when every data lane reads clean on at least one of
-  * its three framings. Taking the best of the three is the point: at an
-  * arbitrary phase the receiver may frame a UI early or late, and the lowest of
-  * the counters is the lane's real error rate rather than an artifact of where
-  * the capture happened to start.
+  * A point is open when every data lane is clean on at least one of its three
+  * framings, since at an arbitrary phase the RX may frame a UI early or late.
   */
 /** SystemVerilog shared by every driver that scores a sweep: the per-lane
   * framing result, the task that reads it out of `PhyTest`, and the run length
-  * helper the eye reports use.
-  *
-  * One copy because these sweeps have to stay comparable -- a definition that
-  * drifted in one of them would quietly make its eye mean something else.
+  * helper the eye reports use. One copy keeps the sweeps comparable.
   */
 object TestDriverItems {
   val scoring: String = """
@@ -828,12 +821,10 @@ integer lane_framing[`TRAIN_SCORE_LANES];
 
 // Waits for a burst to finish arriving.
 //
-// `run_lfsr` reads the packet count a fixed number of times and scores
-// whatever has landed. That bound was chosen against a burst at the top rate;
-// divide the TX clock and the same burst takes proportionally longer, so the
-// window expires mid-flight and every point reads short however good the
-// phase is. Measured at /2: the count was still climbing six reads after
-// `run_lfsr` returned.
+// `run_lfsr` polls the packet count a fixed number of times, sized for the
+// top rate. At a divided rate the burst is longer and every point reads
+// short: at /2 the count was still rising six reads after `run_lfsr`
+// returned.
 task automatic wait_for_packets();
   reg [63:0] p, prev;
   int stalls;
@@ -841,19 +832,14 @@ task automatic wait_for_packets();
     prev = 64'hffffffffffffffff;
     stalls = 0;
     // Wait while packets are still arriving, not for a fixed number of reads.
-    // A burst takes proportionally longer at every division, so any constant
-    // bound is right at one rate and short at the next -- at /4 a 64-read
-    // bound returned with 7 of 16 packets in, and `score_lanes` marks a short
-    // receive as framing 4, which reads exactly like a dead lane. Giving up
-    // only once the count has genuinely stopped moving is the same condition
-    // at every rate.
+    // Any fixed bound is short at some division: at /4 a 64-read bound
+    // returned with 7 of 16 packets, and `score_lanes` marks a short receive
+    // as framing 4, the same as a dead lane.
     for (int w = 0; w < 1024; w++) begin
       `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, p);
       if (p >= `TRAIN_PACKETS) break;
-      // Only a stall *after* packets have started counts. `p` sitting at zero
-      // means the burst has not reached us yet, which at a divided rate takes
-      // longer than any small number of reads -- treating that as "stopped"
-      // abandons the wait before the first packet ever lands.
+      // Only a stall after packets start counts. At a divided rate the burst
+      // can take many reads to arrive, so `p` at zero is not a stall.
       if (p == prev && p > 0) stalls = stalls + 1;
       else stalls = 0;
       prev = p;
@@ -863,12 +849,9 @@ task automatic wait_for_packets();
 endtask
 
 // Reads every scored lane's three bit error counters under one counter pause.
-//
-// The three differ only in where the pattern is assumed to have started: the
-// receiver frames on the valid lane's edge, so a valid bit that was itself
-// mis-sampled leaves the whole capture a UI out of step and pins the nominal
-// count near half the bits received. Whichever framing reads zero is the one
-// that was right.
+// They differ only in the assumed pattern start. The RX frames on valid's
+// edge, so a mis-sampled valid bit shifts the capture a UI and puts the
+// nominal count near half the bits. The framing that reads zero is right.
 task automatic score_lanes();
   begin
     reg [63:0] packets;
@@ -882,27 +865,22 @@ task automatic score_lanes();
       `READ_UCIE(regDrv, `RX_BIT_ERRORS + l * `RX_BIT_ERRORS_WIDTH, nominal);
       `READ_UCIE(regDrv, `RX_BIT_ERRORS_EARLY + l * `RX_BIT_ERRORS_EARLY_WIDTH, early);
       `READ_UCIE(regDrv, `RX_BIT_ERRORS_LATE + l * `RX_BIT_ERRORS_LATE_WIDTH, late);
-      // A re-framed capture is recognised by its error count collapsing
-      // relative to the nominal one, not by reaching exactly zero. A lane that
-      // has slipped a UI is usually also sampling near the edge that it slipped
-      // across, so some of its bits are genuinely corrupted on top of the slip
-      // and no framing scores clean: at one tap either side of the boundary the
-      // right framing lands around a tenth of the nominal count, not at zero.
-      // Testing for zero bins that alongside a total failure and hides the very
-      // effect these counters exist to show.
+      // A slipped lane shows as an early or late count far below nominal, not
+      // as zero: it is usually sampling near the edge it slipped across, so
+      // some bits are corrupt too. One tap either side of the boundary, the
+      // right framing reads about a tenth of nominal. A test for zero would
+      // call that a total failure.
       if (packets < `TRAIN_PACKETS) lane_framing[l] = 4;
       else if (nominal == 64'h0) lane_framing[l] = 0;
       else if (early * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 1;
       else if (late * `TRAIN_SLIP_RATIO < nominal) lane_framing[l] = 2;
       else lane_framing[l] = 3;
-      // A witness lane's raw counts. Classifying each framing as clean or not
-      // throws away the thing worth knowing: whether a framing that is not
-      // exactly zero is nonetheless far below the nominal count, which is what
-      // a one UI slip resolved by re-framing looks like.
+      // Raw counts for one witness lane. A clean/not-clean result hides a
+      // framing that is nonzero but far below nominal, which is what a one UI
+      // slip looks like.
       if (l == 0) begin
-        // `TX_PACKETS_SENT` alongside the RX count: a shortfall that shows up
-        // on both is the transmitter not sending, one that shows up only here
-        // is the receiver not counting what was sent.
+        // `TX_PACKETS_SENT` next to the RX count: a shortfall on both means
+        // the TX did not send; one only here means the RX did not count.
         `READ_UCIE(regDrv, `TX_PACKETS_SENT, sent);
         $display("          lane 0: %0d packets (tx sent %0d), nominal %0d, early %0d, late %0d",
                  packets, sent, nominal, early, late);
@@ -912,11 +890,10 @@ task automatic score_lanes();
   end
 endtask
 
-// One character per scored lane -- the data lanes, then valid last, so the
-// string is one longer than the counts the sweeps print. Shown only when a
-// point needed something other than the nominal framing or failed outright.
-// `.` nominal, `e` a UI early, `l` a UI late, `x` real errors, `-` nothing
-// received.
+// One character per scored lane: the data lanes, then valid, so the string
+// is one longer than the lane counts the sweeps print. Shown only when a
+// point was not clean on the nominal framing. `.` nominal, `e` a UI early,
+// `l` a UI late, `x` real errors, `-` nothing received.
 task automatic report_framing();
   begin
     string marks;
@@ -967,9 +944,8 @@ task automatic longest_run(
 endtask
           """.trim
 
-  /** Probes on the clocking tile's outputs, for the tests of the clocking
-    * itself. The clocks they watch never leave the PHY, so these reach in by
-    * hierarchical name, which nothing else here does.
+  /** Probes on the clocking tile's outputs, for the clocking tests. These
+    * clocks never leave the PHY, so the probes use hierarchical names.
     */
   val clocking: String = """
 `define CLOCKING_TILE SimTop.harness.ucieTL.phy.clkTile
@@ -1094,15 +1070,18 @@ task automatic sb_duty(output real hi, output real lo);
   @(posedge `CLOCKING_TILE.SbClk) lo = $realtime - f;
 endtask
 
-// Fails unless a clock is high and low for half of `period` each.
+// Fails unless a clock is high for `hi_frac` of `period` and low for the
+// rest.
 task automatic check_duty(
   input string what, input real hi, input real lo, input real period,
-  inout integer fails
+  input real hi_frac, inout integer fails
 );
   $display("%s: high %0.1f ps, low %0.1f ps", what, hi, lo);
-  if (hi < period / 2 - 1.0 || hi > period / 2 + 1.0 ||
-      lo < period / 2 - 1.0 || lo > period / 2 + 1.0) begin
-    $display("FAIL: %s should be %0.1f ps high and low", what, period / 2);
+  if (hi < period * hi_frac - 1.0 || hi > period * hi_frac + 1.0 ||
+      lo < period * (1.0 - hi_frac) - 1.0 ||
+      lo > period * (1.0 - hi_frac) + 1.0) begin
+    $display("FAIL: %s should be %0.1f ps high and %0.1f ps low", what,
+             period * hi_frac, period * (1.0 - hi_frac));
     fails = fails + 1;
   end
 endtask
@@ -1121,20 +1100,15 @@ endtask
 
 /** Coarse eye at 4 Gb/s with the quadrature the divider makes.
   *
-  * The main clock stays at 8 GHz, and /4 lands TXCLK at 2 GHz: 4 Gb/s a lane.
-  * Dividing by four gives the shifter a span of eight main clock half cycles,
-  * each 62.5 ps -- a quarter of a UI at this rate -- so the eight coarse
-  * positions walk two whole UI, and each step is short enough for the global
-  * delay line (64 taps, about 69 ps) to fill in. Four fine points, each 14 taps
-  * or 15.2 ps apart, leave 17 ps to the next coarse position, so the whole
-  * sweep is one grid of about 15.6 ps with no gaps.
+  * 8 GHz main clock /4: TXCLK at 2 GHz, 4 Gb/s a lane. The shifter then has
+  * eight positions of 62.5 ps (a quarter UI), covering two UI. Four fine points
+  * of 14 taps (15.2 ps) on the global delay line (64 taps, about 69 ps) leave
+  * 17 ps to the next coarse position: one grid of about 15.6 ps with no gaps.
   *
-  * The main clock has to stay fast for that, since a coarse step is half of its
-  * period. Reaching the same rate off a slower main clock divided less -- 4 GHz
-  * /2 -- makes 125 ps steps the line cannot bridge, so the sweep skips half of
-  * every UI. Under the eye models the shut stretch around a transition is
-  * narrower than one fine step, and those gaps are wide enough to miss both
-  * edges and read open everywhere.
+  * The main clock must stay fast, since a coarse step is half its period.
+  * 4 GHz /2 gives 125 ps steps the line cannot span, skipping half of every UI.
+  * The eye models' closed region around a transition is narrower than one fine
+  * step, so such gaps can miss both edges and read open everywhere.
   */
 class EyeLowRateDividerTestDriver extends SVTestDriver {
   setStimulus(
@@ -1165,10 +1139,9 @@ begin : eye_lowrate_div
       set_clk_en(1);
       run_lfsr(`TRAIN_PACKETS);
       run_lfsr(`TRAIN_PACKETS);
-      // The burst takes four times as long at 4 Gb/s as at
-      // 16 GT/s, so `run_lfsr`'s own poll window expires before
-      // the packets land. Without this wait every point scores
-      // as "received nothing" and the row reads solid shut.
+      // The burst takes four times as long as at 16 GT/s, so
+      // `run_lfsr`'s poll window ends before the packets arrive.
+      // Without this wait every point scores "received nothing".
       wait_for_packets();
       score_lanes();
       clean_any = 0;
@@ -1197,33 +1170,24 @@ end
   )
 }
 
-/** Why the coarse eye reads nothing at /2, asked directly.
+/** Why the coarse eye reads nothing at /2.
   *
-  * The eye sweep reports open points and nothing else, so a rate that scores
-  * shut everywhere cannot be told apart from a rate whose packets never arrive.
-  * This runs the same two rates and prints what actually came back at each
-  * phase: packets counted against packets sent, and the framing each lane
-  * resolved to. A link that is merely mis-sampled counts its packets and scores
-  * them dirty; a link that is not running counts nothing.
-  *
-  * Cut down to a handful of bursts so it answers in minutes rather than the
-  * twenty the full sweep takes.
+  * The eye sweep reports only open points, so it cannot tell a closed eye from
+  * packets that never arrive. This prints, at each phase of the same two
+  * rates, packets counted vs. sent and each lane's framing. A mis-sampled link
+  * counts packets and scores them dirty; a dead link counts nothing. A few
+  * bursts each, so it takes minutes, not the full sweep's twenty.
   */
 /** The link carries clean traffic at every clock division.
   *
-  * A burst, a datapath reset release and a queue drain all take proportionally
-  * longer at each division, so anything in the harness that waits a fixed
-  * number of iterations is correct at the top rate and short below it. Two such
-  * waits have already done this: the RX datapath settle, whose release is
-  * synchronized to the divided clock, and `wait_for_packets`. Both presented
-  * the same way -- a link that is actually fine reading as broken, either as a
-  * short receive scored like a dead lane, or as an RX that missed the
-  * idle-to-valid transition and aligned mid-pattern.
-  *
-  * The eye sweeps would catch that eventually, but they take twenty minutes a
-  * rate and report only open-point counts, which cannot tell a mis-sampled link
-  * from one that received nothing. This asks the direct question at each
-  * division in a few minutes: did every packet arrive, and was it clean.
+  * Bursts, datapath reset releases and queue drains take longer at each
+  * division, so a fixed-count wait sized for the top rate is too short below
+  * it. This broke the RX datapath settle (released on the divided clock) and
+  * `wait_for_packets`, making a working link look broken: a short receive
+  * scored like a dead lane, or an RX that missed the idle-to-valid transition
+  * and aligned mid-pattern. The eye sweeps take twenty minutes a rate and
+  * cannot tell a mis-sampled link from a silent one; this checks every
+  * division in minutes.
   */
 class RateSweepTestDriver extends SVTestDriver {
   setStimulus(
@@ -1245,10 +1209,9 @@ end
 
 // One division: find a sampling point where the whole burst arrives clean.
 //
-// The point is not pinned, because where the eye sits depends on the delay
-// line geometry -- a change to a step or an offset moves it, and a test that
-// asserts cleanliness at one hardcoded code reports that as a broken link.
-// What has to hold at every division is that *some* point works.
+// The point is not fixed, because the eye moves with the delay line's step
+// and offset. A test fixed at one code would report that as a broken link.
+// At every division, some point must work.
 task automatic check_rate(input string label, input integer div);
   reg [63:0] got, idlew;
   integer clean_lanes;
@@ -1268,9 +1231,8 @@ task automatic check_rate(input string label, input integer div);
       wait_for_packets();
       score_lanes();
       `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, got);
-      // Zero idle words means the RX was not presenting words when
-      // transmission began -- what a settle too short for this division looks
-      // like. Checked at every point, since it does not depend on the phase.
+      // Zero idle words means the settle was too short for this division: the
+      // RX was not presenting words when the TX started. Independent of phase.
       `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, idlew);
 
       clean_lanes = 0;
@@ -1280,9 +1242,9 @@ task automatic check_rate(input string label, input integer div);
                label, t * 16, got[31:0], `TRAIN_PACKETS,
                clean_lanes, `TRAIN_DATA_LANES, idlew[31:0]);
 
-      // A short receive scores as framing 4, the same code as a dead lane, so
-      // the count is checked separately: a wait that gave up early would
-      // otherwise read as a broken link at every point.
+      // A short receive scores as framing 4, like a dead lane, so check the
+      // count separately. Otherwise a wait that gave up early reads as a
+      // broken link.
       assert(got >= `TRAIN_PACKETS)
         else $fatal(1, "%s: %0d of %0d packets arrived at tap %0d -- a wait sized at the top rate is short here",
                     label, got[31:0], `TRAIN_PACKETS, t * 16);
@@ -1347,9 +1309,8 @@ begin : eye
              1 << d, coarse_positions, `TRAIN_EYE_FINE_POINTS,
              `TRAIN_EYE_FINE_STEP, row, open_points, total_points);
 
-    // An eye that is open everywhere is not an eye, and one that is shut
-    // everywhere means the sweep never found the link. Either way the phase
-    // is not being resolved and the diagram says nothing.
+    // Open everywhere or shut everywhere means the sweep is not resolving
+    // the phase, and the diagram says nothing.
     assert(open_points > 0)
       else $fatal(1, "Rate /%0d: no phase samples cleanly, so the sweep never found the eye",
                   1 << d);
@@ -1366,13 +1327,11 @@ integer lane_framing[`TRAIN_SCORE_LANES];
 
 // Waits for a burst to finish arriving.
 //
-// `run_lfsr` reads the packet count a fixed number of times and scores
-// whatever has landed. That bound was chosen against a burst at the top rate;
-// divide the TX clock and the same burst takes proportionally longer, so the
-// window expires mid-flight and every point reads short however good the
-// phase is. Measured at /2: the count was still climbing six reads after
-// `run_lfsr` returned. Waiting here keeps that out of the training sweep's
-// bound, which only ever runs at one rate.
+// `run_lfsr` polls the packet count a fixed number of times, sized for the
+// top rate. At a divided rate the burst is longer and every point reads
+// short: at /2 the count was still rising six reads after `run_lfsr`
+// returned. Waiting here leaves the training sweep's bound alone, since that
+// sweep runs at one rate.
 task automatic wait_for_packets();
   reg [63:0] p, prev;
   int stalls;
@@ -1380,19 +1339,14 @@ task automatic wait_for_packets();
     prev = 64'hffffffffffffffff;
     stalls = 0;
     // Wait while packets are still arriving, not for a fixed number of reads.
-    // A burst takes proportionally longer at every division, so any constant
-    // bound is right at one rate and short at the next -- at /4 a 64-read
-    // bound returned with 7 of 16 packets in, and `score_lanes` marks a short
-    // receive as framing 4, which reads exactly like a dead lane. Giving up
-    // only once the count has genuinely stopped moving is the same condition
-    // at every rate.
+    // Any fixed bound is short at some division: at /4 a 64-read bound
+    // returned with 7 of 16 packets, and `score_lanes` marks a short receive
+    // as framing 4, the same as a dead lane.
     for (int w = 0; w < 1024; w++) begin
       `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, p);
       if (p >= `TRAIN_PACKETS) break;
-      // Only a stall *after* packets have started counts. `p` sitting at zero
-      // means the burst has not reached us yet, which at a divided rate takes
-      // longer than any small number of reads -- treating that as "stopped"
-      // abandons the wait before the first packet ever lands.
+      // Only a stall after packets start counts. At a divided rate the burst
+      // can take many reads to arrive, so `p` at zero is not a stall.
       if (p == prev && p > 0) stalls = stalls + 1;
       else stalls = 0;
       prev = p;
@@ -1435,19 +1389,19 @@ manual_simple();
   )
 }
 
-/** The PhyTest and sideband clocks off either PLL, and the rate table with the
-  * PhyTest division out of it.
+/** The PhyTest and sideband clocks off either PLL, and the rate table, which
+  * leaves out the PhyTest division.
   *
-  * Both clocks start on their bypass pins, move onto a divided PLL each, and
-  * then take one change at a time. What is checked is that each runs at the
-  * rate its own registers give it whatever the TX side does, that the clock
-  * gate stops TX and nothing else, and that a PLL either clock divides stays on
-  * whatever the rate table says. Each has a gate of its own, which an apply
-  * that moves it holds shut until the PLL under it has locked. Rates and pauses
-  * are read off the clocking tile's outputs, a pause being a gap between edges
-  * far longer than any period. Hierarchical, because nothing on the register
-  * map shows either. Each domain then has to answer over MMIO, which is what
-  * software depends on.
+  * Both clocks move from their bypass pins onto divided PLLs, then one change
+  * is made at a time. Checks:
+  *  - each clock runs at its own registers' rate, whatever TX does;
+  *  - the clock gate stops TX and nothing else;
+  *  - a PLL either clock divides follows its enable, so turning it off stops
+  *    that clock;
+  *  - an apply holds a moved clock's gate shut until its PLL locks;
+  *  - each domain still answers over MMIO, as software needs.
+  * Rates and pauses (gaps far longer than any period) are read by hierarchical
+  * name off the clocking tile, since the register map shows neither.
   */
 class ClkSrcSelTestDriver extends SVTestDriver {
   setStimulus(
@@ -1458,9 +1412,11 @@ begin : clk_src_sel
   watch = 1;
 
   // 1. Off the bypass pins in one apply: PhyTest onto PLL12 /15, the sideband
-  // onto PLL8 /10, 800 MHz each, with both PLLs started. The apply holds both
-  // clocks' gates shut until their PLLs lock, so neither domain needs a reset
-  // afterwards; the block is reset onto them anyway, as bringup does.
+  // onto PLL8 /10, 800 MHz each. `use_internal_clk` starts PLL12 for the PHY
+  // test clock; PLL8, for the sideband, takes its own write. The apply holds
+  // both gates shut until the PLLs lock, so no reset is needed; the block is
+  // reset anyway, as bring-up does.
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
@@ -1476,6 +1432,7 @@ begin : clk_src_sel
   // 2. The main clock onto PLL12 /2. The apply gates TX, and nothing else:
   // the PhyTest and sideband clocks neither pause nor change rate.
   clear_gaps();
+  set_clk_en(64'h1);
   set_main_clk(64'h1, 64'h1);
   expect_clks(0, 0, 1, "main clock onto PLL12 /2");
   expect_periods(1250.0, 1250.0, "PhyTest and sideband with the main clock moved");
@@ -1501,8 +1458,8 @@ begin : clk_src_sel
   set_clk_en(64'h1);
 
   // 5. The rate table takes over the TX side: the doubler /4, everything on.
-  // Neither field is zero, so a packing off by a bit lands on a different
-  // rate. The PhyTest division is not in it, so PhyTest stays at PLL8 /8.
+  // Neither field is zero, so a field packed one bit off gives a wrong rate.
+  // The table has no PhyTest division, so PhyTest stays at PLL8 /8.
   `READ_UCIE(regDrv, `FREQ_SEL_OBSERVED, rate);
   rate = rate & 64'h7;
   set_rate_cfg(rate, 64'h2, 64'h2, 64'h7);
@@ -1514,18 +1471,18 @@ begin : clk_src_sel
   expect_tx_period(250.0, "TX doubler /4 from the rate table");
 
   // 6. An entry that switches off PLL12, under the sideband. The apply
-  // finishes, and PLL12 stays on for the sideband, which keeps running.
+  // finishes and PLL12 turns off, as the entry says, so the sideband stops.
+  // Nothing touches the controller window meanwhile.
   set_rate_cfg(rate, 64'h2, 64'h2, 64'h5);
   clear_gaps();
   apply_clk_cfg();
   `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply that switched off the sideband's PLL did not finish");
   #50000;
-  expect_clks(0, 0, 1, "PLL12 off in the entry, under the sideband");
-  if (`CLK_TILE.Pll12En !== 1'b1)
-    $fatal(1, "PLL12 was turned off under the sideband");
-  expect_periods(1000.0, 1250.0, "sideband still on PLL12 /15");
+  expect_clks(0, 1, 1, "PLL12 off in the entry, under the sideband");
+  if (`CLK_TILE.Pll12En !== 1'b0)
+    $fatal(1, "PLL12 stayed on against the rate table");
 
-  // 7. PLL12 back on in the entry, which changes nothing under either clock.
+  // 7. PLL12 back on in the entry, which restarts the sideband.
   set_rate_cfg(rate, 64'h2, 64'h2, 64'h7);
   clear_gaps();
   apply_clk_cfg();
@@ -1568,11 +1525,10 @@ always @(posedge `CLK_TILE.TxClk) begin
   tx_last = $realtime;
 end
 
-// Throughout: nothing between the main clock's source and the TX divider
-// moves with the clock gate open -- not the main clock select, not the
-// division, not the PLL under it -- and the gate only opens on a main clock
-// whose PLL is locked. Each is checked a picosecond after the move, once
-// whatever moves with it has.
+// Throughout: while the clock gate is open, the main clock select, the TX
+// division and the PLL under the main clock must not change, and the gate
+// opens only on a locked PLL. Each is checked 1 ps after the change, so
+// signals that change with it have settled.
 bit watch = 0;
 bit pll8_was = 0, pll12_was = 0, x2_was = 0;
 always @(`CLK_TILE.MainClkSel or `CLK_TILE.TxClkDiv) begin
@@ -1625,9 +1581,9 @@ task clear_gaps;
   end
 endtask
 
-// An apply holds the gate for about its 4-cycle dwell of the 2 ns register
-// clock, 8 ns; running is under 2.5 periods of the slowest clock here. 5 ns
-// splits the two with room either side.
+// An apply holds the gate for at least its 32-cycle dwell of the 2 ns
+// register clock (64 ns). A running clock's gap is under 2.5 periods of the
+// slowest clock here. 5 ns separates the two with margin.
 task check_clk(input string clk, input int paused, input realtime gap, input string what);
   begin
     if (paused == 1 && gap < 5000.0)
@@ -1706,12 +1662,746 @@ manual_loopback();
   )
 }
 
-class TlSimpleTestDriver extends SVTestDriver {
+/** Times a PhyTest word's stages from the TX FSM to the RX FSM, finds the
+  * forwarded clock the receiver needs after the last data UI, and reads the
+  * clock meters. `PhyTestQueueCapTestDriver` covers the TX queue cap, which
+  * needs much longer runs.
+  *
+  * Stages are timestamped by hierarchical name on a run's first data word
+  * (nonzero valid word): at each queue's ports, and at the TX valid bump, which
+  * the harness loops back to the RX valid bump. A port is sampled on its
+  * clock's edge, so a word shows at the edge that takes it.
+  *
+  * The postamble a gated burst needs depends on where its last data UI falls
+  * in the RX word, which every partial postamble moves. So each point realigns
+  * the dividers, shifts the RX word boundary `offset` UI with a run whose
+  * postamble is `offset` UI, then measures. Done at every even offset, on the
+  * RX lanes' default and backup (`sample_negedge`) handoff edges, and in
+  * manual mode at the worst offset.
+  */
+class PhyTestLatencyTestDriver extends SVTestDriver {
+  override def timeoutCycles = 4000000
+  override def dumpWaves = false
+
   setStimulus(
-    "TlSimpleTestDriver",
+    "PhyTestLatencyTestDriver",
     """
+begin : phytest_latency
+  reg [63:0] received, bad, flag;
+  int worst [2], best [2], worst_offset, min_units;
+  realtime first, last, lat_lo, lat_hi;
+  setup_ucie();
+  seed_lfsrs();
+  // Centre the forwarded clock on the data, as training does, and realign the
+  // dividers. Gated bursts below have no preamble (the UCIe way), so the
+  // clock's first edge must sample the first data UI. At the reset delay (64
+  // taps, just over a UI late) it does not.
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  // The manual pattern, one row per packet of a run.
+  for (int row = 0; row < N_PKTS; row++) begin
+    for (int g = 0; g < 4; g++)
+      write_tx_data_chunk(g, row, pattern_word(row, 4 * g), pattern_word(row, 4 * g + 1),
+                          pattern_word(row, 4 * g + 2), pattern_word(row, 4 * g + 3));
+    write_tx_data_chunk(4, row, `DEFAULT_VALID, pattern_word(row, `TRACK_LANE), 0, 0);
+  end
+  `WRITE_UCIE(regDrv, `TX_MANUAL_REPEAT_PERIOD, N_PKTS);
+
+  // 1. Latency from TX queue dequeue to RX queue enqueue at every RX word
+  // alignment, with: every lane on its default handoff edge; the TX lanes on
+  // their backup edge; the RX lanes on theirs.
+  for (int handoff = 0; handoff < 3; handoff++) begin
+    set_handoff(handoff == 1, handoff == 2);
+    lat_lo = 1e9; lat_hi = 0;
+    for (int offset = 0; offset < 32; offset += `CLK_POSTAMBLE_UI) begin
+      // Move the RX word boundary `offset` UI against the TX's, then time an
+      // ungated run that leaves it there.
+      run_once(1'b0, 1'b1, offset / `CLK_POSTAMBLE_UI, 1'b0, 1'b1, received);
+      run_once(1'b0, 1'b0, 0, 1'b1, 1'b0, received);
+      if (received != N_PKTS) $fatal(1, "a timed run lost packets");
+      report_latency(handoff, offset, first, last);
+      if (first < lat_lo) lat_lo = first;
+      if (last > lat_hi) lat_hi = last;
+    end
+    $display("== %s: TX queue dequeue to RX queue enqueue, %0.1f UI (first UI, best alignment) to %0.1f UI (last UI, worst)",
+      HANDOFFS[handoff], lat_lo, lat_hi);
+  end
+  set_handoff(1'b0, 1'b0);
+
+  // 2. The postamble at every RX word alignment.
+  for (int negedge_rx = 0; negedge_rx < 2; negedge_rx++) begin
+    for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+      write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, negedge_rx);
+    worst[negedge_rx] = -1;
+    best[negedge_rx] = MAX_UNITS + 1;
+    for (int offset = 0; offset < 32; offset += `CLK_POSTAMBLE_UI) begin
+      min_postamble_task(1'b0, offset, min_units);
+      $display("RX %s handoff, RX word boundary moved %2d UI: minimum postamble %0d UI",
+        negedge_rx ? "backup " : "default", offset, min_units * `CLK_POSTAMBLE_UI);
+      if (min_units > worst[negedge_rx]) begin
+        worst[negedge_rx] = min_units;
+        if (!negedge_rx) worst_offset = offset;
+      end
+      if (min_units < best[negedge_rx]) best[negedge_rx] = min_units;
+    end
+    $display("== RX %s handoff: minimum postamble %0d to %0d UI over every alignment",
+      negedge_rx ? "backup" : "default", best[negedge_rx] * `CLK_POSTAMBLE_UI,
+      worst[negedge_rx] * `CLK_POSTAMBLE_UI);
+  end
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+    write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, 0);
+  min_postamble_task(1'b1, worst_offset, min_units);
+  $display("== manual mode at the worst alignment: minimum postamble %0d UI",
+    min_units * `CLK_POSTAMBLE_UI);
+  if (min_units != worst[0])
+    $fatal(1, "manual mode needs a different postamble from LFSR mode");
+  // What the docs recommend untrained: two whole packets, which covers every
+  // alignment and keeps the RX word boundary where it was.
+  if (worst[0] * `CLK_POSTAMBLE_UI > 2 * 32 || worst[1] * `CLK_POSTAMBLE_UI > 2 * 32)
+    $fatal(1, "two packets of postamble no longer cover every alignment");
+
+  // The forwarded clock running again, which the last gated run parked.
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+
+  // 3. The clock meters against the harness's clocks: the PHY test and
+  // sideband bypass pins at 800 MHz, and 16 GT/s packet clocks at 500 MHz,
+  // over 1024 cycles of the 500 MHz chip clock.
+  check_meter("PHY test", `CLK_METER_PHY_TEST, 1638);
+  check_meter("sideband", `CLK_METER_SB, 1638);
+  check_meter("TX divided", `CLK_METER_TX_DIV, 1024);
+  check_meter("RX divided", `CLK_METER_RX_DIV, 1024);
+  `EXPECT_UCIE(regDrv, `CONTROLLER_RX_FIFO_OVERFLOW, 64'h0);
+end
+""".trim,
+    """
+`define LAT_UCIE SimTop.harness.ucieTL
+localparam int N_PKTS = 4;
+localparam int MAX_UNITS = 48;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 51;
+localparam string HANDOFFS [3] = '{"default handoff", "TX backup handoff", "RX backup handoff"};
+
+// Every TX lane, the clock lanes included, and every RX lane on its default
+// or its backup (`sample_negedge`) handoff edge.
+task automatic set_handoff(input bit tx_backup, input bit rx_backup);
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 4; lane++)
+    write_txctl(lane, `TXCTL_SAMPLE_NEGEDGE_OFS, tx_backup);
+  for (int lane = 0; lane < `TRAIN_DATA_LANES + 2; lane++)
+    write_rxctl(lane, `RXCTL_SAMPLE_NEGEDGE_OFS, rx_backup);
+endtask
+// One UI at the 8 GHz bypass clock, undivided.
+localparam realtime UI_PS = 62.5;
+
+function automatic [31:0] pattern_word(input int row, input int lane);
+  return 32'h9e3779b9 * (row + 1) + 7 * lane;
+endfunction
+
+// When each stage first handled a data word since `lat_arm`.
+bit lat_armed = 1'b0;
+realtime t_tx_enq, t_tx_deq, t_tx_bump, t_rx_enq, t_rx_deq;
+
+task automatic lat_arm();
+  t_tx_enq = 0; t_tx_deq = 0; t_tx_bump = 0; t_rx_enq = 0; t_rx_deq = 0;
+  lat_armed = 1'b1;
+endtask
+
+always @(posedge `LAT_UCIE.txTestFifo.io_enq_clock)
+  if (lat_armed && t_tx_enq == 0 && `LAT_UCIE.txTestFifo.io_enq_valid &&
+      `LAT_UCIE.txTestFifo.io_enq_ready && `LAT_UCIE.txTestFifo.io_enq_bits_word_valid != 0)
+    t_tx_enq = $realtime;
+// The dequeue that hands the word to `TxClkGater`, which may hold it for a
+// precondition or a preamble first.
+always @(posedge `LAT_UCIE.txTestFifo.io_deq_clock)
+  if (lat_armed && t_tx_deq == 0 && `LAT_UCIE.txTestFifo.io_deq_valid &&
+      `LAT_UCIE.txTestFifo.io_deq_ready && `LAT_UCIE.txTestFifo.io_deq_bits_word_valid != 0)
+    t_tx_deq = $realtime;
+always @(posedge `LAT_UCIE.io_phy_txValid)
+  if (lat_armed && t_tx_bump == 0) t_tx_bump = $realtime;
+reg [31:0] rx_first_valid;
+always @(posedge `LAT_UCIE.rxTestFifo.io_enq_clock)
+  if (lat_armed && t_rx_enq == 0 && `LAT_UCIE.rxTestFifo.io_enq_bits_valid != 0) begin
+    t_rx_enq = $realtime;
+    rx_first_valid = `LAT_UCIE.rxTestFifo.io_enq_bits_valid;
+  end
+always @(posedge `LAT_UCIE.rxTestFifo.io_deq_clock)
+  if (lat_armed && t_rx_deq == 0 && `LAT_UCIE.rxTestFifo.io_deq_valid &&
+      `LAT_UCIE.rxTestFifo.io_deq_bits_valid != 0)
+    t_rx_deq = $realtime;
+
+// Latency of the first data word, from the edge the TX queue dequeues it to
+// the edges the RX queue enqueues the RX words holding its first and last UI.
+// The first UI is at bit `k` of the RX word, its lowest set valid bit (only
+// idle comes before it). The packet ends in the same RX word if `k` is 0,
+// and in the next word otherwise.
+task automatic report_latency(input int handoff, input int offset,
+                              output realtime first, output realtime last);
+  int k;
+  if (t_tx_deq == 0 || t_tx_bump == 0 || t_rx_enq == 0)
+    $fatal(1, "a stage never saw the first data word");
+  k = 0;
+  while (!rx_first_valid[k]) k++;
+  first = (t_rx_enq - t_tx_deq) / UI_PS;
+  last = first + (k == 0 ? 0 : 32);
+  $display("%s, RX word boundary moved %2d UI: dequeue -> first UI out %5.1f UI, -> RX enqueue %5.1f UI (first UI), %5.1f UI (last UI)",
+    HANDOFFS[handoff], offset, (t_tx_bump - t_tx_deq) / UI_PS, first, last);
+endtask
+
+// One run of `N_PKTS` packets from reset FSMs. `gate` gates the forwarded
+// clock around it. `realign` realigns the dividers first; otherwise the RX
+// word boundary stays where the last run left it.
+task automatic run_once(input bit manual, input bit gate, input int post_units,
+                        input bit time_it, input bit realign, output reg [63:0] received);
+  reg [63:0] st, w0, w;
+  begin
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    if (realign) begin
+      set_clk_en(64'h0);
+      set_rx_clk_en(64'h0);
+      reset_dividers();
+      set_clk_en(64'h1);
+      set_rx_clk_en(64'h1);
+    end
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, manual ? `TX_TEST_MODE_MANUAL : `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, N_PKTS);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, N_PKTS);
+    // On a running clock: the RX datapath reset needs edges to release.
+    reset_fsms();
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+    `WRITE_UCIE(regDrv, `TX_CLK_PREAMBLE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, post_units);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, gate);
+    repeat (64) @(posedge digitalClock);
+    if (time_it) lat_arm();
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    // Far longer than the TX queue and the RX pipeline take to drain.
+    repeat (500) @(posedge digitalClock);
+    lat_armed = 1'b0;
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+  end
+endtask
+
+// LFSR: the nominal bit errors on every mainband lane. Manual: capture SRAM
+// entries on lane 0 that do not match the pattern.
+task automatic score(input bit manual, output reg [63:0] bad);
+  reg [63:0] e;
+  begin
+    bad = 0;
+    if (!manual) begin
+      for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+        `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+        bad = bad + e;
+      end
+    end else begin
+      for (int p = 0; p < N_PKTS; p++) begin
+        `WRITE_UCIE(regDrv, `RX_DATA_LANE, 64'h0);
+        `WRITE_UCIE(regDrv, `RX_DATA_OFFSET, p);
+        `READ_UCIE(regDrv, `RX_DATA_CHUNK, e);
+        if (e[31:0] != pattern_word(p, 0)) bad = bad + 1;
+      end
+    end
+  end
+endtask
+
+// The fewest postamble units with which a single gated burst arrives whole,
+// with the RX word boundary `offset` UI along from where realigned dividers
+// put it.
+task automatic min_postamble_task(input bit manual, input int offset, output int min_units);
+  reg [63:0] received, bad;
+  begin
+    min_units = -1;
+    for (int u = 0; u <= MAX_UNITS && min_units < 0; u++) begin
+      // The shifting run: its own postamble moves the RX divider `offset`
+      // UI against the TX one, whatever it delivers.
+      run_once(1'b0, 1'b1, offset / `CLK_POSTAMBLE_UI, 1'b0, 1'b1, received);
+      run_once(manual, 1'b1, u, 1'b0, 1'b0, received);
+      score(manual, bad);
+      if (received == N_PKTS && bad == 0) min_units = u;
+    end
+    if (min_units < 0)
+      $fatal(1, "no postamble up to %0d UI delivered every packet", MAX_UNITS * `CLK_POSTAMBLE_UI);
+  end
+endtask
+
+task automatic check_meter(input string what, input [63:0] addr, input int expected);
+  reg [63:0] count;
+  begin
+    // Two windows, so the reading covers one whole one.
+    repeat (2 * `CLK_METER_WINDOW_CYCLES) @(posedge digitalClock);
+    `READ_UCIE(regDrv, addr, count);
+    $display("clock meter, %s: %0d per %0d chip cycles (expected %0d)",
+      what, count, `CLK_METER_WINDOW_CYCLES, expected);
+    if (count < expected - 4 || count > expected + 4)
+      $fatal(1, "the %s clock meter is off", what);
+  end
+endtask
+""".trim
+  )
+}
+
+/** Gated bursts with a packet of postamble, on the silicon handoff timing,
+  * parked low and parking high and low in turn.
+  *
+  * A packet is enough only for a burst that ends 17 UI or more into an RX word.
+  * The RX needs 17 edges after the one that samples the last data UI, plus
+  * enough to finish that word. Dividers realigned behind a parked clock start
+  * every burst 16 UI into an RX word, so it ends 15 UI into one and needs 33.
+  * One 40 UI gap moves the end to 23, which needs 25. Without that gap the last
+  * packet never arrives; with it every burst arrives whole and clean.
+  */
+/** PhyTest's TX queue cap over long runs. A cap too small for the queue's
+  * synchronizer lag runs it dry. `holds` is the smallest cap that must hold,
+  * and `failsAt` a cap that must run dry, so the test measures the lag.
+  */
+object PhyTestQueueCapTestDriver {
+  val stimulus = """
+begin : queue_cap
+  reg [63:0] st, received, bad, e, flag;
+  setup_ucie();
+  seed_lfsrs();
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  foreach (CAPS[i]) begin
+    `WRITE_UCIE(regDrv, `TX_QUEUE_LIMIT, CAPS[i]);
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, N_PKTS);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, N_PKTS);
+    // Also clears the underflow flag and empties the queue.
+    reset_fsms();
+    repeat (64) @(posedge digitalClock);
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int j = 0; j < 4096; j++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    repeat (500) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `READ_UCIE(regDrv, `TX_TEST_FIFO_UNDERFLOW, flag);
+    $display("== %s, txQueueLimit %0d%s: %0d of %0d packets, %0d bit errors, underflow %0d",
+      CLOCKS, CAPS[i], CAPS[i] == 16 ? " (the reset value)" : CAPS[i] == 0 ? " (uncapped)" : "",
+      received, N_PKTS, bad, flag);
+    if ((CAPS[i] == 0 || CAPS[i] >= HOLDS) && (received != N_PKTS || bad != 0 || flag != 0))
+      $fatal(1, "the TX queue ran dry with a cap that should hold");
+    if (CAPS[i] == FAILS_AT && flag == 0)
+      $fatal(1, "a cap that should run the queue dry held, so this is not measuring the lag");
+  end
+  `WRITE_UCIE(regDrv, `TX_QUEUE_LIMIT, 16);
+end
+""".trim
+
+  def moduleItems(clocks: String, holds: Int, failsAt: Int) = s"""
+localparam string CLOCKS = "$clocks";
+localparam int HOLDS = $holds;
+localparam int FAILS_AT = $failsAt;
+localparam int N_PKTS = 4096;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 51;
+localparam int CAPS [9] = '{0, 24, 16, 14, 12, 10, 8, 6, 4};
+""".trim
+}
+
+/** At this harness's clocks: an 800 MHz PHY test clock against 500 MHz packets.
+  */
+class PhyTestQueueCapTestDriver extends SVTestDriver {
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestQueueCapTestDriver",
+    PhyTestQueueCapTestDriver.stimulus,
+    PhyTestQueueCapTestDriver.moduleItems("800 MHz PHY test clock", 8, 4)
+  )
+}
+
+/** With the PHY test clock at the packet clock, 500 MHz each at 16 GT/s, as on
+  * the Iris harness and on silicon with a 1 GHz PHY test clock at 32 GT/s.
+  * PhyTest then cannot run ahead to make up a cycle the cap cost it, so a cap
+  * needs the most room here: 10 is the least that holds over a long run, 8
+  * runs the queue dry, and the reset value of 16 must hold with margin.
+  */
+class PhyTestQueueCapEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestQueueCapEqualRateTestDriver",
+    PhyTestQueueCapTestDriver.stimulus,
+    PhyTestQueueCapTestDriver.moduleItems("equal rates", 12, 8)
+  )
+}
+
+object PhyTestGatedTrainingTestDriver {
+  val stimulus = """
+begin : phytest_gated_training
+  reg [63:0] received, bad;
+  setup_ucie();
+  seed_lfsrs();
+  // The forwarded clock centred on the data, as training leaves it: with no
+  // preamble the clock's first edge has to sample the first data UI.
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  set_global_delay(CENTRED_TAPS);
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+  for (int alternate = 0; alternate < 2; alternate++) begin
+    `WRITE_UCIE(regDrv, `TX_CLK_PARK_ALTERNATE, alternate);
+    for (int train = 0; train < 2; train++) begin
+      gated_bursts(train, received, bad);
+      $display("%s, %s: %0d of %0d packets, %0d bit errors",
+        alternate ? "parking high and low in turn" : "parked low",
+        train ? "after one 40 UI gap" : "untrained", received, N_PKTS, bad);
+      if (train && (received != N_PKTS || bad != 0))
+        $fatal(1, "a packet of postamble did not deliver every burst after training");
+      if (!train && received == N_PKTS)
+        $fatal(1, "a packet of postamble delivered every burst untrained");
+    end
+  end
+end
+""".trim
+
+  val moduleItems = """
+localparam int N_PKTS = 8;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s.
+localparam int CENTRED_TAPS = 51;
+
+task automatic wait_idle_words();
+  reg [63:0] w0, w;
+  begin
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+  end
+endtask
+
+task automatic run_and_drain(input int packets);
+  reg [63:0] st;
+  begin
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, packets);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, packets);
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    // Far longer than the TX queue and the RX pipeline take to drain.
+    repeat (500) @(posedge digitalClock);
+  end
+endtask
+
+// Resets the FSMs on a running clock, which the RX datapath reset needs to
+// release. A clock that runs or parks for whole packets does not move the
+// RX word boundary.
+task automatic restart_fsms();
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+  reset_fsms();
+  wait_idle_words();
+  `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+  repeat (64) @(posedge digitalClock);
+endtask
+
+task automatic gated_bursts(input bit train, output reg [63:0] received, output reg [63:0] bad);
+  reg [63:0] e;
+  begin
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_BURST_MODE, 64'h1);
+    `WRITE_UCIE(regDrv, `TX_CLK_PREAMBLE, 64'h0);
+    restart_fsms();
+    // Realigned behind the parked clock: the next burst's first edge samples
+    // its first data UI, 16 UI into an RX word.
+    set_clk_en(64'h0);
+    set_rx_clk_en(64'h0);
+    reset_dividers();
+    set_clk_en(64'h1);
+    set_rx_clk_en(64'h1);
+    if (train) begin
+      `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+      `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+      `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 40 / `CLK_POSTAMBLE_UI);
+      run_and_drain(1);
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, e);
+      if (e != 1) $fatal(1, "the 40 UI gap lost its packet");
+      restart_fsms();
+    end
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 32 / `CLK_POSTAMBLE_UI);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'd2);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'd4);
+    run_and_drain(N_PKTS);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+  end
+endtask
+""".trim
+}
+
+class PhyTestGatedTrainingTestDriver extends SVTestDriver {
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+
+  setStimulus(
+    "PhyTestGatedTrainingTestDriver",
+    PhyTestGatedTrainingTestDriver.stimulus,
+    PhyTestGatedTrainingTestDriver.moduleItems
+  )
+}
+
+/** The same with the PHY test clock at the packet clock, 500 MHz each, as on
+  * the Iris harness.
+  */
+class PhyTestGatedTrainingEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 2000000
+  override def dumpWaves = false
+
+  setStimulus(
+    "PhyTestGatedTrainingEqualRateTestDriver",
+    PhyTestGatedTrainingTestDriver.stimulus,
+    PhyTestGatedTrainingTestDriver.moduleItems
+  )
+}
+
+/** `test_gated_bursts` from Iris's `software/phytest-loopback.c`, step for
+  * step: the same burst shape, the same order of writes and the same waits,
+  * from the forwarded clock delay `setup_ucie` leaves, which is uncentred.
+  */
+object PhyTestGatedBurstsProgramTestDriver {
+  def stimulus = """
+begin : gated_bursts_program
+  reg [63:0] w0, w, e, bad, flag, received, phase;
+  setup_ucie();
+  seed_lfsrs();
+  `READ_UCIE(regDrv, `CLK_PHASE_SEL, phase);
+  `WRITE_UCIE(regDrv, `RX_BURST_MODE, 64'h1);
+  for (int alternate = 1; alternate >= 0; alternate--) begin
+    `WRITE_UCIE(regDrv, `TX_CLK_PARK_ALTERNATE, alternate);
+    arm(1);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+    repeat (256) @(posedge digitalClock);
+    set_clk_en(64'h0);
+    set_rx_clk_en(64'h0);
+    set_global_delay(CENTRED_TAPS);
+    reset_dividers();
+    set_clk_en(64'h1);
+    set_rx_clk_en(64'h1);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 40 / `CLK_POSTAMBLE_UI);
+    go(1, received);
+    `WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 32 / `CLK_POSTAMBLE_UI);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'd6);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'd10);
+    arm(N_PKTS);
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+    repeat (256) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    repeat (1024) @(posedge digitalClock);
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+    go(N_PKTS, received);
+    bad = 0;
+    for (int lane = 0; lane <= `TRACK_LANE; lane++) begin
+      `READ_UCIE(regDrv, `RX_BIT_ERRORS + lane * `RX_BIT_ERRORS_WIDTH, e);
+      bad = bad + e;
+    end
+    `READ_UCIE(regDrv, `TX_TEST_FIFO_UNDERFLOW, flag);
+    $display("== program's gated bursts, %s: %0d of %0d packets, %0d bit errors, underflow %0d, idle words while parked %0d",
+      alternate ? "parking high and low" : "parked low", received, N_PKTS, bad, flag, w - w0);
+    if (received != N_PKTS || bad != 0 || flag != 0 || w != w0)
+      $fatal(1, "the bring-up program's gated bursts did not come through clean");
+    `WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_BURST_PACKETS, 64'h0);
+    `WRITE_UCIE(regDrv, `TX_IDLE_PACKETS, 64'h0);
+  end
+  set_clk_en(64'h0);
+  set_rx_clk_en(64'h0);
+  `WRITE_UCIE(regDrv, `CLK_PHASE_SEL, phase);
+  apply_clk_cfg();
+  reset_dividers();
+  set_clk_en(64'h1);
+  set_rx_clk_en(64'h1);
+end
+""".trim
+
+  def moduleItems = """
+localparam int N_PKTS = 24;
+// Global delay taps that centre the forwarded clock on the data at 16 GT/s,
+// `PT_CENTRED_DELAY_TAPS` in the program.
+localparam int CENTRED_TAPS = 51;
+
+task automatic arm(input int n);
+  reg [63:0] w0, w;
+  begin
+    `WRITE_UCIE(regDrv, `TEST_TARGET, `TEST_TARGET_MAINBAND);
+    `WRITE_UCIE(regDrv, `TX_TEST_MODE, `TX_TEST_MODE_LFSR);
+    `WRITE_UCIE(regDrv, `TX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `RX_DATA_MODE, `DATA_MODE_FINITE);
+    `WRITE_UCIE(regDrv, `TX_PACKETS_TO_SEND, n);
+    `WRITE_UCIE(regDrv, `RX_PACKETS_TO_RECEIVE, n);
+    reset_fsms();
+    `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w0);
+    for (int i = 0; i < 1024; i++) begin
+      `READ_UCIE(regDrv, `RX_IDLE_WORDS_OBSERVED, w);
+      if (w - w0 >= 4) break;
+    end
+  end
+endtask
+
+task automatic go(input int n, output reg [63:0] received);
+  reg [63:0] st;
+  begin
+    `WRITE_UCIE(regDrv, `TX_EXECUTE, 64'h1);
+    for (int i = 0; i < 4096; i++) begin
+      `READ_UCIE(regDrv, `TX_TEST_STATE, st);
+      if (st == `TX_TEST_STATE_DONE) break;
+    end
+    for (int i = 0; i < 4096; i++) begin
+      `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+      if (received >= n) break;
+    end
+  end
+endtask
+""".trim
+}
+
+/** At the Iris harness's clocks: the PHY test clock at the packet clock. */
+class PhyTestGatedBurstsProgramEqualRateTestDriver extends SVTestDriver {
+  override def digitalBypassHalfPeriodPs: Double = 1000.0
+  override def timeoutCycles = 4000000
+  override def dumpWaves = false
+  setStimulus(
+    "PhyTestGatedBurstsProgramEqualRateTestDriver",
+    PhyTestGatedBurstsProgramTestDriver.stimulus,
+    PhyTestGatedBurstsProgramTestDriver.moduleItems
+  )
+}
+
+object TlSimpleTestDriver {
+
+  /** `gate` parks the forwarded clock between frames once the link is up, with
+    * two packets of postamble so a frame's last word reaches the far RX at any
+    * alignment. The clock is centred first, as training leaves it: with no
+    * preamble, the first edge after a park must sample a frame's first UI, and
+    * at the global delay's reset value it does not.
+    */
+  def stimulus(gate: Boolean) = s"""
 tl_simple();
-          """.trim
+${if (gate) s"""set_clk_en(64'h0);
+set_rx_clk_en(64'h0);
+set_global_delay(${Codegen.digitalGlobalDelayTaps});
+reset_dividers();
+set_clk_en(64'h1);
+set_rx_clk_en(64'h1);
+`WRITE_UCIE(regDrv, `TX_CLK_POSTAMBLE, 64 / `CLK_POSTAMBLE_UI);
+`WRITE_UCIE(regDrv, `TX_CLK_GATE, 64'h1);
+repeat (64) @(posedge digitalClock);""" else ""}
+begin : round_trip
+  reg [63:0] result;
+  realtime start;
+  // A read's round trip over the mainband loopback with nothing else in
+  // flight, in bus clock cycles (`digitalClock`, 2 ns).
+  for (int i = 0; i < 4; i++) begin
+    `WRITE(mbDrv, 64'h8 * i, 64'h1234_5678_0000_0000 + i);
+    start = $$realtime;
+    `READ(mbDrv, 64'h8 * i, result);
+    $$display("== TL read round trip over the mainband: %0.1f bus clock cycles",
+      ($$realtime - start) / 2000.0);
+    if (result != 64'h1234_5678_0000_0000 + i)
+      $$fatal(1, "read back %x from %0d", result, i);
+  end
+end
+""".trim
+}
+
+class TlSimpleTestDriver extends SVTestDriver {
+  setStimulus("TlSimpleTestDriver", TlSimpleTestDriver.stimulus(gate = false))
+}
+
+/** The same with the forwarded clock gated between frames. */
+class TlSimpleGatedTestDriver extends SVTestDriver {
+  setStimulus(
+    "TlSimpleGatedTestDriver",
+    TlSimpleTestDriver.stimulus(gate = true)
+  )
+}
+
+/** The same at 8 GT/s, where the bus clock outruns the packet clock two to one,
+  * as it does on silicon at any rate below 16 GT/s.
+  */
+class TlSimpleSlowLinkTestDriver extends SVTestDriver {
+  override def bypassHalfPeriodPs: Double = 125.0
+  setStimulus(
+    "TlSimpleSlowLinkTestDriver",
+    TlSimpleTestDriver.stimulus(gate = false)
+  )
+}
+
+/** `align_rx_words` puts the RX words on the TX boundary, so a run frames at
+  * UI 0. Then data lane 0 is delayed `d` UI at the RX and every other lane
+  * (valid and track included) `d` UI at the TX. Every lane must arrive
+  * together, read clean, and frame `d` UI into the word. The largest `d` is
+  * odd and over a word, so every stage of both shifters moves.
+  */
+class UiDelayTestDriver extends SVTestDriver {
+  val rxLanes =
+    edu.berkeley.cs.uciedigital.phy.Phy.numRxDataLanes(UcieTLParams().numLanes)
+  setStimulus(
+    "UiDelayTestDriver",
+    s"""
+begin : ui_delay
+  reg [63:0] base, offset, received, errored;
+  int d;
+  setup_ucie();
+  align_rx_words();
+  `READ_UCIE(regDrv, `RX_UI_DELAY, base);
+  $$display("align_rx_words set every rxUiDelay to %0d", base);
+  for (int k = 0; k < 3; k++) begin
+    d = k == 0 ? 0 : k == 1 ? 1 : 33;
+    for (int l = 0; l < $rxLanes; l++) begin
+      `WRITE_UCIE(regDrv, `TX_UI_DELAY + l * `TX_UI_DELAY_WIDTH, l == 0 ? 0 : d);
+      `WRITE_UCIE(regDrv, `RX_UI_DELAY + l * `RX_UI_DELAY_WIDTH, l == 0 ? base + d : base);
+    end
+    run_lfsr(16);
+    `READ_UCIE(regDrv, `RX_PACKETS_RECEIVED, received);
+    `READ_UCIE(regDrv, `RX_FRAME_OFFSET, offset);
+    `READ_UCIE(regDrv, `RX_LANE_ERRORED, errored);
+    $$display("lanes %0d UI late: %0d packets, framed at UI %0d, lanes errored %0h",
+      d, received, offset, errored);
+    if (received != 16 || offset != d % 32 || errored != 0)
+      $$fatal(1, "the lanes did not arrive together, framed %0d UI in", d % 32);
+  end
+end
+""".trim
   )
 }
 
@@ -1735,47 +2425,38 @@ tl_sideband();
 
 /** Trains every mainband lane over MMIO, the way software would.
   *
-  * Nothing here reaches past the register block: `setup_ucie`, `set_tx_delay`,
-  * `set_rx_vref` and `run_lfsr` are the sequences `Codegen` emits, and the two
-  * codes being swept -- `txctl_<lane>_tile`'s delay taps and
-  * `rxctl_<lane>_vrefSel` -- are pins on the analog tiles. So this measures
-  * exactly what a driver on real silicon would measure, through exactly the
-  * registers it would use.
+  * Nothing here reaches past the register block. `setup_ucie`, `set_tx_delay`,
+  * `set_rx_vref` and `run_lfsr` are sequences `Codegen` emits, and the swept
+  * codes (`txctl_<lane>_tile`'s delay taps and `rxctl_<lane>_vrefSel`) are pins
+  * on the analog tiles. So this measures what a driver on silicon would,
+  * through the same registers.
   *
-  * Three sweeps. The first two are the two axes of an eye, run across every
-  * data lane at once: the delay line moves where in the UI the far receiver
-  * samples a lane, the reference ladder moves where between the rails it
-  * slices, and each lane is scored from its own counters so one pass trains the
-  * whole set.
+  * Three sweeps, each on every data lane at once: (1) the global delay line,
+  * which moves where in the UI the far receiver samples; (2) each lane's own
+  * delay trim, at the edge of that eye; (3) the reference ladder, which moves
+  * where between the rails the receiver slices. Each lane is scored from its
+  * own counters, so one pass trains them all.
   *
-  * FRAMING is why valid is not swept with them. The receiver frames every
-  * lane's comparison on the edge it sees on valid, so moving valid together
-  * with the lanes it frames keeps the two in step and measures nothing -- and
-  * when the pair lands badly the receiver never aligns at all, which reads as
-  * every lane receiving nothing rather than as a code being wrong. Held still,
-  * valid gives the framing something to be wrong about: a data lane that slips
-  * into the next UI has slipped relative to valid, and `PhyTest` scores the
-  * same capture framed a UI either side, so reading all three counters
-  * separates "this lane's data is wrong" from "this lane slipped a UI". Only
-  * the nominal counter defines the eye, since treating a slipped UI as inside
-  * it would merge two adjacent UI into one apparent opening; the other two are
-  * diagnosis, and the sweep reports where they mattered. The third sweep is the
-  * other half of that experiment -- valid alone, past data lanes held still --
-  * and doubles as how valid gets trained, since valid cannot be scored against
-  * a framing it is itself producing.
+  * FRAMING: valid is not swept with the data lanes. The receiver frames every
+  * lane on valid's edge, so moving valid with the lanes measures nothing, and
+  * a bad pair never aligns, which reads as every lane receiving nothing. With
+  * valid held still, a lane that slips a UI has slipped relative to valid.
+  * `PhyTest` also scores each capture framed a UI early and late, so the three
+  * counters separate wrong data from a one UI slip. Only the nominal counter
+  * defines the eye; counting a slipped UI would merge two adjacent UI into one
+  * opening. The sweep reports where the other two mattered. Valid itself is
+  * not trained, since it cannot be scored against its own framing.
   *
-  * Both sweeps have to find a bounded run -- the test fails if every code
-  * works, because a model that trains without a wrong answer is not modelling
-  * the thing being trained. That is what `models/eye` exists to provide and
-  * what the behavioral models in `scala/resources/vsrc` cannot; see
-  * `verilog/README.md`.
+  * Both sweeps must find a bounded run. The test fails if every code works,
+  * because a model with no wrong answer does not model what is being trained.
+  * `models/eye` provides that; the behavioral models in `scala/resources/vsrc`
+  * cannot. See `verilog/README.md`.
   *
-  * The pattern and the scoring come from `PhyTest`, which `setup_ucie` selects
-  * as the controller, because that is where the per-lane bit error counters
-  * are. The link training state machine does not yet program either code:
-  * `PhyLaneTrainer` reports every calibration state complete without running
-  * one, so moving this sweep behind the LTSM is a matter of giving that module
-  * the registers to drive.
+  * The pattern and scoring come from `PhyTest`, which `setup_ucie` selects as
+  * the controller, since it has the per-lane bit error counters. The LTSM does
+  * not yet program either code: `PhyLaneTrainer` reports every calibration
+  * state complete without running one. Moving this sweep behind the LTSM
+  * means giving that module the registers to drive.
   */
 class TrainMainbandTestDriver extends SVTestDriver {
   setStimulus(
@@ -1809,13 +2490,12 @@ begin : train
 
   // SWEEP 1: where in the UI the far side samples, for every lane at once.
   //
-  // The global line delays the quadrature clock, and the quadrature clock is
-  // what the forwarded clock lanes carry, so this walks the sampling point
-  // across the data rather than walking the data past a fixed sampling point.
-  // Its range is a little over a UI, so the eye should open and close exactly
-  // once: a run of clean codes with dirty ones either side. Codes outside that
-  // run land near an edge, where a lane that has slipped into the next UI is
-  // what `rxBitErrorsEarly` and `rxBitErrorsLate` are there to resolve.
+  // The global line delays the quadrature clock, which the forwarded clock
+  // lanes carry, so this moves the sampling point across the data. Its range
+  // is a little over a UI, so the eye should open and close once: a run of
+  // clean codes with dirty ones either side. Codes outside the run are near
+  // an edge, where `rxBitErrorsEarly` and `rxBitErrorsLate` detect a lane
+  // that slipped into the next UI.
   for (int g = 0; g < `TRAIN_GLOBAL_CODES; g++) begin
     set_clk_en(0);
     set_global_delay(g * `TRAIN_GLOBAL_STEP);
@@ -1841,9 +2521,8 @@ begin : train
   longest_run(global_score, `TRAIN_GLOBAL_CODES, run_start, run_len);
   trained_global = (run_start + run_len / 2) * `TRAIN_GLOBAL_STEP;
   if (run_len > 0 && run_len < `TRAIN_GLOBAL_CODES) bounded_global = 1;
-  // One end of the run, where a lane is marginal rather than comfortable.
-  // That is where a per-lane trim decides whether it reads clean, so it is
-  // where sweep 3 parks.
+  // One end of the run, where a lane is marginal. There a per-lane trim
+  // decides whether it reads clean, so sweep 2 parks there.
   edge_global = run_start * `TRAIN_GLOBAL_STEP;
   row = "";
   for (int g = 0; g < `TRAIN_GLOBAL_CODES; g++)
@@ -1851,19 +2530,18 @@ begin : train
   $display("  global eye: %s  (%0d codes, code %0d)",
            row, run_len, trained_global);
 
-  // SWEEP 2: each lane's own trim, taken at the edge of the global eye.
+  // SWEEP 2: each lane's own trim, at the edge of the global eye.
   //
-  // A lane's line spans 5 ps, far less than the eye, so at the middle of the
-  // eye every code reads clean and the sweep says nothing. At the edge it is
-  // the trim that decides, and lanes whose arm of the clock tree is long or
-  // short pick different codes -- which is the whole point of having the trim.
-  // With the skew model off every arm is identical and every lane lands on the
-  // same code, which is correct for that model rather than a failure.
+  // A lane's line spans 5 ps, far less than the eye, so at the eye's middle
+  // every code reads clean. At the edge the trim decides, and lanes with a
+  // long or short clock tree arm pick different codes. With the skew model
+  // off every arm is identical and every lane picks the same code; that is
+  // correct for that model, not a failure.
   //
-  // This runs before the reference is trained, on the reference sweep 1 was
-  // clean with. The eye closes in both directions at once, so at its edge the
-  // vertical margin is as thin as the horizontal one and a single step of the
-  // ladder is enough to read dirty -- which says nothing about the trim.
+  // This runs before the reference is trained, at the reference sweep 1 was
+  // clean with. At the eye's edge the vertical margin is as thin as the
+  // horizontal one, so one ladder step can read dirty, which says nothing
+  // about the trim.
   set_clk_en(0);
   set_global_delay(edge_global);
   set_clk_en(1);
@@ -1990,16 +2668,14 @@ tl_long();
 /** Moves the PHY test and TX sideband clocks from their bypass pins onto the
   * PLL dividers, between PLLs, and back, the way bring-up does.
   *
-  * This is what covers the gate each apply shuts across a switch, each PLL
-  * staying on while a divider takes it and going off once none does, and the
-  * wait for a PLL's lock before a gate reopens onto it. The register blocks on
-  * each clock have to come through every switch with their contents.
+  * Covers: the gate each apply shuts across a switch; each PLL following its
+  * enable, even under a divider that uses it; waiting for lock before a gate
+  * reopens; and each register block keeping its contents.
   *
-  * Each apply has to shut exactly the gates of the clocks it changes something
-  * under, which is checked by counting them: a missing gate only shows up as a
-  * runt pulse when the switch happens to land inside a pulse, and these
-  * switches happen not to. Neither clock may show a phase shorter than its half
-  * period either, for when one does.
+  * Each apply must shut exactly the gates of the clocks it changes. Shuts are
+  * counted, since a missing gate makes a runt pulse only if the switch falls
+  * inside a pulse, and these do not. As a backstop, neither clock may show a
+  * phase shorter than its half period.
   */
 class PllClockingTestDriver extends SVTestDriver {
   setStimulus(
@@ -2021,6 +2697,24 @@ begin : pll_clocking
   `EXPECT_UCIE(regDrv, `SB_CLK_EN, 64'h1);
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
 
+  // The PLL settings are applied fields: a write reaches the cells only at
+  // an apply. The models ignore them, as long as the RDAC stays nonzero.
+  `WRITE_UCIE(regDrv, `PLL8_KP, 64'h1234);
+  `WRITE_UCIE(regDrv, `PLL12_DBIAS, 64'h0ab);
+  `WRITE_UCIE(regDrv, `PLL8_DCOARSE, 64'h15);
+  #20000;
+  if (`CLOCKING_TILE.Pll8Cfg_kp !== 16'h0 || `CLOCKING_TILE.Pll8Dcoarse !== 6'h0) begin
+    $display("FAIL: a PLL setting reached the tile without an apply");
+    fails = fails + 1;
+  end
+  apply_clk_cfg();
+  if (`CLOCKING_TILE.Pll8Cfg_kp !== 16'h1234 || `CLOCKING_TILE.Pll12Cfg_dbias !== 9'h0ab ||
+      `CLOCKING_TILE.Pll8Dcoarse !== 6'h15) begin
+    $display("FAIL: the apply did not carry the PLL settings to the tile");
+    fails = fails + 1;
+  end
+  `EXPECT_UCIE(regDrv, `PLL8_KP, 64'h1234);
+
   // Something to read back from each clock's register block.
   `WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
   `READ_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
@@ -2032,7 +2726,7 @@ begin : pll_clocking
   unlocked_opens = 0;
   mark_gate_shuts();
 
-  // PHY test clock onto PLL8 / 8, starting both PLLs.
+  // PHY test clock onto PLL8 / 8, starting PLL8.
   use_internal_clk(0, 4);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   check_gate_shuts("Moving the PHY test clock onto PLL8", 1, 0, fails);
@@ -2040,7 +2734,9 @@ begin : pll_clocking
   phytest_period(p);
   check_period("PHY test clock on PLL8 / 8", p, 1000.0, fails);
 
-  // TX sideband clock onto PLL12 / 15.
+  // TX sideband clock onto PLL12 / 15, starting PLL12 in the same apply,
+  // which keeps the sideband gate shut until it locks.
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
@@ -2051,37 +2747,55 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock on PLL12 / 15", p, 1250.0, fails);
 
-  // Turning both PLL enables off changes nothing under either clock, and
-  // leaves each PLL running for the clock that divides it.
+  // Both PLL enables off, under both dividers. The enables pass through, so
+  // both PLLs stop, and both clocks with them. Nothing touches either window
+  // while they are stopped. The pulse check is off meanwhile: a PLL that
+  // stops under an open gate may cut a pulse.
+  pulse_mon_en = 0;
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Turning both PLL enables off", 0, 0, fails);
-  if (`CLOCKING_TILE.Pll8En !== 1'b1 || `CLOCKING_TILE.Pll12En !== 1'b1) begin
-    $display("FAIL: a PLL was turned off under a divider");
+  if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
+  // And back on. No gate shut, so no apply waits for lock: wait here before
+  // touching either window.
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
+  apply_clk_cfg();
+  check_gate_shuts("Turning both PLL enables back on", 0, 0, fails);
+  cap = 0;
+  while (cap != 64'h3)
+    `READ_UCIE(regDrv, `PLL_LOCK_OBSERVED, cap);
+  #20000;
+  pulse_mon_en = 1;
+  `READ_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
   `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
-  `EXPECT_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
+  phytest_period(p);
+  check_period("PHY test clock on PLL8 / 8 again", p, 1000.0, fails);
 
   // TX sideband clock onto PLL8 / 10. Changing the PLL is a change under the
-  // clock, and PLL12, which nothing takes now, goes off.
+  // clock. PLL12, which nothing takes now, goes off in the same apply.
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Moving the TX sideband clock onto PLL8", 0, 1, fails);
   if (`CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: PLL12 stayed on with nothing using it");
+    $display("FAIL: PLL12 stayed on against its enable");
     fails = fails + 1;
   end
   `EXPECT_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
   sb_period(p);
   check_period("TX sideband clock on PLL8 / 10", p, 1250.0, fails);
 
-  // Back onto PLL12 at the same /10, 1.2 GHz: a change of PLL alone, which
-  // this apply turns on again. The gate has to shut for it and stay shut until
-  // PLL12 locks, though PLL8 already has.
+  // Back onto PLL12 at the same /10, 1.2 GHz: a change of PLL alone, with
+  // PLL12 enabled in the same apply. The gate has to shut for it and stay
+  // shut until PLL12 locks, though PLL8 already has.
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   apply_clk_cfg();
   check_gate_shuts("Moving the TX sideband clock back onto PLL12", 0, 1, fails);
   if (`CLOCKING_TILE.Pll12En !== 1'b1) begin
@@ -2092,9 +2806,11 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock on PLL12 / 10", p, 833.3, fails);
 
-  // Both back onto their bypass pins, after which nothing holds either PLL on.
+  // Both back onto their bypass pins, with both PLLs off in the same apply.
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Moving both back", 1, 1, fails);
   `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
@@ -2104,7 +2820,7 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock back on its bypass pin", p, 1250.0, fails);
   if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: a PLL stayed on with nothing using it");
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
 
@@ -2126,11 +2842,11 @@ end
 
 /** Stops the PHY test and TX sideband clocks with software's own enables.
   *
-  * Shut, a gate has to hold its clock low and let nothing through, and the
-  * register block behind it has to pick up where it left off once it opens. The
-  * second half is the switch with `clkCfgGatePhyTest` off, where software shuts
-  * the gate itself: the apply must leave it shut, so software can wait out
-  * PLL8's lock before letting the new clock out.
+  * A shut gate holds its clock high (the gated clock is inverted on its way
+  * out) and passes no edges, and the register block behind it resumes when it
+  * opens. Then, with `clkCfgGatePhyTest` off, software shuts the gate itself
+  * for a switch; the apply must leave it shut so software can wait for PLL8
+  * to lock before letting the new clock out.
   */
 class ClkEnTestDriver extends SVTestDriver {
   setStimulus(
@@ -2153,7 +2869,7 @@ begin : clk_en
   #20000;
   e0 = pt_edges;
   #50000;
-  if (pt_edges != e0 || `CLOCKING_TILE.PhyTestClk !== 1'b0) begin
+  if (pt_edges != e0 || `CLOCKING_TILE.PhyTestClk !== 1'b1) begin
     $display("FAIL: PHY test clock ran with its gate shut");
     fails = fails + 1;
   end
@@ -2164,7 +2880,7 @@ begin : clk_en
   #20000;
   e0 = sb_edges;
   #50000;
-  if (sb_edges != e0 || `CLOCKING_TILE.SbClk !== 1'b0) begin
+  if (sb_edges != e0 || `CLOCKING_TILE.SbClk !== 1'b1) begin
     $display("FAIL: TX sideband clock ran with its gate shut");
     fails = fails + 1;
   end
@@ -2206,12 +2922,12 @@ end
 /** With the rate table in charge, a new negotiated rate is applied with no
   * software involved.
   *
-  * Training is what moves `freqSel`; forcing it at the clock register block
-  * stands in for a negotiated rate without training a link. The two entries
-  * differ only in TX division, so each apply has to shut the UCIe main clock's
-  * gate and leave the PHY test and TX sideband clocks, which it changes nothing
-  * under, running -- and only then tell the controller its clocks are ready at
-  * the new rate.
+  * Training moves `freqSel`; forcing it at the clock register block stands in
+  * for a negotiated rate. The two entries differ only in TX division. So each
+  * apply must shut the UCIe main clock's gate, leave the PHY test and TX
+  * sideband clocks running, and only then tell the controller its clocks are
+  * ready at the new rate. Last, the rate moves again mid-apply: the apply
+  * copies the entry it started with, and another applies the new one.
   */
 class RateAutoApplyTestDriver extends SVTestDriver {
   setStimulus(
@@ -2222,6 +2938,9 @@ begin : rate_auto_apply
   // What `freqSel` is forced to. A force cannot take a loop variable, which
   // is automatic, so it follows this instead.
   reg [3:0] freq_sel;
+  // The TX division select's values, in the order the tile took them.
+  integer div_changes;
+  integer divs[0:3];
   integer fails;
   fails = 0;
 
@@ -2272,6 +2991,33 @@ begin : rate_auto_apply
     fails = fails + 1;
   end
 
+  // The rate moves again while an apply waits out its gate dwell. That
+  // apply copies the entry for the rate it started on; another follows for
+  // the new one.
+  set_rate_cfg(2, 3, 2, 0);
+  div_changes = 0;
+  fork : div_watch
+    forever @(`CLOCKING_TILE.TxClkDiv) begin
+      if (div_changes < 4) divs[div_changes] = `CLOCKING_TILE.TxClkDiv;
+      div_changes = div_changes + 1;
+    end
+  join_none
+  freq_sel = 4'd2;
+  // The apply starts about 10 ns later and copies 64 ns after that.
+  #30000;
+  freq_sel = 4'd1;
+  #1000000;
+  busy = 1;
+  for (int i = 0; i < 256 && busy != 0; i++)
+    `READ_UCIE(regDrv, `CLK_CFG_BUSY, busy);
+  disable div_watch;
+  $display("Rate 2 then 1 mid-apply: %0d TX division changes, %0d then %0d",
+           div_changes, divs[0], divs[1]);
+  if (div_changes != 2 || divs[0] != 2 || divs[1] != 1) begin
+    $display("FAIL: expected rate 2's entry, then rate 1's");
+    fails = fails + 1;
+  end
+
   `WRITE_UCIE(regDrv, `FREQ_SEL_AUTO_EN, 64'h0);
   release `UCIE_CLK_REGS.io_freqSel;
   if (fails != 0) $fatal(1, "%0d rate auto-apply checks failed", fails);
@@ -2283,10 +3029,18 @@ end
 
 /** Steps the TX quadrature clock's coarse phase at /2 off an 8 GHz main clock.
   *
-  * A span of four half cycles, so each step should move TXCLKQ's edge 62.5 ps
-  * earlier against TXCLK's, modulo the 250 ps TX clock period. The phase is
-  * taken on main clock edges, so this also checks that a phase written with the
-  * clock gated, as `set_tx_phase` does, lands once the gate opens.
+  * The span is four half cycles, so each step should move TXCLKQ's edge
+  * 62.5 ps earlier relative to TXCLK, modulo the 250 ps TX period. Each phase
+  * has its own apply, which restarts the TX dividers under the gate, so this
+  * also checks the restart gives the requested phase, not one a main clock
+  * period off.
+  *
+  * `clkGateEdgeSel` is written first. It starts no apply; the first phase's
+  * apply must take it to the tile.
+  *
+  * Then `clkPhaseAutoApply`: off (reset), a phase write waits for an apply;
+  * on, the write starts one by itself. Last, a longer `clkCfgGateDwell` holds
+  * the phase back until it ends.
   */
 class TxPhaseTestDriver extends SVTestDriver {
   setStimulus(
@@ -2299,7 +3053,15 @@ begin : tx_phase
   fails = 0;
 
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  set_clk_en(64'h1);
   set_main_clk(3, 1);
+  `WRITE_UCIE(regDrv, `CLK_GATE_EDGE_SEL, 64'h1);
+  #20000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.ClkGateEdgeSel !== 1'b0) begin
+    $display("FAIL: clkGateEdgeSel reached the tile without an apply");
+    fails = fails + 1;
+  end
   for (int c = 0; c < 4; c++) begin
     set_tx_phase(c);
     #20000;
@@ -2315,6 +3077,51 @@ begin : tx_phase
       fails = fails + 1;
     end
   end
+  if (`CLOCKING_TILE.ClkGateEdgeSel !== 1'b1) begin
+    $display("FAIL: the phase's apply did not carry clkGateEdgeSel");
+    fails = fails + 1;
+  end
+  // Auto-apply off: the write alone reaches nothing.
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h1);
+  #20000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd3) begin
+    $display("FAIL: a phase write reached the tile with auto-apply off");
+    fails = fails + 1;
+  end
+  // Auto-apply on: the pending phase applies, and so does the next write.
+  `WRITE_UCIE(regDrv, `CLK_PHASE_AUTO_APPLY, 64'h1);
+  #1000000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd1) begin
+    $display("FAIL: turning auto-apply on did not apply the pending phase");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h2);
+  #1000000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd2) begin
+    $display("FAIL: a phase write did not apply itself with auto-apply on");
+    fails = fails + 1;
+  end
+  // A longer gate dwell holds the phase back: 1000 chip cycles is 2 us
+  // before it moves and 2 us after.
+  `WRITE_UCIE(regDrv, `CLK_CFG_GATE_DWELL, 64'd1000);
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h3);
+  #1000000;
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h1, "apply ended before the gate dwell");
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd2) begin
+    $display("FAIL: the phase moved before the gate dwell ended");
+    fails = fails + 1;
+  end
+  #4000000;
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply did not end after both dwells");
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd3) begin
+    $display("FAIL: the phase did not move after the gate dwell");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `CLK_CFG_GATE_DWELL, 64'd32);
+  `WRITE_UCIE(regDrv, `CLK_PHASE_AUTO_APPLY, 64'h0);
   if (fails != 0) $fatal(1, "%0d TX phase checks failed", fails);
 end
           """.trim,
@@ -2324,12 +3131,12 @@ end
 
 /** Manual mode on the clock register block: every output its own register.
   *
-  * Each output of the block is read off its port, all of them together, and
-  * every step says which one alone should have moved. Switching into manual
-  * mode and back out must move nothing; in between, each control has to take
-  * effect when it is written, with no apply, and with none of the FSM's rules
-  * on top -- a PLL a divider takes can be turned off, the UCIe reset no longer
-  * reaches the dividers, and the controller's clock handshake is software's.
+  * All the block's outputs are read off its ports, and each step names the one
+  * output that should change. Entering and leaving manual mode must change
+  * nothing. In manual mode each control takes effect when written, with no
+  * apply and none of the FSM's rules: a PLL a divider uses can be turned off,
+  * the UCIe reset no longer reaches the dividers, and software drives the
+  * controller's clock handshake.
   */
 class ClkManualTestDriver extends SVTestDriver {
   setStimulus(
@@ -2341,16 +3148,27 @@ begin : clk_manual
   integer fails;
   fails = 0;
 
-  // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off, which
-  // the FSM overrides while the divider takes it.
+  // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off. The
+  // FSM passes the enable through, even with the divider on PLL8, and then
+  // back on. PLL12 and X2 on too, so the steps below have something to turn
+  // off.
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `X2_EN, 64'h1);
   use_internal_clk(0, 4);
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
+  apply_clk_cfg();
+  #10000;
+  if (`UCIE_CLK_REGS.io_pll8En !== 1'b0) begin
+    $display("FAIL: FSM mode kept PLL8 on against its enable");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
   apply_clk_cfg();
   `WRITE_UCIE(regDrv, `CLK_EN, 64'h1);
   #10000;
   if (`UCIE_CLK_REGS.io_pll8En !== 1'b1) begin
-    $display("FAIL: FSM mode turned PLL8 off under its divider");
+    $display("FAIL: FSM mode did not turn PLL8 back on");
     fails = fails + 1;
   end
 
@@ -2369,7 +3187,7 @@ begin : clk_manual
     fails = fails + 1;
   end
   check_outs(prev, "entering manual mode", fails);
-  // The registers read back what was driven, the keep-alive folded in.
+  // The registers read back what was driven.
   `EXPECT_UCIE(regDrv, `PLL8_EN, 64'h1);
   `EXPECT_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h0);
 
@@ -2399,8 +3217,16 @@ begin : clk_manual
   want = clk_outs(); want.rxClkFromTxQ = 1'b1;
   step(`RX_CLK_FROM_TX_Q, 1, want, "rxClkFromTxQ", fails);
   want = clk_outs(); want.clkPhaseSel = 64'h0; step(`CLK_PHASE_SEL, 0, want, "clkPhaseSel", fails);
-  // The UCIe reset alone, without the dividers; then each divider reset alone.
-  want = clk_outs(); want.ucieRst = 1'b1; step(`UCIE_RST, 1, want, "ucieRst", fails);
+  want = clk_outs(); want.clkGateEdgeSel = 1'b1;
+  step(`CLK_GATE_EDGE_SEL, 1, want, "clkGateEdgeSel", fails);
+  // The UCIe reset holds both divider resets, as in FSM mode; then each
+  // divider reset alone.
+  want = clk_outs(); want.ucieRst = 1'b1;
+  want.txDividerRstb = 1'b0; want.rxDividerRstb = 1'b0;
+  step(`UCIE_RST, 1, want, "ucieRst", fails);
+  want = clk_outs(); want.ucieRst = 1'b0;
+  want.txDividerRstb = 1'b1; want.rxDividerRstb = 1'b1;
+  step(`UCIE_RST, 0, want, "ucieRst release", fails);
   want = clk_outs(); want.txDividerRstb = 1'b0;
   step(`TX_DIVIDER_RST, 1, want, "txDividerRst", fails);
   want = clk_outs(); want.rxDividerRstb = 1'b0;
@@ -2409,7 +3235,6 @@ begin : clk_manual
   step(`TX_DIVIDER_RST, 0, want, "txDividerRst release", fails);
   want = clk_outs(); want.rxDividerRstb = 1'b1;
   step(`RX_DIVIDER_RST, 0, want, "rxDividerRst release", fails);
-  want = clk_outs(); want.ucieRst = 1'b0; step(`UCIE_RST, 0, want, "ucieRst release", fails);
   // The controller's clock handshake.
   want = clk_outs(); want.clksReady = ~want.clksReady;
   step(`MANUAL_CLKS_READY, want.clksReady, want, "manualClksReady", fails);
@@ -2452,6 +3277,8 @@ begin : clk_manual
   end
 
   // And the FSM runs again: an apply moves the TX division under the gate.
+  set_clk_en(64'h1);
+  #10000;
   main_gate_shuts = 0;
   set_main_clk(3, 0);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
@@ -2483,6 +3310,7 @@ typedef struct packed {
   logic rxClkFromTxQ;
   logic [63:0] clkPhaseSel;
   logic clkEn;
+  logic clkGateEdgeSel;
   logic rxClkEn;
   logic phyTestClkEn;
   logic sbClkEn;
@@ -2511,6 +3339,7 @@ function automatic clk_outs_t clk_outs();
   o.rxClkFromTxQ = `UCIE_CLK_REGS.io_rxClkFromTxQ;
   o.clkPhaseSel = `UCIE_CLK_REGS.io_clkPhaseSel;
   o.clkEn = `UCIE_CLK_REGS.io_clkEn;
+  o.clkGateEdgeSel = `UCIE_CLK_REGS.io_clkGateEdgeSel;
   o.rxClkEn = `UCIE_CLK_REGS.io_rxClkEn;
   o.phyTestClkEn = `UCIE_CLK_REGS.io_phyTestClkEn;
   o.sbClkEn = `UCIE_CLK_REGS.io_sbClkEn;
@@ -2551,15 +3380,13 @@ endtask
 /** The PHY test and TX sideband dividers at every odd ratio, at the PHY test
   * divider's /6 and /12, and off the analog bypass pin.
   *
-  * An odd ratio goes through a duty cycle corrector, so each of them -- /15 of
-  * the PHY test divider, /5 and /15 of the TX sideband one -- has to come out
-  * high and low for exactly half its period, the same as the even ratios, which
-  * do not go through it. /6 is /3 then /2, and /12 is /2, /3, /2, so both end
-  * in a /2 and have to come out at 50% with no corrector. The analog bypass pin
-  * runs at 5 GHz here, neither PLL's rate, so a ratio off it can only come out
-  * at its own period if the select really took the pin. With both clocks on the
-  * pin, neither PLL is held on for them, and an apply finishes with no PLL
-  * locked.
+  * Neither divider has a duty cycle corrector. Odd ratios come from the cells'
+  * fast dividers (a /5 is high 2 source cycles of 5, a /3 high 1 of 3), and
+  * both cells invert their output. So `PhyTestClk` at /15 is high 9 of 15, and
+  * `SbClk` is high 3 of 5 at /5 and 10 of 15 at /15. Even ratios end in a /2
+  * and are 50%. The analog bypass pin runs at 5 GHz, neither PLL's rate, so
+  * the right period shows the select took the pin. With both clocks on the
+  * pin and both PLLs off, an apply finishes with no PLL locked.
   */
 class DividerDutyTestDriver extends SVTestDriver {
 
@@ -2580,68 +3407,70 @@ begin : divider_duty
   use_internal_clk(0, 6);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, PLL8 / 15", hi, lo, 1875.0, fails);
+  check_duty("PHY test clock, PLL8 / 15", hi, lo, 1875.0, 0.6, fails);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
   apply_clk_cfg();
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, PLL8 / 5", hi, lo, 625.0, fails);
+  check_duty("TX sideband clock, PLL8 / 5", hi, lo, 625.0, 0.6, fails);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   apply_clk_cfg();
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, PLL12 / 15", hi, lo, 1250.0, fails);
+  check_duty("TX sideband clock, PLL12 / 15", hi, lo, 1250.0, 2.0 / 3.0, fails);
 
-  // Off the analog bypass pin, at 5 GHz: even ratios, which the corrector must
-  // leave alone, and odd ones.
+  // Off the analog bypass pin, at 5 GHz: even ratios and odd ones.
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h2);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
   apply_clk_cfg();
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, analog bypass / 10", hi, lo, 2000.0, fails);
+  check_duty("TX sideband clock, analog bypass / 10", hi, lo, 2000.0, 0.5, fails);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h1);
   apply_clk_cfg();
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, analog bypass / 5", hi, lo, 1000.0, fails);
+  check_duty("TX sideband clock, analog bypass / 5", hi, lo, 1000.0, 0.6, fails);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_SRC_SEL, 64'h2);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h4);
   apply_clk_cfg();
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, analog bypass / 8", hi, lo, 1600.0, fails);
+  check_duty("PHY test clock, analog bypass / 8", hi, lo, 1600.0, 0.5, fails);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h3);
   apply_clk_cfg();
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, analog bypass / 6", hi, lo, 1200.0, fails);
+  check_duty("PHY test clock, analog bypass / 6", hi, lo, 1200.0, 0.5, fails);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h5);
   apply_clk_cfg();
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, analog bypass / 12", hi, lo, 2400.0, fails);
+  check_duty("PHY test clock, analog bypass / 12", hi, lo, 2400.0, 0.5, fails);
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_DIV, 64'h6);
   apply_clk_cfg();
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, analog bypass / 15", hi, lo, 3000.0, fails);
+  check_duty("PHY test clock, analog bypass / 15", hi, lo, 3000.0, 0.6, fails);
 
-  // No PLL is held on for a divider on the pin, and an apply on the pin
+  // Both PLLs off with both clocks on the pin, and an apply on the pin
   // finishes with neither PLL running.
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   `WRITE_UCIE(regDrv, `X2_EN, 64'h0);
   apply_clk_cfg();
   if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: a PLL was held on for a divider on the analog bypass pin");
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   apply_clk_cfg();
   `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply on the pin waited for a PLL");
   sb_duty(hi, lo);
-  check_duty("TX sideband clock, analog bypass / 15, no PLL", hi, lo, 3000.0, fails);
+  check_duty("TX sideband clock, analog bypass / 15, no PLL", hi, lo, 3000.0,
+             2.0 / 3.0, fails);
   phytest_duty(hi, lo);
-  check_duty("PHY test clock, analog bypass / 15, no PLL", hi, lo, 3000.0, fails);
+  check_duty("PHY test clock, analog bypass / 15, no PLL", hi, lo, 3000.0, 0.6,
+             fails);
 
   if (fails != 0) $fatal(1, "%0d divider duty checks failed", fails);
 end
@@ -2653,11 +3482,11 @@ end
 /** Each RX lane's sampling-delay trim, `rxctl_<lane>_dctrl`, from its own
   * register to its own lane.
   *
-  * The behavioural RX lane ignores `Dctrl` -- only the analog models resolve it
-  * -- so this checks the wiring: each lane's thermometer code reaches that
-  * lane's pins and no other's, reads back, and comes up zero. Every lane gets a
-  * different count of taps so a code landing on the wrong lane shows. The two
-  * clock lanes have no delay line and are left out.
+  * The behavioural RX lane ignores `Dctrl` (only the analog models use it), so
+  * this checks the wiring: each lane's thermometer code reaches only that
+  * lane's pins, reads back, and resets to zero. Each lane gets a different tap
+  * count, so a code on the wrong lane shows. The two clock lanes have no delay
+  * line and are skipped.
   */
 class RxDelayTestDriver extends SVTestDriver {
   setStimulus(
@@ -2760,20 +3589,18 @@ endfunction
   }
 }
 
-/** Register accesses through a harness's tester, with the harness clock and the
-  * PHY clocks the register blocks run on all running.
+/** Register accesses through a harness's tester, with the harness clock and
+  * the register blocks' PHY clocks all running.
   *
-  * The tester, and the bus side of the register crossings, run on the harness
-  * clock. The PhyTest and controller blocks run on the PhyTest and sideband
-  * clocks, which the clocking tile takes from `digitalBypassClk` and
-  * `sidebandBypassClk` out of reset, so an access to either needs its clock
-  * too. Every step advances them all, eight PHY edges to five harness edges as
-  * 800 and 500 MHz would. The clock register block is on the harness clock
-  * alone, and stepping the others does it no harm.
+  * The tester, the bus side of the register crossings and the clock register
+  * block run on the harness clock. The PhyTest and controller blocks run on the
+  * PhyTest and sideband clocks, which the clocking tile takes from
+  * `digitalBypassClk` and `sidebandBypassClk` out of reset. Each step advances
+  * all clocks, eight PHY edges per five harness edges (800 vs. 500 MHz).
   *
   * `TLTesterIO.op` steps one clock and leaves `req.valid` asserted, so this
-  * drives the tester itself: each access raises `req.valid` for exactly one
-  * accepted beat and then waits for its one response.
+  * drives the tester directly: each access holds `req.valid` for exactly one
+  * accepted beat, then waits for its one response.
   */
 class MultiClockRegAccess(
     io: TLTesterIO,
@@ -2791,9 +3618,9 @@ class MultiClockRegAccess(
     steps += 1
   }
 
-  // A response can come back in the cycle its request is accepted -- the clock
-  // register block answers combinationally -- so both handshakes are sampled
-  // before every step, and each completes on the edge that step makes.
+  // A response can arrive in the cycle its request is accepted (the clock
+  // register block answers combinationally), so both handshakes are sampled
+  // before each step and complete on that step's edge.
   private def op(
       addr: BigInt,
       data: BigInt,
@@ -2857,36 +3684,32 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
         override def getDirectory =
           (Utils.buildRoot / "UcieTL_should_be_able_to_read_write_MMIO_registers_using_ChiselSim").toNIO
       }
-      // LazyModule.scope is pushed by the LazyModule constructor and only
-      // popped by LazyModule.apply, so apply it here rather than inside
-      // simulate's by-name argument. If simulate throws first (e.g. no
-      // verilator on PATH), an un-applied TestHarness leaks into the global
-      // scope and every later elaboration in this JVM fails with
+      // The LazyModule constructor pushes LazyModule.scope and only
+      // LazyModule.apply pops it, so apply it here, not inside simulate's
+      // by-name argument. If simulate throws first (e.g. no verilator on
+      // PATH), the TestHarness leaks into the global scope and every later
+      // elaboration in this JVM fails with
       // "<x>.module was constructed before LazyModule() was run on TestHarness".
       val dut = LazyModule(new TestHarness())
       simulate(dut.module) { c =>
         enableWaves()
-        // The tester and the bus side of the register crossings run on the
-        // harness clock, the PhyTest and controller register blocks on the
-        // PhyTest and sideband clocks, which the clocking tile takes from the
-        // digital and sideband bypass clocks. An access needs its block's.
+        // The PhyTest and controller register blocks also need the digital
+        // and sideband bypass clocks; see `MultiClockRegAccess`.
         val regs = new MultiClockRegAccess(
           c.io.reg,
           c.clock,
           c.io.ucieDigitalBypassClock,
           c.io.ucieSidebandBypassClock
         )
-        // ChiselSim's own reset sequence only steps the harness clock, so hold
-        // reset across edges of all of them to bring the PHY domains, and their
-        // ends of the crossings, out of reset with their registers initialized.
+        // ChiselSim's reset only steps the harness clock. Hold reset across
+        // edges of every clock so the PHY domains and their ends of the
+        // crossings reset too.
         c.reset.poke(true.B)
         regs.step(5)
         c.reset.poke(false.B)
         regs.step(5)
-        // Addresses come from the register map by name, the way the
-        // SystemVerilog drivers use the generated constants. Hardcoded offsets
-        // silently retarget this test at a different register whenever the map
-        // grows.
+        // Look up addresses by name, as the SystemVerilog drivers do.
+        // Hardcoded offsets would point at another register when the map grows.
         def addr(name: String): BigInt =
           BigInt(0x200000L) +
             (Codegen.regAddrMap(name) - Codegen.ucieParams.address)
@@ -2910,16 +3733,13 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       }
     }
 
-    // What `ucieRst` is for, shown by what it does and does not reach.
+    // Checks what `ucieRst` reaches and what it does not.
     //
-    // At chip reset the clocking is whatever the reset defaults describe,
-    // which need not be what the part is wired for, so the rest of the block
-    // comes up on a clock it may have no business running on. The way out is
-    // to configure the clocking first and then restart everything else -- and
-    // that only works because the clocking registers sit in a domain the
-    // restart does not touch. Without that split, asserting the reset would
-    // wipe the configuration it was asserted to make use of, and there would
-    // be no way to bring the block up on a clock the defaults do not describe.
+    // At chip reset the clocking follows the reset defaults, which may not
+    // match how the part is wired, so the block may come up on the wrong
+    // clock. Software configures the clocking first, then restarts the rest.
+    // That works only because `ucieRst` does not reach the clocking
+    // registers; otherwise it would wipe the configuration it is meant to use.
     it(
       "should reset the UCIe block without losing the clocking configuration"
     ) {
@@ -2968,9 +3788,8 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
           "the clocking register did not take its value before the reset"
         )
 
-        // Assert and release. Both writes go to the clocking block, which is
-        // the point: the register that commands the reset has to live where
-        // the reset cannot reach it, or nothing could release it.
+        // Assert and release. Both writes go to the clocking block: the reset
+        // register must be outside the reset, or nothing could release it.
         wr("ucieRst", 1)
         regs.step(5)
         wr("ucieRst", 0)
@@ -3023,12 +3842,103 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
       )
     }
 
+    it("should time PhyTest's path and its minimum postamble using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestLatencyTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_time_PhyTest_path_and_minimum_postamble_using_Verilator"
+      )
+    }
+
+    it("should hold a capped TX queue over a long run using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestQueueCapTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_hold_a_capped_TX_queue_over_a_long_run_using_Verilator"
+      )
+    }
+
+    it(
+      "should hold a capped TX queue with the PHY test clock at the packet clock using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestQueueCapEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_hold_a_capped_TX_queue_at_equal_rates_using_Verilator"
+      )
+    }
+
+    it(
+      "should keep gated bursts whole with a packet of postamble using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedTrainingTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_keep_gated_bursts_whole_with_a_packet_of_postamble_using_Verilator"
+      )
+    }
+
+    it(
+      "should run the bring-up program's gated bursts at equal rates using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedBurstsProgramEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_run_the_bring_up_programs_gated_bursts_at_equal_rates_using_Verilator"
+      )
+    }
+
+    it(
+      "should keep gated bursts whole with the PHY test clock at the packet clock using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new PhyTestGatedTrainingEqualRateTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_keep_gated_bursts_whole_at_equal_rates_using_Verilator"
+      )
+    }
+
     it("should support simple TL test using Verilator") {
       implicit val p = Parameters.empty
       Utils.simulate(
         new SimTop(new TlSimpleTestDriver),
         Utils.writeVerilatorSimScript,
         Utils.buildRoot / "UcieTL_should_support_simple_TL_test_using_Verilator"
+      )
+    }
+
+    it("should support simple TL test with the clock gated using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleGatedTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_with_the_clock_gated_using_Verilator"
+      )
+    }
+
+    it(
+      "should support simple TL test with the link slower than the bus using Verilator"
+    ) {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new TlSimpleSlowLinkTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_support_simple_TL_test_with_the_link_slower_than_the_bus_using_Verilator"
+      )
+    }
+
+    it("should align RX words and move whole lanes by UI using Verilator") {
+      implicit val p = Parameters.empty
+      Utils.simulate(
+        new SimTop(new UiDelayTestDriver),
+        Utils.writeVerilatorSimScript,
+        Utils.buildRoot / "UcieTL_should_align_RX_words_and_move_whole_lanes_by_UI_using_Verilator"
       )
     }
 
@@ -3256,7 +4166,7 @@ class TileLinkSpec extends AnyFunSpec with ChiselSim {
     }
 
     it(
-      "should run the PHY test and sideband dividers at 50% duty, off a PLL or the analog bypass pin, using Xcelium"
+      "should run the PHY test and sideband dividers at their duty cycles, off a PLL or the analog bypass pin, using Xcelium"
     ) {
       implicit val p = Parameters.empty
       Utils.simulate(
