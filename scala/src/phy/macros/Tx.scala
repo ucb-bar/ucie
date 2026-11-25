@@ -164,12 +164,10 @@ class TxLane(implicit includeDefaultModels: Boolean = false) extends RawModule {
   verilogBlackBox.io.Edge_Sel := io.ctl.Edge_Sel
 }
 
-/** The delivered TX tile, `TX`. Port names match its pins.
-  *
-  * Left off: the supplies (VDDQ, VDD, VSS), which the physical flow connects,
-  * and about thirty internal nodes the tile brings out as outputs, which
-  * nothing reads. One of those is `rst`, the tile's synchronized divider reset:
-  * an output, not a second reset input.
+/** The delivered TX tile, `TX`, with port names matching its pins. Left off are
+  * the supplies (VDDQ, VDD, VSS), which the physical flow connects, and the 42
+  * internal nodes the tile brings out as outputs, which nothing reads; one is
+  * `rst`, its synchronized divider reset, not a second reset input.
   */
 class VerilogTxLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox

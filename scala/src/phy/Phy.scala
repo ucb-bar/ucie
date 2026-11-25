@@ -132,22 +132,29 @@ class PhyDebugIO(numLanes: Int = 16) extends Bundle {
   // and the loopback receiver, in that order -- clocked off the in-phase TX
   // clock by the lane clock distribution network, alongside the PHY's lanes.
   val testTxLaneClk = Output(Vec(ClkDistNetwork.numTestLanes, Clock()))
-  // Full-rate TX and forwarded RX clocks for the tester's clock observation
-  // pads. Buffered taps off the distribution network, not the raw clocks, so
-  // the wire out to the pads does not load the network's roots.
+  // Full-rate TX and forwarded RX clocks for the tester's observation muxes.
+  // Buffered taps off the distribution network, not the raw clocks, so the
+  // wire out to the muxes does not load the network's roots.
   val testTxPadClk = Output(Clock())
   val testRxPadClk = Output(Clock())
   // TX global divided clock, i.e. the clock the TX lanes take their words on.
   val txDivClk = Output(Clock())
+  // RX global divided clock, the one the RX lanes hand their words over on.
+  val rxDivClk = Output(Clock())
   // Sideband forwarded clock as the PHY transmits it. Tapped here rather than
   // taken from the tester's own sideband output so that the observed clock is
   // whichever controller currently owns the sideband.
   val sbTxClk = Output(Clock())
-  // Deserialized RX lane words, in the RX divided clock domain, in lane order:
-  // `numLanes` data lanes, then valid, then track.
-  val rxData = Output(
-    Vec(Phy.numRxDataLanes(numLanes), Bits(Phy.SerdesRatio.W))
-  )
+  // The PHY's clock inputs, straight off their bumps.
+  val digitalBypassClk = Output(Clock())
+  val sidebandBypassClk = Output(Clock())
+  val refClk = Output(Clock())
+  // Bit 0 of RX data lane 0's deserializer output, before the bit shuffle,
+  // in the RX divided clock domain.
+  val rxDataLsb = Output(Bool())
+  // Bit 0 of the word going into TX data lane 0's serializer, after the bit
+  // shuffle, in the TX divided clock domain.
+  val txDataLsb = Output(Bool())
 }
 
 class PhyBumpsIO(numLanes: Int = 16) extends Bundle {
@@ -425,11 +432,14 @@ class Phy(
   clkTile.io.DigBypassClk := clkDist.io.tileDigitalBypassClk
   clkDist.io.txClk := clkTile.io.TxClk
   clkDist.io.txClkQ := clkTile.io.TxClkQ
-  // The tester's own lanes and its clock observation pads take their clocks
-  // from the network too, so no one loads its roots but the network itself.
+  // The tester's own lanes and its observation muxes take their clocks from
+  // the network too, so no one loads its roots but the network itself.
   io.debug.testTxLaneClk := clkDist.io.testTxLaneClk
   io.debug.testTxPadClk := clkDist.io.testTxPadClk
   io.debug.testRxPadClk := clkDist.io.testRxPadClk
+  io.debug.digitalBypassClk := io.top.digitalBypassClk
+  io.debug.sidebandBypassClk := io.top.sidebandBypassClk
+  io.debug.refClk := io.top.refClk
 
   // Set up sideband. Each bump gets an `SbDriver`, which is the 2:1 serializer
   // and the pad driver as one cell.
@@ -474,6 +484,7 @@ class Phy(
   rxClkDiv.io.clk := clkDist.io.rxClkDivClk
   rxClkDiv.io.resetb := io.clkRst.rxDividerRstb
   io.clkRst.rxDivClk := (!rxClkDiv.io.clkout_3.asBool).asClock
+  io.debug.rxDivClk := io.clkRst.rxDivClk
   val rxRstSync = Module(new RstSync)
   rxRstSync.io.rstbAsync := !(io.clkRst.reset || io.clkRst.rxDatapathRst)
   rxRstSync.io.clk := io.clkRst.rxDivClk
@@ -524,6 +535,9 @@ class Phy(
     txLane.io.rst := (!io.clkRst.txDividerRstb.asBool).asAsyncReset
     txLane.io.clk := clkDist.io.txLaneClk(lane)
     txLane.io.din := txShuffler.io.dout
+    if (lane == 0) {
+      io.debug.txDataLsb := txShuffler.io.dout(0)
+    }
     // The bumps are named, so this is the one place the TX side maps a lane
     // index onto a role.
     if (lane < numLanes) {
@@ -598,6 +612,9 @@ class Phy(
       rxShuffler.suggestName(s"${laneName}_shuffler")
       rxShuffler.io.din := rxLane.io.dout.asUInt
       rxShuffler.io.permutation := io.regs.rxctl(lane).shuffler
+      if (lane == 0) {
+        io.debug.rxDataLsb := rxLane.io.dout(0)
+      }
 
       rxLaneDout(lane) := rxShuffler.io.dout
       rxLane.io.clk := clkDist.io.rxLaneClk(lane)
@@ -630,6 +647,5 @@ class Phy(
   }
   io.rx.valid := rxLaneWord(Phy.validLane(numLanes))
   io.rx.track := rxLaneWord(Phy.trackLane(numLanes))
-  io.debug.rxData := rxLaneDout
 
 }

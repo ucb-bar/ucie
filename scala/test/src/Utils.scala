@@ -264,7 +264,7 @@ ${
           val defaultModels = Seq(
             "ucie_clk_dist_network.sv",
             "ucie_clk_div4.v",
-            "debug_clkmux.v",
+            "mux16to1.v",
             "clocking_tile.v",
             "clock_receiver_esd_dcc.v",
             "clock_receiver_esd_drv_lowspeed.v",
