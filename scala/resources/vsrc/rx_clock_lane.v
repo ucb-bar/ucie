@@ -38,11 +38,20 @@ module rx_clock_lane (
 );
   // Active-high enable for the recovered clock leaving this lane. Low stops
   // the clock reaching the distribution tree, and so none of the data lanes
-  // are clocked. Latched on the low phase so toggling it leaves no glitch.
+  // are clocked.
+  //
+  // The enable is asynchronous to this clock. As in the TX gate
+  // (`global_delayline_gate`), three flops on the clock synchronize it, and
+  // a clock gate cell (a latch open while the clock is low, then an AND)
+  // driven by the third flop gates the clock. A change takes effect on the
+  // fourth rising edge after it, and only while the clock runs. Every path
+  // fits in a whole period. A shut gate holds the clock low.
   wire clkout_raw = clkin;
-  reg gate_en_latched;
+  reg [2:0] en_sync = 3'b0;
+  always @(posedge clkout_raw) en_sync <= {en_sync[1:0], clk_gate_en};
+  reg gate_en_latched = 1'b0;
   always @(*) begin
-    if (!clkout_raw) gate_en_latched = clk_gate_en;
+    if (!clkout_raw) gate_en_latched = en_sync[2];
   end
   assign clkout = clkout_raw & gate_en_latched;
 endmodule

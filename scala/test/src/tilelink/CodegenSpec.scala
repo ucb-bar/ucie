@@ -87,6 +87,20 @@ class CodegenSpec extends AnyFunSpec {
     it("should format defines") {
       assert(f.formatDefine("myConst", "42") == "#define UCIE_MY_CONST 42\n")
     }
+    it("should reject two fields that get one name") {
+      // `rst` and `ucieRst` both become `UCIE_RST`.
+      val defines = f.formatDefine("rst", "0x0") + f.formatDefine("ucieRst", "0x8")
+      val e = intercept[IllegalArgumentException] {
+        Codegen.requireUniqueDefines(defines)
+      }
+      assert(e.getMessage.contains("UCIE_RST"))
+      assert(
+        Codegen.requireUniqueDefines(f.formatDefine("rst", "0x0")).nonEmpty
+      )
+    }
+    it("should generate the header with no name defined twice") {
+      GenUcieHeader.render()
+    }
     it("should format function calls") {
       assert(f.formatFnCall("foo") == "foo(base);\n")
       assert(f.formatFnCall("foo", Seq("a", "b")) == "foo(base, a, b);\n")

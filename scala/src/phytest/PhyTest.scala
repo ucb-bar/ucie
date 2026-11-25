@@ -200,8 +200,9 @@ class PhyTestRegsIO(
   // these settings once it negotiates strobe mode.
   //
   // Rules:
-  //   - Reset the partner's RX datapath with the clock running. With no
-  //     edges, its RX hands over no words and the reset cannot release.
+  //   - After resetting the partner's RX datapath, run the clock a few
+  //     words before gating: the RX drops the words it receives while the
+  //     reset releases.
   //   - UCIe asks for a parked period that is a multiple of 8 UI. Gaps are
   //     whole packets, so use a postamble that is a multiple of 8 UI.
   //   - The partner's RX counts word boundaries on a gap's edges, so each gap
@@ -377,6 +378,18 @@ class PhyTestRegsIO(
   // errors. The first two packets fill the history and are not scored. One
   // bit error counts `1 + PhyTest.LfsrTaps.size` times.
   val rxSelfSync = Input(Bool())
+  // Seeds each pattern lane's RX LFSR from its own stream instead of
+  // `rxLfsrSeed`: from the second and third packets after recording starts,
+  // advanced to the fourth. From there the LFSR runs on its own and scores as
+  // usual, so a bit error counts once, at its own UI. The first three packets
+  // are not scored. The first is skipped because a lane that lags valid
+  // starts it with bits from before the pattern. A bit error in the two
+  // seed packets spoils the lane's run: it reads about half its bits wrong.
+  // A seed of all zeros (a dead lane) is not loaded, so the LFSR runs on from
+  // `rxLfsrSeed` and the lane reads about half wrong. Applies at all three
+  // framings, and to inverted lanes; not to fixed lanes, valid, or a lane
+  // carrying valid. `rxSelfSync` takes over the nominal count if both are set.
+  val rxAutoSeed = Input(Bool())
   // Scores against a `TxTestMode.manual` pattern instead of the RX LFSRs.
   // Load the partner's pattern into this die's TX pattern SRAM
   // (`txDataChunkIn`) and its period into `txManualRepeatPeriod`. The `n`th
@@ -571,8 +584,12 @@ object PhyTest {
     * `seed_lfsrs` writes back. Each lane differs. With one seed everywhere,
     * all lanes switch together (the worst case for supply noise and
     * crosstalk), and lanes swapped between the TX and the RX read clean.
+    *
+    * A stream's first UI is its seed's bit 63. It is set, so every stream
+    * starts with a 1. The loopback RX frames on its first 1, so a seeded run
+    * there frames exactly.
     */
-  val DefaultLfsrSeed = BigInt("0123456789abcdef", 16)
+  val DefaultLfsrSeed = BigInt("8123456789abcdef", 16)
   val LfsrSeedLaneStep = BigInt("1111", 16)
   def defaultLfsrSeed(lane: Int): BigInt =
     (DefaultLfsrSeed + lane * LfsrSeedLaneStep) &
@@ -610,6 +627,19 @@ object PhyTest {
     LfsrTaps.max == LfsrWidth,
     s"LFSR taps $LfsrTaps must include $LfsrWidth"
   )
+
+  /** `state` after `steps` single steps of the Fibonacci LFSR that
+    * `chisel3.util.random.FibonacciLFSR` builds from [[LfsrTaps]]: each step
+    * shifts towards the top bit and enters the XOR of the tapped bits at bit
+    * 0. The taps are sparse, so this is a few XOR gates per bit.
+    */
+  def lfsrAdvance(state: UInt, steps: Int): UInt = {
+    var s: Seq[Bool] = state.asBools
+    for (_ <- 0 until steps) {
+      s = LfsrTaps.toSeq.map(t => s(t - 1)).reduce(_ ^ _) +: s.dropRight(1)
+    }
+    VecInit(s).asUInt
+  }
 
   /** Number of framings each lane is scored against: nominal, one UI early, one
     * UI late. See `rxBitErrorsEarly` in [[PhyTestRegsIO]].
@@ -1615,10 +1645,11 @@ class PhyTest(
       Seq.fill(PhyTest.numTestLanes(numLanes))(0.U(PhyTest.LfsrWidth.W))
     )
   )
-  // Packets processed since the FSM reset, up to the two the history holds.
+  // Packets processed since the FSM reset, up to three: the two the history
+  // holds, and the one `rxAutoSeed` skips before them.
   val rxHistoryFill = softRegInit(rxReset)(0.U(2.W))
-  val rxHistoryFull = rxHistoryFill === 2.U
-  when(rxProcessPacket && !rxHistoryFull) {
+  val rxHistoryFull = rxHistoryFill >= 2.U
+  when(rxProcessPacket && rxHistoryFill =/= 3.U) {
     rxHistoryFill := rxHistoryFill + 1.U
   }
 
@@ -1940,6 +1971,28 @@ class PhyTest(
             val inverted = io.regs.rxLaneInvert(lane)
             def expected(ref: UInt, fixedRef: UInt): UInt =
               Mux(fixed, fixedRef, Mux(inverted, ~ref, ref))
+            // `rxAutoSeed`: the third packet loads the LFSR from the second
+            // and third, oldest UI in its top bit, advanced two packets to
+            // the next one. Instead of the step, so it can't move the state
+            // on.
+            val autoSeeding = io.regs.rxAutoSeed && !fixed && !carriesValid
+            val seedWindow = Cat(
+              newData(31, 0),
+              rxHistory(lane)(PhyTest.LfsrWidth - 1, Phy.SerdesRatio)
+            )
+            val seedStream = Mux(inverted, ~seedWindow, seedWindow)
+            when(
+              autoSeeding && rxHistoryFill === 2.U && seedStream =/= 0.U &&
+                !rxReset
+            ) {
+              rxLfsrs(lane).io.seed.valid := true.B
+              rxLfsrs(lane).io.seed.bits := PhyTest
+                .lfsrAdvance(Reverse(seedStream), 2 * Phy.SerdesRatio)
+                .asTypeOf(rxLfsrs(lane).io.seed.bits)
+              rxLfsrs(lane).io.increment := false.B
+            }
+            // Nothing to score against until then.
+            val unseeded = autoSeeding && rxHistoryFill =/= 3.U
             when(carriesValid) {
               scoreAgainstValid(lane)
             }.otherwise {
@@ -1950,18 +2003,29 @@ class PhyTest(
                   PhyTest.selfSyncErrors(newData(31, 0), rxHistory(lane)),
                   0.U
                 ),
-                newData(31, 0) ^ expected(refWord(state), io.regs.rxFixedWord)
+                Mux(
+                  unseeded,
+                  0.U,
+                  newData(31, 0) ^
+                    expected(refWord(state), io.regs.rxFixedWord)
+                )
               )
-              rxErrorMask(PhyTest.EarlyFraming)(lane) :=
+              rxErrorMask(PhyTest.EarlyFraming)(lane) := Mux(
+                unseeded,
+                0.U,
                 newData(31, 0) ^ expected(
                   refWordAdvanced(state),
                   validRefAdvanced(io.regs.rxFixedWord)
                 )
-              rxErrorMask(PhyTest.LateFraming)(lane) :=
+              )
+              rxErrorMask(PhyTest.LateFraming)(lane) := Mux(
+                unseeded,
+                0.U,
                 newData(31, 0) ^ expected(
                   refWordDelayed(state),
                   validRefDelayed(io.regs.rxFixedWord)
                 )
+              )
             }
           }
         }

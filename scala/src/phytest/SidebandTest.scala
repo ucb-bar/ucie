@@ -77,8 +77,9 @@ class SidebandTest extends Module {
   io.sb <> link.io.sb
 
   // The transmitter leaves busy by itself once a packet is shifted out, so
-  // only `en` going low needs to reset it.
-  link.io.txRst := !io.en
+  // only `en` going low needs to reset it. Both resets come from flops, as
+  // the link needs.
+  link.io.txRst := RegNext(!io.en, true.B)
   link.io.txClock := io.txClock
   link.io.txReset := io.txReset
   // One packet at a time: a send while the last packet is still queued or on
@@ -89,7 +90,7 @@ class SidebandTest extends Module {
   // their reset handshake. A send then is also dropped.
   io.regs.txBusy := !link.io.txIdle || !link.io.tx.ready
 
-  link.io.rxRst := io.regs.rxRst || !io.en
+  link.io.rxRst := RegNext(io.regs.rxRst || !io.en, true.B)
   link.io.rx.ready := io.regs.rxPop
   io.regs.rxPacket := link.io.rx.bits
   io.regs.rxValid := link.io.rx.valid

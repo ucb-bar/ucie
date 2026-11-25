@@ -133,7 +133,9 @@ class RxDataLane(implicit includeDefaultModels: Boolean = false)
 }
 
 /** One UCIe RX clock tile: the same front end, recovering a forwarded clock
-  * rather than a word, with a gate on the clock it hands out.
+  * rather than a word, with a gate on the clock it hands out. The cell must
+  * synchronize `clk_gate_en` to that clock, as its model does and as the TX
+  * gate does: three flops, then a clock gate cell.
   */
 class RxClkLane(implicit includeDefaultModels: Boolean = false)
     extends BlackBox

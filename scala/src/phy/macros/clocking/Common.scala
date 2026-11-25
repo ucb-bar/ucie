@@ -1,6 +1,7 @@
 package edu.berkeley.cs.uciedigital.phy.macros.clocking
 
 import chisel3._
+import chisel3.experimental.BundleLiterals._
 import chisel3.util._
 
 // Clocking, reset, and pad macros used by the PHY.
@@ -70,10 +71,10 @@ object ClockingTile {
   val sbClkDivWidth = 2
   val sbClkSrcSelWidth = 2
 
-  /** Fixed loop settings for one PLL; there are no registers for them.
+  /** Reset values of one PLL's loop settings registers (`UcieClkRegs`).
     * `Dcoarseb` is tied to the complement of `dcoarse`. `dbias` is the RDAC
-    * code used while the PLL is enabled. It must be nonzero, because the tile
-    * drives zero to turn the PLL off.
+    * code used while the PLL is enabled; the tile drives zero to turn the PLL
+    * off, so zero here leaves it off.
     */
   case class PllSettings(
       autoEn: Boolean,
@@ -91,6 +92,33 @@ object ClockingTile {
     */
   val pll8Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
   val pll12Settings = PllSettings(false, 0, 0, 0, 0, 0x100, 0)
+
+  /** Width of PLL8's coarse frequency code. */
+  val pllDcoarseWidth = 6
+
+  /** `settings` as the registers' reset value. */
+  def pllCfgReset(settings: PllSettings): PllCfgIO =
+    (new PllCfgIO).Lit(
+      _.autoEn -> settings.autoEn.B,
+      _.kp -> settings.kp.U,
+      _.ki -> settings.ki.U,
+      _.codeInit -> settings.codeInit.U,
+      _.codeByp -> settings.codeByp.U,
+      _.dbias -> settings.dbias.U
+    )
+}
+
+/** One PLL's digital loop settings and RDAC code, as registers drive them.
+  * Widths are the cells' pins.
+  */
+class PllCfgIO extends Bundle {
+  val autoEn = Bool()
+  val kp = UInt(16.W)
+  val ki = UInt(16.W)
+  val codeInit = UInt(8.W)
+  val codeByp = UInt(20.W)
+  // Used only while the PLL is enabled. Zero leaves it off.
+  val dbias = UInt(9.W)
 }
 
 /** The clocking tile's controls and clocks. The tile is six macros: two PLLs,
@@ -128,6 +156,21 @@ class ClockingTileIO extends Bundle {
     */
   val Pll8Lock = Output(Bool())
   val Pll12Lock = Output(Bool())
+
+  /** Per-PLL loop settings and RDAC code, and PLL8's coarse frequency code
+    * (`Dcoarseb` gets its complement).
+    */
+  val Pll8Cfg = Input(new PllCfgIO)
+  val Pll12Cfg = Input(new PllCfgIO)
+  val Pll8Dcoarse = Input(UInt(ClockingTile.pllDcoarseWidth.W))
+
+  /** Per-PLL loop state, the cells' `code_full` and `code_int`, for
+    * observation. Asynchronous to every clock outside the PLL.
+    */
+  val Pll8CodeFull = Output(UInt(20.W))
+  val Pll8CodeInt = Output(UInt(8.W))
+  val Pll12CodeFull = Output(UInt(20.W))
+  val Pll12CodeInt = Output(UInt(8.W))
 
   /** TX data clock division of the UCIe main clock: 0 /1, 1 /2, 2 /4; 3 is
     * spare and selects /4 too.
@@ -240,28 +283,31 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
 
   // A PLL is off with its RDAC at zero, and `reset` holds only its digital
   // loop, so the enable drives both.
-  def enable(pll: PllIO, en: Bool, s: ClockingTile.PllSettings): Unit = {
-    require(s.dbias != 0, "an RDAC code of zero leaves the PLL off")
+  def enable(pll: PllIO, en: Bool, cfg: PllCfgIO): Unit = {
     pll.reset := !en
-    pll.Dbias := Mux(en, s.dbias.U, 0.U)
-    pll.auto_en := s.autoEn.B
-    pll.kp := s.kp.U
-    pll.ki := s.ki.U
-    pll.code_init := s.codeInit.U
-    pll.code_byp := s.codeByp.U
+    pll.Dbias := Mux(en, cfg.dbias, 0.U)
+    pll.auto_en := cfg.autoEn
+    pll.kp := cfg.kp
+    pll.ki := cfg.ki
+    pll.code_init := cfg.codeInit
+    pll.code_byp := cfg.codeByp
   }
 
   val pll8 = Module(new Pll8g)
   pll8.io.clk_ref := io.RefClk
-  enable(pll8.io, io.Pll8En, ClockingTile.pll8Settings)
-  pll8.io.Dcoarse := ClockingTile.pll8Settings.dcoarse.U
-  pll8.io.Dcoarseb := ~ClockingTile.pll8Settings.dcoarse.U(6.W)
+  enable(pll8.io, io.Pll8En, io.Pll8Cfg)
+  pll8.io.Dcoarse := io.Pll8Dcoarse
+  pll8.io.Dcoarseb := ~io.Pll8Dcoarse
   io.Pll8Lock := pll8.io.lock
+  io.Pll8CodeFull := pll8.io.code_full
+  io.Pll8CodeInt := pll8.io.code_int
 
   val pll12 = Module(new Pll12g)
   pll12.io.clk_ref := io.RefClk
-  enable(pll12.io, io.Pll12En, ClockingTile.pll12Settings)
+  enable(pll12.io, io.Pll12En, io.Pll12Cfg)
   io.Pll12Lock := pll12.io.lock
+  io.Pll12CodeFull := pll12.io.code_full
+  io.Pll12CodeInt := pll12.io.code_int
 
   // TX clock generator. The cell's main clock codes run PLL12, PLL8, X2,
   // bypass, so PLL8 and PLL12 trade places.
@@ -340,7 +386,7 @@ class ClockingTile(implicit includeDefaultModels: Boolean = false)
 
 /** Pins shared by `8gpll_top` and `12gpll_top`: ref clock, digital loop reset
   * and settings, and the RDAC (zero turns the PLL off). `ClockingTile` drives
-  * the reset and RDAC from the enable and ties off the rest.
+  * the reset from the enable, and the rest from registers.
   */
 class PllIO extends Bundle {
   val clk_ref = Input(Clock())

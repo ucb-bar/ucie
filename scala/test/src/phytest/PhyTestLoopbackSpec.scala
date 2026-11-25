@@ -35,6 +35,15 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     // The loopback pair's backup handoff phase, one bit per direction.
     val txSampleNegedge = Input(Bool())
     val rxSampleNegedge = Input(Bool())
+    // An LFSR run instead of the manual pattern, with the loopback lane's TX
+    // and RX both seeded from `seed`.
+    val lfsr = Input(Bool())
+    val seed = Input(UInt(PhyTest.LfsrWidth.W))
+    // Seeds the RX LFSR from the stream instead of `seed`.
+    val autoSeed = Input(Bool())
+    val rxBitErrors = Output(UInt(64.W))
+    val rxBitErrorsEarly = Output(UInt(64.W))
+    val rxBitErrorsLate = Output(UInt(64.W))
     val rxPacketsReceived = Output(UInt(64.W))
     val txPacketsSent = Output(UInt(64.W))
     val state = Output(TxTestState())
@@ -86,7 +95,18 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.testTarget := TestTarget.loopback
   dut.io.regs.txValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
   dut.io.regs.rxValidLaneSel := Phy.defaultValidLaneSel(numLanes).U
-  dut.io.regs.txTestMode := TxTestMode.manual
+  dut.io.regs.txTestMode := Mux(io.lfsr, TxTestMode.lfsr, TxTestMode.manual)
+  dut.io.regs.txLfsrSeed.foreach(_ := io.seed)
+  dut.io.regs.rxLfsrSeed.foreach(_ := io.seed)
+  dut.io.regs.txLaneFixed := 0.U
+  dut.io.regs.txLaneInvert := 0.U
+  dut.io.regs.rxLaneFixed := 0.U
+  dut.io.regs.rxLaneInvert := 0.U
+  dut.io.regs.rxSelfSync := false.B
+  dut.io.regs.rxAutoSeed := io.autoSeed
+  dut.io.regs.rxManualCheck := false.B
+  dut.io.regs.rxBurstMode := false.B
+  dut.io.regs.rxStartMode := RxStartMode.valid
   dut.io.regs.txDataMode := DataMode.infinite
   dut.io.regs.rxDataMode := DataMode.infinite
   dut.io.regs.txManualRepeatPeriod := io.repeatPeriod
@@ -94,6 +114,9 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
   dut.io.regs.rxPacketsToReceive := 0.U
   dut.io.regs.txDatapathRst := io.fsmRst || !io.serdesRstb
   dut.io.regs.rxDatapathRst := io.fsmRst || !io.serdesRstb
+  // The FSM resets too, which load the LFSR seeds, as `reset_fsms` does.
+  dut.io.regs.txFsmRst := io.fsmRst
+  dut.io.regs.rxFsmRst := io.fsmRst
   dut.io.regs.txExecute := io.execute
   dut.io.regs.rxPauseCounters := false.B
   dut.io.regs.txDataChunkIn.valid := io.writeChunk
@@ -148,6 +171,9 @@ class PhyTestLoopbackHarness(numLanes: Int = 2, bufferDepthPerLane: Int = 10)
     )
 
   io.rxDataChunk := dut.io.regs.rxDataChunk
+  io.rxBitErrors := dut.io.regs.rxBitErrors(numLanes + 2)
+  io.rxBitErrorsEarly := dut.io.regs.rxBitErrorsEarly(numLanes + 2)
+  io.rxBitErrorsLate := dut.io.regs.rxBitErrorsLate(numLanes + 2)
   io.rxPacketsReceived := dut.io.regs.rxPacketsReceived
   io.txPacketsSent := dut.io.regs.txPacketsSent
   io.state := dut.io.regs.txTestState
@@ -180,6 +206,9 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
       simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
         c.io.txSampleNegedge.poke(txNeg.B)
         c.io.rxSampleNegedge.poke(rxNeg.B)
+        c.io.lfsr.poke(false.B)
+        c.io.seed.poke(0.U)
+        c.io.autoSeed.poke(false.B)
         c.io.serdesRstb.poke(false.B)
         c.io.fsmRst.poke(false.B)
         c.io.execute.poke(false.B)
@@ -265,6 +294,78 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
 
     it("should carry it with both ends on the backup handoff phase") {
       checkLoopback(txNeg = true, rxNeg = true)
+    }
+
+    // A seeded LFSR run, TX and RX on the same seed. The RX frames on the
+    // first 1, and the stream's first UI is the seed's bit 63. Returns the
+    // packets received and the bit errors at the nominal, early and late
+    // framings.
+    def runLfsr(
+        seed: BigInt,
+        autoSeed: Boolean = false
+    ): (BigInt, Seq[BigInt]) = {
+      var result = (BigInt(0), Seq.empty[BigInt])
+      simulate(new PhyTestLoopbackHarness(numLanes)) { c =>
+        c.io.txSampleNegedge.poke(false.B)
+        c.io.rxSampleNegedge.poke(false.B)
+        c.io.lfsr.poke(true.B)
+        c.io.seed.poke(seed.U)
+        c.io.autoSeed.poke(autoSeed.B)
+        c.io.serdesRstb.poke(false.B)
+        c.io.fsmRst.poke(false.B)
+        c.io.execute.poke(false.B)
+        c.io.writeChunk.poke(false.B)
+        c.io.chunkIn.poke(0.U)
+        c.io.txDataLaneGroup.poke(0.U)
+        c.io.txDataOffset.poke(0.U)
+        c.io.rxDataLane.poke(0.U)
+        c.io.rxDataOffset.poke(0.U)
+        c.io.repeatPeriod.poke(0.U)
+        c.clock.step(4)
+        c.io.serdesRstb.poke(true.B)
+        c.clock.step(4)
+        c.io.fsmRst.poke(true.B)
+        c.clock.step()
+        c.io.fsmRst.poke(false.B)
+        c.clock.step(4)
+        c.io.execute.poke(true.B)
+        c.clock.step()
+        c.io.execute.poke(false.B)
+        c.clock.step(64 * divCycle)
+        result = (
+          c.io.rxPacketsReceived.peek().litValue,
+          Seq(c.io.rxBitErrors, c.io.rxBitErrorsEarly, c.io.rxBitErrorsLate)
+            .map(_.peek().litValue)
+        )
+      }
+      result
+    }
+
+    it("should frame a seeded LFSR run exactly with the default seed") {
+      val seed = PhyTest.defaultLfsrSeed(loopbackLane)
+      assert(seed.testBit(PhyTest.LfsrWidth - 1))
+      val (received, errors) = runLfsr(seed)
+      assert(received >= 16, s"only $received packets received")
+      assert(errors.head == 0, s"${errors.head} bit errors over $received packets")
+    }
+
+    it("should misframe a seeded LFSR run whose seed starts with zeros") {
+      // The old default. The stream starts with 7 zeros, so the RX frames 7
+      // UI late, past what the early and late framings cover.
+      val seed = BigInt("0123456789abcdef", 16) + loopbackLane * 0x1111
+      val (received, errors) = runLfsr(seed)
+      assert(received >= 16, s"only $received packets received")
+      assert(
+        errors.forall(_ > 0),
+        s"a frame 7 UI late should score errors at every framing: $errors"
+      )
+    }
+
+    it("should score that run clean under rxAutoSeed") {
+      val seed = BigInt("0123456789abcdef", 16) + loopbackLane * 0x1111
+      val (received, errors) = runLfsr(seed, autoSeed = true)
+      assert(received >= 16, s"only $received packets received")
+      assert(errors.head == 0, s"${errors.head} bit errors over $received packets")
     }
   }
 }

@@ -22,7 +22,9 @@ class SidebandSerialIO(packetBits: Int) extends Bundle {
   /** Sticky: a packet arrived with no room to store it and was dropped. */
   val rxOverflow = Output(Bool())
 
-  /** Resets the transmitter, dropping any packet queued or mid-flight. */
+  /** Resets the transmitter, dropping any packet queued or mid-flight. It
+    * asserts the TX queue's resets asynchronously, so it must come from a flop.
+    */
   val txRst = Input(Bool())
 
   /** The 800 MHz sideband TX clock the serializer runs on. */
@@ -33,7 +35,8 @@ class SidebandSerialIO(packetBits: Int) extends Bundle {
 
   /** Resets the receiver: clears the bit counter, the stored packets, and
     * `rxOverflow`. Realigns the receiver if a partner reset mid-packet left it
-    * an odd number of bits out of step.
+    * an odd number of bits out of step. It drives the receiver's asynchronous
+    * reset, so it must come from a flop.
     */
   val rxRst = Input(Bool())
 
@@ -125,14 +128,13 @@ class SidebandSerial(packetBits: Int, rxQueueDepth: Int) extends Module {
 
   // RX
   // ====================
-  // One flop, so that the deserializer's asynchronous reset can't glitch on
-  // the decode of modes behind `rxRst`: set by this module's reset, and
-  // otherwise `rxRst` a cycle late. Its release isn't synchronized to the
-  // forwarded clock, which only runs while a packet is coming in, so a
-  // synchronizer on it would eat the first packet's first edges. It is
-  // released with that clock idle instead: `rxRst` comes from settings and
-  // strobes that software changes with the partner quiet.
-  val rxReset = withReset(reset.asAsyncReset) { RegNext(io.rxRst, true.B) }
+  // Both inputs come from flops, so the receiver's asynchronous reset can't
+  // glitch. Its release isn't synchronized to the forwarded clock, which only
+  // runs while a packet is coming in, so a synchronizer on it would eat the
+  // first packet's first edges. It is released with that clock idle instead:
+  // `rxRst` comes from settings and strobes that software changes with the
+  // partner quiet.
+  val rxReset = io.rxRst || reset.asBool
   val negFwClock = (!io.sb.rxClk.asBool).asClock
 
   val rxQueue = Module(

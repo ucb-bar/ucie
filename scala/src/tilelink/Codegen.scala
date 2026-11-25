@@ -244,6 +244,24 @@ end
 }
 
 object Codegen {
+
+  /** Returns `defines` unchanged, or fails if it defines a name twice. Two
+    * fields can map to one name (in C, `rst` and `ucieRst` both become
+    * `UCIE_RST`), and a compiler only warns about a redefined macro.
+    */
+  def requireUniqueDefines(defines: String): String = {
+    val define = "^\\s*[#`]define\\s+(\\S+)".r
+    val names = defines.linesIterator.flatMap { line =>
+      define.findFirstMatchIn(line).map(_.group(1))
+    }.toSeq
+    val repeated = names.diff(names.distinct).distinct.sorted
+    require(
+      repeated.isEmpty,
+      s"generated names defined more than once: ${repeated.mkString(", ")}"
+    )
+    defines
+  }
+
   def indent(content: String, n: Int = 1): String = {
     content.split("\n").map(line => s"${"  " * n}$line").mkString("\n")
   }
@@ -311,13 +329,15 @@ object Codegen {
   val txCtlEnnEqLsb: BigInt =
     txCtlLsb("ENN_EQ", TxLaneCtlIO.raw(0, 0, 0, 1, 0))
 
-  /** Global delay `setup_ucie_digital` puts on the quadrature clock: a quarter
-    * of the TX clock period, which centres the forwarded clock in the data eye.
+  /** The Iris harness's centred global delay on the quadrature clock: a
+    * quarter of the TX clock period, which centres the forwarded clock in the
+    * data eye. Tests set it before gating the clock or handing the link to
+    * the UCIe controller; on silicon, bring-up uses the code it trained.
     *
     * Sized for the reset clocking: main clock on the 8 GHz bypass pin, TX
-    * division /1, so a 125 ps period. At the clocking tile's 1.086 ps per tap,
-    * 31.25 ps is 29 taps. A part brought up at a different rate needs its own
-    * value.
+    * division /1, so a 125 ps period. With the model's tap delay
+    * (`GLOBAL_DL_DELAY_STEP`, about 1 ps), a quarter period is 29 taps. A part
+    * brought up at a different rate needs its own value.
     */
   val digitalGlobalDelayTaps: Int = 29
 
@@ -400,7 +420,7 @@ object Codegen {
   /** Points in the per-lane trim sweep, and taps between them, on a lane's own
     * delay line.
     *
-    * Each line is 32 taps of `DCDL_DELAY_STEP` (0.15625 ps), 5 ps in total.
+    * Each line is 32 taps of `DCDL_DELAY_STEP`, a few ps in total.
     * That covers the lane-to-lane spread from the clock tree, but by design
     * cannot move a lane across a UI; the global line does that. A 2-tap step
     * covers the range in 16 points.
@@ -1286,9 +1306,22 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * the divider and phase shifter both move and a lane divider may miscount
     * an edge in flight. The gate stays shut until the new source settles.
     * `clkEn` is left as it is: the clock runs after this only if it was on.
+    *
+    * Turns on the PLL the source needs (PLL8 for PLL8 and its X2 clock,
+    * PLL12 for PLL12) in the same apply, which then waits for its lock. No
+    * other PLL is touched.
     */
   def formatSetMainClkFn(): String = {
     val body = new StringBuilder
+    body.append(
+      f.formatIfStmt(
+        "src == 0 || src == 2",
+        formatWriteNamedReg("pll8En", f.formatLong(1))
+      )
+    )
+    body.append(
+      f.formatIfStmt("src == 1", formatWriteNamedReg("pll12En", f.formatLong(1)))
+    )
     body.append(formatWriteNamedReg("mainClkSel", "src"))
     body.append(formatWriteNamedReg("txClkDiv", "div"))
     body.append(f.formatFnCall("apply_clk_cfg"))
@@ -1324,18 +1357,29 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     )
   }
 
-  /** Enables the PLLs and the X2 multiplier, and points the PHY test clock at
-    * PLL8 (`phytest_src` 0), PLL12 (1) or the analog bypass pin (2), divided.
+  /** Points the PHY test clock at PLL8 (`phytest_src` 0), PLL12 (1) or the
+    * analog bypass pin (2), divided, and turns on the PLL it divides. No
+    * other PLL is touched, so a clock on another PLL needs that PLL enabled
+    * by its own write.
     *
-    * One apply sets the source, ratio and switch. It keeps the PHY test clock
-    * gated until that PLL locks, so the PHY test domain sees one clean stop and
-    * restart.
+    * One apply sets the PLL, source, ratio and switch. It keeps the PHY test
+    * clock gated until that PLL locks, so the PHY test domain sees one clean
+    * stop and restart.
     */
   def formatUseInternalClkFn(): String = {
     val body = new StringBuilder
-    body.append(formatWriteNamedReg("pll8En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("pll12En", f.formatLong(1)))
-    body.append(formatWriteNamedReg("x2En", f.formatLong(1)))
+    body.append(
+      f.formatIfStmt(
+        "phytest_src == 0",
+        formatWriteNamedReg("pll8En", f.formatLong(1))
+      )
+    )
+    body.append(
+      f.formatIfStmt(
+        "phytest_src == 1",
+        formatWriteNamedReg("pll12En", f.formatLong(1))
+      )
+    )
     body.append(formatWriteNamedReg("phyTestClkSrcSel", "phytest_src"))
     body.append(formatWriteNamedReg("phyTestClkDiv", "phytest_div"))
     body.append(formatWriteNamedReg("phyTestClkBypassEn", f.formatLong(0)))
@@ -1849,17 +1893,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     // it wants kept.
     body.append(formatWriteNamedReg("ucieRst", f.formatLong(0)))
 
-    // Same clock setup as `setup_ucie`, with the clocks gated: the global delay
-    // (reset at its maximum) to a quarter period, and the dividers reset so
-    // every TX lane, clock lanes included, restarts on the same edge.
+    // The dividers reset with both clocks gated, so every lane, clock lanes
+    // included, restarts on the same edge. The global delay stays where the
+    // caller trained it.
     body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(0))))
     body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(0))))
-    body.append(
-      f.formatFnCall(
-        "set_global_delay",
-        args = Seq(f.formatLong(Codegen.digitalGlobalDelayTaps.toLong))
-      )
-    )
     body.append(f.formatFnCall("reset_dividers"))
     body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(1))))
     body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(1))))
@@ -1870,25 +1908,30 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       // mainband tx.bits.clkp/clkn/trk go straight to the clkP/clkN/track
       // TxLane instances, like any data lane). Left at their reset "driver
       // off" state, the extra four silently drop what is sent on them,
-      // including the clock.
+      // including the clock. Each tile's `Dctrl` is kept, so a trim set in
+      // bring-up survives.
       val txLoopBody = new StringBuilder
-      for (
-        case (ofs, value) <- Seq(
-          ("Tile", f.formatConstantRef("enableTxCtl"))
-        )
-      ) {
-        txLoopBody.append(
-          f.formatFnCall(
-            "write_txctl",
-            args = Seq("lane", f.formatConstantRef(s"txctl${ofs}Ofs"), value)
+      val tileAddr = s"${f.formatConstantRef("txctl")} + lane * " +
+        s"${f.formatConstantRef("txctlWidth")} + ${f.formatConstantRef("txctlTileOfs")}"
+      val mask = f.formatConstantRef("txCtlDelayMask")
+      txLoopBody.append(
+        f.formatReadReg("regDrv", "tile", tileAddr, declareVar = true)
+      )
+      txLoopBody.append(
+        f.formatFnCall(
+          "write_txctl",
+          args = Seq(
+            "lane",
+            f.formatConstantRef("txctlTileOfs"),
+            s"((tile & $mask) | (${f.formatConstantRef("enableTxCtl")} & ~$mask))"
           )
         )
-      }
+      )
       body.append(
         f.formatForLoop(
           "lane",
           Phy.numTxLanes(params.numLanes),
-          txLoopBody.toString
+          f.formatBlock(txLoopBody.toString)
         )
       )
     }
@@ -2393,6 +2436,13 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         f.formatLong(0xdeadbeefL)
       )
     )
+    if (band == "mainbandMode") {
+      body.append(
+        formatExpectClear(
+          Seq("tlRxFifoOverflow" -> "TL path RX queue overflowed")
+        )
+      )
+    }
     sb.append(f.formatFn(name, body.toString))
     sb.toString
   }
@@ -2496,12 +2546,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     sb.toString
   }
 
-  def formatDefines(): String = {
-    val sb = new StringBuilder
-    sb.append(formatRegs())
-    sb.append(formatConstants())
-    sb.toString
-  }
+  def formatDefines(): String =
+    Codegen.requireUniqueDefines(formatRegs() + formatConstants())
 
   def formatFns(): String = {
     val sb = new StringBuilder
@@ -2591,9 +2637,12 @@ object GenUcieHeader {
     sb.append(
       "// === Register offsets (relative to the UCIe MMIO base, e.g. 0x8000) ===\n"
     )
-    sb.append(cg.formatRegs())
+    val regs = cg.formatRegs()
+    val constants = cg.formatConstants()
+    Codegen.requireUniqueDefines(regs + constants)
+    sb.append(regs)
     sb.append("\n// === Constants ===\n")
-    sb.append(cg.formatConstants())
+    sb.append(constants)
     sb.append("\n// === Helper functions ===\n")
     sb.append(cg.formatResetDatapathFn())
     sb.append(cg.formatResetFsmsFn())

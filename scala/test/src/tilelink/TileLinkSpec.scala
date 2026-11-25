@@ -1412,9 +1412,11 @@ begin : clk_src_sel
   watch = 1;
 
   // 1. Off the bypass pins in one apply: PhyTest onto PLL12 /15, the sideband
-  // onto PLL8 /10, 800 MHz each, both PLLs started. The apply holds both gates
-  // shut until the PLLs lock, so no reset is needed; the block is reset
-  // anyway, as bring-up does.
+  // onto PLL8 /10, 800 MHz each. `use_internal_clk` starts PLL12 for the PHY
+  // test clock; PLL8, for the sideband, takes its own write. The apply holds
+  // both gates shut until the PLLs lock, so no reset is needed; the block is
+  // reset anyway, as bring-up does.
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
@@ -2695,6 +2697,24 @@ begin : pll_clocking
   `EXPECT_UCIE(regDrv, `SB_CLK_EN, 64'h1);
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
 
+  // The PLL settings are applied fields: a write reaches the cells only at
+  // an apply. The models ignore them, as long as the RDAC stays nonzero.
+  `WRITE_UCIE(regDrv, `PLL8_KP, 64'h1234);
+  `WRITE_UCIE(regDrv, `PLL12_DBIAS, 64'h0ab);
+  `WRITE_UCIE(regDrv, `PLL8_DCOARSE, 64'h15);
+  #20000;
+  if (`CLOCKING_TILE.Pll8Cfg_kp !== 16'h0 || `CLOCKING_TILE.Pll8Dcoarse !== 6'h0) begin
+    $display("FAIL: a PLL setting reached the tile without an apply");
+    fails = fails + 1;
+  end
+  apply_clk_cfg();
+  if (`CLOCKING_TILE.Pll8Cfg_kp !== 16'h1234 || `CLOCKING_TILE.Pll12Cfg_dbias !== 9'h0ab ||
+      `CLOCKING_TILE.Pll8Dcoarse !== 6'h15) begin
+    $display("FAIL: the apply did not carry the PLL settings to the tile");
+    fails = fails + 1;
+  end
+  `EXPECT_UCIE(regDrv, `PLL8_KP, 64'h1234);
+
   // Something to read back from each clock's register block.
   `WRITE_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
   `READ_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
@@ -2706,7 +2726,7 @@ begin : pll_clocking
   unlocked_opens = 0;
   mark_gate_shuts();
 
-  // PHY test clock onto PLL8 / 8, starting both PLLs.
+  // PHY test clock onto PLL8 / 8, starting PLL8.
   use_internal_clk(0, 4);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   check_gate_shuts("Moving the PHY test clock onto PLL8", 1, 0, fails);
@@ -2714,7 +2734,9 @@ begin : pll_clocking
   phytest_period(p);
   check_period("PHY test clock on PLL8 / 8", p, 1000.0, fails);
 
-  // TX sideband clock onto PLL12 / 15.
+  // TX sideband clock onto PLL12 / 15, starting PLL12 in the same apply,
+  // which keeps the sideband gate shut until it locks.
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h0);
@@ -2904,7 +2926,8 @@ end
   * for a negotiated rate. The two entries differ only in TX division. So each
   * apply must shut the UCIe main clock's gate, leave the PHY test and TX
   * sideband clocks running, and only then tell the controller its clocks are
-  * ready at the new rate.
+  * ready at the new rate. Last, the rate moves again mid-apply: the apply
+  * copies the entry it started with, and another applies the new one.
   */
 class RateAutoApplyTestDriver extends SVTestDriver {
   setStimulus(
@@ -2915,6 +2938,9 @@ begin : rate_auto_apply
   // What `freqSel` is forced to. A force cannot take a loop variable, which
   // is automatic, so it follows this instead.
   reg [3:0] freq_sel;
+  // The TX division select's values, in the order the tile took them.
+  integer div_changes;
+  integer divs[0:3];
   integer fails;
   fails = 0;
 
@@ -2965,6 +2991,33 @@ begin : rate_auto_apply
     fails = fails + 1;
   end
 
+  // The rate moves again while an apply waits out its gate dwell. That
+  // apply copies the entry for the rate it started on; another follows for
+  // the new one.
+  set_rate_cfg(2, 3, 2, 0);
+  div_changes = 0;
+  fork : div_watch
+    forever @(`CLOCKING_TILE.TxClkDiv) begin
+      if (div_changes < 4) divs[div_changes] = `CLOCKING_TILE.TxClkDiv;
+      div_changes = div_changes + 1;
+    end
+  join_none
+  freq_sel = 4'd2;
+  // The apply starts about 10 ns later and copies 64 ns after that.
+  #30000;
+  freq_sel = 4'd1;
+  #1000000;
+  busy = 1;
+  for (int i = 0; i < 256 && busy != 0; i++)
+    `READ_UCIE(regDrv, `CLK_CFG_BUSY, busy);
+  disable div_watch;
+  $display("Rate 2 then 1 mid-apply: %0d TX division changes, %0d then %0d",
+           div_changes, divs[0], divs[1]);
+  if (div_changes != 2 || divs[0] != 2 || divs[1] != 1) begin
+    $display("FAIL: expected rate 2's entry, then rate 1's");
+    fails = fails + 1;
+  end
+
   `WRITE_UCIE(regDrv, `FREQ_SEL_AUTO_EN, 64'h0);
   release `UCIE_CLK_REGS.io_freqSel;
   if (fails != 0) $fatal(1, "%0d rate auto-apply checks failed", fails);
@@ -2986,7 +3039,8 @@ end
   * apply must take it to the tile.
   *
   * Then `clkPhaseAutoApply`: off (reset), a phase write waits for an apply;
-  * on, the write starts one by itself.
+  * on, the write starts one by itself. Last, a longer `clkCfgGateDwell` holds
+  * the phase back until it ends.
   */
 class TxPhaseTestDriver extends SVTestDriver {
   setStimulus(
@@ -3050,6 +3104,23 @@ begin : tx_phase
     $display("FAIL: a phase write did not apply itself with auto-apply on");
     fails = fails + 1;
   end
+  // A longer gate dwell holds the phase back: 1000 chip cycles is 2 us
+  // before it moves and 2 us after.
+  `WRITE_UCIE(regDrv, `CLK_CFG_GATE_DWELL, 64'd1000);
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h3);
+  #1000000;
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h1, "apply ended before the gate dwell");
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd2) begin
+    $display("FAIL: the phase moved before the gate dwell ended");
+    fails = fails + 1;
+  end
+  #4000000;
+  `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply did not end after both dwells");
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd3) begin
+    $display("FAIL: the phase did not move after the gate dwell");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `CLK_CFG_GATE_DWELL, 64'd32);
   `WRITE_UCIE(regDrv, `CLK_PHASE_AUTO_APPLY, 64'h0);
   if (fails != 0) $fatal(1, "%0d TX phase checks failed", fails);
 end
@@ -3079,8 +3150,11 @@ begin : clk_manual
 
   // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off. The
   // FSM passes the enable through, even with the divider on PLL8, and then
-  // back on.
+  // back on. PLL12 and X2 on too, so the steps below have something to turn
+  // off.
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `X2_EN, 64'h1);
   use_internal_clk(0, 4);
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   apply_clk_cfg();
@@ -3312,7 +3386,7 @@ endtask
   * `SbClk` is high 3 of 5 at /5 and 10 of 15 at /15. Even ratios end in a /2
   * and are 50%. The analog bypass pin runs at 5 GHz, neither PLL's rate, so
   * the right period shows the select took the pin. With both clocks on the
-  * pin, no PLL is held on for them, and an apply finishes with no PLL locked.
+  * pin and both PLLs off, an apply finishes with no PLL locked.
   */
 class DividerDutyTestDriver extends SVTestDriver {
 
@@ -3341,6 +3415,7 @@ begin : divider_duty
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
   sb_duty(hi, lo);
   check_duty("TX sideband clock, PLL8 / 5", hi, lo, 625.0, 0.6, fails);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);
   apply_clk_cfg();
@@ -3377,14 +3452,14 @@ begin : divider_duty
   phytest_duty(hi, lo);
   check_duty("PHY test clock, analog bypass / 15", hi, lo, 3000.0, 0.6, fails);
 
-  // No PLL is held on for a divider on the pin, and an apply on the pin
+  // Both PLLs off with both clocks on the pin, and an apply on the pin
   // finishes with neither PLL running.
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   `WRITE_UCIE(regDrv, `X2_EN, 64'h0);
   apply_clk_cfg();
   if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: a PLL was held on for a divider on the analog bypass pin");
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h3);

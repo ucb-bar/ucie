@@ -8,9 +8,10 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funspec.AnyFunSpec
 
 import edu.berkeley.cs.uciedigital.Utils
+import edu.berkeley.cs.uciedigital.phy.Phy
 
-/** The self-synchronizing check, and the TX error injection that proves the
-  * checkers count.
+/** The self-synchronizing check, the auto-seeded check, and the TX error
+  * injection that proves the checkers count.
   */
 class PhyTestSelfSyncSpec extends AnyFunSpec with ChiselSim {
   implicit val sim: HasSimulator =
@@ -120,6 +121,76 @@ class PhyTestSelfSyncSpec extends AnyFunSpec with ChiselSim {
               counts(l) == (if (l == lane) 1 + PhyTest.LfsrTaps.size else 0)
             )
           }
+        }
+      }
+    }
+  }
+
+  describe("PhyTest auto-seeded check") {
+    it("should score every pattern lane clean without the TX's seeds") {
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c, rxSeed = lane => seed(lane + 7))
+        c.io.regs.rxAutoSeed.poke(true.B)
+        val counts = run(c)
+        for (l <- scoredLanes) {
+          withClue(s"lane $l: ") { assert(counts(l) == 0) }
+        }
+      }
+    }
+
+    it("should read clean with the pattern a UI out from the valid edge") {
+      // The first packet holds a bit from before the pattern. It isn't used
+      // for the seed.
+      simulate(new PhyTestRegLoopback(numLanes, dataDelay = true)) { c =>
+        setupLfsr(c)
+        c.io.regs.rxAutoSeed.poke(true.B)
+        val counts = run(c)
+        for (l <- patternLanes) {
+          withClue(s"lane $l: ") { assert(counts(l) == 0) }
+        }
+      }
+    }
+
+    it("should count a single bit error once") {
+      val lane = 1
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c)
+        c.io.regs.rxAutoSeed.poke(true.B)
+        val counts = run(c, injectLane = Some(lane))
+        for (l <- patternLanes) {
+          withClue(s"lane $l: ") {
+            assert(counts(l) == (if (l == lane) 1 else 0))
+          }
+        }
+      }
+    }
+
+    it("should seed an inverted lane from its stream inverted back") {
+      val lane = 2
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c, rxSeed = lane => seed(lane + 7))
+        c.io.regs.txLaneInvert.poke((1 << lane).U)
+        c.io.regs.rxLaneInvert.poke((1 << lane).U)
+        c.io.regs.rxAutoSeed.poke(true.B)
+        val counts = run(c)
+        for (l <- patternLanes) {
+          withClue(s"lane $l: ") { assert(counts(l) == 0) }
+        }
+      }
+    }
+
+    it("should fail a lane of zeros, which self-sync passes") {
+      val lane = 0
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c)
+        c.io.regs.txFixedWord.poke(0.U)
+        c.io.regs.txLaneFixed.poke((1 << lane).U)
+        c.io.regs.rxAutoSeed.poke(true.B)
+        val counts = run(c)
+        // About half of every scored bit.
+        assert(counts(lane) > packets * Phy.SerdesRatio / 8)
+        for (l <- patternLanes.filter(_ != lane)) {
+          withClue(s"lane $l: ") { assert(counts(l) == 0) }
         }
       }
     }

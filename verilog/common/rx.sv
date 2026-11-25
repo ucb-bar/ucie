@@ -476,11 +476,17 @@ module rxclk_tile(
 // The recovered clock, before this lane's gate.
 logic clkout_raw;
 
-// Latched on the clock's low phase, so enabling or disabling mid-cycle cannot
-// hand a runt to the tree and leave a lane's divider a count out.
-logic gate_en_latched;
+// The gate, as in the TX gate (`global_delayline_gate`): three flops on this
+// clock synchronize the enable, and a clock gate cell (a latch open while the
+// clock is low, then an AND) driven by the third flop gates the clock. So a
+// change can't hand a runt to the tree and leave a lane's divider a count
+// out. It takes effect on the fourth rising edge after it, and only while
+// the clock runs.
+logic [2:0] en_sync = 3'b0;
+always @(posedge clkout_raw) en_sync <= {en_sync[1:0], intf.clk_gate_en};
+logic gate_en_latched = 1'b0;
 always @(*) begin
-    if (!clkout_raw) gate_en_latched = intf.clk_gate_en;
+    if (!clkout_raw) gate_en_latched = en_sync[2];
 end
 assign intf.clkout = clkout_raw & gate_en_latched;
 
