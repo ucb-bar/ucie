@@ -85,7 +85,12 @@ case class UcieTLParams(
     // links -- cannot close a combinational loop through the link. A link
     // hardened as a block of its own wants that at its boundary. Costs a
     // cycle each way.
-    managerBuffer: BufferParams = BufferParams.none
+    managerBuffer: BufferParams = BufferParams.none,
+    // Whether this link's tester has the TX data debug lane and its `txData`
+    // bump. A chip with several links can keep it to one of them. Without it
+    // the lane's registers stay in the map, so every link keeps one register
+    // layout, but they hold nothing: writes are dropped and reads return 0.
+    hasTxDebugLane: Boolean = true
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
   def managerBusWhere = managerWhere
@@ -118,9 +123,10 @@ case class UcieTLParams(
 
 case object UcieTLKey extends Field[Option[Seq[UcieTLParams]]](None)
 
-class UcieBumpsIO(numLanes: Int = 16) extends ChipletIO {
+class UcieBumpsIO(numLanes: Int = 16, hasTxDebugLane: Boolean = true)
+    extends ChipletIO {
   val phy = new PhyBumpsIO(numLanes)
-  val debug = new DebugBumpsIO
+  val debug = new DebugBumpsIO(hasTxDebugLane)
 
   def tieoff: Unit = {
     phy.rxData := DontCare
@@ -1148,8 +1154,7 @@ class UcieTLRegs(
       // Everything below drives the tester's debug hardware rather than the
       // link: the observation bumps and the TX data debug lane.
       //
-      // Pad drivers for the observation bumps: TX clock, RX clock, RX data,
-      // clock mux.
+      // Pad drivers for the observation bumps, `mux0` then `mux1`.
       val debugDriverctl = RegInit(VecInit(Seq.fill(PhyTest.NumDebugDrivers)({
         val w = Wire(new PadDriverCtlIO)
         w.pu_ctl := 0.U
@@ -1158,13 +1163,15 @@ class UcieTLRegs(
         w.en_b := true.B
         w
       })))
-      // Which clock the clock mux bump watches; see the mux input list in
-      // PhyTest for what each index selects.
-      val debugClkMuxSel = RegInit(0.U(io.test.clkMuxSel.getWidth.W))
-      // Which RX lane, and which bit of its deserialized word, the RX data bump
-      // watches.
-      val debugRxLane = RegInit(0.U(io.test.rxDebugLane.getWidth.W))
-      val debugRxBit = RegInit(0.U(io.test.rxDebugBit.getWidth.W))
+      // What each observation bump watches, `mux0` then `mux1`, each on its
+      // own: an index into `PhyTest.DebugMuxInputs`.
+      val debugMuxSel = RegInit(
+        VecInit(
+          Seq.fill(PhyTest.NumDebugDrivers)(
+            0.U(io.test.debugMuxSel.head.getWidth.W)
+          )
+        )
+      )
       val debugTxctl = RegInit({
         val w = Wire(new TxLaneDigitalCtlIO)
         // Every driver segment off out of reset, so a lane stays quiet until
@@ -1297,9 +1304,7 @@ class UcieTLRegs(
       // Debug circuitry: the observation bump drivers and the TX data debug
       // lane, all owned by PhyTest.
       io.test.driverctl := applyShift(debugDriverctl)
-      io.test.clkMuxSel := applyShift(debugClkMuxSel)
-      io.test.rxDebugLane := applyShift(debugRxLane)
-      io.test.rxDebugBit := applyShift(debugRxBit)
+      io.test.debugMuxSel := applyShift(debugMuxSel)
       io.test.txctl := applyShift(debugTxctl)
       io.test.txDebugTestMode := applyShift(debugTxTestMode)
       io.test.txDebugDataMode := applyShift(debugTxDataMode)
@@ -1311,6 +1316,19 @@ class UcieTLRegs(
       )
       io.test.txDebugPacketsToSend := applyShift(debugTxPacketsToSend)
       io.test.txDebugData := applyShift(debugData)
+
+      // A link without the TX data debug lane keeps that lane's register slots
+      // and names, so every link has one register layout, but backs them with
+      // nothing: each reads 0 and drops writes.
+      def txDebugField(f: RegField): RegField =
+        if (params.hasTxDebugLane) f
+        else RegField.r(f.width, 0.U(f.width.W), f.desc.orNull)
+      if (!params.hasTxDebugLane) {
+        Seq(debugTxFsmRst, debugTxExecute).foreach { strobe =>
+          strobe.valid := false.B
+          strobe.bits := 0.U
+        }
+      }
 
       // String name should always be camel case with an underscore to separate indices.
       // Adjacent indices should be contiguous in memory. Increasing index should correspond to increasing memory address.
@@ -1427,11 +1445,11 @@ class UcieTLRegs(
         RegField.w(1, debugTxExecute, RegFieldDesc("debugTxExecute", "")),
         toRegFieldRw(debugTxManualRepeatPeriod, "debugTxManualRepeatPeriod"),
         toRegFieldRw(debugTxPacketsToSend, "debugTxPacketsToSend")
-      ) ++ (0 until 16).map((i: Int) => {
-        toRegFieldRw(debugData(i), s"debugData_${i}")
+      ).map(txDebugField) ++ (0 until 16).map((i: Int) => {
+        txDebugField(toRegFieldRw(debugData(i), s"debugData_${i}"))
       }) ++ (0 until debugDriverctl.length).map((i: Int) => {
         toRegFieldRw(debugDriverctl(i), s"debugDriverctl_${i}")
-      }) ++ Seq(
+      }) ++ (Seq(
         toRegFieldRw(debugTxctl.tile, s"debugTxctlTile")
       ) ++ (0 until 32).map((j: Int) =>
         toRegFieldRw(debugTxctl.shuffler(j), s"debugTxctlShuffler_$j")
@@ -1443,10 +1461,10 @@ class UcieTLRegs(
         toRegFieldR(
           applyShift(io.test.txDebugPacketsEnqueued),
           "debugTxPacketsSent"
-        ),
-        toRegFieldRw(debugClkMuxSel, "debugClkMuxSel"),
-        toRegFieldRw(debugRxLane, "debugRxLane"),
-        toRegFieldRw(debugRxBit, "debugRxBit"),
+        )
+      )).map(txDebugField) ++ (0 until debugMuxSel.length).map((i: Int) =>
+        toRegFieldRw(debugMuxSel(i), s"debugMuxSel_${i}")
+      ) ++ Seq(
         toRegFieldRw(txValid, "txValid"),
         toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
         toRegFieldRw(controllerSel, "controllerSel"),
@@ -1756,7 +1774,7 @@ class UcieTL(
       clkRegs.module.regmap.map { case (off, fields) =>
         (off + UcieClkRegs.offset) -> fields
       }
-    val io = IO(new UcieBumpsIO(params.numLanes))
+    val io = IO(new UcieBumpsIO(params.numLanes, params.hasTxDebugLane))
 
     // PHY
     val phy = Module(
@@ -1787,7 +1805,8 @@ class UcieTL(
           params.bufferDepthPerLane,
           params.numLanes,
           params.bitCounterWidth,
-          queueParams = params.queueParams
+          queueParams = params.queueParams,
+          hasTxDebugLane = params.hasTxDebugLane
         )(params.includeDefaultModels)
       )
     }
@@ -2456,7 +2475,9 @@ class UcieChipletLink(
   // yourself.
   val control_manager_node: Option[TLRegisterNode] = None
   val clock_node = Some(ucie.digitalClockNode)
-  val top_IO = BundleBridgeSource(() => new UcieBumpsIO(params.numLanes))
+  val top_IO = BundleBridgeSource(() =>
+    new UcieBumpsIO(params.numLanes, params.hasTxDebugLane)
+  )
 
   /** UcieTL's register port, synchronous to this link's clock. */
   def regNode: TLInwardNode = ucie.regNode

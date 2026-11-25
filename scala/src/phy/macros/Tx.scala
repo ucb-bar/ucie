@@ -167,7 +167,7 @@ class TxLane(implicit includeDefaultModels: Boolean = false) extends RawModule {
 /** The delivered TX tile, `TX`. Port names match its pins.
   *
   * Left off: the supplies (VDDQ, VDD, VSS), which the physical flow connects,
-  * and about thirty internal nodes the tile brings out as outputs, which
+  * and the 42 internal nodes the tile brings out as outputs, which
   * nothing reads. One of those is `rst`, the tile's synchronized divider reset:
   * an output, not a second reset input.
   */

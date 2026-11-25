@@ -9,7 +9,8 @@ class ClkRxIO extends Bundle {
 }
 
 /** Which delivered clock receiver a single-ended clock bump lands on. Both are
-  * an ESD clamp and receiver followed by a CKND24 driver, so both invert.
+  * an ESD clamp and receiver followed by a clock inverter driver, so both
+  * invert.
   */
 sealed abstract class ClkRxKind(val cellName: String)
 
