@@ -1,14 +1,7 @@
-// Behavioral model of `mux16to1`, the analog clocking IP's 16:1 clock mux.
-//
-// The cell is a binary tree of fifteen 2:1 clock mux cells. This model is
-// that tree transcribed from the delivered netlist (`mux16to1.sp`), with the
-// same instance and net names, so whatever input a select code picks here is
-// the one the cell picks. The wiring makes the select Gray coded: `sel` =
-// `i ^ (i >> 1)` picks `Q[i]`. Every code picks an input, and the output is not
-// inverted.
-//
-// VDD and VSS are pins on the cell but are omitted here; they are connected by
-// the physical flow.
+// Behavioral model of `mux16to1`, the analog clocking IP's 16:1 clock mux: its
+// netlist's tree of fifteen 2:1 muxes, with instance and net names kept and
+// supply pins omitted. `sel` is Gray coded -- `i ^ (i >> 1)` picks `Q[i]` --
+// and the output is not inverted.
 module mux16to1 (
   input [15:0] Q,
   input [3:0] sel,

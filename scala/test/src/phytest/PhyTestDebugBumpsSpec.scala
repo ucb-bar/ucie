@@ -12,13 +12,10 @@ import edu.berkeley.cs.uciedigital.Utils
 import edu.berkeley.cs.uciedigital.phy.Phy
 import edu.berkeley.cs.uciedigital.phy.macros.clocking.ClkMux
 
-/** Drives the PHY's observation taps and the selects that pick between them,
-  * and brings the resulting bumps back out so a test can watch them.
-  *
-  * Every tap is a `Bool` here, one per `PhyTest.DebugMuxInputs` entry and in
-  * that order, converted at the boundary where the PHY side is a clock. Nothing
-  * in this path is clocked, so a level on a tap shows up on its bump
-  * combinationally.
+/** Drives the PHY's observation taps and their selects, and brings the bumps
+  * back out for a test to watch. Taps are `Bool`s in `PhyTest.DebugMuxInputs`
+  * order and nothing in the path is clocked, so a tap's level shows up on its
+  * bump combinationally.
   */
 class PhyTestDebugBumpsHarness(
     numLanes: Int = 4,
@@ -115,7 +112,7 @@ class PhyTestDebugBumpsSpec extends AnyFunSpec with ChiselSim {
   def bump(c: PhyTestDebugBumpsHarness, mux: Int): Boolean =
     Seq(c.io.bumps.mux0, c.io.bumps.mux1)(mux).peek().litToBoolean
 
-  /** Every tap at `level` but `tap`, which is at its complement. */
+  /** Drives tap `tap` to `level` and every other tap to its complement. */
   def drive(c: PhyTestDebugBumpsHarness, tap: Int, level: Boolean): Unit =
     for (i <- inputs.indices) {
       c.io.taps(i).poke((if (i == tap) level else !level).B)

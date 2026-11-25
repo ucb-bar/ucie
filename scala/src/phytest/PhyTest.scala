@@ -233,8 +233,8 @@ class PhyTestRegsIO(
   // data debug lane brings its own driver and takes its control from `txctl`
   // instead.
   val driverctl = Input(Vec(PhyTest.NumDebugDrivers, new PadDriverCtlIO))
-  // What each observation bump watches, `mux0` then `mux1`: an index into
-  // `PhyTest.DebugMuxInputs`. The two are independent.
+  // What each observation bump watches, `mux0` then `mux1`: independent
+  // indices into `PhyTest.DebugMuxInputs`.
   val debugMuxSel =
     Input(Vec(PhyTest.NumDebugDrivers, UInt(ClkMux.selWidth.W)))
   // The TX data debug lane and its pattern FSM. A tester built without the
@@ -263,14 +263,11 @@ class PhyTestRegsIO(
   val sb = new SidebandTestRegsIO
 }
 
-/** Bumps the tester drives for observation.
-  *
-  * `mux0` and `mux1` each carry whichever of `PhyTest.DebugMuxInputs` their own
-  * select picks, through a pad driver. `txData` is the TX data debug lane,
-  * which only a tester built with one has.
-  *
-  * The PHY only fans out the nets being watched; the muxing and the pad drivers
-  * that put them here all live in [[PhyTest]].
+/** Bumps the tester drives for observation: `mux0` and `mux1` each carry
+  * whichever of `PhyTest.DebugMuxInputs` their own select picks, and `txData`
+  * is the TX data debug lane, present only with `hasTxDebugLane`. The PHY only
+  * fans out the nets being watched; the muxes and pad drivers all live in
+  * [[PhyTest]].
   */
 class DebugBumpsIO(hasTxDebugLane: Boolean = true) extends Bundle {
   val mux0 = Output(Bool())
@@ -325,20 +322,13 @@ object PhyTest {
   def trackLane(numLanes: Int): Int = numLanes + 1
   def loopbackLane(numLanes: Int): Int = numLanes + 2
 
-  /** Observation bumps, `mux0` and `mux1`: each one mux and one pad driver of
-    * its own. The TX data debug lane brings its own driver.
+  /** How many observation bumps there are (`mux0`, `mux1`), each with a mux and
+    * a pad driver of its own. The TX data debug lane brings its own driver.
     */
   val NumDebugDrivers = 2
 
-  /** What the observation muxes can select, in select order: each name is a
-    * field of `PhyDebugIO`. Both muxes take this same list; selects past its
-    * end pick a tied-off input.
-    *
-    * Clocks: the sideband forwarded clock as transmitted, the TX and RX global
-    * divided clocks, the three clock inputs straight off their bumps, and the
-    * full-rate TX and RX clocks off the lane clock distribution. Data: bit 0 of
-    * RX data lane 0's deserializer output, and bit 0 of the word going into TX
-    * data lane 0.
+  /** What both observation muxes can select, in select order, as `PhyDebugIO`
+    * field names. Selects past the end of the list pick a tied-off input.
     */
   val DebugMuxInputs: Seq[String] = Seq(
     "sbTxClk",
@@ -418,9 +408,8 @@ class PhyTest(
     bitCounterWidth: Int = 64,
     sim: Boolean = false,
     queueParams: AsyncQueueParams = AsyncQueueParams(depth = 32),
-    // Whether this tester has the TX data debug lane, and with it the
-    // `txData` bump. A chip that wants one such lane in all builds it in one
-    // link only.
+    // Whether this tester has the TX data debug lane and its `txData` bump. A
+    // chip that wants only one such lane builds it into a single link.
     hasTxDebugLane: Boolean = true
 )(implicit includeDefaultModels: Boolean = false)
     extends Module
@@ -472,17 +461,11 @@ class PhyTest(
 
   // OBSERVATION BUMPS
   //
-  // The PHY hands over raw nets; picking what to watch and driving a pad with
-  // it happens here, so the PHY carries only link RTL.
-  //
-  // Each of the two bumps, `mux0` and `mux1`, is a pad driver behind a 16:1
-  // `ClkMux` of its own, and each mux has its own select, so the two can watch
-  // any pair of `PhyTest.DebugMuxInputs` at once. Nothing here samples what
-  // they watch -- the data bits are in the RX and TX divided clock domains --
-  // so only the quasi-static selects cross into them.
-  //
-  // Neither `ClkMux` nor the pad driver inverts, so the bump carries the
-  // selected signal with its own polarity.
+  // The PHY hands over raw nets; each bump, `mux0` and `mux1`, is a pad driver
+  // behind a 16:1 `ClkMux` and select of its own, so the two can watch any
+  // pair of `PhyTest.DebugMuxInputs` at once. Neither cell inverts, and
+  // nothing here samples what they watch, so only the quasi-static selects
+  // cross clock domains.
   val debugMuxIns: Seq[Clock] = PhyTest.DebugMuxInputs.map { name =>
     io.debug.elements(name) match {
       case c: Clock => c

@@ -12,13 +12,12 @@ import chisel3.util._
 
 object ClkMux {
 
-  // Clocks the observation mux can choose between.
+  // Inputs the observation mux selects between, clocks or data.
   val numInputs = 16
 
   def selWidth: Int = log2Ceil(numInputs)
 
-  // The select code that picks input `index`. The cell's select is Gray coded:
-  // `sel` = `index ^ (index >> 1)` picks `Q[index]`.
+  // The cell's select code for input `index`, which is Gray coded.
   def gray(index: UInt): UInt = index ^ (index >> 1)
 }
 
@@ -30,13 +29,9 @@ class ClkMuxIO extends Bundle {
   val clk_divided = Output(Clock())
 }
 
-// The 16:1 clock mux `mux16to1` from the analog clocking IP.
-//
-// A binary tree of fifteen 2:1 clock mux cells, `sel[0]` at the leaves and
-// `sel[3]` at the root, wired so that the select is Gray coded: `sel` =
-// `gray(i)` picks `Q[i]`. Every code picks some input, so there is no all-off
-// state, and the output is not inverted. Use `connect` rather than driving
-// `sel` by hand.
+// The 16:1 clock mux `mux16to1` from the analog clocking IP. `sel` =
+// `ClkMux.gray(i)` picks `Q[i]`, not inverted, and every code picks some
+// input; use `connect` rather than driving `sel` by hand.
 class ClkMux(implicit includeDefaultModels: Boolean = false)
     extends BlackBox
     with HasBlackBoxResource {
@@ -48,9 +43,8 @@ class ClkMux(implicit includeDefaultModels: Boolean = false)
     addResource("/vsrc/mux16to1.v")
   }
 
-  // Passes `ins(index)`, returning the muxed clock. `index` is the input
-  // number; the Gray code the cell wants is made here. Inputs past the end of
-  // `ins` are tied low, so selecting one gives a constant 0.
+  // Returns `ins(index)`, Gray coding `index` into the cell's select. Inputs
+  // past the end of `ins` are tied low, so selecting one gives a constant 0.
   def connect(ins: Seq[Clock], index: UInt): Clock = {
     require(
       ins.length <= ClkMux.numInputs,

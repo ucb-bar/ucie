@@ -87,9 +87,9 @@ case class UcieTLParams(
     // cycle each way.
     managerBuffer: BufferParams = BufferParams.none,
     // Whether this link's tester has the TX data debug lane and its `txData`
-    // bump. A chip with several links can keep it to one of them. Without it
-    // the lane's registers stay in the map, so every link keeps one register
-    // layout, but they hold nothing: writes are dropped and reads return 0.
+    // bump, which a chip with several links can keep to one of them. Without
+    // it the lane's registers stay in the map but read 0 and drop writes, so
+    // every link keeps one register layout.
     hasTxDebugLane: Boolean = true
 ) extends ChipletLinkParams
     with ChipletLinkWrapperInstantiationLike {
@@ -1163,8 +1163,8 @@ class UcieTLRegs(
         w.en_b := true.B
         w
       })))
-      // What each observation bump watches, `mux0` then `mux1`, each on its
-      // own: an index into `PhyTest.DebugMuxInputs`.
+      // What each observation bump watches, `mux0` then `mux1`: independent
+      // indices into `PhyTest.DebugMuxInputs`.
       val debugMuxSel = RegInit(
         VecInit(
           Seq.fill(PhyTest.NumDebugDrivers)(
