@@ -204,6 +204,30 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
       result
     }
 
+    it("should keep every gap to txIdlePackets when the postamble ends mid-gap") {
+      // A 16 UI postamble ends halfway through the one gap word. On a high
+      // park, the precondition goes out in that same word. No gap may grow.
+      val (burst, idle, packets) = (2, 1, 12)
+      val length = packets / burst * (burst + idle) - idle
+      simulate(new PhyTestRegLoopback(numLanes)) { c =>
+        setupLfsr(c)
+        finiteRun(c, packets)
+        bursts(c, burst, idle)
+        c.io.regs.txClkGate.poke(true.B)
+        c.io.regs.txClkPreamble.poke(0.U)
+        c.io.regs.txClkPostamble.poke((16 / PhyTest.ClkPostambleUi).U)
+        c.io.regs.txClkParkAlternate.poke(true.B)
+        c.clock.step(1 + txOutputDelay)
+        val sent = record(c, length + 8)
+        val shape = sent.drop(sent.indexWhere(_.isData)).map(_.isData)
+        val expected = Seq
+          .fill(packets / burst)(Seq.fill(burst)(true) ++ Seq.fill(idle)(false))
+          .flatten
+          .take(length)
+        assert(shape.take(length) == expected)
+      }
+    }
+
     it("should score clean when the RX only sees the UIs the clock ran for") {
       val packets = 24
       // Two whole packets of postamble.

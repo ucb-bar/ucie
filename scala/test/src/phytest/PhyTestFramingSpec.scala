@@ -81,7 +81,7 @@ class PhyTestLfsrLoopback(
   dut.io.regs.txValid := io.validPattern
   dut.io.regs.txValidLaneSel := validSel.U
   dut.io.regs.rxValidLaneSel := validSel.U
-  dut.io.regs.rxLfsrValid := io.validPattern
+  dut.io.regs.rxValid := io.validPattern
   dut.io.regs.rxValidStartThreshold := io.validStartThreshold
   dut.io.regs.rxUiDelay.foreach(_ := 0.U)
   dut.io.regs.txClkP := 0.U
@@ -359,12 +359,17 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
     }
 
     it("should frame on a run of valid that straddles two words") {
-      // The valid waveform's first run of four lands on UI 30 and 31 of one
-      // word and UI 0 and 1 of the next, so only the two words together show
-      // four in a row.
+      // At a threshold of 4: the valid waveform's first run of four lands on
+      // UI 30 and 31 of one word and UI 0 and 1 of the next, so only the two
+      // words together show four in a row.
       for (linkDelay <- Seq(29, 30, 31)) {
         withClue(s"$linkDelay UI late: ") {
-          val r = run(dataDelay = false, alignedValid, linkDelay = linkDelay)
+          val r = run(
+            dataDelay = false,
+            alignedValid,
+            linkDelay = linkDelay,
+            threshold = 4
+          )
           assert(r.frameOffset == linkDelay)
           assertClean(r)
         }
@@ -372,11 +377,12 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
     }
 
     it("should frame past a glitch on valid shorter than the threshold") {
-      // A lone bit on an idle valid lane, and a pair ending its word, which
-      // the start search must not join onto the idle word after it.
+      // At a threshold of 4: a lone bit on an idle valid lane, and a pair
+      // ending its word, which the start search must not join onto the idle
+      // word after it.
       for (glitch <- Seq(BigInt(1) << 8, BigInt(3) << 30)) {
         withClue(f"glitch $glitch%08x: ") {
-          val r = run(dataDelay = false, alignedValid, glitch = glitch)
+          val r = run(dataDelay = false, alignedValid, threshold = 4, glitch = glitch)
           assert(r.frameOffset == 0)
           assertClean(r)
         }

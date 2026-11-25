@@ -1,6 +1,6 @@
 // Behavioral model of the UCIe TX tile.
 //
-// Models the 16:1 double data rate serializer, the tile's wake-up, and the
+// Models the 32:1 serializer (both clock edges), the tile's wake-up, and the
 // enable state of the output driver. `Dctrl`, `ENP_EQ`, and `ENN_EQ` only
 // shape the analog waveform, so they have no effect here; see
 // `verilog/tx.vams` for the model that does resolve them.

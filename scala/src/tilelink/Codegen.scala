@@ -557,7 +557,7 @@ object Codegen {
     reqs += write("txClkP", defaultClkP)
     reqs += write("txClkN", defaultClkN)
     reqs += write("txValid", defaultValid)
-    reqs += write("rxLfsrValid", defaultValid)
+    reqs += write("rxValid", defaultValid)
 
     for (i <- 0 until PhyTest.NumDebugDrivers) {
       reqs += write(s"debugDriverctl_$i", enableDriverCtl)
@@ -624,10 +624,14 @@ object Codegen {
   *     (revisit if richer reporting is wanted).
   */
 class CFormatter extends Formatter {
-  def getConstantName(name: String): String = "UCIE_" + name
-    .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
-    .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
-    .toUpperCase
+  def getConstantName(name: String): String = {
+    val snake = name
+      .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+      .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+      .toUpperCase
+    // A name that already starts with the prefix (`ucieRst`) keeps one copy.
+    if (snake.startsWith("UCIE_")) snake else "UCIE_" + snake
+  }
 
   private def renderArg(arg: Arg): String = {
     val ty = arg.datatype match {
@@ -933,12 +937,13 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
 
   def formatResetFsmsFn(): String = {
     val body = new StringBuilder
-    // Datapath first, then the FSMs that feed it: `txFsmRst`/`rxFsmRst` return
-    // the test FSMs and their counters to idle.
-    body.append(f.formatFnCall("reset_datapath"))
+    // The TX FSM first, so it stops queuing words before the datapath reset
+    // empties the queue and clears the underflow flag. The RX FSM last, so it
+    // starts on words that arrived after the datapath reset.
     body.append(
       formatWriteNamedReg("txFsmRst", f.formatLong(1))
     )
+    body.append(f.formatFnCall("reset_datapath"))
     body.append(
       formatWriteNamedReg("rxFsmRst", f.formatLong(1))
     )
@@ -1037,8 +1042,11 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val tile = new StringBuilder
     tile.append(f.formatReadReg("regDrv", "tile", tileAddr, declareVar = true))
     val mask = f.formatConstantRef("txCtlDelayMask")
+    // `taps` of 64 or more is every tap; a 64-bit shift by 64 is undefined
+    // in C.
     val delayCode =
-      s"((tile & ~$mask) | ((((${f.formatLong(1)} << taps) - ${f.formatLong(1)}) << " +
+      s"((tile & ~$mask) | ((((taps >= 64) ? ~${f.formatLong(0)} : " +
+        s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})) << " +
         s"${f.formatConstantRef("txCtlDelayLsb")}) & $mask))"
     tile.append(
       f.formatFnCall(
@@ -1277,12 +1285,12 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * the part's rates. The apply gates the clock during the change, because
     * the divider and phase shifter both move and a lane divider may miscount
     * an edge in flight. The gate stays shut until the new source settles.
+    * `clkEn` is left as it is: the clock runs after this only if it was on.
     */
   def formatSetMainClkFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("mainClkSel", "src"))
     body.append(formatWriteNamedReg("txClkDiv", "div"))
-    body.append(formatWriteNamedReg("clkEn", f.formatLong(1)))
     body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "set_main_clk",
@@ -1301,17 +1309,14 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * longer than the line, so get a low rate from a larger division, not a
     * slower main clock.
     *
-    * The write starts its own apply: it closes the TX clock gate, moves the
-    * phase, restarts the TX dividers, and opens the gate. This waits for it.
-    * In manual mode the phase takes effect at once, and the caller must gate
-    * the clock around it.
+    * Then applies, which closes the TX clock gate, moves the phase, restarts
+    * the TX dividers, and opens the gate. In manual mode the phase takes
+    * effect at once, and the caller must gate the clock around it.
     */
   def formatSetTxPhaseFn(): String = {
     val body = new StringBuilder
     body.append(formatWriteNamedReg("txClkPhase", "half_cycles"))
-    body.append(
-      formatWaitClkCfg("set_tx_phase: the apply of the phase never finished")
-    )
+    body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "set_tx_phase",
       body.toString,
@@ -1371,8 +1376,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     * forwarded clock lanes send, so it moves where in the UI the far side
     * samples every lane. Each lane's own line only trims around it.
     *
-    * Like `set_tx_phase`, the write starts its own apply under the TX clock
-    * gate; this waits for it.
+    * Like `set_tx_phase`, it then applies under the TX clock gate.
     */
   def formatSetGlobalDelayFn(): String = {
     val body = new StringBuilder
@@ -1385,11 +1389,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
           s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)}))"
       )
     )
-    body.append(
-      formatWaitClkCfg(
-        "set_global_delay: the apply of the delay never finished"
-      )
-    )
+    body.append(f.formatFnCall("apply_clk_cfg"))
     f.formatFn(
       "set_global_delay",
       body.toString,
@@ -1414,7 +1414,8 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
         args = Seq(
           "lane",
           f.formatConstantRef("rxctlDctrlOfs"),
-          s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)})"
+          s"((taps >= 64) ? ~${f.formatLong(0)} : " +
+            s"((${f.formatLong(1)} << taps) - ${f.formatLong(1)}))"
         )
       )
     )
@@ -1489,6 +1490,28 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     */
   def formatRunLfsrFn(): String = {
     val body = new StringBuilder
+    // The target and modes before `reset_fsms`, whose datapath reset a target
+    // change needs.
+    body.append(
+      formatWriteNamedReg(
+        "testTarget",
+        f.formatConstantRef("testTargetMainband")
+      )
+    )
+    body.append(
+      formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeLfsr"))
+    )
+    body.append(
+      formatWriteNamedReg("txDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    // The receiver also stops at `packets`. Otherwise it would keep scoring
+    // the idle zeros sent after the TX finishes against its own LFSR, and
+    // every sweep point would show the same few errors whatever its code.
+    body.append(
+      formatWriteNamedReg("rxDataMode", f.formatConstantRef("dataModeFinite"))
+    )
+    body.append(formatWriteNamedReg("rxPacketsToReceive", "packets"))
+    body.append(formatWriteNamedReg("txPacketsToSend", "packets"))
     body.append(f.formatFnCall("reset_fsms"))
     // Wait for the RX datapath to leave reset before the TX starts.
     //
@@ -1527,27 +1550,6 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       )
     }
     body.append(f.formatBlock(settle.toString))
-
-    body.append(
-      formatWriteNamedReg(
-        "testTarget",
-        f.formatConstantRef("testTargetMainband")
-      )
-    )
-    body.append(
-      formatWriteNamedReg("txTestMode", f.formatConstantRef("txTestModeLfsr"))
-    )
-    body.append(
-      formatWriteNamedReg("txDataMode", f.formatConstantRef("dataModeFinite"))
-    )
-    // The receiver also stops at `packets`. Otherwise it would keep scoring
-    // the idle zeros sent after the TX finishes against its own LFSR, and
-    // every sweep point would show the same few errors whatever its code.
-    body.append(
-      formatWriteNamedReg("rxDataMode", f.formatConstantRef("dataModeFinite"))
-    )
-    body.append(formatWriteNamedReg("rxPacketsToReceive", "packets"))
-    body.append(formatWriteNamedReg("txPacketsToSend", "packets"))
     body.append(formatWriteNamedReg("txExecute", f.formatLong(1)))
 
     // Wait while packets are still arriving rather than for a fixed number of
@@ -1642,10 +1644,13 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     val sb = new StringBuilder
     val body = new StringBuilder
 
-    // The clocking stays at its reset defaults (analog bypass pin, no
-    // division), which a testbench drives. Restart the rest of the block on it
-    // before configuring anything, so nothing below goes to a block that came
-    // up on the wrong clocking.
+    // The clocking stays as software set it. Restart the rest of the block on
+    // it before configuring anything, so nothing below goes to a block that
+    // came up on the wrong clocking. Both clocks are off first, so the UCIe
+    // reset releases every divider, global and per tile, with no clock, and
+    // they start in a known phase with each other.
+    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(0))))
+    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(0))))
     body.append(f.formatFnCall("reset_ucie"))
 
     {
@@ -1695,7 +1700,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       formatWriteNamedReg("txValid", f.formatConstantRef("defaultValid"))
     )
     body.append(
-      formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
+      formatWriteNamedReg("rxValid", f.formatConstantRef("defaultValid"))
     )
 
     // Every observation driver off. Driving full-rate clocks off chip disturbs
@@ -1703,15 +1708,10 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
     // tests run with them off; `enable_debug_drivers` turns them on for a
     // scope.
     body.append(f.formatFnCall("enable_debug_drivers", Seq(f.formatLong(0))))
-    // Put every divider, global and per tile, in a known phase with each
-    // other, once. After this the clock gate is enough. It switches only
-    // between pulses, so gating loses no edge and the dividers resume where
-    // they stopped. A delay code change needs only a quiet clock, not a divider
-    // restart. Both directions' clocks are off during the restart, so no
-    // divider leaves reset on a live edge.
-    body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(0))))
-    body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(0))))
-    body.append(f.formatFnCall("reset_dividers"))
+    // The clocks back on. After this the clock gate is enough. It switches
+    // only between pulses, so gating loses no edge and the dividers resume
+    // where they stopped. A delay code change needs only a quiet clock, not a
+    // divider restart.
     body.append(f.formatFnCall("set_clk_en", args = Seq(f.formatLong(1))))
     body.append(f.formatFnCall("set_rx_clk_en", args = Seq(f.formatLong(1))))
     // Leave both bands under PhyTest; each test selects what it needs. Before
@@ -1769,7 +1769,7 @@ class Codegen(f: Formatter, params: UcieTLParams = Codegen.ucieParams) {
       formatWriteNamedReg("txValid", f.formatConstantRef("defaultValid"))
     )
     body.append(
-      formatWriteNamedReg("rxLfsrValid", f.formatConstantRef("defaultValid"))
+      formatWriteNamedReg("rxValid", f.formatConstantRef("defaultValid"))
     )
     def writeDelay(value: String) = f.formatForLoop(
       "lane",

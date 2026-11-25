@@ -519,22 +519,20 @@ class UcieClkRegs(
     //
     // Low (default): FSM mode, as described here. The apply sequencer moves
     // the applied fields under a gate, `freqSelAutoEn` hands control to the
-    // rate table, a PLL used by a divider stays on, the UCIe reset holds the
-    // dividers, and the sequencer tells the controller when its clocks are
+    // rate table, and the sequencer tells the controller when its clocks are
     // ready.
     //
     // High: every output follows its own register only and takes effect when
-    // written (applied fields, PLL enables, three gate enables, two divider
-    // resets). The table and sequencer are idle, and the `manualClks*`
-    // registers drive the controller's clock handshake. Clean sequencing is
-    // up to software.
+    // written (applied fields, PLL enables, three gate enables). The table and
+    // sequencer are idle, and the `manualClks*` registers drive the
+    // controller's clock handshake. Clean sequencing is up to software. The
+    // divider resets and the UCIe reset behave the same in both modes.
     //
     // Switching mode moves no output. On entry, each register loads its
-    // output's current value (e.g. applied fields from their live copies, PLL
-    // enables with the keep-alive included), which software then reads back.
-    // In manual mode the live copies follow the registers. On exit the FSM
-    // continues from there, and its rules return: a PLL either divider uses
-    // turns on, and with `freqSelAutoEn` set the rate table applies.
+    // output's current value (e.g. applied fields from their live copies),
+    // which software then reads back. In manual mode the live copies follow
+    // the registers. On exit the FSM continues from there, and with
+    // `freqSelAutoEn` set the rate table applies.
     //
     // `manual` lags `manualReq` by a cycle. The registers load in that cycle,
     // so the outputs switch to registers already holding their values.
@@ -644,14 +642,13 @@ class UcieClkRegs(
     // clock and every PHY clock divided from it are stopped. `ucieRst` holds
     // them too, so restarting the block restarts its dividers. Each comes
     // straight off a flop, so the async reset never sees a glitch from an OR
-    // of changing inputs. In manual mode the UCIe reset does not reach them.
+    // of changing inputs.
     val txDividerRst = RegInit(false.B)
     val rxDividerRst = RegInit(false.B)
-    val ucieRstToDividers = !manual && ucieRstReq
     io.txDividerRstb :=
-      RegNext(!(ucieRstToDividers || txDividerRst), false.B).asAsyncReset
+      RegNext(!(ucieRstReq || txDividerRst), false.B).asAsyncReset
     io.rxDividerRstb :=
-      RegNext(!(ucieRstToDividers || rxDividerRst), false.B).asAsyncReset
+      RegNext(!(ucieRstReq || rxDividerRst), false.B).asAsyncReset
 
     // Applying a configuration: gate, switch under the gate, ungate. A mux,
     // divider or delay code changed under a running clock glitches the
@@ -661,11 +658,12 @@ class UcieClkRegs(
     // their own gates after their PLL dividers, shut only when an apply
     // changes something under them; see `gatePhyTestOnApply`.
     //
-    // In FSM mode, writing the TX quadrature coarse phase or the global delay
-    // line with a value the tile does not run starts an apply by itself. It
-    // shuts only the TX gate, moves only those two and `clkGateEdgeSel`, and
-    // skips the ungate wait, since no PLL changed. In manual mode they drive
-    // their pins directly, like every other field.
+    // With `phaseAutoApply` set, in FSM mode, writing the TX quadrature coarse
+    // phase or the global delay line with a value the tile does not run
+    // starts an apply by itself. It shuts only the TX gate, moves only those
+    // two and `clkGateEdgeSel`, and skips the ungate wait, since no PLL
+    // changed. In manual mode they drive their pins directly, like every
+    // other field.
     val applyReq = RegInit(false.B)
     val applyBusy = RegInit(false.B)
     // Whether the apply under way is a whole one, as opposed to a phase alone.
@@ -688,9 +686,14 @@ class UcieClkRegs(
     // and the UCIe reset), so these two restart with the rest.
     val cfgTxClkGenRst = RegInit(false.B)
     io.txClkGenRstb := RegNext(
-      !(ucieRstToDividers || txDividerRst || cfgTxClkGenRst),
+      !(ucieRstReq || txDividerRst || cfgTxClkGenRst),
       false.B
     ).asAsyncReset
+
+    // High: writing the coarse phase or the delay code starts an apply by
+    // itself (see above). Low (reset): they are applied fields like the rest
+    // and wait for `clkCfgApply`.
+    val phaseAutoApply = RegInit(false.B)
 
     // A coarse phase or delay code written that the tile does not run yet.
     val phaseChanges = txClkPhase =/= liveTxClkPhase ||
@@ -704,6 +707,10 @@ class UcieClkRegs(
         phyTestClkDiv =/= livePhyTestDiv))
     val sbChanges = sbClkBypassEn =/= liveSbBypass ||
       (!sbClkBypassEn && (sbClkSrcSel =/= liveSbSrc || sbClkDiv =/= liveSbDiv))
+    // Whether an apply may move those fields now: their gate is shut, software
+    // runs that gate, or they change nothing.
+    val phyTestSafe = cfgGatePhyTest || !gatePhyTestOnApply || !phyTestChanges
+    val sbSafe = cfgGateSb || !gateSbOnApply || !sbChanges
 
     // A PHY test or TX sideband clock reopened onto its divider must also
     // wait for the PLL it divides, which this apply may have just turned on.
@@ -770,9 +777,11 @@ class UcieClkRegs(
             cfgGate := true.B
             cfgGatePhyTest := gatePhyTestOnApply && phyTestChanges
             cfgGateSb := gateSbOnApply && sbChanges
+            // A release written before this apply must not end its wait.
+            ungateReq := false.B
             applyCount := 0.U
             applyPhase := ClkApplyPhase.gateIn
-          }.elsewhen(phaseChanges) {
+          }.elsewhen(phaseAutoApply && phaseChanges) {
             applyBusy := true.B
             applyFull := false.B
             cfgGate := true.B
@@ -789,13 +798,23 @@ class UcieClkRegs(
             liveClkPhaseSel := clkPhaseSel
             liveClkGateEdgeSel := clkGateEdgeSel
             when(applyFull) {
+              // Taken now, so a request written from here on runs again
+              // after this apply, with the shadows as they are then. So does
+              // a PHY test or sideband field written after this apply chose
+              // which gates to shut: copied now, it would switch that clock
+              // with its gate open.
+              applyReq := !(phyTestSafe && sbSafe)
               live := pending
-              livePhyTestDiv := phyTestClkDiv
-              liveSbDiv := sbClkDiv
-              liveSbBypass := sbClkBypassEn
-              livePhyTestBypass := phyTestClkBypassEn
-              liveSbSrc := sbClkSrcSel
-              livePhyTestSrc := phyTestClkSrcSel
+              when(phyTestSafe) {
+                livePhyTestDiv := phyTestClkDiv
+                livePhyTestBypass := phyTestClkBypassEn
+                livePhyTestSrc := phyTestClkSrcSel
+              }
+              when(sbSafe) {
+                liveSbDiv := sbClkDiv
+                liveSbBypass := sbClkBypassEn
+                liveSbSrc := sbClkSrcSel
+              }
             }
             // Whenever this apply can have upset the TX dividers: a new
             // source or ratio, or a new coarse phase. A delay code alone is
@@ -835,19 +854,17 @@ class UcieClkRegs(
           applyCount := applyCount + 1.U
           when(applyCount === (UcieClkRegs.gateDwell - 1).U) {
             applyBusy := false.B
-            // A request written during a phase's apply is still to do.
-            when(applyFull) {
-              applyReq := false.B
-            }
             applyPhase := ClkApplyPhase.idle
           }
         }
       }
     }
 
-    // What `clkCfgBusy` reads: an apply under way, or a phase written that one
-    // is about to carry, so a read straight after the write already sees it.
-    val busyObserved = applyBusy || (!manual && phaseChanges)
+    // What `clkCfgBusy` reads: an apply under way, or a request or phase
+    // written that one is about to carry, so a read straight after the write
+    // already sees it.
+    val busyObserved = applyBusy ||
+      (!manual && (applyReq || (phaseAutoApply && phaseChanges)))
 
     // Stands in for a PHY PLL lock to the UCIe controller. An apply sets it
     // when it ungates, by the `clkCfgUngateSrc` condition, and it holds from
@@ -876,19 +893,10 @@ class UcieClkRegs(
         RegNext(clksStable && !applyBusy && clkEn, false.B)
       )
 
-    // Each output's FSM-mode value. Either PLL can also feed the PHY test and
-    // TX sideband dividers. A PLL stays on, whatever its enable says, while
-    // either clock is on a divider using it. Turning it off would stop the
-    // UCIe controller's clock, or the PHY test clock, with no gate shut in
-    // front of it. A divider on the analog bypass pin keeps neither on.
-    def dividing(bypass: Bool, src: UInt, pll: Int): Bool =
-      !bypass && src === pll.U
-    val fsmPll8En = live.pll8En ||
-      dividing(livePhyTestBypass, livePhyTestSrc, 0) ||
-      dividing(liveSbBypass, liveSbSrc, 0)
-    val fsmPll12En = live.pll12En ||
-      dividing(livePhyTestBypass, livePhyTestSrc, 1) ||
-      dividing(liveSbBypass, liveSbSrc, 1)
+    // Each output's FSM-mode value. The gates are software's enable, shut
+    // while an apply holds them. The PLL enables are exactly what was
+    // applied, even for a PLL the PHY test or TX sideband divider uses:
+    // turning that PLL off stops that clock with its gate open.
     val fsmClkEn = clkEn && !cfgGate
     val fsmPhyTestClkEn = phyTestClkEn && !cfgGatePhyTest
     val fsmSbClkEn = sbClkEn && !cfgGateSb
@@ -902,8 +910,8 @@ class UcieClkRegs(
       clkPhaseSel := liveClkPhaseSel
       clkGateEdgeSel := liveClkGateEdgeSel
       x2En := live.x2En
-      pll8En := fsmPll8En
-      pll12En := fsmPll12En
+      pll8En := live.pll8En
+      pll12En := live.pll12En
       phyTestClkDiv := livePhyTestDiv
       phyTestClkSrcSel := livePhyTestSrc
       phyTestClkBypassEn := livePhyTestBypass
@@ -913,8 +921,6 @@ class UcieClkRegs(
       clkEn := fsmClkEn
       phyTestClkEn := fsmPhyTestClkEn
       sbClkEn := fsmSbClkEn
-      txDividerRst := ucieRstReq || txDividerRst
-      rxDividerRst := ucieRstReq || rxDividerRst
       manualClksReady := fsmClksReady
       manualClksReadyFreqSel := fsmClksReadyFreqSel
       manualClksUngated := fsmClksUngated
@@ -938,32 +944,43 @@ class UcieClkRegs(
       liveSbBypass := sbClkBypassEn
     }
 
-    io.mainClkSel := Mux(manual, mainClkSel, live.mainClkSel)
-    io.pll8En := Mux(manual, pll8En, fsmPll8En)
-    io.pll12En := Mux(manual, pll12En, fsmPll12En)
-    io.x2En := Mux(manual, x2En, live.x2En)
-    io.txClkDiv := Mux(manual, txClkDiv, live.txClkDiv)
-    io.txClkPhase := Mux(manual, txClkPhase, liveTxClkPhase)
-    io.phyTestClkDiv := Mux(manual, phyTestClkDiv, livePhyTestDiv)
-    io.phyTestClkSrcSel := Mux(manual, phyTestClkSrcSel, livePhyTestSrc)
-    io.phyTestClkBypassEn := Mux(manual, phyTestClkBypassEn, livePhyTestBypass)
-    io.sbClkDiv := Mux(manual, sbClkDiv, liveSbDiv)
-    io.sbClkSrcSel := Mux(manual, sbClkSrcSel, liveSbSrc)
-    io.sbClkBypassEn := Mux(manual, sbClkBypassEn, liveSbBypass)
+    // Every output that picks between the registers and the FSM goes out
+    // through a flop, so a mode switch or an apply can't glitch a PLL enable,
+    // a clock mux select or a gate enable. Each resets to its source's reset
+    // value, asynchronously, like the rest.
+    def flop[T <: Data](x: T, init: T): T = RegNext(x, init)
+    io.mainClkSel := flop(Mux(manual, mainClkSel, live.mainClkSel), 3.U)
+    io.pll8En := flop(Mux(manual, pll8En, live.pll8En), false.B)
+    io.pll12En := flop(Mux(manual, pll12En, live.pll12En), false.B)
+    io.x2En := flop(Mux(manual, x2En, live.x2En), false.B)
+    io.txClkDiv := flop(Mux(manual, txClkDiv, live.txClkDiv), 0.U)
+    io.txClkPhase := flop(Mux(manual, txClkPhase, liveTxClkPhase), 0.U)
+    io.phyTestClkDiv :=
+      flop(Mux(manual, phyTestClkDiv, livePhyTestDiv), 4.U)
+    io.phyTestClkSrcSel :=
+      flop(Mux(manual, phyTestClkSrcSel, livePhyTestSrc), 0.U)
+    io.phyTestClkBypassEn :=
+      flop(Mux(manual, phyTestClkBypassEn, livePhyTestBypass), true.B)
+    io.sbClkDiv := flop(Mux(manual, sbClkDiv, liveSbDiv), 2.U)
+    io.sbClkSrcSel := flop(Mux(manual, sbClkSrcSel, liveSbSrc), 0.U)
+    io.sbClkBypassEn := flop(Mux(manual, sbClkBypassEn, liveSbBypass), true.B)
     io.rxClkFromTxQ := rxClkFromTxQ
-    io.clkPhaseSel := Mux(manual, clkPhaseSel, liveClkPhaseSel)
-    io.clkEn := Mux(manual, clkEn, fsmClkEn)
-    io.clkGateEdgeSel := Mux(manual, clkGateEdgeSel, liveClkGateEdgeSel)
-    io.rxClkEn := rxClkEn
-    io.phyTestClkEn := Mux(manual, phyTestClkEn, fsmPhyTestClkEn)
-    io.sbClkEn := Mux(manual, sbClkEn, fsmSbClkEn)
-    io.clksReady := Mux(manual, manualClksReady, fsmClksReady)
-    io.clksReadyFreqSel := Mux(
-      manual,
-      manualClksReadyFreqSel,
-      fsmClksReadyFreqSel
+    io.clkPhaseSel := flop(
+      Mux(manual, clkPhaseSel, liveClkPhaseSel),
+      UcieClkRegs.maxPhaseSel.U(ClockingTile.phaseSelWidth.W)
     )
-    io.clksUngated := Mux(manual, manualClksUngated, fsmClksUngated)
+    io.clkEn := flop(Mux(manual, clkEn, fsmClkEn), false.B)
+    io.clkGateEdgeSel :=
+      flop(Mux(manual, clkGateEdgeSel, liveClkGateEdgeSel), false.B)
+    io.rxClkEn := rxClkEn
+    io.phyTestClkEn := flop(Mux(manual, phyTestClkEn, fsmPhyTestClkEn), true.B)
+    io.sbClkEn := flop(Mux(manual, sbClkEn, fsmSbClkEn), true.B)
+    io.clksReady := flop(Mux(manual, manualClksReady, fsmClksReady), false.B)
+    io.clksReadyFreqSel := flop(
+      Mux(manual, manualClksReadyFreqSel, fsmClksReadyFreqSel),
+      0.U
+    )
+    io.clksUngated := flop(Mux(manual, manualClksUngated, fsmClksUngated), false.B)
 
     val regmap: Seq[(Int, Seq[RegField])] = {
       val scalars = Seq(
@@ -1007,7 +1024,8 @@ class UcieClkRegs(
         toRegFieldR(rate, s"clkMeter$name")
       } ++ Seq(
         toRegFieldRw(pllLockLost, "pllLockLost"),
-        toRegFieldRw(clkGateEdgeSel, "clkGateEdgeSel")
+        toRegFieldRw(clkGateEdgeSel, "clkGateEdgeSel"),
+        toRegFieldRw(phaseAutoApply, "clkPhaseAutoApply")
       )
       // The table is at a fixed slot so adding a scalar does not move every
       // entry. But one scalar too many then silently overlaps `rateCfg_0`.
@@ -1069,9 +1087,8 @@ object ClkUngateSrc extends ChiselEnum {
   * Holds everything that sets the lane rate, and nothing else. The sampling
   * phase is a training result, not a property of the rate, so it has its own
   * register. So do the PHY test and TX sideband clocks, whose rate does not
-  * follow the lanes. The PLL enables cover the whole part, so an entry can turn
-  * off a PLL that one of those clocks divides. `UcieClkRegs` keeps that PLL
-  * running anyway, since nothing would gate that clock while its PLL stopped.
+  * follow the lanes. The PLL enables cover the whole part, so an entry that
+  * turns off a PLL one of those clocks divides stops that clock.
   */
 class ClkRateCfgIO extends Bundle {
   val mainClkSel = UInt(ClockingTile.mainClkSelWidth.W)
@@ -1226,7 +1243,7 @@ class UcieTLRegs(
           )
         )
       )
-      val rxLfsrValid = RegInit(0.U(32.W))
+      val rxValid = RegInit(0.U(32.W))
       val rxDatapathRst = Wire(DecoupledIO(UInt(1.W)))
       val rxFsmRst = Wire(DecoupledIO(UInt(1.W)))
       val rxPacketsToReceive =
@@ -1454,9 +1471,9 @@ class UcieTLRegs(
       rxFsmRst.ready := true.B
 
       // Stretches a one-cycle register write to `UcieTLRegs.rstStrobeCycles`
-      // cycles. The datapath resets cross into a divided clock domain at a
-      // quarter of this rate, and `txFsmRst`/`rxFsmRst` into the UCIe clock
-      // domain, so a one-cycle strobe is too short.
+      // cycles, for the datapath resets. The FSM resets stay one cycle: they
+      // clear logic on this clock, and a longer one would swallow a
+      // `txExecute` or `txInjectError` written just after.
       def stretched(pulse: Bool): Bool = {
         val remaining =
           RegInit(0.U(log2Ceil(UcieTLRegs.rstStrobeCycles).W))
@@ -1496,7 +1513,7 @@ class UcieTLRegs(
       // datapath mid-run.
       io.test.txDatapathRst :=
         applyShift(RegNext(stretched(txDatapathRst.valid), false.B))
-      io.test.txFsmRst := applyShift(stretched(txFsmRst.valid))
+      io.test.txFsmRst := applyShift(txFsmRst.valid)
       io.test.txExecute := applyShift(txExecute.valid)
       io.test.txManualRepeatPeriod := applyShift(txManualRepeatPeriod)
       io.test.txPacketsToSend := applyShift(txPacketsToSend)
@@ -1505,10 +1522,10 @@ class UcieTLRegs(
       io.test.txValid := applyShift(txValid)
       io.test.rxDataMode := applyShift(rxDataMode)
       io.test.rxLfsrSeed := applyShift(rxLfsrSeed)
-      io.test.rxLfsrValid := applyShift(rxLfsrValid)
+      io.test.rxValid := applyShift(rxValid)
       io.test.rxDatapathRst :=
         applyShift(RegNext(stretched(rxDatapathRst.valid), false.B))
-      io.test.rxFsmRst := applyShift(stretched(rxFsmRst.valid))
+      io.test.rxFsmRst := applyShift(rxFsmRst.valid)
       io.test.rxPacketsToReceive := applyShift(rxPacketsToReceive)
       io.test.rxPauseCounters := applyShift(rxPauseCounters)
       io.test.rxDataLane := applyShift(rxDataLane)
@@ -1716,7 +1733,7 @@ class UcieTLRegs(
         toRegFieldRw(debugRxLane, "debugRxLane"),
         toRegFieldRw(debugRxBit, "debugRxBit"),
         toRegFieldRw(txValid, "txValid"),
-        toRegFieldRw(rxLfsrValid, "rxLfsrValid"),
+        toRegFieldRw(rxValid, "rxValid"),
         toRegFieldRw(controllerSel, "controllerSel"),
         toRegFieldRw(mainbandMode, "mainbandMode"),
         toRegFieldRw(sidebandMode, "sidebandMode"),

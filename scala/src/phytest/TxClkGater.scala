@@ -205,10 +205,12 @@ class TxClkGater(numLanes: Int) extends Module {
     when(inGap) { gapLeft := gapLeft - 1.U }
     when(stopsAfter.orR || stopsAtStart) { parkHigh := parkHighNow }
     lastRunning := running(n - 1)
-    when(running.orR) {
-      preconditioned := false.B
-    }.elsewhen(precondition.orR) {
+    // The precondition is always the word's last UIs, after any running
+    // ones, so it wins: the clock is low again either way.
+    when(precondition.orR) {
       preconditioned := true.B
+    }.elsewhen(running.orR) {
+      preconditioned := false.B
     }
     when(io.in.valid && !inGap && io.gate && clocked.orR) {
       waking := true.B

@@ -177,7 +177,7 @@ object PhyTestRegLoopback {
       r.rxLfsrSeed(lane).poke(rxSeed(lane).U)
     }
     r.txValid.poke(validWord.U)
-    r.rxLfsrValid.poke(validWord.U)
+    r.rxValid.poke(validWord.U)
     r.txValidLaneSel.poke(Phy.defaultValidLaneSel(c.numLanes).U)
     r.rxValidLaneSel.poke(Phy.defaultValidLaneSel(c.numLanes).U)
     r.txClkP.poke(clkPWord.U)

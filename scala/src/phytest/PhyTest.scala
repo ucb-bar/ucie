@@ -112,7 +112,7 @@ class PhyTestRegsIO(
   // Every per-lane vector (pattern and capture SRAMs, bit error counters, LFSR
   // seeds) has `PhyTest.numTestLanes` entries: data `0` to `numLanes - 1`,
   // then valid, track, and loopback. Valid carries a repeating framing
-  // waveform, not a pattern: it is checked against `rxLfsrValid` and its LFSR
+  // waveform, not a pattern: it is checked against `rxValid` and its LFSR
   // seed slot is unused. Track is driven and scored like a data lane.
   // GENERAL CONTROL
   // =====================
@@ -158,7 +158,7 @@ class PhyTestRegsIO(
   val txClkP = Input(UInt(32.W))
   // Clock N signal.
   val txClkN = Input(UInt(32.W))
-  // Valid signal.
+  // Valid word in LFSR mode. Manual mode takes valid from the pattern SRAM.
   val txValid = Input(UInt(32.W))
   // Physical lane that sends valid, so a broken dedicated valid lane does not
   // stop a test: `0` to `numLanes - 1` for a data lane,
@@ -260,8 +260,9 @@ class PhyTestRegsIO(
   // `txLfsrSeed`. Should be the same as the TX seed of the transmitting chiplet.
   val rxLfsrSeed =
     Input(Vec(PhyTest.numTestLanes(numLanes), UInt((2 * Phy.SerdesRatio).W)))
-  // Expected valid signal in LFSR mode.
-  val rxLfsrValid = Input(UInt(32.W))
+  // Expected valid word: the partner's `txValid`. Valid is a fixed waveform,
+  // not an LFSR stream, in every mode but `rxManualCheck`.
+  val rxValid = Input(UInt(32.W))
   // Physical lane the RX watches for the edge that starts recording. Coded
   // like `txValidLaneSel` but set independently. It must match the lane the
   // partner die sends valid on.
@@ -361,7 +362,7 @@ class PhyTestRegsIO(
   // The loopback lane always starts on its first set bit.
   val rxValidStartThreshold = Input(UInt(log2Ceil(Phy.SerdesRatio + 1).W))
   // Processes only packets whose valid word (lane `rxValidLaneSel`) is closer
-  // to `rxLfsrValid` than to zero. Others are idle packets between bursts:
+  // to `rxValid` than to zero. Others are idle packets between bursts:
   // not counted, scored, captured, or folded into the signature. Needs a
   // valid waveform with bit 0 set, so the RX frames on the TX's packet
   // boundaries and no packet spans a burst edge. Ignored with
@@ -593,11 +594,11 @@ object PhyTest {
   val ClkPreconditionUi = 2
   require(ClkPreconditionUi >= 1 && ClkPreconditionUi <= 8)
 
-  /** `rxValidStartThreshold` out of reset: the length of the first run of set
-    * bits in the default valid waveform, `0x0f0f0f0f`. So a single bit error
-    * on an idle valid lane does not frame a run.
+  /** `rxValidStartThreshold` out of reset: start on the first set bit, so
+    * any valid waveform frames. Raise it (up to the waveform's first run, 4
+    * for `0x0f0f0f0f`) if a lone bit error on an idle valid lane frames runs.
     */
-  val rxValidStartThresholdReset = 4
+  val rxValidStartThresholdReset = 1
 
   /** Maximal period taps for [[LfsrWidth]], in LFSR convention (indexed from
     * one).
@@ -1842,7 +1843,7 @@ class PhyTest(
       val alignedValidWord = rxLaneWords(io.regs.rxValidLaneSel)
       val packetIsValid = !io.regs.rxBurstMode ||
         io.regs.testTarget === TestTarget.loopback ||
-        PopCount(alignedValidWord ^ io.regs.rxLfsrValid) <
+        PopCount(alignedValidWord ^ io.regs.rxValid) <
         PopCount(alignedValidWord)
       val shouldProcessPacket =
         fullPacketReceived && packetIsValid && (io.regs.rxDataMode === DataMode.infinite || rxPacketsReceived < io.regs.rxPacketsToReceive)
@@ -1909,11 +1910,11 @@ class PhyTest(
           // Scores a lane against the framing waveform instead of a pattern.
           def scoreAgainstValid(errIdx: Int): Unit = {
             rxErrorMask(PhyTest.NominalFraming)(errIdx) :=
-              newData(31, 0) ^ io.regs.rxLfsrValid
+              newData(31, 0) ^ io.regs.rxValid
             rxErrorMask(PhyTest.EarlyFraming)(errIdx) :=
-              newData(31, 0) ^ validRefAdvanced(io.regs.rxLfsrValid)
+              newData(31, 0) ^ validRefAdvanced(io.regs.rxValid)
             rxErrorMask(PhyTest.LateFraming)(errIdx) :=
-              newData(31, 0) ^ validRefDelayed(io.regs.rxLfsrValid)
+              newData(31, 0) ^ validRefDelayed(io.regs.rxValid)
           }
           if (lane == PhyTest.validLane(numLanes)) {
             // The dedicated valid lane always carries the framing waveform,

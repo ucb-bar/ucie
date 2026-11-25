@@ -1396,7 +1396,8 @@ manual_simple();
   * is made at a time. Checks:
   *  - each clock runs at its own registers' rate, whatever TX does;
   *  - the clock gate stops TX and nothing else;
-  *  - a PLL either clock divides stays on, whatever the rate table says;
+  *  - a PLL either clock divides follows its enable, so turning it off stops
+  *    that clock;
   *  - an apply holds a moved clock's gate shut until its PLL locks;
   *  - each domain still answers over MMIO, as software needs.
   * Rates and pauses (gaps far longer than any period) are read by hierarchical
@@ -1429,6 +1430,7 @@ begin : clk_src_sel
   // 2. The main clock onto PLL12 /2. The apply gates TX, and nothing else:
   // the PhyTest and sideband clocks neither pause nor change rate.
   clear_gaps();
+  set_clk_en(64'h1);
   set_main_clk(64'h1, 64'h1);
   expect_clks(0, 0, 1, "main clock onto PLL12 /2");
   expect_periods(1250.0, 1250.0, "PhyTest and sideband with the main clock moved");
@@ -1467,18 +1469,18 @@ begin : clk_src_sel
   expect_tx_period(250.0, "TX doubler /4 from the rate table");
 
   // 6. An entry that switches off PLL12, under the sideband. The apply
-  // finishes, and PLL12 stays on for the sideband, which keeps running.
+  // finishes and PLL12 turns off, as the entry says, so the sideband stops.
+  // Nothing touches the controller window meanwhile.
   set_rate_cfg(rate, 64'h2, 64'h2, 64'h5);
   clear_gaps();
   apply_clk_cfg();
   `EXPECT_UCIE_MSG(regDrv, `CLK_CFG_BUSY, 64'h0, "apply that switched off the sideband's PLL did not finish");
   #50000;
-  expect_clks(0, 0, 1, "PLL12 off in the entry, under the sideband");
-  if (`CLK_TILE.Pll12En !== 1'b1)
-    $fatal(1, "PLL12 was turned off under the sideband");
-  expect_periods(1000.0, 1250.0, "sideband still on PLL12 /15");
+  expect_clks(0, 1, 1, "PLL12 off in the entry, under the sideband");
+  if (`CLK_TILE.Pll12En !== 1'b0)
+    $fatal(1, "PLL12 stayed on against the rate table");
 
-  // 7. PLL12 back on in the entry, which changes nothing under either clock.
+  // 7. PLL12 back on in the entry, which restarts the sideband.
   set_rate_cfg(rate, 64'h2, 64'h2, 64'h7);
   clear_gaps();
   apply_clk_cfg();
@@ -2242,6 +2244,7 @@ begin : gated_bursts_program
   set_clk_en(64'h0);
   set_rx_clk_en(64'h0);
   `WRITE_UCIE(regDrv, `CLK_PHASE_SEL, phase);
+  apply_clk_cfg();
   reset_dividers();
   set_clk_en(64'h1);
   set_rx_clk_en(64'h1);
@@ -2663,9 +2666,9 @@ tl_long();
 /** Moves the PHY test and TX sideband clocks from their bypass pins onto the
   * PLL dividers, between PLLs, and back, the way bring-up does.
   *
-  * Covers: the gate each apply shuts across a switch; each PLL staying on
-  * while a divider uses it and turning off when none does; waiting for lock
-  * before a gate reopens; and each register block keeping its contents.
+  * Covers: the gate each apply shuts across a switch; each PLL following its
+  * enable, even under a divider that uses it; waiting for lock before a gate
+  * reopens; and each register block keeping its contents.
   *
   * Each apply must shut exactly the gates of the clocks it changes. Shuts are
   * counted, since a missing gate makes a runt pulse only if the switch falls
@@ -2722,37 +2725,55 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock on PLL12 / 15", p, 1250.0, fails);
 
-  // Turning both PLL enables off changes nothing under either clock, and
-  // leaves each PLL running for the clock that divides it.
+  // Both PLL enables off, under both dividers. The enables pass through, so
+  // both PLLs stop, and both clocks with them. Nothing touches either window
+  // while they are stopped. The pulse check is off meanwhile: a PLL that
+  // stops under an open gate may cut a pulse.
+  pulse_mon_en = 0;
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Turning both PLL enables off", 0, 0, fails);
-  if (`CLOCKING_TILE.Pll8En !== 1'b1 || `CLOCKING_TILE.Pll12En !== 1'b1) begin
-    $display("FAIL: a PLL was turned off under a divider");
+  if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
+  // And back on. No gate shut, so no apply waits for lock: wait here before
+  // touching either window.
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
+  apply_clk_cfg();
+  check_gate_shuts("Turning both PLL enables back on", 0, 0, fails);
+  cap = 0;
+  while (cap != 64'h3)
+    `READ_UCIE(regDrv, `PLL_LOCK_OBSERVED, cap);
+  #20000;
+  pulse_mon_en = 1;
+  `READ_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
   `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
-  `EXPECT_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
+  phytest_period(p);
+  check_period("PHY test clock on PLL8 / 8 again", p, 1000.0, fails);
 
   // TX sideband clock onto PLL8 / 10. Changing the PLL is a change under the
-  // clock, and PLL12, which nothing takes now, goes off.
+  // clock. PLL12, which nothing takes now, goes off in the same apply.
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h0);
   `WRITE_UCIE(regDrv, `SB_CLK_DIV, 64'h2);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Moving the TX sideband clock onto PLL8", 0, 1, fails);
   if (`CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: PLL12 stayed on with nothing using it");
+    $display("FAIL: PLL12 stayed on against its enable");
     fails = fails + 1;
   end
   `EXPECT_UCIE(regDrv, `PCIE_EXT_CAP_ID, cap);
   sb_period(p);
   check_period("TX sideband clock on PLL8 / 10", p, 1250.0, fails);
 
-  // Back onto PLL12 at the same /10, 1.2 GHz: a change of PLL alone, which
-  // this apply turns on again. The gate has to shut for it and stay shut until
-  // PLL12 locks, though PLL8 already has.
+  // Back onto PLL12 at the same /10, 1.2 GHz: a change of PLL alone, with
+  // PLL12 enabled in the same apply. The gate has to shut for it and stay
+  // shut until PLL12 locks, though PLL8 already has.
   `WRITE_UCIE(regDrv, `SB_CLK_SRC_SEL, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h1);
   apply_clk_cfg();
   check_gate_shuts("Moving the TX sideband clock back onto PLL12", 0, 1, fails);
   if (`CLOCKING_TILE.Pll12En !== 1'b1) begin
@@ -2763,9 +2784,11 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock on PLL12 / 10", p, 833.3, fails);
 
-  // Both back onto their bypass pins, after which nothing holds either PLL on.
+  // Both back onto their bypass pins, with both PLLs off in the same apply.
   `WRITE_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h1);
   `WRITE_UCIE(regDrv, `SB_CLK_BYPASS_EN, 64'h1);
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
+  `WRITE_UCIE(regDrv, `PLL12_EN, 64'h0);
   apply_clk_cfg();
   check_gate_shuts("Moving both back", 1, 1, fails);
   `EXPECT_UCIE(regDrv, `TX_DATA_CHUNK_IN0, 64'hdeadbeef);
@@ -2775,7 +2798,7 @@ begin : pll_clocking
   sb_period(p);
   check_period("TX sideband clock back on its bypass pin", p, 1250.0, fails);
   if (`CLOCKING_TILE.Pll8En !== 1'b0 || `CLOCKING_TILE.Pll12En !== 1'b0) begin
-    $display("FAIL: a PLL stayed on with nothing using it");
+    $display("FAIL: a PLL stayed on against its enable");
     fails = fails + 1;
   end
 
@@ -2961,6 +2984,9 @@ end
   *
   * `clkGateEdgeSel` is written first. It starts no apply; the first phase's
   * apply must take it to the tile.
+  *
+  * Then `clkPhaseAutoApply`: off (reset), a phase write waits for an apply;
+  * on, the write starts one by itself.
   */
 class TxPhaseTestDriver extends SVTestDriver {
   setStimulus(
@@ -2973,6 +2999,7 @@ begin : tx_phase
   fails = 0;
 
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
+  set_clk_en(64'h1);
   set_main_clk(3, 1);
   `WRITE_UCIE(regDrv, `CLK_GATE_EDGE_SEL, 64'h1);
   #20000;
@@ -3000,6 +3027,30 @@ begin : tx_phase
     $display("FAIL: the phase's apply did not carry clkGateEdgeSel");
     fails = fails + 1;
   end
+  // Auto-apply off: the write alone reaches nothing.
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h1);
+  #20000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd3) begin
+    $display("FAIL: a phase write reached the tile with auto-apply off");
+    fails = fails + 1;
+  end
+  // Auto-apply on: the pending phase applies, and so does the next write.
+  `WRITE_UCIE(regDrv, `CLK_PHASE_AUTO_APPLY, 64'h1);
+  #1000000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd1) begin
+    $display("FAIL: turning auto-apply on did not apply the pending phase");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `TX_CLK_PHASE, 64'h2);
+  #1000000;
+  `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
+  if (`CLOCKING_TILE.TxClkPhase !== 3'd2) begin
+    $display("FAIL: a phase write did not apply itself with auto-apply on");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `CLK_PHASE_AUTO_APPLY, 64'h0);
   if (fails != 0) $fatal(1, "%0d TX phase checks failed", fails);
 end
           """.trim,
@@ -3026,16 +3077,24 @@ begin : clk_manual
   integer fails;
   fails = 0;
 
-  // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off, which
-  // the FSM overrides while the divider takes it.
+  // FSM mode: the PHY test clock onto PLL8 / 8, then PLL8's enable off. The
+  // FSM passes the enable through, even with the divider on PLL8, and then
+  // back on.
   `WRITE_UCIE(regDrv, `UCIE_RST, 64'h0);
   use_internal_clk(0, 4);
   `WRITE_UCIE(regDrv, `PLL8_EN, 64'h0);
   apply_clk_cfg();
+  #10000;
+  if (`UCIE_CLK_REGS.io_pll8En !== 1'b0) begin
+    $display("FAIL: FSM mode kept PLL8 on against its enable");
+    fails = fails + 1;
+  end
+  `WRITE_UCIE(regDrv, `PLL8_EN, 64'h1);
+  apply_clk_cfg();
   `WRITE_UCIE(regDrv, `CLK_EN, 64'h1);
   #10000;
   if (`UCIE_CLK_REGS.io_pll8En !== 1'b1) begin
-    $display("FAIL: FSM mode turned PLL8 off under its divider");
+    $display("FAIL: FSM mode did not turn PLL8 back on");
     fails = fails + 1;
   end
 
@@ -3054,7 +3113,7 @@ begin : clk_manual
     fails = fails + 1;
   end
   check_outs(prev, "entering manual mode", fails);
-  // The registers read back what was driven, the keep-alive folded in.
+  // The registers read back what was driven.
   `EXPECT_UCIE(regDrv, `PLL8_EN, 64'h1);
   `EXPECT_UCIE(regDrv, `PHY_TEST_CLK_BYPASS_EN, 64'h0);
 
@@ -3086,8 +3145,14 @@ begin : clk_manual
   want = clk_outs(); want.clkPhaseSel = 64'h0; step(`CLK_PHASE_SEL, 0, want, "clkPhaseSel", fails);
   want = clk_outs(); want.clkGateEdgeSel = 1'b1;
   step(`CLK_GATE_EDGE_SEL, 1, want, "clkGateEdgeSel", fails);
-  // The UCIe reset alone, without the dividers; then each divider reset alone.
-  want = clk_outs(); want.ucieRst = 1'b1; step(`UCIE_RST, 1, want, "ucieRst", fails);
+  // The UCIe reset holds both divider resets, as in FSM mode; then each
+  // divider reset alone.
+  want = clk_outs(); want.ucieRst = 1'b1;
+  want.txDividerRstb = 1'b0; want.rxDividerRstb = 1'b0;
+  step(`UCIE_RST, 1, want, "ucieRst", fails);
+  want = clk_outs(); want.ucieRst = 1'b0;
+  want.txDividerRstb = 1'b1; want.rxDividerRstb = 1'b1;
+  step(`UCIE_RST, 0, want, "ucieRst release", fails);
   want = clk_outs(); want.txDividerRstb = 1'b0;
   step(`TX_DIVIDER_RST, 1, want, "txDividerRst", fails);
   want = clk_outs(); want.rxDividerRstb = 1'b0;
@@ -3096,7 +3161,6 @@ begin : clk_manual
   step(`TX_DIVIDER_RST, 0, want, "txDividerRst release", fails);
   want = clk_outs(); want.rxDividerRstb = 1'b1;
   step(`RX_DIVIDER_RST, 0, want, "rxDividerRst release", fails);
-  want = clk_outs(); want.ucieRst = 1'b0; step(`UCIE_RST, 0, want, "ucieRst release", fails);
   // The controller's clock handshake.
   want = clk_outs(); want.clksReady = ~want.clksReady;
   step(`MANUAL_CLKS_READY, want.clksReady, want, "manualClksReady", fails);
@@ -3139,6 +3203,8 @@ begin : clk_manual
   end
 
   // And the FSM runs again: an apply moves the TX division under the gate.
+  set_clk_en(64'h1);
+  #10000;
   main_gate_shuts = 0;
   set_main_clk(3, 0);
   `EXPECT_UCIE(regDrv, `CLK_CFG_BUSY, 64'h0);
