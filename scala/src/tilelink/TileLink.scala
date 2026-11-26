@@ -2723,9 +2723,9 @@ class UcieTL(
       regs.module.io.sbTlRxOverflow := sbTl.io.rxOverflow
 
       val rxABuffer =
-        Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
+        Module(new Queue(new UcieTLBundleA, params.tlBufferDepth))
       val rxDBuffer =
-        Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
+        Module(new Queue(new UcieTLBundleD, params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Only frames that carry something go in. The PHY end sends an idle
@@ -2798,13 +2798,13 @@ class UcieTL(
       clientTl.d.ready := txEnqReady && dAvail
       managerA.ready := txEnqReady && aAvail && !clientTl.d.valid
 
-      when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
+      when(rxABuffer.io.deq.fire) {
         aCreditsToReturn := aCreditsToReturn + 1.U
       }
       when(creditRetValid) {
         aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
       }
-      when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
+      when(rxDBuffer.io.deq.fire) {
         dCreditsToReturn := dCreditsToReturn + 1.U
       }
       when(creditRetValid) {
@@ -2894,10 +2894,14 @@ class UcieTL(
       )
 
       val tlBits = framedBits(framedBits.getWidth - 1, 1)
-      rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
-      rxDBuffer.io.enq.bits := tlBits.asTypeOf(rxDBuffer.io.enq.bits)
-      when(framedValid) {
-        when(framedBits.asUInt(0)) {
+      val rxIsD = framedBits.asUInt(0)
+      val rxFrameA = tlBits.asTypeOf(new UcieTXA(creditBits))
+      val rxFrameD = tlBits.asTypeOf(new UcieTXD(creditBits))
+      val rxTlValid = Mux(rxIsD, rxFrameD.tl_valid, rxFrameA.tl_valid)
+      rxABuffer.io.enq.bits := rxFrameA.tl
+      rxDBuffer.io.enq.bits := rxFrameD.tl
+      when(framedValid && rxTlValid) {
+        when(rxIsD) {
           rxDBuffer.io.enq.valid := true.B
         }.otherwise {
           rxABuffer.io.enq.valid := true.B
@@ -2906,30 +2910,28 @@ class UcieTL(
 
       clientTl.a <> rxABuffer.io.deq.map(bits => {
         val tlBundleA = Wire(chiselTypeOf(clientTl.a.bits))
-        tlBundleA.opcode := bits.tl.opcode
-        tlBundleA.param := bits.tl.param
-        tlBundleA.size := bits.tl.size
-        tlBundleA.address := bits.tl.address
-        tlBundleA.mask := bits.tl.mask
-        tlBundleA.data := bits.tl.data
-        tlBundleA.source := bits.tl.source
-        tlBundleA.corrupt := bits.tl.corrupt
+        tlBundleA.opcode := bits.opcode
+        tlBundleA.param := bits.param
+        tlBundleA.size := bits.size
+        tlBundleA.address := bits.address
+        tlBundleA.mask := bits.mask
+        tlBundleA.data := bits.data
+        tlBundleA.source := bits.source
+        tlBundleA.corrupt := bits.corrupt
         tlBundleA
       })
-      clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
       val rxD = rxDBuffer.io.deq.map(bits => {
         val tlBundleD = Wire(chiselTypeOf(managerPort.d.bits))
-        tlBundleD.opcode := bits.tl.opcode
-        tlBundleD.param := bits.tl.param
-        tlBundleD.size := bits.tl.size
-        tlBundleD.data := bits.tl.data
-        tlBundleD.source := bits.tl.source
-        tlBundleD.sink := bits.tl.sink
-        tlBundleD.denied := bits.tl.denied
-        tlBundleD.corrupt := bits.tl.corrupt
+        tlBundleD.opcode := bits.opcode
+        tlBundleD.param := bits.param
+        tlBundleD.size := bits.size
+        tlBundleD.data := bits.data
+        tlBundleD.source := bits.source
+        tlBundleD.sink := bits.sink
+        tlBundleD.denied := bits.denied
+        tlBundleD.corrupt := bits.corrupt
         tlBundleD
       })
-      rxD.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
       val managerD = params.managerBuffer(rxD)
       managerPort.d <> managerD
       dontTouch(managerPort.d.bits.opcode)
@@ -3022,21 +3024,16 @@ class UcieTL(
         phy.io.tx.clkn := regs.module.io.test.txClkN
       }
 
-      val creditAValid =
-        rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
-      val creditDValid =
-        rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
+      val rxCreditValid =
+        framedValid && Mux(rxIsD, rxFrameD.credit_valid, rxFrameA.credit_valid)
 
       val aCreditCounter = Module(
         new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
       )
       aCreditCounter.io.used := managerA.fire
-      aCreditCounter.io.ret.valid := creditAValid || creditDValid
-      aCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_a,
-        rxDBuffer.io.deq.bits.credit_a
-      )
+      aCreditCounter.io.ret.valid := rxCreditValid
+      aCreditCounter.io.ret.bits :=
+        Mux(rxIsD, rxFrameD.credit_a, rxFrameA.credit_a)
       aCreditCounter.io.mode := regs.module.io.creditFlowEnable
       aAvail := aCreditCounter.io.avail
 
@@ -3044,12 +3041,9 @@ class UcieTL(
         new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
       )
       dCreditCounter.io.used := clientTl.d.fire
-      dCreditCounter.io.ret.valid := creditAValid || creditDValid
-      dCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_d,
-        rxDBuffer.io.deq.bits.credit_d
-      )
+      dCreditCounter.io.ret.valid := rxCreditValid
+      dCreditCounter.io.ret.bits :=
+        Mux(rxIsD, rxFrameD.credit_d, rxFrameA.credit_d)
       dCreditCounter.io.mode := regs.module.io.creditFlowEnable
       dAvail := dCreditCounter.io.avail
     }
