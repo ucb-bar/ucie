@@ -18,8 +18,8 @@ class TxQueueWord(numLanes: Int) extends Bundle {
 
 /** Puts a word on the TX lanes every packet, for whichever controller drives
   * them: the controller's next queued word if one is waiting and nothing else
-  * is due, otherwise a word of its own. Controllers queue only words that
-  * carry something, so nothing waits behind idle words.
+  * is due, otherwise a word of its own. Controllers queue only words that carry
+  * something, so nothing waits behind idle words.
   *
   * Its own words carry `fill` on the data, valid and track lanes and
   * `clkP`/`clkN` on the clock lanes. With `gate` set, the clock runs only
@@ -27,32 +27,32 @@ class TxQueueWord(numLanes: Int) extends Bundle {
   *
   *   - After a queued word it runs for `postamble` units of
   *     `PhyTest.ClkPostambleUi` UI, then parks.
-  *   - A park holds each lane's UI 1 level (with the usual patterns, P low
-  *     and N high: differential low). With `parkAlternate`, every other park
-  *     holds the UI 0 level (differential high).
+  *   - A park holds each lane's UI 1 level (with the usual patterns, P low and
+  *     N high: differential low). With `parkAlternate`, every other park holds
+  *     the UI 0 level (differential high).
   *   - A high park holds the postamble's last rising edge through the UI it
-  *     would fall on. That falling edge goes out `PhyTest.ClkPreconditionUi`
-  *     UI before the clock restarts instead. So every gap has exactly the
+  *     would fall on. That falling edge goes out `PhyTest.ClkPreconditionUi` UI
+  *     before the clock restarts instead. So every gap has exactly the
   *     postamble's edges, and the far RX's word boundary stays put when the
   *     postamble is a whole word.
   *   - After a park, `preamble` words of running clock precede data.
   *
-  * Queued words go out unchanged, clock lanes included, so a controller's
-  * own clock patterns pass through. A park right after a queued word
-  * (`postamble` = 0) or caused by the queue running dry stays low, since a
-  * high park would change the last word's last UI.
+  * Queued words go out unchanged, clock lanes included, so a controller's own
+  * clock patterns pass through. A park right after a queued word (`postamble` =
+  * 0) or caused by the queue running dry stays low, since a high park would
+  * change the last word's last UI.
   *
   * Gaps:
   *   - After a word with `gapAfter`: exactly `idlePackets` own words, with the
   *     preamble in the last of them and a precondition in the one before.
-  *   - Otherwise, while the queue is empty. The clock starts only once the
-  *     next word is there, so after a high park one word goes out first just
-  *     for the precondition.
+  *   - Otherwise, while the queue is empty. The clock starts only once the next
+  *     word is there, so after a high park one word goes out first just for the
+  *     precondition.
   *
   * Settings other than `gate` are quasi-static, read each packet: change them
   * only while the queue is empty and no gap is running. `gate` may change any
-  * time and applies from the next word. Runs on the TX divided clock, one
-  * word per cycle.
+  * time and applies from the next word. Runs on the TX divided clock, one word
+  * per cycle.
   */
 class TxClkGater(numLanes: Int) extends Module {
   val io = IO(new Bundle {

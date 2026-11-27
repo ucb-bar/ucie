@@ -89,7 +89,8 @@ class CodegenSpec extends AnyFunSpec {
     }
     it("should reject two fields that get one name") {
       // `rst` and `ucieRst` both become `UCIE_RST`.
-      val defines = f.formatDefine("rst", "0x0") + f.formatDefine("ucieRst", "0x8")
+      val defines =
+        f.formatDefine("rst", "0x0") + f.formatDefine("ucieRst", "0x8")
       val e = intercept[IllegalArgumentException] {
         Codegen.requireUniqueDefines(defines)
       }

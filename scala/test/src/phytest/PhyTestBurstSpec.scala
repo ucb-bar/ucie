@@ -204,7 +204,9 @@ class PhyTestBurstSpec extends AnyFunSpec with ChiselSim {
       result
     }
 
-    it("should keep every gap to txIdlePackets when the postamble ends mid-gap") {
+    it(
+      "should keep every gap to txIdlePackets when the postamble ends mid-gap"
+    ) {
       // A 16 UI postamble ends halfway through the one gap word. On a high
       // park, the precondition goes out in that same word. No gap may grow.
       val (burst, idle, packets) = (2, 1, 12)

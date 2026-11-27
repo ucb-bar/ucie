@@ -389,7 +389,8 @@ class PhyTestFramingSpec extends AnyFunSpec with ChiselSim {
       // word after it.
       for (glitch <- Seq(BigInt(1) << 8, BigInt(3) << 30)) {
         withClue(f"glitch $glitch%08x: ") {
-          val r = run(dataDelay = false, alignedValid, threshold = 4, glitch = glitch)
+          val r =
+            run(dataDelay = false, alignedValid, threshold = 4, glitch = glitch)
           assert(r.frameOffset == 0)
           assertClean(r)
         }

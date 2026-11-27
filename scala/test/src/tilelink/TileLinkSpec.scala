@@ -634,9 +634,9 @@ class MmioSimpleTestDriver extends SVTestDriver {
   )
 }
 
-/** Quickly checks two things training depends on that the Verilator tests and
-  * a single `run_lfsr` miss: every packet of a run is counted, and a lane
-  * reads clean after its delay moves across the eye and back.
+/** Quickly checks two things training depends on that the Verilator tests and a
+  * single `run_lfsr` miss: every packet of a run is counted, and a lane reads
+  * clean after its delay moves across the eye and back.
   *
   * Takes about three minutes against `models/eye`; the full sweep takes fifty.
   */
@@ -800,10 +800,10 @@ end
   * coarse phase shifter is needed.
   *
   * The global delay line covers 64 ps: a whole UI at 16 GT/s but only about
-  * half of one at 8, so below the top rate it cannot cross an eye alone. The phase
-  * shifter moves TXCLKQ in main clock half cycles (62.5 ps at 8 GHz), within
-  * the line's range, so together they reach any point in a UI. The shifter
-  * sets the coarse position and the line sweeps within it.
+  * half of one at 8, so below the top rate it cannot cross an eye alone. The
+  * phase shifter moves TXCLKQ in main clock half cycles (62.5 ps at 8 GHz),
+  * within the line's range, so together they reach any point in a UI. The
+  * shifter sets the coarse position and the line sweeps within it.
   *
   * A point is open when every data lane is clean on at least one of its three
   * framings, since at an arbitrary phase the RX may frame a UI early or late.
@@ -1105,9 +1105,9 @@ endtask
   * of 14 taps (15.2 ps) on the global delay line (64 taps, about 69 ps) leave
   * 17 ps to the next coarse position: one grid of about 15.6 ps with no gaps.
   *
-  * The main clock must stay fast, since a coarse step is half its period.
-  * 4 GHz /2 gives 125 ps steps the line cannot span, skipping half of every UI.
-  * The eye models' closed region around a transition is narrower than one fine
+  * The main clock must stay fast, since a coarse step is half its period. 4 GHz
+  * /2 gives 125 ps steps the line cannot span, skipping half of every UI. The
+  * eye models' closed region around a transition is narrower than one fine
   * step, so such gaps can miss both edges and read open everywhere.
   */
 class EyeLowRateDividerTestDriver extends SVTestDriver {
@@ -1173,10 +1173,10 @@ end
 /** Why the coarse eye reads nothing at /2.
   *
   * The eye sweep reports only open points, so it cannot tell a closed eye from
-  * packets that never arrive. This prints, at each phase of the same two
-  * rates, packets counted vs. sent and each lane's framing. A mis-sampled link
-  * counts packets and scores them dirty; a dead link counts nothing. A few
-  * bursts each, so it takes minutes, not the full sweep's twenty.
+  * packets that never arrive. This prints, at each phase of the same two rates,
+  * packets counted vs. sent and each lane's framing. A mis-sampled link counts
+  * packets and scores them dirty; a dead link counts nothing. A few bursts
+  * each, so it takes minutes, not the full sweep's twenty.
   */
 /** The link carries clean traffic at every clock division.
   *
@@ -1186,8 +1186,8 @@ end
   * `wait_for_packets`, making a working link look broken: a short receive
   * scored like a dead lane, or an RX that missed the idle-to-valid transition
   * and aligned mid-pattern. The eye sweeps take twenty minutes a rate and
-  * cannot tell a mis-sampled link from a silent one; this checks every
-  * division in minutes.
+  * cannot tell a mis-sampled link from a silent one; this checks every division
+  * in minutes.
   */
 class RateSweepTestDriver extends SVTestDriver {
   setStimulus(
@@ -1394,12 +1394,12 @@ manual_simple();
   *
   * Both clocks move from their bypass pins onto divided PLLs, then one change
   * is made at a time. Checks:
-  *  - each clock runs at its own registers' rate, whatever TX does;
-  *  - the clock gate stops TX and nothing else;
-  *  - a PLL either clock divides follows its enable, so turning it off stops
-  *    that clock;
-  *  - an apply holds a moved clock's gate shut until its PLL locks;
-  *  - each domain still answers over MMIO, as software needs.
+  *   - each clock runs at its own registers' rate, whatever TX does;
+  *   - the clock gate stops TX and nothing else;
+  *   - a PLL either clock divides follows its enable, so turning it off stops
+  *     that clock;
+  *   - an apply holds a moved clock's gate shut until its PLL locks;
+  *   - each domain still answers over MMIO, as software needs.
   * Rates and pauses (gaps far longer than any period) are read by hierarchical
   * name off the clocking tile, since the register map shows neither.
   */
@@ -1672,12 +1672,12 @@ manual_loopback();
   * the harness loops back to the RX valid bump. A port is sampled on its
   * clock's edge, so a word shows at the edge that takes it.
   *
-  * The postamble a gated burst needs depends on where its last data UI falls
-  * in the RX word, which every partial postamble moves. So each point realigns
-  * the dividers, shifts the RX word boundary `offset` UI with a run whose
-  * postamble is `offset` UI, then measures. Done at every even offset, on the
-  * RX lanes' default and backup (`sample_negedge`) handoff edges, and in
-  * manual mode at the worst offset.
+  * The postamble a gated burst needs depends on where its last data UI falls in
+  * the RX word, which every partial postamble moves. So each point realigns the
+  * dividers, shifts the RX word boundary `offset` UI with a run whose postamble
+  * is `offset` UI, then measures. Done at every even offset, on the RX lanes'
+  * default and backup (`sample_negedge`) handoff edges, and in manual mode at
+  * the worst offset.
   */
 class PhyTestLatencyTestDriver extends SVTestDriver {
   override def timeoutCycles = 4000000
@@ -2039,8 +2039,8 @@ class PhyTestQueueCapTestDriver extends SVTestDriver {
 /** With the PHY test clock at the packet clock, 500 MHz each at 16 GT/s, as on
   * the Iris harness and on silicon with a 1 GHz PHY test clock at 32 GT/s.
   * PhyTest then cannot run ahead to make up a cycle the cap cost it, so a cap
-  * needs the most room here: 10 is the least that holds over a long run, 8
-  * runs the queue dry, and the reset value of 16 must hold with margin.
+  * needs the most room here: 10 is the least that holds over a long run, 8 runs
+  * the queue dry, and the reset value of 16 must hold with margin.
   */
 class PhyTestQueueCapEqualRateTestDriver extends SVTestDriver {
   override def digitalBypassHalfPeriodPs: Double = 1000.0
@@ -2366,11 +2366,11 @@ class TlSimpleSlowLinkTestDriver extends SVTestDriver {
   )
 }
 
-/** `align_rx_words` puts the RX words on the TX boundary, so a run frames at
-  * UI 0. Then data lane 0 is delayed `d` UI at the RX and every other lane
-  * (valid and track included) `d` UI at the TX. Every lane must arrive
-  * together, read clean, and frame `d` UI into the word. The largest `d` is
-  * odd and over a word, so every stage of both shifters moves.
+/** `align_rx_words` puts the RX words on the TX boundary, so a run frames at UI
+  * 0. Then data lane 0 is delayed `d` UI at the RX and every other lane (valid
+  * and track included) `d` UI at the TX. Every lane must arrive together, read
+  * clean, and frame `d` UI into the word. The largest `d` is odd and over a
+  * word, so every stage of both shifters moves.
   */
 class UiDelayTestDriver extends SVTestDriver {
   val rxLanes =
@@ -2438,14 +2438,14 @@ tl_sideband();
   * own counters, so one pass trains them all.
   *
   * FRAMING: valid is not swept with the data lanes. The receiver frames every
-  * lane on valid's edge, so moving valid with the lanes measures nothing, and
-  * a bad pair never aligns, which reads as every lane receiving nothing. With
+  * lane on valid's edge, so moving valid with the lanes measures nothing, and a
+  * bad pair never aligns, which reads as every lane receiving nothing. With
   * valid held still, a lane that slips a UI has slipped relative to valid.
   * `PhyTest` also scores each capture framed a UI early and late, so the three
   * counters separate wrong data from a one UI slip. Only the nominal counter
   * defines the eye; counting a slipped UI would merge two adjacent UI into one
-  * opening. The sweep reports where the other two mattered. Valid itself is
-  * not trained, since it cannot be scored against its own framing.
+  * opening. The sweep reports where the other two mattered. Valid itself is not
+  * trained, since it cannot be scored against its own framing.
   *
   * Both sweeps must find a bounded run. The test fails if every code works,
   * because a model with no wrong answer does not model what is being trained.
@@ -2455,8 +2455,8 @@ tl_sideband();
   * The pattern and scoring come from `PhyTest`, which `setup_ucie` selects as
   * the controller, since it has the per-lane bit error counters. The LTSM does
   * not yet program either code: `PhyLaneTrainer` reports every calibration
-  * state complete without running one. Moving this sweep behind the LTSM
-  * means giving that module the registers to drive.
+  * state complete without running one. Moving this sweep behind the LTSM means
+  * giving that module the registers to drive.
   */
 class TrainMainbandTestDriver extends SVTestDriver {
   setStimulus(
@@ -2845,8 +2845,8 @@ end
   * A shut gate holds its clock high (the gated clock is inverted on its way
   * out) and passes no edges, and the register block behind it resumes when it
   * opens. Then, with `clkCfgGatePhyTest` off, software shuts the gate itself
-  * for a switch; the apply must leave it shut so software can wait for PLL8
-  * to lock before letting the new clock out.
+  * for a switch; the apply must leave it shut so software can wait for PLL8 to
+  * lock before letting the new clock out.
   */
 class ClkEnTestDriver extends SVTestDriver {
   setStimulus(
@@ -3029,18 +3029,18 @@ end
 
 /** Steps the TX quadrature clock's coarse phase at /2 off an 8 GHz main clock.
   *
-  * The span is four half cycles, so each step should move TXCLKQ's edge
-  * 62.5 ps earlier relative to TXCLK, modulo the 250 ps TX period. Each phase
-  * has its own apply, which restarts the TX dividers under the gate, so this
-  * also checks the restart gives the requested phase, not one a main clock
-  * period off.
+  * The span is four half cycles, so each step should move TXCLKQ's edge 62.5 ps
+  * earlier relative to TXCLK, modulo the 250 ps TX period. Each phase has its
+  * own apply, which restarts the TX dividers under the gate, so this also
+  * checks the restart gives the requested phase, not one a main clock period
+  * off.
   *
   * `clkGateEdgeSel` is written first. It starts no apply; the first phase's
   * apply must take it to the tile.
   *
-  * Then `clkPhaseAutoApply`: off (reset), a phase write waits for an apply;
-  * on, the write starts one by itself. Last, a longer `clkCfgGateDwell` holds
-  * the phase back until it ends.
+  * Then `clkPhaseAutoApply`: off (reset), a phase write waits for an apply; on,
+  * the write starts one by itself. Last, a longer `clkCfgGateDwell` holds the
+  * phase back until it ends.
   */
 class TxPhaseTestDriver extends SVTestDriver {
   setStimulus(
@@ -3384,9 +3384,9 @@ endtask
   * fast dividers (a /5 is high 2 source cycles of 5, a /3 high 1 of 3), and
   * both cells invert their output. So `PhyTestClk` at /15 is high 9 of 15, and
   * `SbClk` is high 3 of 5 at /5 and 10 of 15 at /15. Even ratios end in a /2
-  * and are 50%. The analog bypass pin runs at 5 GHz, neither PLL's rate, so
-  * the right period shows the select took the pin. With both clocks on the
-  * pin and both PLLs off, an apply finishes with no PLL locked.
+  * and are 50%. The analog bypass pin runs at 5 GHz, neither PLL's rate, so the
+  * right period shows the select took the pin. With both clocks on the pin and
+  * both PLLs off, an apply finishes with no PLL locked.
   */
 class DividerDutyTestDriver extends SVTestDriver {
 
@@ -3589,8 +3589,8 @@ endfunction
   }
 }
 
-/** Register accesses through a harness's tester, with the harness clock and
-  * the register blocks' PHY clocks all running.
+/** Register accesses through a harness's tester, with the harness clock and the
+  * register blocks' PHY clocks all running.
   *
   * The tester, the bus side of the register crossings and the clock register
   * block run on the harness clock. The PhyTest and controller blocks run on the

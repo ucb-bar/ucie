@@ -103,12 +103,11 @@ case class UcieTLParams(
   /** Suffix appended to the module names of this instance.
     *
     * Instances with the same parameters elaborate to the same hardware, so
-    * Chisel puts them in one dedup group (the proposed module name) and
-    * firtool emits one SystemVerilog module. That is right when they are
-    * hardened together. When physical design needs one module per instance
-    * (e.g. different orientations, hardened separately), different
-    * `moduleId`s split the groups and keep the hierarchies apart. Id 0 keeps
-    * the unsuffixed name.
+    * Chisel puts them in one dedup group (the proposed module name) and firtool
+    * emits one SystemVerilog module. That is right when they are hardened
+    * together. When physical design needs one module per instance (e.g.
+    * different orientations, hardened separately), different `moduleId`s split
+    * the groups and keep the hierarchies apart. Id 0 keeps the unsuffixed name.
     */
   def moduleSuffix: String = if (moduleId == 0) "" else s"_$moduleId"
   // Width of the credit fields carried alongside every framed TL packet.
@@ -256,10 +255,10 @@ object UcieTLRegs {
 /** Clock source controls, on their own clock.
   *
   * These choose where the PHY's clocks come from, so they cannot run on one of
-  * them: at power up nothing would run until they are set. They run on the
-  * chip clock, which runs before any PHY clock. This is a separate block, not
-  * an extra domain in another, because most registers belong on the clock of
-  * the logic they control.
+  * them: at power up nothing would run until they are set. They run on the chip
+  * clock, which runs before any PHY clock. This is a separate block, not an
+  * extra domain in another, because most registers belong on the clock of the
+  * logic they control.
   *
   * The selects need no synchronizer: they settle during bring-up while the
   * clocks they steer are quiet.
@@ -1061,7 +1060,10 @@ class UcieClkRegs(
       Mux(manual, manualClksReadyFreqSel, fsmClksReadyFreqSel),
       0.U
     )
-    io.clksUngated := flop(Mux(manual, manualClksUngated, fsmClksUngated), false.B)
+    io.clksUngated := flop(
+      Mux(manual, manualClksUngated, fsmClksUngated),
+      false.B
+    )
 
     // Each PLL's loop state, through two flops per bit. The codes move while
     // the PLL runs, so a read can mix two consecutive values.
@@ -1241,8 +1243,8 @@ object UcieClkRegs {
   val defaultGateDwell = 32
 
   /** Cycles between the TX dividers' release and the TX gate opening on them:
-    * the release crossing its flop here, then the dividers' own synchronizer
-    * on the main clock, with room to spare.
+    * the release crossing its flop here, then the dividers' own synchronizer on
+    * the main clock, with room to spare.
     */
   val clkGenRstDwell = 4
 
@@ -1259,8 +1261,8 @@ object UcieClkRegs {
     */
   val maxPhaseSel = (BigInt(1) << ClockingTile.phaseSelWidth) - 1
 
-  /** Default count for `ClkUngateSrc.delay`. Sized to clear a PLL wake-up
-    * with margin at any plausible chip clock.
+  /** Default count for `ClkUngateSrc.delay`. Sized to clear a PLL wake-up with
+    * margin at any plausible chip clock.
     */
   val defaultUngateDelay = 1024
 
@@ -2080,23 +2082,22 @@ object UcieController {
 object UcieTL {
   val dataBits = 256
 
-  /** Width of the register port and every register block behind it, except
-    * the mainband's. The registers are 64 bits apart, and a narrower port keeps
-    * the async queues into the PHY test and TX sideband clocks small.
+  /** Width of the register port and every register block behind it, except the
+    * mainband's. The registers are 64 bits apart, and a narrower port keeps the
+    * async queues into the PHY test and TX sideband clocks small.
     */
   val regBeatBytes = 8
 
   /** Register port requests in flight at once: the source IDs its shrinker
     * hands out, and so the flight bits its FIFO fixer keeps.
     *
-    * The clock registers answer in the same cycle and the shrinker can reuse
-    * an ID the next cycle, so one in flight gives a request per cycle. The
-    * PhyTest and controller blocks are behind one-entry async queues
-    * (`regXing`) that pass a request every ~7 chip cycles against a ~8 cycle
-    * round trip, so two keep them full. The fixer allows only one block in
-    * flight at a time, so two would do; four adds margin on those estimates.
-    * More than one in flight happens only when several masters access the
-    * registers at once.
+    * The clock registers answer in the same cycle and the shrinker can reuse an
+    * ID the next cycle, so one in flight gives a request per cycle. The PhyTest
+    * and controller blocks are behind one-entry async queues (`regXing`) that
+    * pass a request every ~7 chip cycles against a ~8 cycle round trip, so two
+    * keep them full. The fixer allows only one block in flight at a time, so
+    * two would do; four adds margin on those estimates. More than one in flight
+    * happens only when several masters access the registers at once.
     */
   val regsInFlight = 4
 
@@ -2723,9 +2724,9 @@ class UcieTL(
       regs.module.io.sbTlRxOverflow := sbTl.io.rxOverflow
 
       val rxABuffer =
-        Module(new Queue(new UcieTXA(creditBits), params.tlBufferDepth))
+        Module(new Queue(new UcieTLBundleA, params.tlBufferDepth))
       val rxDBuffer =
-        Module(new Queue(new UcieTXD(creditBits), params.tlBufferDepth))
+        Module(new Queue(new UcieTLBundleD, params.tlBufferDepth))
       val txTlFifo =
         Module(new AsyncQueue(new TxIO(params.numLanes), params.queueParams))
       // Only frames that carry something go in. The PHY end sends an idle
@@ -2798,13 +2799,13 @@ class UcieTL(
       clientTl.d.ready := txEnqReady && dAvail
       managerA.ready := txEnqReady && aAvail && !clientTl.d.valid
 
-      when(rxABuffer.io.deq.fire && rxABuffer.io.deq.bits.tl_valid) {
+      when(rxABuffer.io.deq.fire) {
         aCreditsToReturn := aCreditsToReturn + 1.U
       }
       when(creditRetValid) {
         aCreditsToReturn := Mux(rxABuffer.io.deq.fire, 1.U, 0.U)
       }
-      when(rxDBuffer.io.deq.fire && rxDBuffer.io.deq.bits.tl_valid) {
+      when(rxDBuffer.io.deq.fire) {
         dCreditsToReturn := dCreditsToReturn + 1.U
       }
       when(creditRetValid) {
@@ -2845,7 +2846,9 @@ class UcieTL(
         val primed = RegInit(false.B)
         when(rxTlFifo.io.enq.ready) { primed := true.B }
         val flag = RegInit(false.B)
-        when(selMbTl && selectedSinceReset && primed && !rxTlFifo.io.enq.ready) {
+        when(
+          selMbTl && selectedSinceReset && primed && !rxTlFifo.io.enq.ready
+        ) {
           flag := true.B
         }
         flag
@@ -2894,10 +2897,14 @@ class UcieTL(
       )
 
       val tlBits = framedBits(framedBits.getWidth - 1, 1)
-      rxABuffer.io.enq.bits := tlBits.asTypeOf(rxABuffer.io.enq.bits)
-      rxDBuffer.io.enq.bits := tlBits.asTypeOf(rxDBuffer.io.enq.bits)
-      when(framedValid) {
-        when(framedBits.asUInt(0)) {
+      val rxIsD = framedBits.asUInt(0)
+      val rxFrameA = tlBits.asTypeOf(new UcieTXA(creditBits))
+      val rxFrameD = tlBits.asTypeOf(new UcieTXD(creditBits))
+      val rxTlValid = Mux(rxIsD, rxFrameD.tl_valid, rxFrameA.tl_valid)
+      rxABuffer.io.enq.bits := rxFrameA.tl
+      rxDBuffer.io.enq.bits := rxFrameD.tl
+      when(framedValid && rxTlValid) {
+        when(rxIsD) {
           rxDBuffer.io.enq.valid := true.B
         }.otherwise {
           rxABuffer.io.enq.valid := true.B
@@ -2906,30 +2913,28 @@ class UcieTL(
 
       clientTl.a <> rxABuffer.io.deq.map(bits => {
         val tlBundleA = Wire(chiselTypeOf(clientTl.a.bits))
-        tlBundleA.opcode := bits.tl.opcode
-        tlBundleA.param := bits.tl.param
-        tlBundleA.size := bits.tl.size
-        tlBundleA.address := bits.tl.address
-        tlBundleA.mask := bits.tl.mask
-        tlBundleA.data := bits.tl.data
-        tlBundleA.source := bits.tl.source
-        tlBundleA.corrupt := bits.tl.corrupt
+        tlBundleA.opcode := bits.opcode
+        tlBundleA.param := bits.param
+        tlBundleA.size := bits.size
+        tlBundleA.address := bits.address
+        tlBundleA.mask := bits.mask
+        tlBundleA.data := bits.data
+        tlBundleA.source := bits.source
+        tlBundleA.corrupt := bits.corrupt
         tlBundleA
       })
-      clientTl.a.valid := rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.tl_valid
       val rxD = rxDBuffer.io.deq.map(bits => {
         val tlBundleD = Wire(chiselTypeOf(managerPort.d.bits))
-        tlBundleD.opcode := bits.tl.opcode
-        tlBundleD.param := bits.tl.param
-        tlBundleD.size := bits.tl.size
-        tlBundleD.data := bits.tl.data
-        tlBundleD.source := bits.tl.source
-        tlBundleD.sink := bits.tl.sink
-        tlBundleD.denied := bits.tl.denied
-        tlBundleD.corrupt := bits.tl.corrupt
+        tlBundleD.opcode := bits.opcode
+        tlBundleD.param := bits.param
+        tlBundleD.size := bits.size
+        tlBundleD.data := bits.data
+        tlBundleD.source := bits.source
+        tlBundleD.sink := bits.sink
+        tlBundleD.denied := bits.denied
+        tlBundleD.corrupt := bits.corrupt
         tlBundleD
       })
-      rxD.valid := rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.tl_valid
       val managerD = params.managerBuffer(rxD)
       managerPort.d <> managerD
       dontTouch(managerPort.d.bits.opcode)
@@ -3022,21 +3027,16 @@ class UcieTL(
         phy.io.tx.clkn := regs.module.io.test.txClkN
       }
 
-      val creditAValid =
-        rxABuffer.io.deq.valid && rxABuffer.io.deq.bits.credit_valid
-      val creditDValid =
-        rxDBuffer.io.deq.valid && rxDBuffer.io.deq.bits.credit_valid
+      val rxCreditValid =
+        framedValid && Mux(rxIsD, rxFrameD.credit_valid, rxFrameA.credit_valid)
 
       val aCreditCounter = Module(
         new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
       )
       aCreditCounter.io.used := managerA.fire
-      aCreditCounter.io.ret.valid := creditAValid || creditDValid
-      aCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_a,
-        rxDBuffer.io.deq.bits.credit_a
-      )
+      aCreditCounter.io.ret.valid := rxCreditValid
+      aCreditCounter.io.ret.bits :=
+        Mux(rxIsD, rxFrameD.credit_a, rxFrameA.credit_a)
       aCreditCounter.io.mode := regs.module.io.creditFlowEnable
       aAvail := aCreditCounter.io.avail
 
@@ -3044,12 +3044,9 @@ class UcieTL(
         new CreditCounter(params.creditCounterSize, params.tlBufferDepth)
       )
       dCreditCounter.io.used := clientTl.d.fire
-      dCreditCounter.io.ret.valid := creditAValid || creditDValid
-      dCreditCounter.io.ret.bits := Mux(
-        creditAValid,
-        rxABuffer.io.deq.bits.credit_d,
-        rxDBuffer.io.deq.bits.credit_d
-      )
+      dCreditCounter.io.ret.valid := rxCreditValid
+      dCreditCounter.io.ret.bits :=
+        Mux(rxIsD, rxFrameD.credit_d, rxFrameA.credit_d)
       dCreditCounter.io.mode := regs.module.io.creditFlowEnable
       dAvail := dCreditCounter.io.avail
     }
