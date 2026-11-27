@@ -353,7 +353,10 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
       assert(seed.testBit(PhyTest.LfsrWidth - 1))
       val (received, errors) = runLfsr(seed)
       assert(received >= 16, s"only $received packets received")
-      assert(errors.head == 0, s"${errors.head} bit errors over $received packets")
+      assert(
+        errors.head == 0,
+        s"${errors.head} bit errors over $received packets"
+      )
     }
 
     it("should misframe a seeded LFSR run whose seed starts with zeros") {
@@ -372,7 +375,10 @@ class PhyTestLoopbackSpec extends AnyFunSpec with ChiselSim {
       val seed = BigInt("0123456789abcdef", 16) + loopbackLane * 0x1111
       val (received, errors) = runLfsr(seed, autoSeed = true)
       assert(received >= 16, s"only $received packets received")
-      assert(errors.head == 0, s"${errors.head} bit errors over $received packets")
+      assert(
+        errors.head == 0,
+        s"${errors.head} bit errors over $received packets"
+      )
     }
   }
 }

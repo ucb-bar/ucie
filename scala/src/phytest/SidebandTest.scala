@@ -47,8 +47,8 @@ class SidebandTestIO extends Bundle {
   val regs = new SidebandTestRegsIO
 
   /** Low while another block owns the sideband bumps. Holds the tester's link
-    * in reset, so it does not drive the bumps or turn that block's traffic
-    * into bogus packets.
+    * in reset, so it does not drive the bumps or turn that block's traffic into
+    * bogus packets.
     */
   val en = Input(Bool())
 

@@ -10,8 +10,8 @@ import edu.berkeley.cs.uciedigital.phy.macros._
 import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
 /** What a band carries while PhyTest is the selected controller. The mainband
-  * and the sideband each have one, so either can carry TileLink while the
-  * other stays under test control.
+  * and the sideband each have one, so either can carry TileLink while the other
+  * stays under test control.
   */
 object BandMode extends ChiselEnum {
 
@@ -594,9 +594,9 @@ object PhyTest {
   val DebugBufferPackets = 32
 
   /** Every lane's TX and RX LFSR seed out of reset, and what the generated
-    * `seed_lfsrs` writes back. Each lane differs. With one seed everywhere,
-    * all lanes switch together (the worst case for supply noise and
-    * crosstalk), and lanes swapped between the TX and the RX read clean.
+    * `seed_lfsrs` writes back. Each lane differs. With one seed everywhere, all
+    * lanes switch together (the worst case for supply noise and crosstalk), and
+    * lanes swapped between the TX and the RX read clean.
     *
     * A stream's first UI is its seed's bit 63. It is set, so every stream
     * starts with a 1. The loopback RX frames on its first 1, so a seeded run
@@ -624,9 +624,9 @@ object PhyTest {
   val ClkPreconditionUi = 2
   require(ClkPreconditionUi >= 1 && ClkPreconditionUi <= 8)
 
-  /** `rxValidStartThreshold` out of reset: start on the first set bit, so
-    * any valid waveform frames. Raise it (up to the waveform's first run, 4
-    * for `0x0f0f0f0f`) if a lone bit error on an idle valid lane frames runs.
+  /** `rxValidStartThreshold` out of reset: start on the first set bit, so any
+    * valid waveform frames. Raise it (up to the waveform's first run, 4 for
+    * `0x0f0f0f0f`) if a lone bit error on an idle valid lane frames runs.
     */
   val rxValidStartThresholdReset = 1
 
@@ -643,8 +643,8 @@ object PhyTest {
 
   /** `state` after `steps` single steps of the Fibonacci LFSR that
     * `chisel3.util.random.FibonacciLFSR` builds from [[LfsrTaps]]: each step
-    * shifts towards the top bit and enters the XOR of the tapped bits at bit
-    * 0. The taps are sparse, so this is a few XOR gates per bit.
+    * shifts towards the top bit and enters the XOR of the tapped bits at bit 0.
+    * The taps are sparse, so this is a few XOR gates per bit.
     */
   def lfsrAdvance(state: UInt, steps: Int): UInt = {
     var s: Seq[Bool] = state.asBools
@@ -684,8 +684,8 @@ object PhyTest {
     *
     * `laneWords` holds the `numLanes + 3` words of one received packet, in the
     * order the RX buffers them: data lanes `0 until numLanes`, then valid,
-    * track, and loopback. Fold every packet the RX counts, in order, to get
-    * the expected signature for a given `rxPacketsReceived`.
+    * track, and loopback. Fold every packet the RX counts, in order, to get the
+    * expected signature for a given `rxPacketsReceived`.
     */
   def signatureNext(signature: BigInt, laneWords: Seq[BigInt]): BigInt = {
     val folded = laneWords.zipWithIndex.foldLeft(signature & SignatureMask) {
@@ -728,13 +728,13 @@ object PhyTest {
     flag
   }
 
-  /** Sticky flag for a queue whose consumer takes a word every cycle. Sets
-    * when the queue runs dry. Call it in the dequeue clock domain, under that
+  /** Sticky flag for a queue whose consumer takes a word every cycle. Sets when
+    * the queue runs dry. Call it in the dequeue clock domain, under that
     * domain's reset.
     *
     * The queue is empty after reset until the producer's first word arrives,
-    * and whenever its producer is not feeding it. So the flag arms only once
-    * a word has been seen with `feeding` high ever since the reset.
+    * and whenever its producer is not feeding it. So the flag arms only once a
+    * word has been seen with `feeding` high ever since the reset.
     */
   def underflowFlag(deqValid: Bool, feeding: Bool): Bool = {
     val fedSinceReset = RegInit(true.B)

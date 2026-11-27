@@ -103,12 +103,11 @@ case class UcieTLParams(
   /** Suffix appended to the module names of this instance.
     *
     * Instances with the same parameters elaborate to the same hardware, so
-    * Chisel puts them in one dedup group (the proposed module name) and
-    * firtool emits one SystemVerilog module. That is right when they are
-    * hardened together. When physical design needs one module per instance
-    * (e.g. different orientations, hardened separately), different
-    * `moduleId`s split the groups and keep the hierarchies apart. Id 0 keeps
-    * the unsuffixed name.
+    * Chisel puts them in one dedup group (the proposed module name) and firtool
+    * emits one SystemVerilog module. That is right when they are hardened
+    * together. When physical design needs one module per instance (e.g.
+    * different orientations, hardened separately), different `moduleId`s split
+    * the groups and keep the hierarchies apart. Id 0 keeps the unsuffixed name.
     */
   def moduleSuffix: String = if (moduleId == 0) "" else s"_$moduleId"
   // Width of the credit fields carried alongside every framed TL packet.
@@ -256,10 +255,10 @@ object UcieTLRegs {
 /** Clock source controls, on their own clock.
   *
   * These choose where the PHY's clocks come from, so they cannot run on one of
-  * them: at power up nothing would run until they are set. They run on the
-  * chip clock, which runs before any PHY clock. This is a separate block, not
-  * an extra domain in another, because most registers belong on the clock of
-  * the logic they control.
+  * them: at power up nothing would run until they are set. They run on the chip
+  * clock, which runs before any PHY clock. This is a separate block, not an
+  * extra domain in another, because most registers belong on the clock of the
+  * logic they control.
   *
   * The selects need no synchronizer: they settle during bring-up while the
   * clocks they steer are quiet.
@@ -1061,7 +1060,10 @@ class UcieClkRegs(
       Mux(manual, manualClksReadyFreqSel, fsmClksReadyFreqSel),
       0.U
     )
-    io.clksUngated := flop(Mux(manual, manualClksUngated, fsmClksUngated), false.B)
+    io.clksUngated := flop(
+      Mux(manual, manualClksUngated, fsmClksUngated),
+      false.B
+    )
 
     // Each PLL's loop state, through two flops per bit. The codes move while
     // the PLL runs, so a read can mix two consecutive values.
@@ -1241,8 +1243,8 @@ object UcieClkRegs {
   val defaultGateDwell = 32
 
   /** Cycles between the TX dividers' release and the TX gate opening on them:
-    * the release crossing its flop here, then the dividers' own synchronizer
-    * on the main clock, with room to spare.
+    * the release crossing its flop here, then the dividers' own synchronizer on
+    * the main clock, with room to spare.
     */
   val clkGenRstDwell = 4
 
@@ -1259,8 +1261,8 @@ object UcieClkRegs {
     */
   val maxPhaseSel = (BigInt(1) << ClockingTile.phaseSelWidth) - 1
 
-  /** Default count for `ClkUngateSrc.delay`. Sized to clear a PLL wake-up
-    * with margin at any plausible chip clock.
+  /** Default count for `ClkUngateSrc.delay`. Sized to clear a PLL wake-up with
+    * margin at any plausible chip clock.
     */
   val defaultUngateDelay = 1024
 
@@ -2080,23 +2082,22 @@ object UcieController {
 object UcieTL {
   val dataBits = 256
 
-  /** Width of the register port and every register block behind it, except
-    * the mainband's. The registers are 64 bits apart, and a narrower port keeps
-    * the async queues into the PHY test and TX sideband clocks small.
+  /** Width of the register port and every register block behind it, except the
+    * mainband's. The registers are 64 bits apart, and a narrower port keeps the
+    * async queues into the PHY test and TX sideband clocks small.
     */
   val regBeatBytes = 8
 
   /** Register port requests in flight at once: the source IDs its shrinker
     * hands out, and so the flight bits its FIFO fixer keeps.
     *
-    * The clock registers answer in the same cycle and the shrinker can reuse
-    * an ID the next cycle, so one in flight gives a request per cycle. The
-    * PhyTest and controller blocks are behind one-entry async queues
-    * (`regXing`) that pass a request every ~7 chip cycles against a ~8 cycle
-    * round trip, so two keep them full. The fixer allows only one block in
-    * flight at a time, so two would do; four adds margin on those estimates.
-    * More than one in flight happens only when several masters access the
-    * registers at once.
+    * The clock registers answer in the same cycle and the shrinker can reuse an
+    * ID the next cycle, so one in flight gives a request per cycle. The PhyTest
+    * and controller blocks are behind one-entry async queues (`regXing`) that
+    * pass a request every ~7 chip cycles against a ~8 cycle round trip, so two
+    * keep them full. The fixer allows only one block in flight at a time, so
+    * two would do; four adds margin on those estimates. More than one in flight
+    * happens only when several masters access the registers at once.
     */
   val regsInFlight = 4
 
@@ -2845,7 +2846,9 @@ class UcieTL(
         val primed = RegInit(false.B)
         when(rxTlFifo.io.enq.ready) { primed := true.B }
         val flag = RegInit(false.B)
-        when(selMbTl && selectedSinceReset && primed && !rxTlFifo.io.enq.ready) {
+        when(
+          selMbTl && selectedSinceReset && primed && !rxTlFifo.io.enq.ready
+        ) {
           flag := true.B
         }
         flag

@@ -5,10 +5,10 @@ import chisel3.util._
 import edu.berkeley.cs.uciedigital.phy.macros._
 import edu.berkeley.cs.uciedigital.phy.macros.clocking._
 
-/** Lane numbering, the same in both directions: the `numLanes` data lanes,
-  * then valid, track, and the two forwarded-clock lanes. TX has all
-  * `numLanes + 4`. RX uses the same numbering, but only the first
-  * `numLanes + 2` carry a word; its clock lanes recover a clock.
+/** Lane numbering, the same in both directions: the `numLanes` data lanes, then
+  * valid, track, and the two forwarded-clock lanes. TX has all `numLanes + 4`.
+  * RX uses the same numbering, but only the first `numLanes + 2` carry a word;
+  * its clock lanes recover a clock.
   *
   * Per-lane controls in [[PhyRegsIO]], lane clocks from `ClkDistNetwork`, taps
   * in [[PhyDebugIO]] and the bump fan-out all use this order. [[TxIO]] and

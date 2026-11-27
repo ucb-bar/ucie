@@ -122,9 +122,8 @@ class PllCfgIO extends Bundle {
 }
 
 /** The clocking tile's controls and clocks. The tile is six macros: two PLLs,
-  * the TX clock generator, the global delay line and gate, and the PHY test
-  * and TX sideband dividers. `ClockingTile` maps each control to its macro's
-  * pins.
+  * the TX clock generator, the global delay line and gate, and the PHY test and
+  * TX sideband dividers. `ClockingTile` maps each control to its macro's pins.
   */
 class ClockingTileIO extends Bundle {
 
@@ -150,9 +149,9 @@ class ClockingTileIO extends Bundle {
     */
   val X2En = Input(Bool())
 
-  /** Per-PLL lock. Low while the PLL is off, and after enable until it
-    * settles. An apply keeps the clock gate shut until lock. The X2 clock is
-    * ready when PLL8 is locked.
+  /** Per-PLL lock. Low while the PLL is off, and after enable until it settles.
+    * An apply keeps the clock gate shut until lock. The X2 clock is ready when
+    * PLL8 is locked.
     */
   val Pll8Lock = Output(Bool())
   val Pll12Lock = Output(Bool())
@@ -177,16 +176,16 @@ class ClockingTileIO extends Bundle {
     */
   val TxClkDiv = Input(UInt(ClockingTile.txClkDivWidth.W))
 
-  /** TxClkQ's lead over TxClk, in UCIe main clock half cycles, 0 to 2*div-1.
-    * A step of half a main clock period is within the global delay line's
-    * tap range for main clocks of about 5 GHz and up (every PLL rate), so
-    * this and the delay line together reach any phase. A slower bypass clock
-    * leaves gaps. At /1 this has no effect: TxClkQ is the main clock.
+  /** TxClkQ's lead over TxClk, in UCIe main clock half cycles, 0 to 2*div-1. A
+    * step of half a main clock period is within the global delay line's tap
+    * range for main clocks of about 5 GHz and up (every PLL rate), so this and
+    * the delay line together reach any phase. A slower bypass clock leaves
+    * gaps. At /1 this has no effect: TxClkQ is the main clock.
     */
   val TxClkPhase = Input(UInt(ClockingTile.txClkPhaseWidth.W))
 
-  /** PHY test clock divider for the source `PhyTestClkSrcSel` picks: 3 /6,
-    * 4 /8, 5 /12, 6 and 7 /15. 0, 1 and 2 select /8, the reset value. 1 GHz is
+  /** PHY test clock divider for the source `PhyTestClkSrcSel` picks: 3 /6, 4
+    * /8, 5 /12, 6 and 7 /15. 0, 1 and 2 select /8, the reset value. 1 GHz is
     * PLL8/8 or PLL12/12; 800 MHz is PLL12/15. The source is never the UCIe main
     * clock, so main clock changes don't affect it. /15 has no duty cycle
     * corrector: high for 9 source cycles, low for 6.
@@ -209,10 +208,10 @@ class ClockingTileIO extends Bundle {
     */
   val PhyTestClkEn = Input(Bool())
 
-  /** TX sideband clock divider for the source `SbClkSrcSel` picks: 1 /5,
-    * 2 /10, 3 /15. 0 selects /10, the reset value. 800 MHz is PLL8/10 or
-    * PLL12/15. /5 and /15 have no duty cycle corrector: `SbClk` is high for 3
-    * of 5 and 10 of 15 source cycles.
+  /** TX sideband clock divider for the source `SbClkSrcSel` picks: 1 /5, 2 /10,
+    * 3 /15. 0 selects /10, the reset value. 800 MHz is PLL8/10 or PLL12/15. /5
+    * and /15 have no duty cycle corrector: `SbClk` is high for 3 of 5 and 10 of
+    * 15 source cycles.
     */
   val SbClkDiv = Input(UInt(ClockingTile.sbClkDivWidth.W))
 
@@ -227,26 +226,26 @@ class ClockingTileIO extends Bundle {
     */
   val SbClkEn = Input(Bool())
 
-  /** Active-high enable for the TX clock gate, driven by the `clkEn`
-    * register. The gate is after the global delay line. Three flops synchronize
-    * the enable to TxClk, and three more delay it to match TxClkQ's three
-    * flops. Each clock goes through a clock gate cell driven by a flop on the
-    * same clock, so no pulse is cut short and no path has to fit in half a
-    * period. Low stops both clocks 6-7 TxClk periods later. The TX dividers
-    * before the gate keep running, so the source, ratio, phase or delay code
-    * can change with no edge reaching a lane. The PHY test and sideband clocks
-    * keep running, so the PHY test domain can still service the RX AFEs.
+  /** Active-high enable for the TX clock gate, driven by the `clkEn` register.
+    * The gate is after the global delay line. Three flops synchronize the
+    * enable to TxClk, and three more delay it to match TxClkQ's three flops.
+    * Each clock goes through a clock gate cell driven by a flop on the same
+    * clock, so no pulse is cut short and no path has to fit in half a period.
+    * Low stops both clocks 6-7 TxClk periods later. The TX dividers before the
+    * gate keep running, so the source, ratio, phase or delay code can change
+    * with no edge reaching a lane. The PHY test and sideband clocks keep
+    * running, so the PHY test domain can still service the RX AFEs.
     */
   val ClkGateEn = Input(Bool())
 
   /** TX clock gate tap select, driven by the `clkGateEdgeSel` register. It
     * picks the TxClk-chain tap that TxClkQ's flops sample. 0: flop 4, which
-    * changes as TxClk rises. 1: flop 3 through a latch open while TxClk is
-    * low, half a period earlier. Each tap has a race: a lag where a gate change
-    * can take effect on either of two TxClkQ pulses, though none is cut. Tap
-    * 0's race is at its flop and mux delay; tap 1's is half a period before.
-    * Software sets this to 1 within a quarter period of tap 0's race. It has
-    * no effect while the gate stays open or shut.
+    * changes as TxClk rises. 1: flop 3 through a latch open while TxClk is low,
+    * half a period earlier. Each tap has a race: a lag where a gate change can
+    * take effect on either of two TxClkQ pulses, though none is cut. Tap 0's
+    * race is at its flop and mux delay; tap 1's is half a period before.
+    * Software sets this to 1 within a quarter period of tap 0's race. It has no
+    * effect while the gate stays open or shut.
     */
   val ClkGateEdgeSel = Input(Bool())
 

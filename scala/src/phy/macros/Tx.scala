@@ -7,8 +7,8 @@ import chisel3.experimental.BundleLiterals._
 object TxLane {
 
   /** Bits of parallel data (`DataIN`) the tile consumes per divided clock
-    * cycle. The serializer is 32:1 and sends on both edges of `CK`, so the
-    * tile emits two bits per `CK` period.
+    * cycle. The serializer is 32:1 and sends on both edges of `CK`, so the tile
+    * emits two bits per `CK` period.
     */
   val SerdesRatio = 32
 
